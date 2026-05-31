@@ -1,0 +1,66 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            os: macos-14
+            bun-target: bun-darwin-arm64
+          - target: darwin-x64
+            os: macos-13
+            bun-target: bun-darwin-x64
+          - target: linux-x64
+            os: ubuntu-latest
+            bun-target: bun-linux-x64
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            bun-target: bun-linux-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: install
+        run: bun install
+
+      - name: typecheck
+        run: bun node_modules/typescript/bin/tsc --noEmit
+
+      - name: build single binary
+        run: |
+          mkdir -p dist
+          bun build --compile \
+            --target=${{ matrix.bun-target }} \
+            --outfile=dist/aireadyu \
+            src/index.tsx
+          # bundle the vault-demo alongside the binary
+          cp -R vault-demo dist/vault-demo
+          chmod +x dist/aireadyu
+
+      - name: package
+        working-directory: dist
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          tar -czf "aireadyu-${VERSION}-${{ matrix.target }}.tar.gz" aireadyu vault-demo
+          ls -la
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/aireadyu-*.tar.gz
+          generate_release_notes: true
