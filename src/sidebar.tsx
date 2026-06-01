@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { theme, spinnerChar } from "./theme.ts";
 import type { Domain, AppSkill } from "./vault.ts";
 
@@ -48,6 +49,7 @@ export function Sidebar({
         focused={focus === "domains"}
         flexGrow={3}
         columnHeader="  domain         loops"
+        followId={focus === "domains" ? `dom-${domains[domainIdx]?.name ?? ""}` : null}
       >
         {domains.map((d, i) => {
           const active = focus === "domains" && i === domainIdx;
@@ -61,6 +63,7 @@ export function Sidebar({
           return (
             <box
               key={d.name}
+              id={`dom-${d.name}`}
               flexDirection="row"
               backgroundColor={bg}
               height={1}
@@ -78,6 +81,7 @@ export function Sidebar({
         count={apps.length}
         focused={focus === "apps"}
         flexGrow={2}
+        followId={focus === "apps" ? `app-${apps[appIdx]?.id ?? ""}` : null}
       >
         {apps.map((a, i) => {
           const active = focus === "apps" && i === appIdx;
@@ -94,6 +98,7 @@ export function Sidebar({
           return (
             <box
               key={a.id}
+              id={`app-${a.id}`}
               flexDirection="row"
               backgroundColor={bg}
               height={1}
@@ -126,6 +131,7 @@ function Section({
   focused,
   flexGrow,
   columnHeader,
+  followId,
   children,
 }: {
   title: string;
@@ -133,9 +139,17 @@ function Section({
   focused: boolean;
   flexGrow: number;
   columnHeader?: string;
+  followId?: string | null;
   children: React.ReactNode;
 }) {
   const accent = focused ? theme.gold : theme.fgDim;
+  const scrollRef = useRef<any>(null);
+  useEffect(() => {
+    if (!followId || !scrollRef.current) return;
+    try {
+      scrollRef.current.scrollChildIntoView?.(followId);
+    } catch {}
+  }, [followId]);
   return (
     <box
       flexDirection="column"
@@ -155,7 +169,7 @@ function Section({
         <text fg={theme.fgFaint}>{columnHeader}</text>
       )}
       {!columnHeader && <text> </text>}
-      <scrollbox flexGrow={1} scrollY>
+      <scrollbox ref={scrollRef} flexGrow={1} scrollY>
         {children}
       </scrollbox>
     </box>
