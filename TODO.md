@@ -5,10 +5,10 @@
 ## STATUS
 
 - **last touched:** 2026-06-01
-- **current version on main:** v0.1.2
+- **current version on main:** v0.1.2 (P1.1 + P1.2 staged for v0.1.3)
 - **next milestone:** v0.2.0 — "the agent that grows with you" (Hermes-inspired feature pack)
-- **active item:** P1.1 — create AGENTS.md and AGENTS-operating.md
-- **next item after that:** P1.2 — wire CLI launchers to prepend the operating manual
+- **active item:** P1.3 — fix recurring linux-x64 build failure
+- **just finished:** P1.1 + P1.2 — AGENTS.md + AGENTS-operating.md shipped; cli-bridge prepends manual on every chat launch via --append-system-prompt (Claude) or augmented prompt (Codex/Gemini); install.sh + release.yml + vault-demo all carry the manual
 
 ## BACKGROUND (read this if you have no context)
 
@@ -30,7 +30,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 
 ### P1 — TODAY (foundation; everything else depends on these)
 
-- [ ] **P1.1 — Create `AGENTS.md` (project map) and `AGENTS-operating.md` (agent operating manual)**
+- [x] **P1.1 — Create `AGENTS.md` (project map) and `AGENTS-operating.md` (agent operating manual)** (done: 2026-06-01, commit 21eb13a)
   - **why:** Hermes treats `AGENTS.md` as *the* contract for any agent that boots into the repo. We don't have one. Two files keeps human contributors and AI runtimes from stepping on each other.
   - **acceptance:**
     - `AGENTS.md` at repo root — describes the project for humans (what is aireadyu, layout, conventions, how to contribute). Linked from `README.md`.
@@ -38,7 +38,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
   - **files:** `AGENTS.md` (new), `AGENTS-operating.md` (new), `README.md` (add link)
   - **effort:** 2 hours
 
-- [ ] **P1.2 — Prepend `AGENTS-operating.md` content to every CLI launch**
+- [x] **P1.2 — Prepend `AGENTS-operating.md` content to every CLI launch** (done: 2026-06-01)
   - **why:** so the operating manual reaches Claude/Codex/Gemini on the first `-p` call. Tiny code change with outsized effect on chat quality.
   - **acceptance:** in `src/cli-bridge.ts` `runChatTurn()`, read `AGENTS-operating.md` from a known location (`<vault>/AGENTS-operating.md` if present, fall back to the binary's bundled copy) and prepend its content as a `--append-system-prompt` argument (Claude) or system message (Codex/Gemini). Cached at process start; reread on `r` (refresh).
   - **files:** `src/cli-bridge.ts`, `src/vault.ts` (helper to find the manual), `vault-demo/AGENTS-operating.md` (copy in)

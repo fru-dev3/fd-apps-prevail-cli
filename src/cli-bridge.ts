@@ -1,7 +1,44 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import type { Domain, ViewKey } from "./vault.ts";
+
+const OPERATING_MANUAL_FILE = "AGENTS-operating.md";
+let operatingManualCache: { vaultPath: string; content: string | null } | null = null;
+
+function findOperatingManual(vaultPath: string): string | null {
+  if (operatingManualCache && operatingManualCache.vaultPath === vaultPath) {
+    return operatingManualCache.content;
+  }
+  const candidates: string[] = [
+    join(vaultPath, OPERATING_MANUAL_FILE),
+    join(homedir(), ".aireadyu", OPERATING_MANUAL_FILE),
+  ];
+  try {
+    candidates.push(resolve(dirname(process.execPath), OPERATING_MANUAL_FILE));
+  } catch {}
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    candidates.push(resolve(here, "..", OPERATING_MANUAL_FILE));
+  } catch {}
+  let content: string | null = null;
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      try {
+        content = readFileSync(c, "utf8");
+        break;
+      } catch {}
+    }
+  }
+  operatingManualCache = { vaultPath, content };
+  return content;
+}
+
+export function refreshOperatingManualCache(): void {
+  operatingManualCache = null;
+}
 
 export type CliKind = "claude" | "codex" | "gemini";
 
@@ -106,17 +143,29 @@ export interface ChatTurn {
 
 export async function runChatTurn({ prompt, cwd, cli, model, isFirst }: ChatTurn): Promise<string> {
   const m = model.trim();
+  // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
+  const vaultPath = resolve(cwd, "..");
+  const manual = findOperatingManual(vaultPath);
+
   if (cli.kind === "claude") {
     const head = isFirst ? ["-p", prompt] : ["--continue", "-p", prompt];
-    const args = m ? ["--model", m, ...head] : head;
+    const args: string[] = [];
+    if (m) args.push("--model", m);
+    // --append-system-prompt is only meaningful on the first turn; --continue inherits it
+    if (manual && isFirst) args.push("--append-system-prompt", manual);
+    args.push(...head);
     return runCapture(cli.bin, args, cwd);
   }
+  // codex + gemini don't have session continuation in our wrapper — prepend manual every turn
+  const augmentedPrompt = manual
+    ? `<operating-manual>\n${manual}\n</operating-manual>\n\n${prompt}`
+    : prompt;
   if (cli.kind === "codex") {
-    const args = m ? ["exec", "-m", m, prompt] : ["exec", prompt];
+    const args = m ? ["exec", "-m", m, augmentedPrompt] : ["exec", augmentedPrompt];
     return runCapture(cli.bin, args, cwd);
   }
   if (cli.kind === "gemini") {
-    const args = m ? ["-m", m, "-p", prompt] : ["-p", prompt];
+    const args = m ? ["-m", m, "-p", augmentedPrompt] : ["-p", augmentedPrompt];
     return runCapture(cli.bin, args, cwd);
   }
   return `(no handler for ${cli.kind})`;

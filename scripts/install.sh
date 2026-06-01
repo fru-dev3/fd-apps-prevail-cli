@@ -65,6 +65,12 @@ if [ -d "$tmp/vault-demo" ]; then
   say "installed synthetic vault to $DATA_DIR/vault-demo"
 fi
 
+if [ -f "$tmp/AGENTS-operating.md" ]; then
+  mkdir -p "$DATA_DIR"
+  mv "$tmp/AGENTS-operating.md" "$DATA_DIR/AGENTS-operating.md"
+  say "installed agent operating manual to $DATA_DIR/AGENTS-operating.md"
+fi
+
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
