@@ -58,9 +58,10 @@ interface Props {
   onSend: (key: string, text: string) => void;
   onCommand: (key: string, command: ChatCommand) => void;
   onExit: () => void;
+  onAutocompleteChange?: (open: boolean) => void;
 }
 
-export function ChatPane({ session, availableClis, tick, onSend, onCommand, onExit }: Props) {
+export function ChatPane({ session, availableClis, tick, onSend, onCommand, onExit, onAutocompleteChange }: Props) {
   const ref = useRef<any>(null);
 
   useLayoutEffect(() => {
@@ -141,7 +142,12 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
         }}
       />
       <StatusLine session={session} tick={tick} />
-      <InputBox inputRef={ref} disabled={session.pending} onSubmit={handleSubmit} />
+      <InputBox
+        inputRef={ref}
+        disabled={session.pending}
+        onSubmit={handleSubmit}
+        onAutocompleteChange={onAutocompleteChange}
+      />
     </box>
   );
 }
@@ -527,17 +533,45 @@ function InputBox({
   inputRef,
   disabled,
   onSubmit,
+  onAutocompleteChange,
 }: {
   inputRef: React.RefObject<any>;
   disabled: boolean;
   onSubmit: (v: string) => void;
+  onAutocompleteChange?: (open: boolean) => void;
 }) {
   const [value, setValue] = useState("");
+  const [selectedIdx, setSelectedIdx] = useState(0);
   const showAutocomplete = !disabled && value.startsWith("/");
-  const matches = showAutocomplete ? matchSlashCommands(value) : [];
+  const matches = useMemo(
+    () => (showAutocomplete ? matchSlashCommands(value) : []),
+    [showAutocomplete, value],
+  );
+
+  useEffect(() => {
+    onAutocompleteChange?.(showAutocomplete && matches.length > 0);
+  }, [showAutocomplete, matches.length, onAutocompleteChange]);
+
+  useEffect(() => {
+    if (selectedIdx >= matches.length) setSelectedIdx(0);
+  }, [matches.length, selectedIdx]);
 
   const handleSubmit = (v: string) => {
+    const trimmed = v.trim();
+    if (showAutocomplete && matches.length > 0 && !trimmed.includes(" ")) {
+      const exact = matches.find(
+        (m) => m.cmd === trimmed || (m.aliases ?? []).some((a) => a === trimmed),
+      );
+      if (!exact) {
+        const pick = matches[selectedIdx];
+        if (pick) {
+          pickCommand(pick);
+          return;
+        }
+      }
+    }
     setValue("");
+    setSelectedIdx(0);
     onSubmit(v);
   };
 
@@ -545,6 +579,7 @@ function InputBox({
     const needsArg = !!cmd.arg;
     const next = needsArg ? `${cmd.cmd} ` : cmd.cmd;
     setValue(next);
+    setSelectedIdx(0);
     if (inputRef.current) {
       try {
         inputRef.current.value = next;
@@ -552,6 +587,18 @@ function InputBox({
       } catch {}
     }
   };
+
+  useKeyboard((evt) => {
+    if (!showAutocomplete || matches.length === 0) return;
+    if (evt.name === "up") {
+      setSelectedIdx((i) => (i - 1 + matches.length) % matches.length);
+    } else if (evt.name === "down") {
+      setSelectedIdx((i) => (i + 1) % matches.length);
+    } else if (evt.name === "tab") {
+      const pick = matches[selectedIdx];
+      if (pick) pickCommand(pick);
+    }
+  });
 
   return (
     <box
@@ -561,7 +608,12 @@ function InputBox({
       paddingBottom={1}
     >
       {showAutocomplete && matches.length > 0 && (
-        <SlashAutocomplete matches={matches} onPick={pickCommand} />
+        <SlashAutocomplete
+          matches={matches}
+          selectedIdx={selectedIdx}
+          onPick={pickCommand}
+          onHover={setSelectedIdx}
+        />
       )}
       <box
         flexDirection="row"
@@ -594,10 +646,14 @@ function InputBox({
 
 function SlashAutocomplete({
   matches,
+  selectedIdx,
   onPick,
+  onHover,
 }: {
   matches: SlashCommandSpec[];
+  selectedIdx: number;
   onPick: (c: SlashCommandSpec) => void;
+  onHover: (i: number) => void;
 }) {
   return (
     <box
@@ -609,21 +665,35 @@ function SlashAutocomplete({
       paddingRight={1}
       paddingTop={0}
       paddingBottom={0}
-      title=" slash commands "
+      title=" slash commands · ↑↓ select · tab accept "
       titleAlignment="left"
     >
-      {matches.map((c) => (
-        <box
-          key={c.cmd}
-          flexDirection="row"
-          height={1}
-          onMouseDown={() => onPick(c)}
-        >
-          <text fg={theme.gold}>{c.cmd.padEnd(10, " ")}</text>
-          <text fg={theme.fgDim}>{(c.arg ?? "").padEnd(12, " ")}</text>
-          <text fg={theme.fg}>{c.desc}</text>
-        </box>
-      ))}
+      {matches.map((c, i) => {
+        const active = i === selectedIdx;
+        const bg = active ? theme.selBg : theme.bgPanel;
+        const cmdFg = active ? theme.goldBright : theme.gold;
+        const argFg = active ? theme.selFg : theme.fgDim;
+        const descFg = active ? theme.selFg : theme.fg;
+        return (
+          <box
+            key={c.cmd}
+            flexDirection="row"
+            backgroundColor={bg}
+            height={1}
+            onMouseDown={() => onPick(c)}
+            onMouseMove={() => onHover(i)}
+          >
+            <text fg={active ? theme.gold : theme.fgFaint} bg={bg}>
+              {active ? "› " : "  "}
+            </text>
+            <text fg={cmdFg} bg={bg} attributes={active ? 1 : 0}>
+              {c.cmd.padEnd(10, " ")}
+            </text>
+            <text fg={argFg} bg={bg}>{(c.arg ?? "").padEnd(12, " ")}</text>
+            <text fg={descFg} bg={bg}>{c.desc}</text>
+          </box>
+        );
+      })}
     </box>
   );
 }

@@ -75,6 +75,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   const [chats, setChats] = useState<Map<string, ChatSession>>(new Map());
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
+  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
   const [tick, setTick] = useState(0);
 
   const view = VIEW_ORDER[viewIdx];
@@ -152,6 +153,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     if (!name) return;
 
     if (mode === "new-domain" || mode === "edit") return;
+
+    // When the chat's slash-command popover is open, let the chat pane own
+    // arrow/tab navigation — don't steal them for the sidebar.
+    if (autocompleteOpen && (name === "up" || name === "down" || name === "tab")) {
+      return;
+    }
 
     if (mode === "chat") {
       if (name === "up") {
@@ -758,6 +765,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               onSend={sendMessage}
               onCommand={handleChatCommand}
               onExit={exitChat}
+              onAutocompleteChange={setAutocompleteOpen}
             />
           ) : inEdit && editFilename ? (
             <EditorPane
