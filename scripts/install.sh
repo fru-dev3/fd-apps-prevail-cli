@@ -11,6 +11,7 @@ set -euo pipefail
 
 REPO="${AIREADYU_REPO:-fru-dev3/aireadyu}"
 BIN_DIR="${AIREADYU_BIN_DIR:-$HOME/.local/bin}"
+DATA_DIR="${AIREADYU_DATA_DIR:-$HOME/.aireadyu}"
 VERSION="${AIREADYU_VERSION:-latest}"
 
 bold=$(printf '\033[1m')
@@ -55,7 +56,14 @@ mkdir -p "$BIN_DIR"
 mv "$tmp/aireadyu" "$BIN_DIR/aireadyu"
 chmod +x "$BIN_DIR/aireadyu"
 
-say "installed to $BIN_DIR/aireadyu"
+say "installed binary to $BIN_DIR/aireadyu"
+
+if [ -d "$tmp/vault-demo" ]; then
+  mkdir -p "$DATA_DIR"
+  rm -rf "$DATA_DIR/vault-demo"
+  mv "$tmp/vault-demo" "$DATA_DIR/vault-demo"
+  say "installed synthetic vault to $DATA_DIR/vault-demo"
+fi
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;

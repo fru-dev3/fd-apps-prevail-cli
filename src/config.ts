@@ -34,15 +34,18 @@ export function writeConfig(cfg: UserConfig): void {
 }
 
 export function bundledDemoVaultPath(): string {
-  // Two cases:
-  // 1. source run (`bun run src/index.tsx`) — vault-demo is one level up from src/
-  // 2. compiled binary (`./aireadyu`) — vault-demo ships in the same dir as the binary
+  // Resolve in priority order:
+  // 1. ~/.aireadyu/vault-demo — where the installer drops it
+  // 2. AIREADYU_DATA_DIR/vault-demo if env var is set
+  // 3. next to the binary (unpacked tarball before install)
+  // 4. relative to argv[1] (script-mode)
+  // 5. relative to import.meta.url (source run via bun)
+  // 6. cwd
   const candidates: string[] = [];
-  try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    candidates.push(resolve(here, "..", "vault-demo"));
-    candidates.push(resolve(here, "vault-demo"));
-  } catch {}
+  candidates.push(join(homedir(), ".aireadyu", "vault-demo"));
+  if (process.env.AIREADYU_DATA_DIR) {
+    candidates.push(join(process.env.AIREADYU_DATA_DIR, "vault-demo"));
+  }
   try {
     const execDir = dirname(process.execPath);
     candidates.push(resolve(execDir, "vault-demo"));
@@ -52,13 +55,16 @@ export function bundledDemoVaultPath(): string {
       candidates.push(resolve(dirname(process.argv[1]), "vault-demo"));
     } catch {}
   }
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    candidates.push(resolve(here, "..", "vault-demo"));
+    candidates.push(resolve(here, "vault-demo"));
+  } catch {}
   candidates.push(resolve(process.cwd(), "vault-demo"));
   for (const c of candidates) {
     if (existsSync(c)) return c;
   }
-  // Fall back to the most likely path even if it doesn't exist, so error
-  // messages are informative.
-  return candidates[0] ?? resolve(process.cwd(), "vault-demo");
+  return candidates[0];
 }
 
 export interface VaultCandidate {
