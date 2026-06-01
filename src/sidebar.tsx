@@ -47,6 +47,7 @@ export function Sidebar({
         count={domains.length}
         focused={focus === "domains"}
         flexGrow={3}
+        columnHeader="  domain         loops"
       >
         {domains.map((d, i) => {
           const active = focus === "domains" && i === domainIdx;
@@ -124,12 +125,14 @@ function Section({
   count,
   focused,
   flexGrow,
+  columnHeader,
   children,
 }: {
   title: string;
   count: number;
   focused: boolean;
   flexGrow: number;
+  columnHeader?: string;
   children: React.ReactNode;
 }) {
   const accent = focused ? theme.gold : theme.fgDim;
@@ -148,7 +151,10 @@ function Section({
         <text fg={theme.fgFaint}>  {count}</text>
         {focused && <text fg={theme.gold}>  ●</text>}
       </box>
-      <text> </text>
+      {columnHeader && (
+        <text fg={theme.fgFaint}>{columnHeader}</text>
+      )}
+      {!columnHeader && <text> </text>}
       <scrollbox flexGrow={1} scrollY>
         {children}
       </scrollbox>

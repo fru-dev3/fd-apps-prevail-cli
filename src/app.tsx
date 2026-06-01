@@ -15,6 +15,7 @@ import {
   type ChatSession,
 } from "./chat-pane.tsx";
 import { EditorPane } from "./editor-pane.tsx";
+import { TabStrip } from "./tab-strip.tsx";
 import { scanApps, scanCommunityApps, scanVault, type AppSkill, type Domain, type ViewKey } from "./vault.ts";
 import { theme } from "./theme.ts";
 import { scaffoldDomain } from "./domain-scaffold.ts";
@@ -718,35 +719,48 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             setFocus("apps");
           }}
         />
-        {inChat ? (
-          <ChatPane
-            session={activeSession!}
-            availableClis={clis}
-            tick={tick}
-            onSend={sendMessage}
-            onCommand={handleChatCommand}
-            onExit={exitChat}
-          />
-        ) : inEdit && editFilename ? (
-          <EditorPane
-            domain={domain!}
-            filename={editFilename}
-            onExit={exitEditor}
-          />
-        ) : focus === "apps" && app ? (
-          <AppDetail app={app} />
-        ) : (
-          <DomainDetail
-            domain={domain}
-            view={view}
-            skillIdx={skillIdx}
-            onPickTab={(i) => {
-              setFocus("domains");
-              setViewIdx(i);
-            }}
-            onPickSkill={(i) => setSkillIdx(i)}
-          />
-        )}
+        <box flexDirection="column" flexGrow={1}>
+          {focus === "domains" && domain && !inEdit && (
+            <TabStrip
+              domainName={domain.name}
+              activeView={view}
+              inChat={Boolean(inChat)}
+              onPickView={(i) => {
+                setFocus("domains");
+                setViewIdx(i);
+                if (mode === "chat") setMode("idle");
+              }}
+              onPickChat={() => {
+                if (domain) openChatForDomain(domain);
+              }}
+            />
+          )}
+          {inChat ? (
+            <ChatPane
+              session={activeSession!}
+              availableClis={clis}
+              tick={tick}
+              onSend={sendMessage}
+              onCommand={handleChatCommand}
+              onExit={exitChat}
+            />
+          ) : inEdit && editFilename ? (
+            <EditorPane
+              domain={domain!}
+              filename={editFilename}
+              onExit={exitEditor}
+            />
+          ) : focus === "apps" && app ? (
+            <AppDetail app={app} />
+          ) : (
+            <DomainDetail
+              domain={domain}
+              view={view}
+              skillIdx={skillIdx}
+              onPickSkill={(i) => setSkillIdx(i)}
+            />
+          )}
+        </box>
       </box>
       <CommandBar
         mode={mode}
