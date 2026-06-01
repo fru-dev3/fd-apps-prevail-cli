@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useKeyboard } from "@opentui/react";
-import { theme, spinnerChar } from "./theme.ts";
+import { theme, spinnerChar, thinkingWord } from "./theme.ts";
 import {
   MODEL_QUICKPICKS,
   buildChatPrompt,
@@ -563,6 +563,7 @@ function DistillDraftBubble({
 
 function ThinkingBubble({ tick }: { tick: number }) {
   const char = spinnerChar(tick);
+  const word = thinkingWord(tick);
   return (
     <box flexDirection="column" paddingBottom={1}>
       <box
@@ -576,7 +577,7 @@ function ThinkingBubble({ tick }: { tick: number }) {
         paddingRight={1}
       >
         <text fg={theme.gold}>{char}</text>
-        <text fg={theme.fgDim}>  thinking…</text>
+        <text fg={theme.fgDim}>  {word}…</text>
       </box>
     </box>
   );
@@ -594,7 +595,7 @@ function StatusLine({ session, tick }: { session: ChatSession; tick: number }) {
       {session.pending ? (
         <>
           <text fg={theme.gold}>{spinnerChar(tick)}</text>
-          <text fg={theme.fgDim}>  {session.cli.label} is thinking…</text>
+          <text fg={theme.fgDim}>  {session.cli.label} is {thinkingWord(tick)}…</text>
         </>
       ) : (
         <text fg={theme.fgFaint}>

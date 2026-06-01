@@ -24,3 +24,43 @@ export const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 export function spinnerChar(tick: number): string {
   return SPINNER[tick % SPINNER.length] ?? "·";
 }
+
+export const THINKING_WORDS = [
+  "thinking",
+  "pondering",
+  "cogitating",
+  "ruminating",
+  "noodling",
+  "brewing",
+  "synthesizing",
+  "musing",
+  "deliberating",
+  "marinating",
+  "percolating",
+  "reflecting",
+  "reasoning",
+  "weighing",
+  "scheming",
+  "untangling",
+  "distilling",
+  "composing",
+  "considering",
+  "calibrating",
+  "drafting",
+  "puzzling",
+  "stewing",
+  "tracing",
+  "sketching",
+  "wrangling",
+  "channeling",
+  "divining",
+  "conjuring",
+  "polishing",
+] as const;
+
+const WORD_TICKS = 12;
+
+export function thinkingWord(tick: number): string {
+  const idx = Math.floor(tick / WORD_TICKS) % THINKING_WORDS.length;
+  return THINKING_WORDS[idx] ?? "thinking";
+}
