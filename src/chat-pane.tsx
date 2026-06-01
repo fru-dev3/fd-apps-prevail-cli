@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useKeyboard } from "@opentui/react";
 import { theme, spinnerChar, thinkingWord } from "./theme.ts";
 import {
@@ -587,6 +587,33 @@ function StatusLine({ session, tick }: { session: ChatSession; tick: number }) {
   );
 }
 
+interface SlashCommandSpec {
+  cmd: string;
+  arg?: string;
+  desc: string;
+  aliases?: string[];
+}
+
+const SLASH_COMMANDS: SlashCommandSpec[] = [
+  { cmd: "/distill", desc: "synthesize this conversation into a reusable SKILL.md", aliases: ["/skill"] },
+  { cmd: "/search", arg: "<query>", desc: "FTS5 search across all past chats", aliases: ["/s"] },
+  { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
+  { cmd: "/codex", arg: "[model]", desc: "switch this chat to Codex" },
+  { cmd: "/gemini", arg: "[model]", desc: "switch this chat to Gemini CLI" },
+  { cmd: "/model", arg: "<name>", desc: "set model on the current CLI · /model default clears it", aliases: ["/m"] },
+  { cmd: "/clear", desc: "clear conversation messages (keeps session config)", aliases: ["/reset"] },
+  { cmd: "/help", desc: "show all slash commands", aliases: ["/?"] },
+  { cmd: "/exit", desc: "return to cockpit (same as esc)", aliases: ["/quit", "/q", "/close"] },
+];
+
+function matchSlashCommands(query: string): SlashCommandSpec[] {
+  const q = query.toLowerCase();
+  return SLASH_COMMANDS.filter((c) => {
+    if (c.cmd.startsWith(q)) return true;
+    return (c.aliases ?? []).some((a) => a.startsWith(q));
+  });
+}
+
 function InputBox({
   inputRef,
   disabled,
@@ -596,6 +623,27 @@ function InputBox({
   disabled: boolean;
   onSubmit: (v: string) => void;
 }) {
+  const [value, setValue] = useState("");
+  const showAutocomplete = !disabled && value.startsWith("/");
+  const matches = showAutocomplete ? matchSlashCommands(value) : [];
+
+  const handleSubmit = (v: string) => {
+    setValue("");
+    onSubmit(v);
+  };
+
+  const pickCommand = (cmd: SlashCommandSpec) => {
+    const needsArg = !!cmd.arg;
+    const next = needsArg ? `${cmd.cmd} ` : cmd.cmd;
+    setValue(next);
+    if (inputRef.current) {
+      try {
+        inputRef.current.value = next;
+        inputRef.current.focus?.();
+      } catch {}
+    }
+  };
+
   return (
     <box
       flexDirection="column"
@@ -603,6 +651,9 @@ function InputBox({
       paddingRight={2}
       paddingBottom={1}
     >
+      {showAutocomplete && matches.length > 0 && (
+        <SlashAutocomplete matches={matches} onPick={pickCommand} />
+      )}
       <box
         flexDirection="row"
         border
@@ -624,9 +675,46 @@ function InputBox({
           }
           backgroundColor={theme.bgPanel}
           textColor={theme.fg}
-          onSubmit={onSubmit as any}
+          onInput={setValue as any}
+          onSubmit={handleSubmit as any}
         />
       </box>
+    </box>
+  );
+}
+
+function SlashAutocomplete({
+  matches,
+  onPick,
+}: {
+  matches: SlashCommandSpec[];
+  onPick: (c: SlashCommandSpec) => void;
+}) {
+  return (
+    <box
+      flexDirection="column"
+      border
+      borderColor={theme.gold}
+      backgroundColor={theme.bgPanel}
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={0}
+      paddingBottom={0}
+      title=" slash commands "
+      titleAlignment="left"
+    >
+      {matches.map((c) => (
+        <box
+          key={c.cmd}
+          flexDirection="row"
+          height={1}
+          onMouseDown={() => onPick(c)}
+        >
+          <text fg={theme.gold}>{c.cmd.padEnd(10, " ")}</text>
+          <text fg={theme.fgDim}>{(c.arg ?? "").padEnd(12, " ")}</text>
+          <text fg={theme.fg}>{c.desc}</text>
+        </box>
+      ))}
     </box>
   );
 }
