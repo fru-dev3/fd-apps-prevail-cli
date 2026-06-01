@@ -21,7 +21,6 @@ export interface Domain {
 }
 
 const NON_DOMAIN_DIRS = new Set([
-  "chief",
   "complete",
   "core",
   "scripts",
@@ -30,6 +29,58 @@ const NON_DOMAIN_DIRS = new Set([
   ".claude-plugin",
   "node_modules",
 ]);
+
+// Importance order for the LIFE DOMAINS sidebar. Coordinators (chief, council)
+// come first, then daily-driver life domains, then periodic/archival domains.
+// Anything not in this list falls to the bottom, alphabetically.
+const DOMAIN_PRIORITY: readonly string[] = [
+  "chief",        // chief of staff — daily brief, cross-domain triage
+  "council",      // council of elders — cross-agent coordination
+  "vision",       // long-horizon goals & retrospectives
+  "wealth",       // money pulse
+  "health",       // body pulse
+  "tax",          // compliance + deadlines
+  "calendar",     // time
+  "career",       // primary income (W2)
+  "business",     // secondary income (LLCs)
+  "estate",       // real estate operations
+  "real-estate",  // real estate documents
+  "insurance",    // risk management
+  "benefits",     // comp & benefits
+  "brand",        // personal + biz brand
+  "content",      // content production
+  "social",       // relationships
+  "home",         // household
+  "learning",     // skill building
+  "explore",      // exploration / opportunities
+  "intel",        // info gathering
+  "records",      // archive
+];
+
+function domainRank(name: string): number {
+  const idx = DOMAIN_PRIORITY.indexOf(name);
+  return idx === -1 ? DOMAIN_PRIORITY.length : idx;
+}
+
+// Skill ordering: cadenced operational skills (briefs > weekly > monthly > sync >
+// review) outrank utility skills (build/extract/flag) outrank everything else.
+// Within a tier, sort alphabetically.
+function skillRank(id: string): number {
+  const s = id.toLowerCase();
+  if (/(^|-)(daily|morning|evening)(-|$)/.test(s)) return 0;
+  if (s.endsWith("-brief") || s.includes("-brief-")) return 1;
+  if (s.includes("weekly")) return 2;
+  if (s.includes("monthly") || s.includes("quarterly") || s.includes("annual")) return 3;
+  if (s.includes("sync") || s.includes("synthesis")) return 4;
+  if (s.includes("review") || s.includes("audit") || s.includes("analyze")) return 5;
+  if (/(^|-)build-/.test(s) || /(^|-)prepare-/.test(s) || /(^|-)calculate-/.test(s) || /(^|-)draft-/.test(s)) return 6;
+  if (/(^|-)extract-/.test(s) || /(^|-)pull-/.test(s) || /(^|-)check-/.test(s) || /(^|-)log-/.test(s)) return 7;
+  if (/(^|-)flag-/.test(s) || /(^|-)watch-/.test(s) || /(^|-)track-/.test(s)) return 8;
+  // Bare integration names (no hyphen) sink to the bottom — they're connectors,
+  // not operational skills.
+  if (!s.includes("-")) return 10;
+  return 9;
+}
 
 export function resolveDefaultVaultPath(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -80,7 +131,12 @@ export function scanVault(vaultPath: string): Domain[] {
     });
   }
 
-  domains.sort((a, b) => a.name.localeCompare(b.name));
+  domains.sort((a, b) => {
+    const ra = domainRank(a.name);
+    const rb = domainRank(b.name);
+    if (ra !== rb) return ra - rb;
+    return a.name.localeCompare(b.name);
+  });
   return domains;
 }
 
@@ -151,7 +207,12 @@ function scanSkills(lifePath: string, vaultPath: string, domain: string): Domain
       });
     }
     if (out.length > 0) {
-      out.sort((a, b) => a.id.localeCompare(b.id));
+      out.sort((a, b) => {
+        const ra = skillRank(a.id);
+        const rb = skillRank(b.id);
+        if (ra !== rb) return ra - rb;
+        return a.id.localeCompare(b.id);
+      });
       return out;
     }
   }
