@@ -15,6 +15,8 @@ interface Args {
   help: boolean;
   version: boolean;
   doctor: boolean;
+  schedule: boolean;
+  scheduleArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -24,6 +26,8 @@ function parseArgs(argv: string[]): Args {
   let help = false;
   let version = false;
   let doctor = false;
+  let schedule = false;
+  let scheduleArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -31,7 +35,11 @@ function parseArgs(argv: string[]): Args {
     else if (a === "init" || a === "--init") forceInit = true;
     else if (a === "demo" || a === "--demo") demo = true;
     else if (a === "doctor") doctor = true;
-    else if (a === "--vault" || a === "-d") {
+    else if (a === "schedule") {
+      schedule = true;
+      scheduleArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "--vault" || a === "-d") {
       const next = argv[i + 1];
       if (next) {
         vaultPath = resolve(process.cwd(), next);
@@ -41,7 +49,7 @@ function parseArgs(argv: string[]): Args {
       vaultPath = resolve(process.cwd(), a.slice("--vault=".length));
     }
   }
-  return { vaultPath, forceInit, demo, help, version, doctor };
+  return { vaultPath, forceInit, demo, help, version, doctor, schedule, scheduleArgs };
 }
 
 function printHelp() {
@@ -52,6 +60,7 @@ USAGE
   aireadyu init                run the first-run wizard
   aireadyu demo                ignore config, boot the synthetic vault
   aireadyu doctor              check installed AI clis + vault shape
+  aireadyu schedule [...]      manage embedded cron-style schedules
   aireadyu --vault <path>      override vault path for one session
 
 OPTIONS
@@ -77,6 +86,137 @@ CHAT (right pane, always live)
   /clear                            reset conversation
   /exit                             return to cockpit
 `);
+}
+
+async function scheduleCommand(args: string[], vaultOverride: string | null) {
+  const { loadSchedules, saveSchedules, makeScheduleId, isValidCron, isCronDue, runSchedule, describeCron, nextRunWithin } = await import("./schedule.ts");
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  if (!existsSync(vault)) {
+    console.error(`vault path not found: ${vault}`);
+    process.exit(1);
+  }
+
+  const sub = args[0];
+  if (!sub || sub === "list" || sub === "ls") {
+    const schedules = loadSchedules(vault);
+    if (schedules.length === 0) {
+      console.log(`no schedules in ${vault}/.schedule.json`);
+      console.log(`add one with: aireadyu schedule add "<cron>" "<command>" [--name <name>]`);
+      return;
+    }
+    console.log(`schedules in ${vault}/.schedule.json:\n`);
+    for (const s of schedules) {
+      const next = nextRunWithin(s.cron);
+      const nextLabel = next ? new Date(next).toLocaleString() : "(never within 7d)";
+      const status = s.enabled ? "✓" : "✗";
+      console.log(`  ${status} ${s.id}`);
+      console.log(`    name:     ${s.name}`);
+      console.log(`    cron:     ${s.cron}  (${describeCron(s.cron)})`);
+      console.log(`    command:  ${s.command}`);
+      console.log(`    last_run: ${s.last_run ? new Date(s.last_run).toLocaleString() : "(never)"}`);
+      console.log(`    next:     ${nextLabel}\n`);
+    }
+    return;
+  }
+
+  if (sub === "add") {
+    const cron = args[1];
+    const command = args[2];
+    if (!cron || !command) {
+      console.error('usage: aireadyu schedule add "<cron>" "<command>" [--name <name>]');
+      process.exit(1);
+    }
+    if (!isValidCron(cron)) {
+      console.error(`invalid cron: "${cron}" — needs 5 space-separated fields`);
+      process.exit(1);
+    }
+    let name = command.slice(0, 60);
+    for (let i = 3; i < args.length; i++) {
+      if (args[i] === "--name" && args[i + 1]) {
+        name = args[i + 1];
+        i++;
+      }
+    }
+    const entry = {
+      id: makeScheduleId(),
+      name,
+      cron,
+      command,
+      enabled: true,
+      last_run: null,
+      created_at: Date.now(),
+    };
+    const schedules = loadSchedules(vault);
+    schedules.push(entry);
+    saveSchedules(vault, schedules);
+    console.log(`✓ added ${entry.id}`);
+    console.log(`  cron:    ${cron}  (${describeCron(cron)})`);
+    console.log(`  command: ${command}`);
+    return;
+  }
+
+  if (sub === "remove" || sub === "rm") {
+    const id = args[1];
+    if (!id) {
+      console.error("usage: aireadyu schedule remove <id>");
+      process.exit(1);
+    }
+    const before = loadSchedules(vault);
+    const after = before.filter((s) => s.id !== id);
+    if (after.length === before.length) {
+      console.error(`no schedule with id ${id}`);
+      process.exit(1);
+    }
+    saveSchedules(vault, after);
+    console.log(`✓ removed ${id}`);
+    return;
+  }
+
+  if (sub === "run") {
+    const id = args[1];
+    if (!id) {
+      console.error("usage: aireadyu schedule run <id>");
+      process.exit(1);
+    }
+    const schedules = loadSchedules(vault);
+    const entry = schedules.find((s) => s.id === id);
+    if (!entry) {
+      console.error(`no schedule with id ${id}`);
+      process.exit(1);
+    }
+    console.log(`running ${entry.id}: ${entry.command}`);
+    const result = await runSchedule(entry, vault);
+    entry.last_run = result.ts;
+    saveSchedules(vault, schedules);
+    console.log(`✓ fired at ${new Date(result.ts).toLocaleString()}`);
+    return;
+  }
+
+  if (sub === "tick") {
+    // mostly for debugging — runs all due schedules right now
+    const schedules = loadSchedules(vault);
+    let fired = 0;
+    for (const s of schedules) {
+      if (!s.enabled) continue;
+      if (!isCronDue(s.cron, new Date())) continue;
+      console.log(`firing ${s.id}: ${s.command}`);
+      await runSchedule(s, vault);
+      s.last_run = Date.now();
+      fired++;
+    }
+    saveSchedules(vault, schedules);
+    console.log(`${fired} schedule${fired === 1 ? "" : "s"} fired`);
+    return;
+  }
+
+  console.error(`unknown subcommand: ${sub}\n`);
+  console.error("usage:");
+  console.error("  aireadyu schedule list");
+  console.error('  aireadyu schedule add "<cron>" "<command>" [--name <name>]');
+  console.error("  aireadyu schedule remove <id>");
+  console.error("  aireadyu schedule run <id>");
+  process.exit(1);
 }
 
 async function doctor() {
@@ -114,6 +254,10 @@ async function main() {
   }
   if (args.doctor) {
     await doctor();
+    return;
+  }
+  if (args.schedule) {
+    await scheduleCommand(args.scheduleArgs, args.vaultPath);
     return;
   }
 

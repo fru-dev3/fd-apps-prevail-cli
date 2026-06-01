@@ -7,8 +7,8 @@
 - **last touched:** 2026-06-01
 - **current version on main:** v0.1.2 (P1.1 + P1.2 staged for v0.1.3)
 - **next milestone:** v0.2.0 — "the agent that grows with you" (Hermes-inspired feature pack)
-- **active item:** P3.1 — embedded scheduler (`aireadyu schedule`)
-- **just finished:** P2.2 — session persistence + FTS5 /search. Every user + assistant message is appended to `~/.aireadyu/sessions/<domain>-<sessionId>.jsonl` and mirrored into `~/.aireadyu/sessions.db` (SQLite FTS5 virtual table). `/search <query>` returns top 5 matches with rank-ordered snippets. ContextCard now shows "▸ N past chat messages · last 3d ago" chip when the domain has history. Whole module in `src/session.ts`.
+- **active item:** P3.2 — LifeApp plugin contract
+- **just finished:** P3.1 — embedded scheduler. New subcommand `aireadyu schedule list/add/remove/run/tick` with 5-field cron support. Schedules persist in `<vault>/.schedule.json`. The cockpit also runs a background tick every 60s that fires due jobs and surfaces "⏰ scheduled: <name>" in the bottom command bar. Whole module in `src/schedule.ts`.
 
 ## BACKGROUND (read this if you have no context)
 
@@ -76,7 +76,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 
 ### P3 — NEXT SPRINT (unlocks live demo + community contributions)
 
-- [ ] **P3.1 — Embedded scheduler (`aireadyu schedule`)**
+- [x] **P3.1 — Embedded scheduler (`aireadyu schedule`)** (done: 2026-06-01)
   - **why:** so the Alex Rivera demo can show *live* recurring activity, and so `fru-*-monthly-sync`-style routines work without macOS launchd. Cite: Hermes `cron/scheduler.py` (87KB).
   - **acceptance:**
     - new subcommand `aireadyu schedule list/add/remove/run`

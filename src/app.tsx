@@ -26,6 +26,7 @@ import {
   persistMessage,
   searchMessages,
 } from "./session.ts";
+import { tickAndRunDue } from "./schedule.ts";
 import {
   detectClis,
   formatModelBadge,
@@ -97,6 +98,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     const t = setTimeout(() => setMessage(null), 4000);
     return () => clearTimeout(t);
   }, [message]);
+
+  // schedule tick — check every minute for due jobs in this vault
+  useEffect(() => {
+    const fireAndSurface = () => {
+      const fired = tickAndRunDue(vaultPath);
+      if (fired.length > 0) {
+        const label = fired.map((s) => s.name || s.id).join(", ");
+        setMessage(`⏰ scheduled: ${label}`);
+      }
+    };
+    fireAndSurface();
+    const id = setInterval(fireAndSurface, 60_000);
+    return () => clearInterval(id);
+  }, [vaultPath]);
 
   useEffect(() => {
     setViewIdx(0);
