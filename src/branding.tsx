@@ -37,7 +37,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={11}
+      height={14}
       border={["bottom"]}
       borderStyle="double"
       borderColor={theme.gold}
@@ -70,6 +70,15 @@ export function Branding({
   );
 }
 
+const LOGO_LINES = [
+  " █████╗ ██╗   ██████╗ ███████╗ █████╗ ██████╗ ██╗   ██╗   ██╗   ██╗",
+  "██╔══██╗██║   ██╔══██╗██╔════╝██╔══██╗██╔══██╗╚██╗ ██╔╝   ██║   ██║",
+  "███████║██║   ██████╔╝█████╗  ███████║██║  ██║ ╚████╔╝    ██║   ██║",
+  "██╔══██║██║   ██╔══██╗██╔══╝  ██╔══██║██║  ██║  ╚██╔╝     ██║   ██║",
+  "██║  ██║██║   ██║  ██║███████╗██║  ██║██████╔╝   ██║      ╚██████╔╝",
+  "╚═╝  ╚═╝╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝    ╚═╝       ╚═════╝ ",
+] as const;
+
 function BrandColumn({
   domainCount,
   appCount,
@@ -80,20 +89,20 @@ function BrandColumn({
   totalLoops: number;
 }) {
   return (
-    <box flexDirection="row" width={64}>
+    <box flexDirection="row" width={80}>
       <Mascot />
-      <box flexDirection="column" paddingLeft={2} paddingTop={1}>
-        <text fg={theme.gold} attributes={1}>
-          █▀█ █   █▀█ █▀▀ ▄▀█ █▀▄ █▄█   █ █
-        </text>
-        <text fg={theme.gold} attributes={1}>
-          █▀█ █   █▀▄ ██▄ █▀█ █▄▀  █    █▄█
-        </text>
+      <box flexDirection="column" paddingLeft={2}>
+        {LOGO_LINES.map((line, i) => (
+          <text key={`logo-${i}`} fg={theme.gold} attributes={1}>
+            {line}
+          </text>
+        ))}
         <text fg={theme.goldDim}>
-          a i  ·  r e a d y  ·  u   —   personal ai cockpit
+          {"        a i  ·  r e a d y  ·  u   —   personal ai cockpit"}
         </text>
         <text> </text>
         <text fg={theme.fgDim}>
+          {"        "}
           <span fg={theme.fg}>{domainCount.toString().padStart(2, " ")}</span>
           {" life domains   "}
           <span fg={theme.fg}>{appCount.toString().padStart(2, " ")}</span>
@@ -110,7 +119,7 @@ function BrandColumn({
 
 function Mascot() {
   return (
-    <box flexDirection="column" width={9} paddingTop={1}>
+    <box flexDirection="column" width={9} paddingTop={2}>
       <text fg={theme.goldDim}> ╲ │ ╱ </text>
       <text fg={theme.gold} attributes={1}> ─ ◈ ─ </text>
       <text fg={theme.goldDim}> ╱ │ ╲ </text>
@@ -123,7 +132,7 @@ function Mascot() {
 function Separator() {
   return (
     <box flexDirection="column" width={3} paddingLeft={1} paddingRight={1}>
-      {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+      {Array.from({ length: 12 }, (_, i) => (
         <text key={`sep-${i}`} fg={theme.border}>
           │
         </text>
@@ -168,7 +177,7 @@ function StatusColumn({
         <text fg={theme.goldDim}>{`  ·  ${yearLabel}`}</text>
       </box>
       <text fg={theme.fgDim}>
-        {timeLabel}  ·  fd-apps · aireadyu-tui  ·  opentui · zig core
+        {timeLabel}  ·  aireadyu  ·  opentui · zig core
       </text>
       <text> </text>
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
