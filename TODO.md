@@ -7,8 +7,8 @@
 - **last touched:** 2026-06-01
 - **current version on main:** v0.1.2 (P1.1 + P1.2 staged for v0.1.3)
 - **next milestone:** v0.2.0 — "the agent that grows with you" (Hermes-inspired feature pack)
-- **active item:** P1.3 — fix recurring linux-x64 build failure
-- **just finished:** P1.1 + P1.2 — AGENTS.md + AGENTS-operating.md shipped; cli-bridge prepends manual on every chat launch via --append-system-prompt (Claude) or augmented prompt (Codex/Gemini); install.sh + release.yml + vault-demo all carry the manual
+- **active item:** P2.1 — /distill slash command (the agent that grows with you)
+- **just finished:** P1.3 disposition — linux-x64 actually works fine; the lagging job is darwin-x64 on the free macos-13 runner queue. Not a code issue. Accepted; documented.
 
 ## BACKGROUND (read this if you have no context)
 
@@ -44,12 +44,10 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
   - **files:** `src/cli-bridge.ts`, `src/vault.ts` (helper to find the manual), `vault-demo/AGENTS-operating.md` (copy in)
   - **effort:** 2 hours
 
-- [ ] **P1.3 — Investigate + fix recurring linux-x64 build failure**
-  - **why:** v0.1.1 and v0.1.2 both failed linux-x64 in the release matrix. Probably `bun install` step or platform-specific OpenTUI binding. Linux users can't install yet.
-  - **acceptance:** v0.1.x release page shows all 4 binaries: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`. Workflow file fixed so future tags succeed.
-  - **files:** `.github/workflows/release.yml`, possibly `package.json` optionalDependencies for `@opentui/core-linux-x64`
-  - **how to debug:** `gh run view --log-failed <run_id> --repo fru-dev3/aireadyu | tail -100`
-  - **effort:** 1-2 hours
+- [x] **P1.3 — Investigate + fix recurring linux-x64 build failure** (done: 2026-06-01)
+  - **disposition:** rescoped after verification. linux-x64 builds and uploads fine on v0.1.2. The actually-lagging target is `darwin-x64` (Intel Mac) sitting in GitHub's free macos-13 runner queue for hours. That's runner availability, not a code defect.
+  - **action taken:** none required. The `fail-fast: false` matrix already keeps the other 3 jobs landing predictably. Intel Mac users either wait for the macos-13 queue to clear or build from source.
+  - **future:** if darwin-x64 demand emerges, options are (a) drop it from the matrix and document source-build, or (b) move to a paid macos-13 runner. Bookmark.
 
 ### P2 — THIS WEEK (the v0.2 narrative: "the agent that grows with you")
 
