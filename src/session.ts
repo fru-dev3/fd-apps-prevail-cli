@@ -111,6 +111,26 @@ export interface DomainHistory {
   session_count: number;
 }
 
+export function getRecentUserPrompts(domain: string, limit = 10): string[] {
+  const handle = db();
+  if (!handle) return [];
+  try {
+    const rows = handle
+      .query<{ content: string }, [string, number]>(
+        `SELECT content FROM messages
+         WHERE domain = ? AND role = 'user'
+         ORDER BY ts DESC
+         LIMIT ?`,
+      )
+      .all(domain, limit);
+    return rows
+      .map((r) => r.content)
+      .filter((c) => typeof c === "string" && c.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 export function getDomainHistory(domain: string): DomainHistory {
   const empty: DomainHistory = {
     domain,

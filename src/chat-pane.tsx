@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { useKeyboard } from "@opentui/react";
 import { theme, spinnerChar, thinkingWord } from "./theme.ts";
 import {
@@ -11,7 +13,15 @@ import {
 import { buildDomainContext, type Domain, type ViewKey } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { openInFinder, shortenHome } from "./system.ts";
-import { formatRelativeDate, getDomainHistory } from "./session.ts";
+import { formatRelativeDate, getDomainHistory, getRecentUserPrompts } from "./session.ts";
+import {
+  buildSuggestions,
+  parsePromptsMd,
+  recordSuggestionClick,
+  type Suggestion,
+  type SuggestionContext,
+  type SuggestionSource,
+} from "./suggestions.ts";
 
 export type ChatSeed =
   | "tab"
@@ -63,6 +73,21 @@ interface Props {
 
 export function ChatPane({ session, availableClis, tick, onSend, onCommand, onExit, onAutocompleteChange }: Props) {
   const ref = useRef<any>(null);
+
+  const userMsgCount = session.messages.filter((m) => m.role === "user").length;
+  const showSuggestions = userMsgCount === 0;
+
+  const suggestions = useMemo<Suggestion[]>(() => {
+    if (!showSuggestions) return [];
+    return buildSuggestions(buildSuggestionContext(session));
+  }, [
+    showSuggestions,
+    session.hostDomain.path,
+    session.hostDomain.stateMtime,
+    session.hostDomain.openLoopCount,
+    session.seed,
+    session.key,
+  ]);
 
   useLayoutEffect(() => {
     forceFocus(ref);
@@ -127,12 +152,17 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
       <Transcript
         session={session}
         tick={tick}
+        suggestions={suggestions}
         onAcceptDistill={(ts, content) =>
           onCommand(session.key, { kind: "accept-distill", ts, content })
         }
         onDiscardDistill={(ts) =>
           onCommand(session.key, { kind: "discard-distill", ts })
         }
+        onPickSuggestion={(s) => {
+          recordSuggestionClick(s.id);
+          onSend(session.key, s.prompt);
+        }}
       />
       <SkillStrip
         session={session}
@@ -302,17 +332,27 @@ function SkillStrip({
 function Transcript({
   session,
   tick,
+  suggestions,
   onAcceptDistill,
   onDiscardDistill,
+  onPickSuggestion,
 }: {
   session: ChatSession;
   tick: number;
+  suggestions: Suggestion[];
   onAcceptDistill: (ts: number, content: string) => void;
   onDiscardDistill: (ts: number) => void;
+  onPickSuggestion: (s: Suggestion) => void;
 }) {
   const messages = session.messages;
+  const showChips =
+    suggestions.length > 0 &&
+    messages.filter((m) => m.role === "user").length === 0;
   return (
     <scrollbox flexGrow={1} scrollY paddingLeft={2} paddingRight={2} paddingTop={1}>
+      {showChips && (
+        <SuggestionChips suggestions={suggestions} onPick={onPickSuggestion} />
+      )}
       <MetaLine session={session} visibleCount={messages.filter((m) => m.role !== "system").length} />
       {messages.map((m, i) => (
         <MessageBubble
@@ -325,6 +365,96 @@ function Transcript({
       {session.pending && <ThinkingBubble tick={tick} />}
     </scrollbox>
   );
+}
+
+const SOURCE_ICON: Record<SuggestionSource, string> = {
+  "stale-state": "◆",
+  "open-loops": "◯",
+  "prompts-md": "▶",
+  history: "↻",
+  llm: "≡",
+  default: "·",
+};
+
+function SuggestionChips({
+  suggestions,
+  onPick,
+}: {
+  suggestions: Suggestion[];
+  onPick: (s: Suggestion) => void;
+}) {
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <box flexDirection="row" height={1}>
+        <text fg={theme.fgFaint}>try one to get started · clicks tune future suggestions</text>
+      </box>
+      {suggestions.map((s) => (
+        <SuggestionChip key={s.id} suggestion={s} onPick={onPick} />
+      ))}
+    </box>
+  );
+}
+
+function SuggestionChip({
+  suggestion,
+  onPick,
+}: {
+  suggestion: Suggestion;
+  onPick: (s: Suggestion) => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const border = hover ? theme.goldBright : theme.gold;
+  const labelFg = hover ? theme.goldBright : theme.fg;
+  const icon = SOURCE_ICON[suggestion.source] ?? "·";
+  return (
+    <box flexDirection="column" paddingBottom={0}>
+      <box
+        flexDirection="row"
+        border
+        borderColor={border}
+        backgroundColor={theme.bg}
+        paddingLeft={1}
+        paddingRight={1}
+        height={3}
+        onMouseDown={() => onPick(suggestion)}
+        onMouseOver={() => setHover(true)}
+        onMouseOut={() => setHover(false)}
+      >
+        <text fg={theme.gold}>{icon} </text>
+        <text fg={labelFg}>{suggestion.label}</text>
+      </box>
+    </box>
+  );
+}
+
+function buildSuggestionContext(session: ChatSession): SuggestionContext {
+  const seed = session.seed;
+  const isApp = seed !== "tab" && seed.kind === "app";
+  // For app sessions we still anchor on hostDomain (always set) but key the
+  // suggestion context to the app id so click-tracking is per-app, not per-host.
+  const name = isApp ? seed.id : session.hostDomain.name;
+  const path = session.hostDomain.path;
+  const promptsPath = join(path, "PROMPTS.md");
+  let promptsContent = "";
+  if (existsSync(promptsPath)) {
+    try {
+      promptsContent = readFileSync(promptsPath, "utf8");
+    } catch {}
+  }
+  const promptsMdEntries = parsePromptsMd(promptsContent);
+  let recentChatPrompts: string[] = [];
+  try {
+    recentChatPrompts = getRecentUserPrompts(session.hostDomain.name, 10);
+  } catch {}
+  return {
+    kind: isApp ? "app" : "domain",
+    name,
+    path,
+    openLoopCount: session.hostDomain.openLoopCount,
+    stateMtime: session.hostDomain.stateMtime,
+    recentChatPrompts,
+    promptsMdEntries,
+  };
 }
 
 function MetaLine({ session, visibleCount }: { session: ChatSession; visibleCount: number }) {
