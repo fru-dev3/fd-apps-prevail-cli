@@ -735,6 +735,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               }}
             />
           )}
+          {focus === "apps" && app && !inEdit && (
+            <TabStrip
+              domainName={app.id}
+              activeView={view}
+              inChat={Boolean(inChat)}
+              onPickView={(i) => {
+                setFocus("apps");
+                setViewIdx(i);
+                if (mode === "chat") setMode("idle");
+              }}
+              onPickChat={() => {
+                if (app) openChatForApp(app);
+              }}
+            />
+          )}
           {inChat ? (
             <ChatPane
               session={activeSession!}
@@ -751,7 +766,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               onExit={exitEditor}
             />
           ) : focus === "apps" && app ? (
-            <AppDetail app={app} />
+            <AppDetail
+              app={app}
+              view={view}
+              skillIdx={skillIdx}
+              onPickSkill={(i) => setSkillIdx(i)}
+            />
           ) : (
             <DomainDetail
               domain={domain}

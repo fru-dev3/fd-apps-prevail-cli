@@ -81,6 +81,7 @@ export function Sidebar({
         count={apps.length}
         focused={focus === "apps"}
         flexGrow={2}
+        columnHeader="  app            loops"
         followId={focus === "apps" ? `app-${apps[appIdx]?.id ?? ""}` : null}
       >
         {apps.map((a, i) => {
@@ -88,9 +89,8 @@ export function Sidebar({
           const fg = active ? theme.selFg : theme.fg;
           const bg = active ? theme.selBg : theme.bgPanel;
           const pointer = active ? "› " : "  ";
-          const xn = a.domains.length;
-          const badge = xn > 1 ? `×${xn}`.padStart(3, " ") : "   ";
-          const badgeColor = active ? theme.selFg : theme.fgFaint;
+          const badgeColor = a.openLoopCount > 0 ? theme.warn : theme.fgFaint;
+          const badge = a.openLoopCount.toString().padStart(2, " ");
           const communityMark = a.community ? "★" : " ";
           const nameRaw = `${communityMark}${a.id}`;
           const namePadded = nameRaw.padEnd(16, " ").slice(0, 16);

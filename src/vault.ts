@@ -338,13 +338,21 @@ function extractStateHeadline(content: string, max: number): string[] {
   return out;
 }
 
+// AppSkill carries the same Vaultable shape as Domain (path, hasState,
+// openLoopCount, stateMtime, skills) plus app-specific metadata. Vault apps
+// (<vault>/apps/<id>/) populate hasState=true and a real skill list.
+// Community apps populate hasState=false and just point at their SKILL.md.
 export interface AppSkill {
   id: string;
   title: string;
   description: string;
   domains: string[];
-  paths: string[];
-  community?: boolean;
+  path: string;
+  hasState: boolean;
+  openLoopCount: number;
+  stateMtime: number | null;
+  skills: DomainSkill[];
+  community: boolean;
   manifestPath?: string;
 }
 
@@ -405,7 +413,11 @@ export function scanCommunityApps(): AppSkill[] {
         title: manifest.name || e.name,
         description: (manifest.description || "").trim().slice(0, 240),
         domains: manifest.domains || [],
-        paths: [skillPath],
+        path: root,
+        hasState: false,
+        openLoopCount: 0,
+        stateMtime: null,
+        skills: [],
         community: true,
         manifestPath,
       });
@@ -415,49 +427,133 @@ export function scanCommunityApps(): AppSkill[] {
   return out;
 }
 
-export function scanApps(vaultPath: string): AppSkill[] {
-  if (!existsSync(vaultPath)) return [];
-  const lifePath = resolve(vaultPath, "..");
-  const out = new Map<string, AppSkill>();
-  const entries = readdirSync(vaultPath, { withFileTypes: true });
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    if (NON_DOMAIN_DIRS.has(e.name)) continue;
-    const skillsRoot = [
-      join(vaultPath, e.name, "skills"),
-      join(lifePath, e.name, "skills"),
-    ].find((p) => existsSync(p));
-    if (!skillsRoot) continue;
-    let skillDirs: import("node:fs").Dirent[] = [];
-    try {
-      skillDirs = readdirSync(skillsRoot, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const s of skillDirs) {
-      if (!s.isDirectory()) continue;
-      if (s.name.startsWith(`${e.name}-`)) continue;
-      const skillFile = join(skillsRoot, s.name, "SKILL.md");
-      if (!existsSync(skillFile)) continue;
-      const existing = out.get(s.name);
-      if (existing) {
-        if (!existing.domains.includes(e.name)) existing.domains.push(e.name);
-        existing.paths.push(skillFile);
-      } else {
-        out.set(s.name, {
-          id: s.name,
-          title: extractSkillTitle(skillFile, s.name),
-          description: extractDescription(skillFile),
-          domains: [e.name],
-          paths: [skillFile],
-        });
-      }
-    }
+// Vault apps live at <vault>/apps/<id>/ and mirror the domain shape exactly:
+// state.md, open-loops.md, PROMPTS.md, QUICKSTART.md, skills/<skill-id>/SKILL.md.
+function scanVaultApps(vaultPath: string): AppSkill[] {
+  const appsRoot = join(vaultPath, "apps");
+  if (!existsSync(appsRoot)) return [];
+  const out: AppSkill[] = [];
+  let entries: import("node:fs").Dirent[] = [];
+  try {
+    entries = readdirSync(appsRoot, { withFileTypes: true });
+  } catch {
+    return [];
   }
-  const sorted = Array.from(out.values());
-  for (const app of sorted) app.domains.sort();
-  sorted.sort((a, b) => a.id.localeCompare(b.id));
-  return sorted;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const appPath = join(appsRoot, entry.name);
+    const statePath = join(appPath, "state.md");
+    const loopsPath = join(appPath, "open-loops.md");
+    const hasState = existsSync(statePath);
+    let openLoopCount = 0;
+    let stateMtime: number | null = null;
+    if (hasState) {
+      try {
+        const content = readFileSync(statePath, "utf8");
+        stateMtime = statSync(statePath).mtimeMs;
+        openLoopCount = countOpenItemsInState(content);
+      } catch {}
+    }
+    if (openLoopCount === 0 && existsSync(loopsPath)) {
+      try {
+        const content = readFileSync(loopsPath, "utf8");
+        openLoopCount = countUncheckedBoxes(content);
+      } catch {}
+    }
+    out.push({
+      id: entry.name,
+      title: extractAppTitle(appPath, entry.name),
+      description: extractAppDescription(appPath),
+      domains: extractAppDomains(appPath),
+      path: appPath,
+      hasState,
+      openLoopCount,
+      stateMtime,
+      skills: scanAppSkills(appPath),
+      community: false,
+    });
+  }
+  out.sort((a, b) => a.id.localeCompare(b.id));
+  return out;
+}
+
+function scanAppSkills(appPath: string): DomainSkill[] {
+  const skillsRoot = join(appPath, "skills");
+  if (!existsSync(skillsRoot)) return [];
+  const out: DomainSkill[] = [];
+  let entries: import("node:fs").Dirent[] = [];
+  try {
+    entries = readdirSync(skillsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillFile = join(skillsRoot, entry.name, "SKILL.md");
+    if (!existsSync(skillFile)) continue;
+    out.push({
+      id: entry.name,
+      title: extractSkillTitle(skillFile, entry.name),
+      path: skillFile,
+    });
+  }
+  out.sort((a, b) => {
+    const ra = skillRank(a.id);
+    const rb = skillRank(b.id);
+    if (ra !== rb) return ra - rb;
+    return a.id.localeCompare(b.id);
+  });
+  return out;
+}
+
+function extractAppTitle(appPath: string, fallback: string): string {
+  const statePath = join(appPath, "state.md");
+  if (existsSync(statePath)) {
+    try {
+      const content = readFileSync(statePath, "utf8");
+      const m = content.match(/^#\s+(.+?)\s*$/m);
+      if (m) return m[1].split("—")[0].trim() || fallback;
+    } catch {}
+  }
+  return fallback;
+}
+
+function extractAppDescription(appPath: string): string {
+  const statePath = join(appPath, "state.md");
+  if (!existsSync(statePath)) return "";
+  try {
+    const content = readFileSync(statePath, "utf8");
+    const lines = content.split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (trimmed.startsWith("#")) continue;
+      if (trimmed.startsWith(">")) continue;
+      if (trimmed.startsWith("**")) continue;
+      return trimmed.replace(/\s+/g, " ").slice(0, 240);
+    }
+  } catch {}
+  return "";
+}
+
+function extractAppDomains(appPath: string): string[] {
+  const statePath = join(appPath, "state.md");
+  if (!existsSync(statePath)) return [];
+  try {
+    const content = readFileSync(statePath, "utf8");
+    const m = content.match(/^\*\*Used by domains?:\*\*\s*(.+)$/im);
+    if (m) {
+      return m[1]
+        .split(/[,·]/)
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.length > 0);
+    }
+  } catch {}
+  return [];
+}
+
+export function scanApps(vaultPath: string): AppSkill[] {
+  return scanVaultApps(vaultPath);
 }
 
 function extractDescription(skillFile: string): string {
@@ -475,13 +571,88 @@ function extractDescription(skillFile: string): string {
 }
 
 export function readAppSkill(app: AppSkill): string {
-  const primary = app.paths[0];
-  if (!primary) return `*No SKILL.md for ${app.id}.*`;
-  try {
-    return readFileSync(primary, "utf8");
-  } catch (err) {
-    return `*Failed to read ${primary}: ${(err as Error).message}*`;
+  // Community apps have a SKILL.md at the plugin root.
+  const skillPath = join(app.path, "SKILL.md");
+  if (existsSync(skillPath)) {
+    try {
+      return readFileSync(skillPath, "utf8");
+    } catch (err) {
+      return `*Failed to read ${skillPath}: ${(err as Error).message}*`;
+    }
   }
+  return `*No SKILL.md for ${app.id}.*`;
+}
+
+export function readAppView(app: AppSkill, view: ViewKey): string {
+  if (view === "skills") return renderAppSkillsView(app);
+  if (view === "loops") return readAppOpenItems(app);
+  const fileMap: Record<"state" | "quickstart" | "prompts", string> = {
+    state: "state.md",
+    quickstart: "QUICKSTART.md",
+    prompts: "PROMPTS.md",
+  };
+  const file = join(app.path, fileMap[view]);
+  if (!existsSync(file)) {
+    if (app.community && view === "state") {
+      return readAppSkill(app);
+    }
+    return `*No ${fileMap[view]} for ${app.id}.*`;
+  }
+  try {
+    return readFileSync(file, "utf8");
+  } catch (err) {
+    return `*Failed to read ${file}: ${(err as Error).message}*`;
+  }
+}
+
+function readAppOpenItems(app: AppSkill): string {
+  const statePath = join(app.path, "state.md");
+  if (existsSync(statePath)) {
+    try {
+      const content = readFileSync(statePath, "utf8");
+      const section = extractOpenItemsSection(content);
+      if (section) return `# ${app.id} — open items\n\n${section}`;
+    } catch {}
+  }
+  const loopsPath = join(app.path, "open-loops.md");
+  if (existsSync(loopsPath)) {
+    try {
+      return readFileSync(loopsPath, "utf8");
+    } catch {}
+  }
+  return `*No open items for ${app.id}.*`;
+}
+
+function renderAppSkillsView(app: AppSkill): string {
+  if (app.skills.length === 0) {
+    return `*No skills found for ${app.id}.*`;
+  }
+  const lines: string[] = [];
+  lines.push(`# ${app.id} skills (${app.skills.length})`);
+  lines.push("");
+  for (const skill of app.skills) {
+    lines.push(`- **${skill.id}** — ${skill.title}`);
+  }
+  return lines.join("\n");
+}
+
+export interface AppContext {
+  id: string;
+  updatedLabel: string;
+  openItems: string[];
+  statePreview: string[];
+}
+
+export function buildAppContext(app: AppSkill): AppContext {
+  const updatedLabel = formatRelativeTime(app.stateMtime);
+  const statePath = join(app.path, "state.md");
+  let raw = "";
+  try {
+    raw = readFileSync(statePath, "utf8");
+  } catch {}
+  const openItems = extractOpenItems(raw).slice(0, 5);
+  const statePreview = extractStateHeadline(raw, 4);
+  return { id: app.id, updatedLabel, openItems, statePreview };
 }
 
 export function formatRelativeTime(mtimeMs: number | null): string {
