@@ -102,8 +102,6 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
     } catch {}
   };
 
-  const visibleCount = session.messages.filter((m) => m.role !== "system").length;
-
   return (
     <box
       flexDirection="column"
@@ -111,9 +109,7 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
       border
       borderColor={theme.borderFocus}
       backgroundColor={theme.bg}
-      title={` ${session.label} · ${visibleCount} msg${visibleCount === 1 ? "" : "s"} `}
-      titleAlignment="left"
-      bottomTitle={` enter send · / for commands · click cli to switch · esc back `}
+      bottomTitle={` enter send · / for commands · esc back `}
       bottomTitleAlignment="left"
     >
       <PickerBar
@@ -311,7 +307,7 @@ function Transcript({
   const messages = session.messages;
   return (
     <scrollbox flexGrow={1} scrollY paddingLeft={2} paddingRight={2} paddingTop={1}>
-      <ContextCard session={session} />
+      <MetaLine session={session} visibleCount={messages.filter((m) => m.role !== "system").length} />
       {messages.map((m, i) => (
         <MessageBubble
           key={`m-${i}-${m.ts}`}
@@ -325,129 +321,42 @@ function Transcript({
   );
 }
 
-function ContextCard({ session }: { session: ChatSession }) {
+function MetaLine({ session, visibleCount }: { session: ChatSession; visibleCount: number }) {
   const ctx = useMemo(() => buildDomainContext(session.hostDomain), [session.hostDomain.path]);
-  const lines = useMemo(() => buildContextLines(session, ctx), [session.key, session.seed, ctx]);
+  const history = useMemo(
+    () => getDomainHistory(session.hostDomain.name),
+    [session.hostDomain.name, session.key],
+  );
+
+  const parts: string[] = [];
+  parts.push(`${visibleCount} msg${visibleCount === 1 ? "" : "s"}`);
+  parts.push(`updated ${ctx.updatedLabel}`);
+  if (session.seed !== "tab" && session.seed.kind === "skill") {
+    parts.push(`skill ${session.seed.id}`);
+  } else if (session.seed !== "tab" && session.seed.kind === "app") {
+    parts.push(`app ${session.seed.id} (${session.seed.domains.length}×)`);
+  }
+  if (history.message_count > 0) {
+    parts.push(
+      `${history.message_count} past chat${history.message_count === 1 ? "" : "s"} · /search`,
+    );
+  }
+
   return (
-    <box
-      flexDirection="column"
-      border
-      borderColor={theme.fgFaint}
-      backgroundColor={theme.bg}
-      title={contextTitle(session)}
-      titleAlignment="left"
-      paddingLeft={1}
-      paddingRight={1}
-      paddingBottom={0}
-    >
-      <PathRow path={session.hostDomain.path} />
-      {lines.map((line, i) => (
-        <ContextLine key={`ctx-${i}`} line={line} />
-      ))}
+    <box flexDirection="row" height={1} paddingBottom={0}>
+      <text fg={theme.fgFaint}>{parts.join("  ·  ")}</text>
+      <text fg={theme.fgFaint}>  ·  </text>
+      <box
+        flexDirection="row"
+        onMouseDown={() => openInFinder(session.hostDomain.path)}
+      >
+        <text fg={theme.bubbleAssistant} attributes={4}>
+          {shortenHome(session.hostDomain.path)}
+        </text>
+        <text fg={theme.fgFaint}> ↗</text>
+      </box>
     </box>
   );
-}
-
-function PathRow({ path }: { path: string }) {
-  return (
-    <box
-      flexDirection="row"
-      height={1}
-      onMouseDown={() => {
-        openInFinder(path);
-      }}
-    >
-      <text fg={theme.fgFaint}>path  </text>
-      <text fg={theme.bubbleAssistant} attributes={4}>
-        {shortenHome(path)}
-      </text>
-      <text fg={theme.fgFaint}>  ↗ click to open in finder</text>
-    </box>
-  );
-}
-
-function contextTitle(session: ChatSession): string {
-  if (session.seed === "tab") {
-    return ` context · ${session.hostDomain.name} `;
-  }
-  if (session.seed.kind === "skill") {
-    return ` context · skill ${session.seed.id} `;
-  }
-  return ` context · app ${session.seed.id} `;
-}
-
-interface CtxLine {
-  text: string;
-  emphasis?: "heading" | "muted" | "bullet" | "loop";
-}
-
-function ContextLine({ line }: { line: CtxLine }) {
-  const fg =
-    line.emphasis === "heading"
-      ? theme.gold
-      : line.emphasis === "muted"
-        ? theme.fgFaint
-        : line.emphasis === "loop"
-          ? theme.warn
-          : theme.fg;
-  return <text fg={fg}>{line.text}</text>;
-}
-
-function buildContextLines(session: ChatSession, ctx: ReturnType<typeof buildDomainContext>): CtxLine[] {
-  const lines: CtxLine[] = [];
-  if (session.seed === "tab") {
-    lines.push({ text: `${ctx.name} · updated ${ctx.updatedLabel}`, emphasis: "heading" });
-    for (const p of ctx.statePreview) {
-      lines.push({ text: `  ${p}` });
-    }
-    const history = getDomainHistory(session.hostDomain.name);
-    if (history.message_count > 0) {
-      lines.push({
-        text: `▸ ${history.message_count} past chat message${history.message_count === 1 ? "" : "s"} · last ${formatRelativeDate(history.last_ts)} · /search to find`,
-        emphasis: "muted",
-      });
-    }
-    if (ctx.openItems.length > 0) {
-      lines.push({ text: " " });
-      lines.push({ text: `open items (${ctx.openItems.length}):`, emphasis: "muted" });
-      for (const item of ctx.openItems) {
-        lines.push({ text: `  ◯ ${item}`, emphasis: "loop" });
-      }
-    }
-    return lines;
-  }
-  if (session.seed.kind === "skill") {
-    lines.push({
-      text: `${session.seed.id} · ${session.seed.title}`,
-      emphasis: "heading",
-    });
-    lines.push({ text: `domain: ${session.hostDomain.name}`, emphasis: "muted" });
-    lines.push({ text: " " });
-    lines.push({
-      text: `Claude will read SKILL.md at ${session.hostDomain.path}/../skills/${session.seed.id}/`,
-      emphasis: "muted",
-    });
-    lines.push({ text: " " });
-    if (ctx.openItems.length > 0) {
-      lines.push({ text: `domain open items (${ctx.openItems.length}):`, emphasis: "muted" });
-      for (const item of ctx.openItems.slice(0, 3)) {
-        lines.push({ text: `  ◯ ${item}`, emphasis: "loop" });
-      }
-    }
-    return lines;
-  }
-  const seed = session.seed;
-  lines.push({ text: `${seed.id} · ${seed.title}`, emphasis: "heading" });
-  lines.push({
-    text: `used in ${seed.domains.length} domain${seed.domains.length === 1 ? "" : "s"}: ${seed.domains.join(", ")}`,
-    emphasis: "muted",
-  });
-  lines.push({ text: " " });
-  lines.push({
-    text: `running with cwd ${session.hostDomain.name} — Claude will read its SKILL.md`,
-    emphasis: "muted",
-  });
-  return lines;
 }
 
 function MessageBubble({
