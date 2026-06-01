@@ -18,7 +18,7 @@ import { EditorPane } from "./editor-pane.tsx";
 import { TabStrip } from "./tab-strip.tsx";
 import { scanApps, scanCommunityApps, scanVault, type AppSkill, type Domain, type ViewKey } from "./vault.ts";
 import { theme } from "./theme.ts";
-import { scaffoldDomain } from "./domain-scaffold.ts";
+import { scaffoldApp, scaffoldDomain } from "./domain-scaffold.ts";
 import { buildDistillPrompt, parseDistillResponse, writeDistilledSkill } from "./distill.ts";
 import {
   formatRelativeDate,
@@ -44,7 +44,7 @@ const VIEW_FILE: Record<ViewKey, string | null> = {
   skills: null,
 };
 
-type Mode = "idle" | "new-domain" | "pick-cli" | "chat" | "edit";
+type Mode = "idle" | "new-domain" | "new-app" | "pick-cli" | "chat" | "edit";
 
 interface AppProps {
   vaultPath: string;
@@ -125,7 +125,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   }, [viewIdx]);
 
   useEffect(() => {
-    if (mode === "edit" || mode === "new-domain") return;
+    if (mode === "edit" || mode === "new-domain" || mode === "new-app") return;
     if (focus === "domains" && domain) {
       autoOpenDomainChat(domain);
     } else if (focus === "apps" && app) {
@@ -152,7 +152,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     const name = evt.name;
     if (!name) return;
 
-    if (mode === "new-domain" || mode === "edit") return;
+    if (mode === "new-domain" || mode === "new-app" || mode === "edit") return;
 
     // When the chat's slash-command popover is open, let the chat pane own
     // arrow/tab navigation — don't steal them for the sidebar.
@@ -259,6 +259,23 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   }, [chats]);
 
   const handleSubmit = (value: string) => {
+    if (mode === "new-app") {
+      const result = scaffoldApp(vaultPath, value);
+      setMode("idle");
+      if (result.ok) {
+        const next = [...scanApps(vaultPath), ...scanCommunityApps()];
+        setApps(next);
+        const idx = next.findIndex((a) => a.path === result.path);
+        if (idx >= 0) {
+          setAppIdx(idx);
+          setFocus("apps");
+        }
+        setMessage(`✓ ${result.message}`);
+      } else {
+        setMessage(`✗ ${result.message}`);
+      }
+      return;
+    }
     const result = scaffoldDomain(vaultPath, value);
     setMode("idle");
     if (result.ok) {
@@ -725,6 +742,14 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             setAppIdx(i);
             setFocus("apps");
           }}
+          onNewDomain={() => {
+            setFocus("domains");
+            setMode("new-domain");
+          }}
+          onNewApp={() => {
+            setFocus("apps");
+            setMode("new-app");
+          }}
         />
         <box flexDirection="column" flexGrow={1}>
           {focus === "domains" && domain && !inEdit && (
@@ -792,7 +817,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       </box>
       <CommandBar
         mode={mode}
-        prompt={mode === "new-domain" ? "new domain ›" : "chat with:"}
+        prompt={mode === "new-domain" ? "new domain ›" : mode === "new-app" ? "new app ›" : "chat with:"}
         message={message}
         cliOptions={clis.map((c) => c.label)}
         cliIndex={cliIdx}
@@ -802,7 +827,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           setPendingOpen(null);
         }}
         onAction={(a) => {
-          if (a === "new") setMode("new-domain");
+          if (a === "new") setMode(focus === "apps" ? "new-app" : "new-domain");
           else if (a === "chat") {
             if (focus === "apps" && app) openChatForApp(app);
             else if (domain) openChatForDomain(domain);

@@ -29,8 +29,52 @@ export function scaffoldDomain(vaultPath: string, rawName: string): ScaffoldResu
   }
 }
 
+export function scaffoldApp(vaultPath: string, rawName: string): ScaffoldResult {
+  const name = rawName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  if (!name) return { ok: false, message: "name is empty" };
+  const appsRoot = join(vaultPath, "apps");
+  const dir = join(appsRoot, name);
+  if (existsSync(dir)) return { ok: false, message: `app ${name} already exists` };
+
+  try {
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(dir, "skills"), { recursive: true });
+    writeFileSync(join(dir, "state.md"), defaultAppState(name));
+    writeFileSync(join(dir, "open-loops.md"), defaultOpenLoops(name));
+    writeFileSync(join(dir, "QUICKSTART.md"), defaultQuickstart(name));
+    writeFileSync(join(dir, "PROMPTS.md"), defaultPrompts(name));
+    return { ok: true, message: `created app ${name}`, path: dir };
+  } catch (err) {
+    return { ok: false, message: (err as Error).message };
+  }
+}
+
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function defaultAppState(name: string): string {
+  return `# ${title(name)}
+
+> Synthetic / placeholder — fill this in as you connect the app.
+
+**Used by domains:** (list here)
+**Last refresh:** —
+**Auth:** —
+
+## Coverage
+
+What data this app exposes; which institutions, accounts, or scopes it connects to.
+
+## When to Use This App
+
+- When …
+- When …
+
+## Open Items
+
+- [ ] First setup task for ${name}
+`;
 }
 
 function defaultState(name: string): string {

@@ -5,7 +5,7 @@ import { theme } from "./theme.ts";
 export type ToolbarAction = "new" | "chat" | "edit" | "refresh" | "quit";
 
 interface Props {
-  mode: "idle" | "new-domain" | "pick-cli" | "chat" | "edit";
+  mode: "idle" | "new-domain" | "new-app" | "pick-cli" | "chat" | "edit";
   prompt: string;
   message: string | null;
   cliOptions?: string[];
@@ -39,7 +39,7 @@ export function CommandBar({
     );
   }
 
-  if (mode === "new-domain") {
+  if (mode === "new-domain" || mode === "new-app") {
     return (
       <box flexDirection="row" height={1} paddingLeft={2} backgroundColor={theme.selBg}>
         <text fg={theme.gold}>{prompt} </text>

@@ -18,6 +18,8 @@ interface Props {
   tick: number;
   onPickDomain: (i: number) => void;
   onPickApp: (i: number) => void;
+  onNewDomain: () => void;
+  onNewApp: () => void;
 }
 
 export function Sidebar({
@@ -32,6 +34,8 @@ export function Sidebar({
   tick,
   onPickDomain,
   onPickApp,
+  onNewDomain,
+  onNewApp,
 }: Props) {
   return (
     <box
@@ -50,6 +54,7 @@ export function Sidebar({
         flexGrow={3}
         columnHeader="  domain         loops"
         followId={focus === "domains" ? `dom-${domains[domainIdx]?.name ?? ""}` : null}
+        footer={<NewRow label="+ new domain" onClick={onNewDomain} />}
       >
         {domains.map((d, i) => {
           const active = focus === "domains" && i === domainIdx;
@@ -83,6 +88,7 @@ export function Sidebar({
         flexGrow={2}
         columnHeader="  app            loops"
         followId={focus === "apps" ? `app-${apps[appIdx]?.id ?? ""}` : null}
+        footer={<NewRow label="+ new app" onClick={onNewApp} />}
       >
         {apps.map((a, i) => {
           const active = focus === "apps" && i === appIdx;
@@ -132,6 +138,7 @@ function Section({
   flexGrow,
   columnHeader,
   followId,
+  footer,
   children,
 }: {
   title: string;
@@ -140,6 +147,7 @@ function Section({
   flexGrow: number;
   columnHeader?: string;
   followId?: string | null;
+  footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const accent = focused ? theme.gold : theme.fgDim;
@@ -172,6 +180,19 @@ function Section({
       <scrollbox ref={scrollRef} flexGrow={1} scrollY>
         {children}
       </scrollbox>
+      {footer}
+    </box>
+  );
+}
+
+function NewRow({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <box
+      flexDirection="row"
+      height={1}
+      onMouseDown={onClick}
+    >
+      <text fg={theme.goldDim}>  {label}</text>
     </box>
   );
 }
