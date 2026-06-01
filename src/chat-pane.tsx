@@ -116,16 +116,13 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
       bottomTitle={` enter send · / for commands · click cli to switch · esc back `}
       bottomTitleAlignment="left"
     >
-      <CliPickerBar
+      <PickerBar
         clis={availableClis}
-        current={session.cli.kind}
+        currentCli={session.cli.kind}
+        model={session.model}
         onSwitchCli={(cli) =>
           onCommand(session.key, { kind: "switch-cli", cli, model: undefined })
         }
-      />
-      <ModelPickerBar
-        cli={session.cli.kind}
-        model={session.model}
         onPickModel={(model) =>
           onCommand(session.key, { kind: "switch-model", model })
         }
@@ -159,15 +156,24 @@ function forceFocus(ref: React.RefObject<any>) {
   } catch {}
 }
 
-function CliPickerBar({
+function PickerBar({
   clis,
-  current,
+  currentCli,
+  model,
   onSwitchCli,
+  onPickModel,
 }: {
   clis: AvailableCli[];
-  current: CliKind;
+  currentCli: CliKind;
+  model: string;
   onSwitchCli: (cli: CliKind) => void;
+  onPickModel: (model: string) => void;
 }) {
+  const picks = MODEL_QUICKPICKS[currentCli] ?? [];
+  const isDefault = !model.trim();
+  const currentLower = model.trim().toLowerCase();
+  const customActive =
+    !isDefault && !picks.some((p) => p === currentLower || currentLower.includes(p));
   return (
     <box
       flexDirection="row"
@@ -176,9 +182,8 @@ function CliPickerBar({
       paddingRight={2}
       backgroundColor={theme.bg}
     >
-      <text fg={theme.fgDim}>cli:    </text>
       {clis.map((c) => {
-        const active = c.kind === current;
+        const active = c.kind === currentCli;
         const fg = active ? theme.gold : theme.fgDim;
         const bg = active ? theme.selBg : theme.bg;
         return (
@@ -193,36 +198,12 @@ function CliPickerBar({
             }}
           >
             <text fg={fg} bg={bg}>
-              {active ? `▸ ${c.label}` : `  ${c.label}`}
+              {active ? `▸ ${c.label}` : c.label}
             </text>
           </box>
         );
       })}
-    </box>
-  );
-}
-
-function ModelPickerBar({
-  cli,
-  model,
-  onPickModel,
-}: {
-  cli: CliKind;
-  model: string;
-  onPickModel: (model: string) => void;
-}) {
-  const picks = MODEL_QUICKPICKS[cli] ?? [];
-  const isDefault = !model.trim();
-  const currentLower = model.trim().toLowerCase();
-  return (
-    <box
-      flexDirection="row"
-      height={1}
-      paddingLeft={2}
-      paddingRight={2}
-      backgroundColor={theme.bg}
-    >
-      <text fg={theme.fgDim}>model:  </text>
+      <text fg={theme.fgFaint}>  │  </text>
       <ModelChip
         label="default"
         active={isDefault}
@@ -236,11 +217,9 @@ function ModelPickerBar({
           onClick={() => onPickModel(id)}
         />
       ))}
-      {!isDefault && !picks.some((p) => p === currentLower || currentLower.includes(p)) && (
-        <ModelChip label={model} active onClick={() => {}} />
-      )}
+      {customActive && <ModelChip label={model} active onClick={() => {}} />}
       <box flexGrow={1} />
-      <text fg={theme.fgFaint}>· /model name for custom</text>
+      <text fg={theme.fgFaint}>/model name</text>
     </box>
   );
 }
@@ -265,7 +244,7 @@ function ModelChip({
       onMouseDown={onClick}
     >
       <text fg={fg} bg={bg}>
-        {active ? `▸ ${label}` : `  ${label}`}
+        {active ? `▸ ${label}` : label}
       </text>
     </box>
   );
