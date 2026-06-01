@@ -16,12 +16,18 @@ import { openInFinder, shortenHome } from "./system.ts";
 import { formatRelativeDate, getDomainHistory, getRecentUserPrompts } from "./session.ts";
 import {
   buildSuggestions,
+  loadClickCounts,
+  mergeSuggestions,
   parsePromptsMd,
   recordSuggestionClick,
   type Suggestion,
   type SuggestionContext,
   type SuggestionSource,
 } from "./suggestions.ts";
+import {
+  getCachedLlmSuggestions,
+  precomputeLlmSuggestions,
+} from "./suggestions-llm.ts";
 
 export type ChatSeed =
   | "tab"
@@ -77,9 +83,50 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
   const userMsgCount = session.messages.filter((m) => m.role === "user").length;
   const showSuggestions = userMsgCount === 0;
 
+  // Re-poll the LLM cache while suggestions are visible. 1s feels live without
+  // hammering the disk; we stop polling once the user has sent a message.
+  const [llmCacheTick, setLlmCacheTick] = useState(0);
+  useEffect(() => {
+    if (!showSuggestions) return;
+    const id = setInterval(() => setLlmCacheTick((t) => (t + 1) % 1_000_000), 1000);
+    return () => clearInterval(id);
+  }, [showSuggestions, session.key]);
+
+  // Kick off LLM precompute in the background once per session. Errors are
+  // swallowed inside precomputeLlmSuggestions; Level 1 keeps working regardless.
+  useEffect(() => {
+    if (!showSuggestions) return;
+    const ctx = buildSuggestionContext(session);
+    const tid = setTimeout(() => {
+      precomputeLlmSuggestions({
+        domain: ctx.name,
+        domainPath: ctx.path,
+        cli: session.cli,
+        model: session.model,
+        clickHistory: loadClickCounts(),
+        recentMessages: session.messages
+          .filter((mm) => mm.role !== "system")
+          .slice(-5)
+          .map((mm) => ({ role: mm.role, content: mm.content })),
+      }).catch(() => {});
+    }, 100);
+    return () => clearTimeout(tid);
+  }, [showSuggestions, session.hostDomain.name, session.key]);
+
   const suggestions = useMemo<Suggestion[]>(() => {
     if (!showSuggestions) return [];
-    return buildSuggestions(buildSuggestionContext(session));
+    const ctx = buildSuggestionContext(session);
+    const deterministic = buildSuggestions(ctx);
+    const cached = getCachedLlmSuggestions(ctx.name) ?? [];
+    if (cached.length === 0) return deterministic;
+    const llmAsSuggestions: Suggestion[] = cached.map((s) => ({
+      id: s.id,
+      label: s.label,
+      prompt: s.prompt,
+      source: "llm" as SuggestionSource,
+      score: 75,
+    }));
+    return mergeSuggestions(deterministic, llmAsSuggestions);
   }, [
     showSuggestions,
     session.hostDomain.path,
@@ -87,6 +134,7 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
     session.hostDomain.openLoopCount,
     session.seed,
     session.key,
+    llmCacheTick,
   ]);
 
   useLayoutEffect(() => {
