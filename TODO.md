@@ -7,8 +7,8 @@
 - **last touched:** 2026-06-01
 - **current version on main:** v0.1.2 (P1.1 + P1.2 staged for v0.1.3)
 - **next milestone:** v0.2.0 — "the agent that grows with you" (Hermes-inspired feature pack)
-- **active item:** P2.2 — session persistence + FTS5 /search
-- **just finished:** P2.1 — /distill slash command. Type `/distill` in any chat → CLI synthesizes a SKILL.md draft → bordered gold bubble appears with [▶ accept and save] and [✗ discard] buttons. Click accept → writes to `<vault>/<domain>/skills/<slug>/SKILL.md`, refreshes sidebar. Whole flow in `src/distill.ts`.
+- **active item:** P3.1 — embedded scheduler (`aireadyu schedule`)
+- **just finished:** P2.2 — session persistence + FTS5 /search. Every user + assistant message is appended to `~/.aireadyu/sessions/<domain>-<sessionId>.jsonl` and mirrored into `~/.aireadyu/sessions.db` (SQLite FTS5 virtual table). `/search <query>` returns top 5 matches with rank-ordered snippets. ContextCard now shows "▸ N past chat messages · last 3d ago" chip when the domain has history. Whole module in `src/session.ts`.
 
 ## BACKGROUND (read this if you have no context)
 
@@ -63,7 +63,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
   - **prompt design:** read SKILL.md examples in `vault-demo/wealth/skills/` for style guidance. The synthesizer prompt should output frontmatter + ## How to use + ## Inputs + ## Steps + ## Outputs sections.
   - **effort:** 3-5 days
 
-- [ ] **P2.2 — Session persistence + FTS5 search + `/search`**
+- [x] **P2.2 — Session persistence + FTS5 search + `/search`** (done: 2026-06-01)
   - **why:** chats currently die when the pane closes. For life domains, "what did I decide about Roth conversion in March?" is the killer query. Cite: Hermes session search.
   - **acceptance:**
     - every chat message is appended to `~/.aireadyu/sessions/<domain>-<session_id>.jsonl` (one JSON object per line: `{ts, role, content, model, cli}`)

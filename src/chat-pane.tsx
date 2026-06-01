@@ -11,6 +11,7 @@ import {
 import { buildDomainContext, type Domain, type ViewKey } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { openInFinder, shortenHome } from "./system.ts";
+import { formatRelativeDate, getDomainHistory } from "./session.ts";
 
 export type ChatSeed =
   | "tab"
@@ -35,6 +36,7 @@ export interface ChatSession {
   messages: ChatMsg[];
   pending: boolean;
   hasFirstTurn: boolean;
+  sessionId: string;
 }
 
 export type ChatCommand =
@@ -46,6 +48,7 @@ export type ChatCommand =
   | { kind: "distill" }
   | { kind: "accept-distill"; ts: number; content: string }
   | { kind: "discard-distill"; ts: number }
+  | { kind: "search"; query: string }
   | { kind: "unknown"; raw: string };
 
 interface Props {
@@ -418,6 +421,13 @@ function buildContextLines(session: ChatSession, ctx: ReturnType<typeof buildDom
     for (const p of ctx.statePreview) {
       lines.push({ text: `  ${p}` });
     }
+    const history = getDomainHistory(session.hostDomain.name);
+    if (history.message_count > 0) {
+      lines.push({
+        text: `▸ ${history.message_count} past chat message${history.message_count === 1 ? "" : "s"} · last ${formatRelativeDate(history.last_ts)} · /search to find`,
+        emphasis: "muted",
+      });
+    }
     if (ctx.openItems.length > 0) {
       lines.push({ text: " " });
       lines.push({ text: `open items (${ctx.openItems.length}):`, emphasis: "muted" });
@@ -666,6 +676,7 @@ function parseSlashCommand(text: string): ChatCommand {
   if (cmd === "gemini") return { kind: "switch-cli", cli: "gemini", model: arg || undefined };
   if (cmd === "model" || cmd === "m") return { kind: "switch-model", model: arg };
   if (cmd === "distill" || cmd === "skill") return { kind: "distill" };
+  if (cmd === "search" || cmd === "s") return { kind: "search", query: arg };
   return { kind: "unknown", raw: text };
 }
 
@@ -675,6 +686,7 @@ export const SLASH_HELP = [
   "/gemini [model]   switch this chat to Gemini CLI",
   "/model <name>     set model on the current CLI · /model default clears it",
   "/distill          synthesize this conversation into a reusable SKILL.md (alias: /skill)",
+  "/search <query>   FTS5 search across all past chats in any domain (alias: /s)",
   "/clear            clear conversation messages (keeps session config)",
   "/help             show this list",
   "/exit             return to cockpit (same as esc)",

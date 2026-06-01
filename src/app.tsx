@@ -20,6 +20,13 @@ import { theme } from "./theme.ts";
 import { scaffoldDomain } from "./domain-scaffold.ts";
 import { buildDistillPrompt, parseDistillResponse, writeDistilledSkill } from "./distill.ts";
 import {
+  formatRelativeDate,
+  getDomainHistory,
+  makeSessionId,
+  persistMessage,
+  searchMessages,
+} from "./session.ts";
+import {
   detectClis,
   formatModelBadge,
   runChatTurn,
@@ -281,6 +288,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         messages: makeInitialMessages(d.name, cli),
         pending: false,
         hasFirstTurn: false,
+        sessionId: makeSessionId(),
       };
       return new Map(m).set(key, session);
     });
@@ -308,6 +316,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         messages: makeInitialMessages(label, cli),
         pending: false,
         hasFirstTurn: false,
+        sessionId: makeSessionId(),
       };
       return new Map(m).set(key, session);
     });
@@ -367,6 +376,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       messages: makeInitialMessages(open.label, cli),
       pending: false,
       hasFirstTurn: false,
+      sessionId: makeSessionId(),
     };
     setChats((m) => new Map(m).set(open.key, session));
     setActiveKey(open.key);
@@ -439,6 +449,22 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           ),
         };
         systemNote = "distill draft discarded.";
+      } else if (cmd.kind === "search") {
+        const q = cmd.query.trim();
+        if (!q) {
+          systemNote = "usage: /search <query>  · e.g. /search roth conversion";
+        } else {
+          const hits = searchMessages(q, 5);
+          if (hits.length === 0) {
+            systemNote = `no past chats matched "${q}".`;
+          } else {
+            const lines = hits.map((h) => {
+              const when = formatRelativeDate(h.ts);
+              return `  · [${h.domain}] ${when} (${h.role}) — «${h.excerpt}»`;
+            });
+            systemNote = `${hits.length} past chat${hits.length === 1 ? "" : "s"} matching "${q}":\n${lines.join("\n")}`;
+          }
+        }
       } else if (cmd.kind === "unknown") {
         systemNote = `unknown command ${cmd.raw}. try /help.`;
       }
@@ -543,6 +569,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     const session = chats.get(key);
     if (!session || session.pending) return;
     const userMsg = { role: "user" as const, content: text, ts: Date.now() };
+    persistMessage({
+      domain: session.hostDomain.name,
+      session_id: session.sessionId,
+      role: "user",
+      content: text,
+      ts: userMsg.ts,
+      cli: session.cli.kind,
+      model: session.model,
+    });
     const promptForCli = makeSeedPrompt(
       { ...session, messages: [...session.messages, userMsg] },
       text,
@@ -564,6 +599,16 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       isFirst: !session.hasFirstTurn,
     })
       .then((response) => {
+        const ts = Date.now();
+        persistMessage({
+          domain: session.hostDomain.name,
+          session_id: session.sessionId,
+          role: "assistant",
+          content: response,
+          ts,
+          cli: session.cli.kind,
+          model: session.model,
+        });
         setChats((m) => {
           const cur = m.get(key);
           if (!cur) return m;
@@ -571,7 +616,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             ...cur,
             messages: [
               ...cur.messages,
-              { role: "assistant", content: response, ts: Date.now() },
+              { role: "assistant", content: response, ts },
             ],
             pending: false,
             hasFirstTurn: true,
