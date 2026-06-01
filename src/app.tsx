@@ -25,6 +25,7 @@ import {
   getDomainHistory,
   makeSessionId,
   persistMessage,
+  getUserPromptsForDomain,
   searchMessages,
 } from "./session.ts";
 import { tickAndRunDue } from "./schedule.ts";
@@ -504,6 +505,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             });
             systemNote = `${hits.length} past chat${hits.length === 1 ? "" : "s"} matching "${q}":\n${lines.join("\n")}`;
           }
+        }
+      } else if (cmd.kind === "history") {
+        const limit = cmd.limit ?? 20;
+        const prompts = getUserPromptsForDomain(next.hostDomain.name, limit);
+        if (prompts.length === 0) {
+          systemNote = `no past prompts saved for ${next.hostDomain.name} yet.`;
+        } else {
+          const lines = prompts.map((p) => {
+            const when = formatRelativeDate(p.ts);
+            const first = p.content.split("\n")[0]?.slice(0, 200) ?? "";
+            const cliTag = p.cli ? ` [${p.cli}${p.model ? "·" + p.model : ""}]` : "";
+            return `  · ${when}${cliTag} — ${first}`;
+          });
+          systemNote = `your last ${prompts.length} prompt${prompts.length === 1 ? "" : "s"} for ${next.hostDomain.name} (newest first):\n${lines.join("\n")}`;
         }
       } else if (cmd.kind === "unknown") {
         systemNote = `unknown command ${cmd.raw}. try /help.`;

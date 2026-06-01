@@ -168,6 +168,38 @@ export function getDomainHistory(domain: string): DomainHistory {
   }
 }
 
+export interface UserPromptRecord {
+  ts: number;
+  content: string;
+  session_id: string;
+  cli: string;
+  model: string;
+}
+
+// Returns the user's prompts (role === 'user') for a domain, newest first.
+// Prompts only — assistant responses are excluded. Used for the /history view.
+export function getUserPromptsForDomain(domain: string, limit = 50): UserPromptRecord[] {
+  const handle = db();
+  if (!handle) return [];
+  try {
+    const rows = handle
+      .query<
+        { ts: number; content: string; session_id: string; cli: string; model: string },
+        [string, number]
+      >(
+        `SELECT ts, content, session_id, cli, model
+         FROM messages
+         WHERE domain = ? AND role = 'user'
+         ORDER BY ts DESC
+         LIMIT ?`,
+      )
+      .all(domain, limit);
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
 export function formatRelativeDate(ts: number | null): string {
   if (!ts) return "never";
   const diff = Date.now() - ts;

@@ -13,7 +13,12 @@ import {
 import { buildDomainContext, type Domain, type ViewKey } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { openInFinder, shortenHome } from "./system.ts";
-import { formatRelativeDate, getDomainHistory, getRecentUserPrompts } from "./session.ts";
+import {
+  formatRelativeDate,
+  getDomainHistory,
+  getRecentUserPrompts,
+  getUserPromptsForDomain,
+} from "./session.ts";
 import {
   buildSuggestions,
   loadClickCounts,
@@ -65,6 +70,7 @@ export type ChatCommand =
   | { kind: "accept-distill"; ts: number; content: string }
   | { kind: "discard-distill"; ts: number }
   | { kind: "search"; query: string }
+  | { kind: "history"; limit?: number }
   | { kind: "unknown"; raw: string };
 
 interface Props {
@@ -396,8 +402,28 @@ function Transcript({
   const showChips =
     suggestions.length > 0 &&
     messages.filter((m) => m.role === "user").length === 0;
+  const scrollRef = useRef<any>(null);
+
+  // Auto-scroll to the latest message whenever the message count or the
+  // pending (assistant typing) state changes. Use a large scrollTo target so
+  // we land at the bottom regardless of total height.
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+    try {
+      node.scrollTo?.(1e9);
+    } catch {}
+  }, [messages.length, session.pending, session.key]);
+
   return (
-    <scrollbox flexGrow={1} scrollY paddingLeft={2} paddingRight={2} paddingTop={1}>
+    <scrollbox
+      ref={scrollRef}
+      flexGrow={1}
+      scrollY
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+    >
       {showChips && (
         <SuggestionChips suggestions={suggestions} onPick={onPickSuggestion} />
       )}
@@ -690,6 +716,7 @@ interface SlashCommandSpec {
 const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/distill", desc: "synthesize this conversation into a reusable SKILL.md", aliases: ["/skill"] },
   { cmd: "/search", arg: "<query>", desc: "FTS5 search across all past chats", aliases: ["/s"] },
+  { cmd: "/history", arg: "[n]", desc: "show your past prompts for this domain (default 20)", aliases: ["/h", "/prompts"] },
   { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
   { cmd: "/codex", arg: "[model]", desc: "switch this chat to Codex" },
   { cmd: "/gemini", arg: "[model]", desc: "switch this chat to Gemini CLI" },
@@ -902,6 +929,10 @@ function parseSlashCommand(text: string): ChatCommand {
   if (cmd === "model" || cmd === "m") return { kind: "switch-model", model: arg };
   if (cmd === "distill" || cmd === "skill") return { kind: "distill" };
   if (cmd === "search" || cmd === "s") return { kind: "search", query: arg };
+  if (cmd === "history" || cmd === "h" || cmd === "prompts") {
+    const n = parseInt(arg, 10);
+    return { kind: "history", limit: Number.isFinite(n) && n > 0 ? n : undefined };
+  }
   return { kind: "unknown", raw: text };
 }
 

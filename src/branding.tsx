@@ -37,7 +37,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={11}
+      height={12}
       border={["bottom"]}
       borderStyle="double"
       borderColor={theme.gold}
@@ -48,7 +48,7 @@ export function Branding({
         flexGrow={1}
         paddingLeft={3}
         paddingRight={3}
-        paddingTop={0}
+        paddingTop={1}
       >
         <BrandColumn
           domainCount={domainCount}
