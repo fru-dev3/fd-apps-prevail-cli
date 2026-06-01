@@ -681,16 +681,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   }
 
   function doEdit() {
-    if (focus === "apps") {
-      setMessage("apps aren't editable from the cockpit — open the SKILL.md in your repo");
-      return;
-    }
-    if (!domain) return;
     const filename = VIEW_FILE[view];
     if (!filename) {
       setMessage("the skills tab isn't editable — switch to state / prompts / quickstart");
       return;
     }
+    if (focus === "apps") {
+      if (!app) return;
+      if (app.community) {
+        setMessage("community apps aren't editable from the cockpit");
+        return;
+      }
+      setMode("edit");
+      return;
+    }
+    if (!domain) return;
     setMode("edit");
   }
 
@@ -698,6 +703,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     setMode("idle");
     if (saved) {
       setDomains(scanVault(vaultPath));
+      setApps([...scanApps(vaultPath), ...scanCommunityApps()]);
       setMessage("✓ saved");
     }
   }
@@ -709,7 +715,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
 
   const activeSession = activeKey ? chats.get(activeKey) ?? null : null;
   const inChat = mode === "chat" && activeSession;
-  const inEdit = mode === "edit" && domain;
+  const editTarget =
+    mode === "edit"
+      ? focus === "apps" && app && !app.community
+        ? { path: app.path, name: app.id }
+        : focus === "domains" && domain
+          ? { path: domain.path, name: domain.name }
+          : null
+      : null;
+  const inEdit = mode === "edit" && editTarget !== null;
   const editFilename = inEdit ? VIEW_FILE[view] : null;
 
   return (
@@ -765,6 +779,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               onPickChat={() => {
                 if (domain) openChatForDomain(domain);
               }}
+              onEdit={() => {
+                if (mode === "chat") setMode("idle");
+                doEdit();
+              }}
             />
           )}
           {focus === "apps" && app && !inEdit && (
@@ -780,6 +798,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               onPickChat={() => {
                 if (app) openChatForApp(app);
               }}
+              onEdit={() => {
+                if (mode === "chat") setMode("idle");
+                doEdit();
+              }}
             />
           )}
           {inChat ? (
@@ -792,9 +814,9 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               onExit={exitChat}
               onAutocompleteChange={setAutocompleteOpen}
             />
-          ) : inEdit && editFilename ? (
+          ) : inEdit && editFilename && editTarget ? (
             <EditorPane
-              domain={domain!}
+              target={editTarget}
               filename={editFilename}
               onExit={exitEditor}
             />

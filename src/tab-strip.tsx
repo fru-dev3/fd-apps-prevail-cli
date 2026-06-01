@@ -15,15 +15,23 @@ const TABS: TabDef[] = [
   { key: "chat", label: "chat" },
 ];
 
+const EDITABLE_VIEWS: ReadonlySet<ViewKey | "chat"> = new Set([
+  "state",
+  "quickstart",
+  "prompts",
+]);
+
 interface Props {
   domainName: string;
   activeView: ViewKey;
   inChat: boolean;
   onPickView: (i: number) => void;
   onPickChat: () => void;
+  onEdit?: () => void;
 }
 
-export function TabStrip({ domainName, activeView, inChat, onPickView, onPickChat }: Props) {
+export function TabStrip({ domainName, activeView, inChat, onPickView, onPickChat, onEdit }: Props) {
+  const showEdit = !inChat && EDITABLE_VIEWS.has(activeView) && onEdit;
   return (
     <box
       flexDirection="row"
@@ -46,6 +54,13 @@ export function TabStrip({ domainName, activeView, inChat, onPickView, onPickCha
           </box>
         );
       })}
+      <box flexGrow={1} />
+      {showEdit && (
+        <box flexDirection="row" onMouseDown={onEdit}>
+          <text fg={theme.goldDim}>✎ edit</text>
+          <text fg={theme.fgFaint}>  (esc back)</text>
+        </box>
+      )}
     </box>
   );
 }

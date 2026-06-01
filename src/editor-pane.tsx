@@ -3,16 +3,20 @@ import { useKeyboard } from "@opentui/react";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { theme } from "./theme.ts";
-import type { Domain } from "./vault.ts";
+
+interface EditTarget {
+  path: string;
+  name: string;
+}
 
 interface Props {
-  domain: Domain;
+  target: EditTarget;
   filename: string;
   onExit: (saved: boolean) => void;
 }
 
-export function EditorPane({ domain, filename, onExit }: Props) {
-  const filePath = join(domain.path, filename);
+export function EditorPane({ target, filename, onExit }: Props) {
+  const filePath = join(target.path, filename);
   const [initial] = useState(() => {
     try {
       return readFileSync(filePath, "utf8");
@@ -68,7 +72,7 @@ export function EditorPane({ domain, filename, onExit }: Props) {
       border
       borderColor={theme.gold}
       backgroundColor={theme.bg}
-      title={` editing ${domain.name}/${filename} `}
+      title={` editing ${target.name}/${filename} `}
       titleAlignment="left"
       bottomTitle=" ctrl-s save · esc cancel "
       bottomTitleAlignment="left"
