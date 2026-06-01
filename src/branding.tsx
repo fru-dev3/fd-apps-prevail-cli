@@ -37,7 +37,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={14}
+      height={11}
       border={["bottom"]}
       borderStyle="double"
       borderColor={theme.gold}
@@ -48,7 +48,7 @@ export function Branding({
         flexGrow={1}
         paddingLeft={3}
         paddingRight={3}
-        paddingTop={1}
+        paddingTop={0}
       >
         <BrandColumn
           domainCount={domainCount}
@@ -70,6 +70,8 @@ export function Branding({
   );
 }
 
+// AIREADY is at cols 0-57; the trailing U starts at col 58 (9 chars wide).
+const LOGO_U_OFFSET = 58;
 const LOGO_LINES = [
   " █████╗ ██╗   ██████╗ ███████╗ █████╗ ██████╗ ██╗   ██╗   ██╗   ██╗",
   "██╔══██╗██║   ██╔══██╗██╔════╝██╔══██╗██╔══██╗╚██╗ ██╔╝   ██║   ██║",
@@ -92,13 +94,20 @@ function BrandColumn({
     <box flexDirection="row" width={80}>
       <Mascot />
       <box flexDirection="column" paddingLeft={2}>
-        {LOGO_LINES.map((line, i) => (
-          <text key={`logo-${i}`} fg={theme.gold} attributes={1}>
-            {line}
-          </text>
-        ))}
+        {LOGO_LINES.map((line, i) => {
+          const prefix = line.slice(0, LOGO_U_OFFSET);
+          const uChars = line.slice(LOGO_U_OFFSET);
+          return (
+            <text key={`logo-${i}`} fg={theme.gold} attributes={1}>
+              <span fg={theme.gold} attributes={1}>{prefix}</span>
+              <span fg={theme.goldBright} attributes={1}>{uChars}</span>
+            </text>
+          );
+        })}
         <text fg={theme.goldDim}>
-          {"        a i  ·  r e a d y  ·  u   —   personal ai cockpit"}
+          {"        a i  ·  r e a d y  ·  "}
+          <span fg={theme.goldBright}>u</span>
+          {"   —   personal ai cockpit"}
         </text>
         <text> </text>
         <text fg={theme.fgDim}>

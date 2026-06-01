@@ -1,6 +1,7 @@
 export const theme = {
   gold: "#C4A35A",
   goldDim: "#8A7340",
+  goldBright: "#F5E0A8",
   bg: "#0E0E0E",
   bgPanel: "#161616",
   fg: "#E6E6E6",
