@@ -86,7 +86,9 @@ export function Sidebar({
           const xn = a.domains.length;
           const badge = xn > 1 ? `×${xn}`.padStart(3, " ") : "   ";
           const badgeColor = active ? theme.selFg : theme.fgFaint;
-          const namePadded = a.id.padEnd(16, " ").slice(0, 16);
+          const communityMark = a.community ? "★" : " ";
+          const nameRaw = `${communityMark}${a.id}`;
+          const namePadded = nameRaw.padEnd(16, " ").slice(0, 16);
           const status = appStatus.get(a.id) ?? "idle";
           return (
             <box

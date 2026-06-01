@@ -1,0 +1,15 @@
+{
+  "id": "plaid",
+  "name": "Plaid",
+  "version": "0.1.0",
+  "description": "Aggregate bank, brokerage, and credit card transaction history via the Plaid API. Used by wealth, tax, and business domains to keep state.md in sync with the institutions Plaid is linked to.",
+  "domains": ["wealth", "tax", "business"],
+  "auth": "api-key",
+  "auth_env_vars": ["PLAID_CLIENT_ID", "PLAID_SECRET", "PLAID_ACCESS_TOKEN"],
+  "homepage": "https://plaid.com",
+  "license": "MIT",
+  "author": {
+    "name": "fru-dev3",
+    "url": "https://github.com/fru-dev3/aireadyu"
+  }
+}

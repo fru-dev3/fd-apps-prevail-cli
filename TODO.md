@@ -7,8 +7,8 @@
 - **last touched:** 2026-06-01
 - **current version on main:** v0.1.2 (P1.1 + P1.2 staged for v0.1.3)
 - **next milestone:** v0.2.0 — "the agent that grows with you" (Hermes-inspired feature pack)
-- **active item:** P3.2 — LifeApp plugin contract
-- **just finished:** P3.1 — embedded scheduler. New subcommand `aireadyu schedule list/add/remove/run/tick` with 5-field cron support. Schedules persist in `<vault>/.schedule.json`. The cockpit also runs a background tick every 60s that fires due jobs and surfaces "⏰ scheduled: <name>" in the bottom command bar. Whole module in `src/schedule.ts`.
+- **active item:** v0.2.0 release tagging (P5.1) — P1+P2+P3 all done, ready to tag
+- **just finished:** P3.2 — LifeApp plugin contract. `apps/community/<id>/{manifest.json,SKILL.md}` drop-in protocol. `scanCommunityApps()` in `src/vault.ts` scans `~/.aireadyu/apps/`, `<binary>/apps/community/`, and `<repo>/apps/community/`, dedups by id. Sidebar renders `★` prefix for community apps. Reference plugin `apps/community/plaid/` ships. `CONTRIBUTING.md` at repo root documents the protocol.
 
 ## BACKGROUND (read this if you have no context)
 
@@ -87,7 +87,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
   - **deps:** small cron parser (`cronstrue` or roll our own — keep it small)
   - **effort:** 2-3 days
 
-- [ ] **P3.2 — LifeApp plugin contract + 1 reference plugin**
+- [x] **P3.2 — LifeApp plugin contract + 1 reference plugin** (done: 2026-06-01)
   - **why:** community wants to contribute new life apps (Plaid, Greenhouse, MyChart…). Need a clean drop-in path. Cite: Hermes `plugins/`, `optional-mcps/`.
   - **acceptance:**
     - `apps/community/<app-id>/` accepts contributions with: `manifest.json` (name, version, domains-it-belongs-to, auth-method), optional `icon.svg`, `SKILL.md`, `skills/` directory with sub-skills

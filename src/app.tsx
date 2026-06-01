@@ -15,7 +15,7 @@ import {
   type ChatSession,
 } from "./chat-pane.tsx";
 import { EditorPane } from "./editor-pane.tsx";
-import { scanApps, scanVault, type AppSkill, type Domain, type ViewKey } from "./vault.ts";
+import { scanApps, scanCommunityApps, scanVault, type AppSkill, type Domain, type ViewKey } from "./vault.ts";
 import { theme } from "./theme.ts";
 import { scaffoldDomain } from "./domain-scaffold.ts";
 import { buildDistillPrompt, parseDistillResponse, writeDistilledSkill } from "./distill.ts";
@@ -61,7 +61,7 @@ interface PendingOpen {
 export function App({ vaultPath, vaultLabel }: AppProps) {
   const renderer = useRenderer();
   const [domains, setDomains] = useState<Domain[]>(() => scanVault(vaultPath));
-  const [apps, setApps] = useState<AppSkill[]>(() => scanApps(vaultPath));
+  const [apps, setApps] = useState<AppSkill[]>(() => [...scanApps(vaultPath), ...scanCommunityApps()]);
   const [domainIdx, setDomainIdx] = useState(0);
   const [appIdx, setAppIdx] = useState(0);
   const [focus, setFocus] = useState<SidebarFocus>("domains");
@@ -256,7 +256,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     if (result.ok) {
       const next = scanVault(vaultPath);
       setDomains(next);
-      setApps(scanApps(vaultPath));
+      setApps([...scanApps(vaultPath), ...scanCommunityApps()]);
       const idx = next.findIndex((d) => d.path === result.path);
       if (idx >= 0) {
         setDomainIdx(idx);
@@ -270,7 +270,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
 
   function doRefresh() {
     setDomains(scanVault(vaultPath));
-    setApps(scanApps(vaultPath));
+    setApps([...scanApps(vaultPath), ...scanCommunityApps()]);
     setMessage("vault reloaded");
   }
 

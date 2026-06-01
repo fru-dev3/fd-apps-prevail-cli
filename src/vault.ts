@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 export type ViewKey = "state" | "loops" | "quickstart" | "prompts" | "skills";
 
@@ -282,6 +283,75 @@ export interface AppSkill {
   description: string;
   domains: string[];
   paths: string[];
+  community?: boolean;
+  manifestPath?: string;
+}
+
+export interface CommunityAppManifest {
+  id: string;
+  name?: string;
+  description?: string;
+  domains?: string[];
+  version?: string;
+  homepage?: string;
+}
+
+function communityAppsDirs(): string[] {
+  const dirs: string[] = [];
+  dirs.push(join(homedir(), ".aireadyu", "apps"));
+  try {
+    dirs.push(resolve(dirname(process.execPath), "apps", "community"));
+  } catch {}
+  if (process.argv[1]) {
+    try {
+      dirs.push(resolve(dirname(process.argv[1]), "apps", "community"));
+    } catch {}
+  }
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    dirs.push(resolve(here, "..", "apps", "community"));
+  } catch {}
+  return dirs;
+}
+
+export function scanCommunityApps(): AppSkill[] {
+  const seen = new Set<string>();
+  const out: AppSkill[] = [];
+  for (const dir of communityAppsDirs()) {
+    if (!existsSync(dir)) continue;
+    let entries: import("node:fs").Dirent[] = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (seen.has(e.name)) continue;
+      const root = join(dir, e.name);
+      const manifestPath = join(root, "manifest.json");
+      const skillPath = join(root, "SKILL.md");
+      if (!existsSync(manifestPath) || !existsSync(skillPath)) continue;
+      let manifest: CommunityAppManifest;
+      try {
+        manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CommunityAppManifest;
+      } catch {
+        continue;
+      }
+      seen.add(e.name);
+      out.push({
+        id: manifest.id || e.name,
+        title: manifest.name || e.name,
+        description: (manifest.description || "").trim().slice(0, 240),
+        domains: manifest.domains || [],
+        paths: [skillPath],
+        community: true,
+        manifestPath,
+      });
+    }
+  }
+  out.sort((a, b) => a.id.localeCompare(b.id));
+  return out;
 }
 
 export function scanApps(vaultPath: string): AppSkill[] {
