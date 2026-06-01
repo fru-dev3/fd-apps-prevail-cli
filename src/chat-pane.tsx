@@ -10,6 +10,7 @@ import {
 } from "./cli-bridge.ts";
 import { buildDomainContext, type Domain, type ViewKey } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
+import { openInFinder, shortenHome } from "./system.ts";
 
 export type ChatSeed =
   | "tab"
@@ -329,9 +330,28 @@ function ContextCard({ session }: { session: ChatSession }) {
       paddingRight={1}
       paddingBottom={0}
     >
+      <PathRow path={session.hostDomain.path} />
       {lines.map((line, i) => (
         <ContextLine key={`ctx-${i}`} line={line} />
       ))}
+    </box>
+  );
+}
+
+function PathRow({ path }: { path: string }) {
+  return (
+    <box
+      flexDirection="row"
+      height={1}
+      onMouseDown={() => {
+        openInFinder(path);
+      }}
+    >
+      <text fg={theme.fgFaint}>path  </text>
+      <text fg={theme.bubbleAssistant} attributes={4}>
+        {shortenHome(path)}
+      </text>
+      <text fg={theme.fgFaint}>  ↗ click to open in finder</text>
     </box>
   );
 }

@@ -1,6 +1,6 @@
 {
   "name": "aireadyu",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "ai · ready · u — a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,

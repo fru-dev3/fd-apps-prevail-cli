@@ -109,7 +109,7 @@ async function main() {
     return;
   }
   if (args.version) {
-    console.log("aireadyu 0.1.1");
+    console.log("aireadyu 0.1.2");
     return;
   }
   if (args.doctor) {
