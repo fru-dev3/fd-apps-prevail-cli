@@ -21,6 +21,7 @@ export interface ChatMsg {
   role: "user" | "assistant" | "system";
   content: string;
   ts: number;
+  kind?: "distill-draft" | "distill-saved" | "distill-discarded";
 }
 
 export interface ChatSession {
@@ -42,6 +43,9 @@ export type ChatCommand =
   | { kind: "clear" }
   | { kind: "exit" }
   | { kind: "help" }
+  | { kind: "distill" }
+  | { kind: "accept-distill"; ts: number; content: string }
+  | { kind: "discard-distill"; ts: number }
   | { kind: "unknown"; raw: string };
 
 interface Props {
@@ -123,7 +127,16 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
           onCommand(session.key, { kind: "switch-model", model })
         }
       />
-      <Transcript session={session} tick={tick} />
+      <Transcript
+        session={session}
+        tick={tick}
+        onAcceptDistill={(ts, content) =>
+          onCommand(session.key, { kind: "accept-distill", ts, content })
+        }
+        onDiscardDistill={(ts) =>
+          onCommand(session.key, { kind: "discard-distill", ts })
+        }
+      />
       <SkillStrip
         session={session}
         onPickSkill={(skillId, title) => {
@@ -302,13 +315,28 @@ function SkillStrip({
   );
 }
 
-function Transcript({ session, tick }: { session: ChatSession; tick: number }) {
+function Transcript({
+  session,
+  tick,
+  onAcceptDistill,
+  onDiscardDistill,
+}: {
+  session: ChatSession;
+  tick: number;
+  onAcceptDistill: (ts: number, content: string) => void;
+  onDiscardDistill: (ts: number) => void;
+}) {
   const messages = session.messages;
   return (
     <scrollbox flexGrow={1} scrollY paddingLeft={2} paddingRight={2} paddingTop={1}>
       <ContextCard session={session} />
       {messages.map((m, i) => (
-        <MessageBubble key={`m-${i}-${m.ts}`} msg={m} />
+        <MessageBubble
+          key={`m-${i}-${m.ts}`}
+          msg={m}
+          onAcceptDistill={onAcceptDistill}
+          onDiscardDistill={onDiscardDistill}
+        />
       ))}
       {session.pending && <ThinkingBubble tick={tick} />}
     </scrollbox>
@@ -433,7 +461,18 @@ function buildContextLines(session: ChatSession, ctx: ReturnType<typeof buildDom
   return lines;
 }
 
-function MessageBubble({ msg }: { msg: ChatMsg }) {
+function MessageBubble({
+  msg,
+  onAcceptDistill,
+  onDiscardDistill,
+}: {
+  msg: ChatMsg;
+  onAcceptDistill: (ts: number, content: string) => void;
+  onDiscardDistill: (ts: number) => void;
+}) {
+  if (msg.kind === "distill-draft") {
+    return <DistillDraftBubble msg={msg} onAccept={onAcceptDistill} onDiscard={onDiscardDistill} />;
+  }
   if (msg.role === "system") {
     return (
       <box flexDirection="column" paddingTop={1} paddingBottom={1}>
@@ -457,6 +496,56 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
         paddingRight={1}
       >
         {renderMarkdownLines(msg.content)}
+      </box>
+    </box>
+  );
+}
+
+function DistillDraftBubble({
+  msg,
+  onAccept,
+  onDiscard,
+}: {
+  msg: ChatMsg;
+  onAccept: (ts: number, content: string) => void;
+  onDiscard: (ts: number) => void;
+}) {
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <box
+        flexDirection="column"
+        border
+        borderColor={theme.gold}
+        backgroundColor={theme.bg}
+        title=" 🪄 distilled skill draft "
+        titleAlignment="left"
+        bottomTitle=" click [accept] to save · [discard] to throw away "
+        bottomTitleAlignment="left"
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        {renderMarkdownLines(msg.content)}
+      </box>
+      <box flexDirection="row" paddingTop={0} paddingLeft={2}>
+        <box
+          flexDirection="row"
+          paddingLeft={2}
+          paddingRight={2}
+          backgroundColor={theme.selBg}
+          onMouseDown={() => onAccept(msg.ts, msg.content)}
+        >
+          <text fg={theme.gold} attributes={1}>▶ accept and save</text>
+        </box>
+        <text fg={theme.bg}>  </text>
+        <box
+          flexDirection="row"
+          paddingLeft={2}
+          paddingRight={2}
+          backgroundColor={theme.bgPanel}
+          onMouseDown={() => onDiscard(msg.ts)}
+        >
+          <text fg={theme.fgDim}>✗ discard</text>
+        </box>
       </box>
     </box>
   );
@@ -576,6 +665,7 @@ function parseSlashCommand(text: string): ChatCommand {
   if (cmd === "codex") return { kind: "switch-cli", cli: "codex", model: arg || undefined };
   if (cmd === "gemini") return { kind: "switch-cli", cli: "gemini", model: arg || undefined };
   if (cmd === "model" || cmd === "m") return { kind: "switch-model", model: arg };
+  if (cmd === "distill" || cmd === "skill") return { kind: "distill" };
   return { kind: "unknown", raw: text };
 }
 
@@ -584,6 +674,7 @@ export const SLASH_HELP = [
   "/codex [model]    switch this chat to Codex",
   "/gemini [model]   switch this chat to Gemini CLI",
   "/model <name>     set model on the current CLI · /model default clears it",
+  "/distill          synthesize this conversation into a reusable SKILL.md (alias: /skill)",
   "/clear            clear conversation messages (keeps session config)",
   "/help             show this list",
   "/exit             return to cockpit (same as esc)",

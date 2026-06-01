@@ -7,8 +7,8 @@
 - **last touched:** 2026-06-01
 - **current version on main:** v0.1.2 (P1.1 + P1.2 staged for v0.1.3)
 - **next milestone:** v0.2.0 — "the agent that grows with you" (Hermes-inspired feature pack)
-- **active item:** P2.1 — /distill slash command (the agent that grows with you)
-- **just finished:** P1.3 disposition — linux-x64 actually works fine; the lagging job is darwin-x64 on the free macos-13 runner queue. Not a code issue. Accepted; documented.
+- **active item:** P2.2 — session persistence + FTS5 /search
+- **just finished:** P2.1 — /distill slash command. Type `/distill` in any chat → CLI synthesizes a SKILL.md draft → bordered gold bubble appears with [▶ accept and save] and [✗ discard] buttons. Click accept → writes to `<vault>/<domain>/skills/<slug>/SKILL.md`, refreshes sidebar. Whole flow in `src/distill.ts`.
 
 ## BACKGROUND (read this if you have no context)
 
@@ -51,7 +51,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 
 ### P2 — THIS WEEK (the v0.2 narrative: "the agent that grows with you")
 
-- [ ] **P2.1 — `/distill` slash command — close the learning loop**
+- [x] **P2.1 — `/distill` slash command — close the learning loop** (done: 2026-06-01)
   - **why:** turn a successful chat into a new SKILL.md proposal for the focused domain. This is THE feature that differentiates aireadyu from "yet another chat launcher." Cite: Hermes `agent/curator.py`, `memory_manager.py`, `insights.py`, `background_review.py`.
   - **acceptance:**
     - typing `/distill` in any chat triggers an agent call (use the chat's current CLI) that synthesizes the conversation into a SKILL.md draft

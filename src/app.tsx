@@ -18,6 +18,7 @@ import { EditorPane } from "./editor-pane.tsx";
 import { scanApps, scanVault, type AppSkill, type Domain, type ViewKey } from "./vault.ts";
 import { theme } from "./theme.ts";
 import { scaffoldDomain } from "./domain-scaffold.ts";
+import { buildDistillPrompt, parseDistillResponse, writeDistilledSkill } from "./distill.ts";
 import {
   detectClis,
   formatModelBadge,
@@ -407,6 +408,37 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         systemNote = "conversation cleared.";
       } else if (cmd.kind === "help") {
         systemNote = `available commands:\n${SLASH_HELP}`;
+      } else if (cmd.kind === "distill") {
+        // distill is async — kick off in the next tick after this state update
+        setTimeout(() => startDistill(key), 0);
+        systemNote = "🪄 distilling this conversation into a SKILL.md draft…";
+      } else if (cmd.kind === "accept-distill") {
+        const result = writeDistilledSkill(cur.hostDomain, cmd.content);
+        if (result.ok) {
+          // mark the original distill-draft message as saved and add a system confirm
+          next = {
+            ...cur,
+            messages: cur.messages.map((mm) =>
+              mm.ts === cmd.ts && mm.kind === "distill-draft"
+                ? { ...mm, kind: "distill-saved" }
+                : mm,
+            ),
+          };
+          systemNote = `✓ ${result.message} — refreshing skills…`;
+          setTimeout(() => doRefresh(), 100);
+        } else {
+          systemNote = `✗ could not save: ${result.message}`;
+        }
+      } else if (cmd.kind === "discard-distill") {
+        next = {
+          ...cur,
+          messages: cur.messages.map((mm) =>
+            mm.ts === cmd.ts && mm.kind === "distill-draft"
+              ? { ...mm, kind: "distill-discarded" }
+              : mm,
+          ),
+        };
+        systemNote = "distill draft discarded.";
       } else if (cmd.kind === "unknown") {
         systemNote = `unknown command ${cmd.raw}. try /help.`;
       }
@@ -425,6 +457,86 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
 
   function exitChat() {
     setMode("idle");
+  }
+
+  function startDistill(key: string) {
+    const session = chats.get(key);
+    if (!session) return;
+    const visible = session.messages.filter((mm) => mm.role !== "system");
+    if (visible.length === 0) {
+      setChats((m) => {
+        const cur = m.get(key);
+        if (!cur) return m;
+        return new Map(m).set(key, {
+          ...cur,
+          messages: [
+            ...cur.messages,
+            {
+              role: "system" as const,
+              content: "nothing to distill — send a message or two first.",
+              ts: Date.now(),
+            },
+          ],
+        });
+      });
+      return;
+    }
+    const prompt = buildDistillPrompt(session.hostDomain, session.messages);
+    setChats((m) => {
+      const cur = m.get(key);
+      if (!cur) return m;
+      return new Map(m).set(key, { ...cur, pending: true });
+    });
+    runChatTurn({
+      prompt,
+      cwd: session.hostDomain.path,
+      cli: session.cli,
+      model: session.model,
+      isFirst: true,
+    })
+      .then((response) => {
+        const parsed = parseDistillResponse(response);
+        setChats((m) => {
+          const cur = m.get(key);
+          if (!cur) return m;
+          const ts = Date.now();
+          const newMsg = parsed.ok
+            ? {
+                role: "assistant" as const,
+                content: parsed.skill!,
+                ts,
+                kind: "distill-draft" as const,
+              }
+            : {
+                role: "system" as const,
+                content: `distill failed: ${parsed.error}. raw response:\n\n${response.slice(0, 500)}`,
+                ts,
+              };
+          return new Map(m).set(key, {
+            ...cur,
+            messages: [...cur.messages, newMsg],
+            pending: false,
+          });
+        });
+      })
+      .catch((err: Error) => {
+        setChats((m) => {
+          const cur = m.get(key);
+          if (!cur) return m;
+          return new Map(m).set(key, {
+            ...cur,
+            messages: [
+              ...cur.messages,
+              {
+                role: "system" as const,
+                content: `distill error: ${err.message}`,
+                ts: Date.now(),
+              },
+            ],
+            pending: false,
+          });
+        });
+      });
   }
 
   function sendMessage(key: string, text: string) {
