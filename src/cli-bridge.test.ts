@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { buildCliArgs, detectClis } from "./cli-bridge.ts";
+import {
+  buildCliArgs,
+  detectClis,
+  extractCodexReply,
+  extractGeminiReply,
+} from "./cli-bridge.ts";
 
 describe("buildCliArgs", () => {
   const PROMPT = "Reply with: pong";
@@ -150,5 +155,100 @@ describe("detectClis", () => {
       expect(c.bin).toMatch(/\//);
       expect(c.label.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// Regression coverage for the codex envelope stripper. The "codex exec"
+// runtime wraps every successful reply in a noisy envelope (workdir, model,
+// session id, provider, "user" / "codex" markers, "tokens used") that used
+// to leak into the chat bubble. extractCodexReply pulls only the model's
+// answer; failures + missing-reply cases get cleaned error lines.
+describe("extractCodexReply", () => {
+  test("strips the success envelope and returns the model body", () => {
+    const raw = `OpenAI Codex v0.136.0
+--------
+workdir: /Users/x/y
+model: gpt-5.4
+provider: openai
+session id: 019e88ad-...
+--------
+user
+What's 2+2?
+codex
+4
+tokens used
+1,234`;
+    expect(extractCodexReply(raw)).toBe("4");
+  });
+
+  test("multi-line replies are preserved between 'codex' and 'tokens used'", () => {
+    const raw = `--------
+user
+hi
+codex
+line one
+line two
+line three
+tokens used
+99`;
+    expect(extractCodexReply(raw)).toBe("line one\nline two\nline three");
+  });
+
+  test("non-zero exit prefix returns the error line, not the envelope", () => {
+    const raw = `(/opt/homebrew/bin/codex exited 1)
+OpenAI Codex v0.136.0
+--------
+workdir: /tmp
+model: gpt-5.4
+ERROR: The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.`;
+    const out = extractCodexReply(raw);
+    expect(out).toContain("not supported when using Codex");
+    expect(out).not.toContain("workdir");
+    expect(out).not.toContain("OpenAI Codex");
+  });
+
+  test("envelope without a codex reply marker returns concise fallback", () => {
+    const raw = `--------
+workdir: /tmp
+model: gpt-5.4
+session id: abc
+--------
+user
+hello`;
+    // No "codex" line ever appears — the model never replied.
+    expect(extractCodexReply(raw)).toBe("(codex produced no reply)");
+  });
+
+  test("empty input passes through", () => {
+    expect(extractCodexReply("")).toBe("");
+  });
+});
+
+// Regression coverage for the gemini stack-trace stripper. The gemini CLI
+// dumps 30+ lines of Node.js "at frameName (file:///...)" frames after the
+// real error line on any API failure. extractGeminiReply pulls the error,
+// leaves successful replies untouched.
+describe("extractGeminiReply", () => {
+  test("collapses stack traces to the error line on quota exhaust", () => {
+    const raw = `(/opt/homebrew/bin/gemini exited 1)
+Error when talking to Gemini API Full report available at: /var/folders/x/y/z.json TerminalQuotaError: You have exhausted your capacity on this model. Your quota will reset after 21h0m20s.
+    at classifyGoogleError (file:///opt/homebrew/Cellar/gemini-cli/0.44.1/libexec/lib/node_modules/@google/gemini-cli/bundle/chunk-GPVT36PL.js:304203:18)
+    at retryWithBackoff (file:///opt/homebrew/Cellar/gemini-cli/0.44.1/libexec/lib/node_modules/@google/gemini-cli/bundle/chunk-GPVT36PL.js:304863:31)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)`;
+    const out = extractGeminiReply(raw);
+    expect(out).toContain("TerminalQuotaError");
+    expect(out).toContain("21h0m20s");
+    expect(out).not.toContain("at classifyGoogleError");
+    expect(out).not.toContain("Full report available at");
+    expect(out).not.toContain("file:///opt/homebrew/Cellar");
+  });
+
+  test("successful gemini reply passes through unchanged", () => {
+    const plain = "Here is my answer\nin two lines.";
+    expect(extractGeminiReply(plain)).toBe(plain);
+  });
+
+  test("empty input passes through", () => {
+    expect(extractGeminiReply("")).toBe("");
   });
 });
