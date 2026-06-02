@@ -132,6 +132,34 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       cancelled = true;
     };
   }, [clis]);
+
+  // Self-healing health watch: every 60s, re-probe any CLI whose last probe
+  // failed. If the user fixed it externally (codex login, removed a gemini
+  // hook, etc) the chip flips from ⚠ to ✓ without needing an app relaunch.
+  // Healthy CLIs aren't re-probed — they cost tokens and we trust them once
+  // proven good for the session. A toggle to force a re-check would be a
+  // future addition but background heal covers the common case.
+  useEffect(() => {
+    const inFlight = new Set<string>();
+    const id = setInterval(() => {
+      for (const c of clis) {
+        if (inFlight.has(c.kind)) continue;
+        const h = cliHealth.get(c.kind);
+        if (!h || h.ok) continue; // only retry failures
+        inFlight.add(c.kind);
+        probeCli(c)
+          .then((next) => {
+            setCliHealth((prev) => {
+              const m = new Map(prev);
+              m.set(c.kind, next);
+              return m;
+            });
+          })
+          .finally(() => inFlight.delete(c.kind));
+      }
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [clis, cliHealth]);
   const councilModeFor = (key: string | null): boolean =>
     key ? councilModeMap.get(key) ?? false : false;
   const toggleCouncilModeFor = (key: string) => {
@@ -998,6 +1026,28 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       if (good.length >= 2) {
         const synthCli = panel[0]!; // use the first panel member to synthesize
         const synthModel = models[synthCli.kind] ?? "";
+        // Drop a "synthesizing" placeholder so the user sees step 2 happen
+        // explicitly (panel → synth → verdict) rather than wondering why the
+        // chair is "thinking" alongside the panel.
+        const synthTs = Date.now();
+        setChats((m) => {
+          const cur = m.get(key);
+          if (!cur) return m;
+          return new Map(m).set(key, {
+            ...cur,
+            messages: [
+              ...cur.messages,
+              {
+                role: "assistant" as const,
+                content: "",
+                ts: synthTs,
+                kind: "council-synthesizing" as const,
+                cli: synthCli.kind,
+                model: synthModel,
+              },
+            ],
+          });
+        });
         const panelBlock = good
           .map((c) => {
             const tag = c.model ? `${c.cli.label}·${c.model}` : c.cli.label;
@@ -1049,31 +1099,48 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             cli: synthCli.kind,
             model: synthModel,
           });
-          // Land the verdict AND flip pending=false in the same setChats so
-          // the spinner stops the instant the verdict bubble appears.
+          // Replace the synthesizing placeholder with the verdict, AND flip
+          // pending=false in the same setChats so the spinner stops the
+          // instant the verdict bubble appears.
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
+            const verdictMsg = {
+              role: "assistant" as const,
+              content: verdict,
+              ts,
+              kind: "council-verdict" as const,
+              cli: synthCli.kind,
+              model: synthModel,
+            };
+            const idx = cur.messages.findIndex(
+              (x) => x.kind === "council-synthesizing" && x.ts === synthTs,
+            );
+            const nextMessages =
+              idx >= 0
+                ? [...cur.messages.slice(0, idx), verdictMsg, ...cur.messages.slice(idx + 1)]
+                : [...cur.messages, verdictMsg];
             return new Map(m).set(key, {
               ...cur,
-              messages: [
-                ...cur.messages,
-                {
-                  role: "assistant" as const,
-                  content: verdict,
-                  ts,
-                  kind: "council-verdict" as const,
-                  cli: synthCli.kind,
-                  model: synthModel,
-                },
-              ],
+              messages: nextMessages,
               pending: false,
               hasFirstTurn: true,
             });
           });
           return; // verdict landed — done.
         } catch {
-          // synthesis failed silently — user still has the panel responses.
+          // Synthesis failed — drop the synthesizing placeholder so the user
+          // isn't left staring at a spinner that will never resolve.
+          setChats((m) => {
+            const cur = m.get(key);
+            if (!cur) return m;
+            return new Map(m).set(key, {
+              ...cur,
+              messages: cur.messages.filter(
+                (x) => !(x.kind === "council-synthesizing" && x.ts === synthTs),
+              ),
+            });
+          });
         }
       }
       // No verdict (fewer than 2 successes, or synthesis failed) — still

@@ -56,6 +56,7 @@ export interface ChatMsg {
     | "council-config"
     | "council-pending"
     | "council-response"
+    | "council-synthesizing"
     | "council-verdict";
   cli?: CliKind; // for council-response bubbles
   model?: string;
@@ -558,7 +559,14 @@ function Transcript({
           onDiscardDistill={onDiscardDistill}
         />
       ))}
-      {session.pending && <ThinkingBubble tick={tick} cliLabel={session.cli.label} />}
+      {/* The generic ThinkingBubble is for normal single-CLI chat. During
+          council mode the per-panelist CouncilPendingBubble and the
+          CouncilSynthesizingBubble already convey the same info, so suppress
+          this one to avoid a redundant 4th spinner. */}
+      {session.pending &&
+        !messages.some(
+          (m) => m.kind === "council-pending" || m.kind === "council-synthesizing",
+        ) && <ThinkingBubble tick={tick} cliLabel={session.cli.label} />}
     </scrollbox>
   );
 }
@@ -717,6 +725,9 @@ function MessageBubble({
   if (msg.kind === "council-config") return null;
   if (msg.kind === "council-pending") {
     return <CouncilPendingBubble msg={msg} tick={tick} />;
+  }
+  if (msg.kind === "council-synthesizing") {
+    return <CouncilSynthesizingBubble msg={msg} tick={tick} />;
   }
   if (msg.kind === "council-response") {
     return <CouncilResponseBubble msg={msg} />;
@@ -1069,6 +1080,36 @@ function CouncilResponseBubble({ msg }: { msg: ChatMsg }) {
         paddingRight={1}
       >
         {renderMarkdownLines(msg.content)}
+      </box>
+    </box>
+  );
+}
+
+// Step-2 placeholder rendered between the panelist replies and the final
+// verdict. Distinct from the per-panelist CouncilPendingBubble so the user
+// can see the synthesis step explicitly ("synthesizing with Claude Code…")
+// instead of wondering why the chair is "thinking" alongside the panel.
+function CouncilSynthesizingBubble({ msg, tick }: { msg: ChatMsg; tick: number }) {
+  const synthCli = msg.cli ?? "claude";
+  const labelParts: string[] = [synthCli];
+  if (msg.model) labelParts.push(msg.model);
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <box
+        flexDirection="row"
+        border
+        borderColor={theme.goldBright}
+        backgroundColor={theme.bg}
+        title=" ⚖ synthesizing verdict "
+        titleAlignment="left"
+        bottomTitle={` chair: ${labelParts.join(" · ")} `}
+        bottomTitleAlignment="left"
+        paddingLeft={1}
+        paddingRight={1}
+        height={3}
+      >
+        <text fg={theme.goldBright}>{spinnerChar(tick)}</text>
+        <text fg={theme.fgDim}>  {thinkingWord(tick)} the panel responses…</text>
       </box>
     </box>
   );
