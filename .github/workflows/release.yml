@@ -8,6 +8,14 @@ on:
 permissions:
   contents: write
 
+# Opt into Node.js 24 on the runner so the warning from actions/checkout@v4
+# + softprops/action-gh-release@v2 (which currently default to Node.js 20)
+# goes away. GitHub deprecates Node 20 on 2026-09-16; this just sets us up
+# ahead of the cutover. Lift the var when the actions ship a v5/v3 that
+# defaults to Node 24 natively.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     name: build ${{ matrix.target }}
