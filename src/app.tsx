@@ -54,9 +54,12 @@ import {
   type AvailableCli,
 } from "./cli-bridge.ts";
 
-const VIEW_ORDER: ViewKey[] = ["state", "loops", "quickstart", "prompts", "skills"];
+const VIEW_ORDER: ViewKey[] = ["state", "quickstart", "prompts", "skills"];
 const VIEW_FILE: Record<ViewKey, string | null> = {
   state: "state.md",
+  // 'loops' kept as a typed alias for state.md so old call sites and the
+  // ViewKey union don't break; the tab itself is removed from VIEW_ORDER so
+  // it never shows in the nav. Open items live as a section inside state.md.
   loops: "state.md",
   quickstart: "QUICKSTART.md",
   prompts: "PROMPTS.md",
@@ -1104,6 +1107,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               domain={domain}
               view={view}
               skillIdx={skillIdx}
+              apps={apps}
               onPickSkill={(i) => setSkillIdx(i)}
             />
           )}

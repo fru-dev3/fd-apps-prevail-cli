@@ -8,7 +8,6 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { key: "state", label: "state" },
-  { key: "loops", label: "open items" },
   { key: "quickstart", label: "quickstart" },
   { key: "prompts", label: "prompts" },
   { key: "skills", label: "skills" },

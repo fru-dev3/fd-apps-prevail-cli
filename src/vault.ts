@@ -65,21 +65,42 @@ function domainRank(name: string): number {
 // Skill ordering: cadenced operational skills (briefs > weekly > monthly > sync >
 // review) outrank utility skills (build/extract/flag) outrank everything else.
 // Within a tier, sort alphabetically.
+export type SkillGroup = "op" | "flow" | "task" | "other";
+
+// Classify a skill by its <domain>-<group>-<name> convention. Anything that
+// doesn't match an explicit group prefix lands in "other" — bare integration
+// names (fidelity, notion) and any unconventionally named skills.
+export function skillGroup(id: string): SkillGroup {
+  const s = id.toLowerCase();
+  if (s.includes("-op-") || s.endsWith("-op")) return "op";
+  if (s.includes("-flow-") || s.endsWith("-flow")) return "flow";
+  if (s.includes("-task-") || s.endsWith("-task")) return "task";
+  return "other";
+}
+
+const GROUP_OFFSET: Record<SkillGroup, number> = {
+  op: 0,
+  flow: 1000,
+  task: 2000,
+  other: 3000,
+};
+
 function skillRank(id: string): number {
   const s = id.toLowerCase();
-  if (/(^|-)(daily|morning|evening)(-|$)/.test(s)) return 0;
-  if (s.endsWith("-brief") || s.includes("-brief-")) return 1;
-  if (s.includes("weekly")) return 2;
-  if (s.includes("monthly") || s.includes("quarterly") || s.includes("annual")) return 3;
-  if (s.includes("sync") || s.includes("synthesis")) return 4;
-  if (s.includes("review") || s.includes("audit") || s.includes("analyze")) return 5;
-  if (/(^|-)build-/.test(s) || /(^|-)prepare-/.test(s) || /(^|-)calculate-/.test(s) || /(^|-)draft-/.test(s)) return 6;
-  if (/(^|-)extract-/.test(s) || /(^|-)pull-/.test(s) || /(^|-)check-/.test(s) || /(^|-)log-/.test(s)) return 7;
-  if (/(^|-)flag-/.test(s) || /(^|-)watch-/.test(s) || /(^|-)track-/.test(s)) return 8;
-  // Bare integration names (no hyphen) sink to the bottom — they're connectors,
-  // not operational skills.
-  if (!s.includes("-")) return 10;
-  return 9;
+  const base = GROUP_OFFSET[skillGroup(id)];
+  // Cadence within group: daily/brief → weekly → monthly → sync → review →
+  // build/draft → extract/pull → flag/watch → general → bare integration.
+  if (/(^|-)(daily|morning|evening)(-|$)/.test(s)) return base + 0;
+  if (s.endsWith("-brief") || s.includes("-brief-")) return base + 1;
+  if (s.includes("weekly")) return base + 2;
+  if (s.includes("monthly") || s.includes("quarterly") || s.includes("annual")) return base + 3;
+  if (s.includes("sync") || s.includes("synthesis")) return base + 4;
+  if (s.includes("review") || s.includes("audit") || s.includes("analyze")) return base + 5;
+  if (/(^|-)build-/.test(s) || /(^|-)prepare-/.test(s) || /(^|-)calculate-/.test(s) || /(^|-)draft-/.test(s)) return base + 6;
+  if (/(^|-)extract-/.test(s) || /(^|-)pull-/.test(s) || /(^|-)check-/.test(s) || /(^|-)log-/.test(s)) return base + 7;
+  if (/(^|-)flag-/.test(s) || /(^|-)watch-/.test(s) || /(^|-)track-/.test(s)) return base + 8;
+  if (!s.includes("-")) return base + 10;
+  return base + 9;
 }
 
 export function resolveDefaultVaultPath(): string {
