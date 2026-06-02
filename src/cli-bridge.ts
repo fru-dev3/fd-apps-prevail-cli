@@ -4,7 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { Domain, ViewKey } from "./vault.ts";
-import { readWebAccess } from "./config.ts";
+import { readResponseFramework, readWebAccess } from "./config.ts";
+import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 
 const OPERATING_MANUAL_FILE = "AGENTS-operating.md";
 let operatingManualCache: { vaultPath: string; content: string | null } | null = null;
@@ -414,9 +415,15 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     bare || cli.kind !== "claude"
       ? null
       : augmentManualWithWebGate(findOperatingManual(vaultPath));
+  // Response framework preamble (BLUF, WIN, SCQA, ...). When set, prepend
+  // a bracketed instruction so the model structures its answer in that
+  // style. Applies to every CLI and to both single-chat + council. Short
+  // enough that even codex (which would otherwise echo) renders cleanly.
+  const framework = getFramework(readResponseFramework());
+  const framedPrompt = buildFrameworkPreamble(framework) + prompt;
 
   if (cli.kind === "claude") {
-    const head = isFirst ? ["-p", prompt] : ["--continue", "-p", prompt];
+    const head = isFirst ? ["-p", framedPrompt] : ["--continue", "-p", framedPrompt];
     const args: string[] = [];
     if (m) args.push("--model", m);
     // --append-system-prompt is only meaningful on the first turn; --continue inherits it
@@ -436,8 +443,8 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     // opens with framing it generally cooperates. Kept short so it doesn't
     // dominate the prompt or leak noticeably in the reply.
     const codexPrompt = bare
-      ? `(This is a general advisory question — not a software/coding task. Engage with it directly and give your real opinion.)\n\n${prompt}`
-      : prompt;
+      ? `(This is a general advisory question — not a software/coding task. Engage with it directly and give your real opinion.)\n\n${framedPrompt}`
+      : framedPrompt;
     const args = m ? [...base, "-m", m, codexPrompt] : [...base, codexPrompt];
     const raw = await runCapture(cli.bin, args, cwd, signal);
     return extractCodexReply(raw);
@@ -448,8 +455,8 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     // directory' error.
     const base = ["--skip-trust"];
     const args = m
-      ? [...base, "-m", m, "-p", prompt]
-      : [...base, "-p", prompt];
+      ? [...base, "-m", m, "-p", framedPrompt]
+      : [...base, "-p", framedPrompt];
     const raw = await runCapture(cli.bin, args, cwd, signal);
     return extractGeminiReply(raw);
   }
@@ -498,10 +505,24 @@ export function extractCodexReply(raw: string): string {
     }
   }
   if (start === -1) {
-    // No reply marker — codex output is just the startup envelope (model
-    // failed to produce a reply at all, e.g. invalid model id). Look for a
-    // line that reads like an actual error and surface that. Otherwise fall
-    // back to a concise "no reply" string so we don't dump workdir/model/etc.
+    // No "codex" marker line. Two cases:
+    //
+    // 1. Codex 0.136+ split the streams: the model reply goes to stdout,
+    //    the envelope (workdir / model / session id / the "codex" marker
+    //    itself / "tokens used") goes to stderr. runCapture only feeds us
+    //    stdout when it's non-empty, so `raw` here is just the bare reply.
+    //    Returning a no-reply fallback would discard the actual answer.
+    //
+    // 2. Codex failed silently and dumped only the envelope. In that case
+    //    `raw` will contain envelope markers like "workdir:" or "session
+    //    id:" or the "--------" separator.
+    //
+    // Distinguish by checking for envelope tells. If none are present, the
+    // stdout we received IS the reply — pass it through.
+    const looksLikeEnvelope = /\b(workdir|provider|sandbox|session id|reasoning effort)\s*:|^-{4,}$/m.test(raw);
+    if (!looksLikeEnvelope) return raw.trim();
+    // Otherwise it's the failure case — surface a real error line if
+    // present, else a concise placeholder so we don't dump the envelope.
     const errLine = extractCodexErrorLine(raw);
     return errLine ?? "(codex produced no reply)";
   }

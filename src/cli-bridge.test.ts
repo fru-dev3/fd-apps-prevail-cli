@@ -222,6 +222,20 @@ hello`;
   test("empty input passes through", () => {
     expect(extractCodexReply("")).toBe("");
   });
+
+  // Codex 0.136+ split the streams: the reply goes to stdout (just the
+  // bare answer), the envelope (workdir / model / 'codex' marker / tokens
+  // used) goes to stderr. runCapture only hands us stdout — so the input
+  // is just the bare reply with no marker line. Used to be falsely
+  // discarded as "(codex produced no reply)"; now passes through.
+  test("bare stdout reply (no envelope, no marker) passes through unchanged", () => {
+    expect(extractCodexReply("2 + 2 = 4.")).toBe("2 + 2 = 4.");
+  });
+
+  test("bare multi-line stdout reply passes through", () => {
+    const reply = "line one\nline two\nline three";
+    expect(extractCodexReply(reply)).toBe(reply);
+  });
 });
 
 // Regression coverage for the gemini stack-trace stripper. The gemini CLI

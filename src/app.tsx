@@ -21,7 +21,9 @@ import {
   ALL_CLI_KINDS,
   isCliKind,
   readCouncilConfig,
+  readResponseFramework,
   readWebAccess,
+  setResponseFramework,
   setCouncilClis,
   setCouncilModel,
   addCouncilModel,
@@ -30,6 +32,7 @@ import {
   setWebAccess,
   type CliKind,
 } from "./config.ts";
+import { FRAMEWORKS, getFramework, isFrameworkId } from "./framework.ts";
 import { buildDomainHeatmap, renderHeatmapText } from "./heatmap.ts";
 import {
   readRecentObservations,
@@ -741,6 +744,27 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           systemNote = cmd.mode === "deny"
             ? "web access disabled. CLIs will be told not to use WebSearch, WebFetch, or any network tools from the next turn onward."
             : "web access enabled. CLIs may use WebSearch, WebFetch, and network tools as needed.";
+        }
+      } else if (cmd.kind === "framework") {
+        const arg = cmd.id.trim();
+        if (!arg || arg === "list" || arg === "ls" || arg === "show") {
+          const cur = readResponseFramework();
+          const lines = FRAMEWORKS.map(
+            (f) => `  ${f.id === cur ? "▸" : " "} ${f.label.padEnd(10)} ${f.blurb}`,
+          );
+          systemNote =
+            `response frameworks (active: ${cur ?? "none"}):\n` +
+            lines.join("\n") +
+            `\n\nset with: /framework <id> · clear with: /framework none`;
+        } else if (arg === "none" || arg === "off" || arg === "clear" || arg === "default") {
+          setResponseFramework(null);
+          systemNote = "response framework cleared — models pick their own structure.";
+        } else if (isFrameworkId(arg)) {
+          setResponseFramework(arg);
+          const fw = getFramework(arg)!;
+          systemNote = `response framework set to ${fw.label} — ${fw.blurb}. applies to every CLI from the next message.`;
+        } else {
+          systemNote = `unknown framework "${arg}". try /framework list.`;
         }
       } else if (cmd.kind === "unknown") {
         systemNote = `unknown command ${cmd.raw}. try /help.`;

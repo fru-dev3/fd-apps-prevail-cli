@@ -21,13 +21,16 @@ import {
 } from "./session.ts";
 import {
   readCouncilConfig,
+  readResponseFramework,
   setCouncilClis,
   setCouncilModel,
   addCouncilModel,
   removeCouncilModel,
   setCouncilChair,
+  setResponseFramework,
   type CliKind as ConfigCliKind,
 } from "./config.ts";
+import { FRAMEWORKS, getFramework, type FrameworkId } from "./framework.ts";
 import {
   buildSuggestions,
   loadClickCounts,
@@ -105,6 +108,7 @@ export type ChatCommand =
   | { kind: "council-chair"; cli: string; model: string }
   | { kind: "heatmap"; days?: number }
   | { kind: "watch"; limit?: number }
+  | { kind: "framework"; id: string }
   | { kind: "unknown"; raw: string };
 
 interface Props {
@@ -1119,6 +1123,46 @@ function CouncilConfigBubble({
             </box>
           );
         })()}
+        {(() => {
+          // Response framework picker. Sets the global responseFramework
+          // config key, which runChatTurn reads on every call and prepends
+          // as a bracketed instruction to the prompt. Click any chip to
+          // switch; click "none" to clear.
+          const active = readResponseFramework();
+          const pickFw = (id: FrameworkId | null) => {
+            setResponseFramework(id);
+            setRevision((r) => r + 1);
+          };
+          const activeFw = getFramework(active);
+          return (
+            <box flexDirection="column" paddingTop={0}>
+              <box flexDirection="row" height={1}>
+                <text fg={theme.gold} attributes={1}>response framework</text>
+                <text fg={theme.fgFaint}>
+                  {"  → "}
+                  {activeFw ? `${activeFw.label} · ${activeFw.blurb}` : "none (model picks structure)"}
+                </text>
+              </box>
+              <box flexDirection="row" height={1} paddingLeft={2}>
+                <text fg={theme.fgFaint}>style:   </text>
+                <CouncilModelChip
+                  label="none"
+                  active={active === null}
+                  onClick={() => pickFw(null)}
+                />
+                {FRAMEWORKS.map((f) => (
+                  <CouncilModelChip
+                    key={f.id}
+                    label={f.label}
+                    active={active === f.id}
+                    onClick={() => pickFw(f.id)}
+                  />
+                ))}
+              </box>
+              <text> </text>
+            </box>
+          );
+        })()}
         <box
           flexDirection="row"
           height={1}
@@ -1350,6 +1394,7 @@ function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: numb
   // already shows the spinner + "X is thinking…" word. Rendering the same
   // here was a duplicate, so the status line stays silent during work and
   // only carries the idle ready-prompt.
+  const fw = getFramework(readResponseFramework());
   return (
     <box
       flexDirection="row"
@@ -1358,6 +1403,12 @@ function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: numb
       paddingRight={2}
       backgroundColor={theme.bg}
     >
+      {fw && (
+        <text>
+          <span fg={theme.aiAccent} attributes={1}>{`◆ ${fw.label}`}</span>
+          <span fg={theme.fgFaint}>{"  ·  "}</span>
+        </text>
+      )}
       {session.pending ? (
         <text fg={theme.fgFaint}> </text>
       ) : (
@@ -1423,6 +1474,7 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/council", arg: "<prompt>", desc: "ask the configured panel in parallel  ·  /council config to see panel, /council use ..., /council model ...", aliases: ["/c", "/panel"] },
   { cmd: "/heatmap", arg: "[days]", desc: "domain activity heatmap (default 30 days)", aliases: ["/heat", "/activity"] },
   { cmd: "/watch", arg: "[n]", desc: "show recent background-watcher observations (default 20)", aliases: ["/watcher", "/obs"] },
+  { cmd: "/framework", arg: "[id|list|none]", desc: "set response framework (bluf · win · scqa · sbar · ooda · proscons · steelman)", aliases: ["/fw"] },
   { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
   { cmd: "/codex", arg: "[model]", desc: "switch this chat to Codex" },
   { cmd: "/gemini", arg: "[model]", desc: "switch this chat to Gemini CLI" },
@@ -1721,6 +1773,9 @@ function parseSlashCommand(text: string): ChatCommand {
     if (a === "on" || a === "allow" || a === "enable") return { kind: "web", mode: "allow" };
     if (a === "off" || a === "deny" || a === "disable") return { kind: "web", mode: "deny" };
     return { kind: "web", mode: "status" };
+  }
+  if (cmd === "framework" || cmd === "fw") {
+    return { kind: "framework", id: arg.trim().toLowerCase() };
   }
   if (cmd === "council" || cmd === "c" || cmd === "panel") {
     const parts = arg.trim().split(/\s+/).filter(Boolean);

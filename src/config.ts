@@ -3,6 +3,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
+import type { FrameworkId } from "./framework.ts";
+
 export type CliKind = "claude" | "codex" | "gemini";
 
 export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "gemini"];
@@ -27,6 +29,11 @@ export interface UserConfig {
   // Optional chair pin: who synthesizes the verdict. null/missing = use
   // the first panelist that successfully replied (round-robin in practice).
   councilChair?: { cli: CliKind; model?: string };
+  // Optional response framework — when set, prepended as an instruction to
+  // every CLI prompt so the model structures its answer in that style
+  // (BLUF, WIN, SCQA, etc). See src/framework.ts for the catalog.
+  // Applies globally across all domains and both single-CLI + council mode.
+  responseFramework?: FrameworkId;
 }
 
 export interface CouncilConfig {
@@ -145,6 +152,21 @@ export function setWebAccess(mode: "allow" | "deny"): void {
   const cfg = readConfig();
   if (!cfg) return;
   writeConfig({ ...cfg, webAccess: mode });
+}
+
+export function readResponseFramework(): FrameworkId | null {
+  return readConfig()?.responseFramework ?? null;
+}
+
+// Set the active response framework. Pass null to clear (model picks its
+// own structure as before).
+export function setResponseFramework(id: FrameworkId | null): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (id === null) delete next.responseFramework;
+  else next.responseFramework = id;
+  writeConfig(next);
 }
 
 export function configDir(): string {
