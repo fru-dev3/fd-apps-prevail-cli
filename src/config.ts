@@ -200,6 +200,15 @@ export function bundledDemoVaultPath(): string {
     candidates.push(resolve(here, "vault-demo"));
   } catch {}
   candidates.push(resolve(process.cwd(), "vault-demo"));
+  // First pass: prefer a candidate that actually contains apps/ — this
+  // guards against an incomplete copy (e.g. dist/vault-demo from a stale
+  // partial build) that exists but has no LIFE APPS to surface. Picking
+  // such a path silently produces an empty Apps sidebar.
+  for (const c of candidates) {
+    if (existsSync(c) && existsSync(join(c, "apps"))) return c;
+  }
+  // Second pass: any path that exists, even incomplete. Better than
+  // returning a non-existent fallback.
   for (const c of candidates) {
     if (existsSync(c)) return c;
   }
