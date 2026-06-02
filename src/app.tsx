@@ -567,30 +567,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         setTimeout(() => runCouncil(key, cmd.prompt), 0);
         return m;
       } else if (cmd.kind === "council-config") {
-        const cfg = readCouncilConfig();
-        const detected = clis.map((c) => c.label).join(", ") || "none";
-        const panel = cfg.clis
-          ? cfg.clis.join(", ")
-          : "all detected (default)";
-        const modelLines =
-          Object.entries(cfg.models).length === 0
-            ? "  (none — each CLI uses its default model)"
-            : Object.entries(cfg.models)
-                .map(([k, v]) => `  · ${k}: ${v}`)
-                .join("\n");
-        systemNote = [
-          "council panel:",
-          `  detected on PATH: ${detected}`,
-          `  configured panel: ${panel}`,
-          "pinned models:",
-          modelLines,
-          "",
-          "change with:",
-          "  /council use claude codex          set panel (any of: claude, codex, gemini)",
-          "  /council use all                   reset to all detected",
-          "  /council model claude opus-4.7     pin a model for one CLI",
-          "  /council model gemini default      clear a pinned model",
-        ].join("\n");
+        // Drop an interactive bubble into the transcript instead of plain
+        // text — clicks on the checkboxes/model chips mutate ~/.aireadyu/
+        // config.json directly.
+        const bubble = {
+          role: "assistant" as const,
+          content: "",
+          ts: Date.now(),
+          kind: "council-config" as const,
+        };
+        next = {
+          ...next,
+          messages: [...next.messages, bubble],
+        };
+        return new Map(m).set(key, next);
       } else if (cmd.kind === "council-use") {
         if (cmd.clis.length === 0) {
           systemNote = "usage: /council use <cli1> [cli2 ...]  ·  /council use all";

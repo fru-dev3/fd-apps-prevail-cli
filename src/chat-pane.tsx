@@ -20,6 +20,12 @@ import {
   getUserPromptsForDomain,
 } from "./session.ts";
 import {
+  readCouncilConfig,
+  setCouncilClis,
+  setCouncilModel,
+  type CliKind as ConfigCliKind,
+} from "./config.ts";
+import {
   buildSuggestions,
   loadClickCounts,
   mergeSuggestions,
@@ -43,7 +49,7 @@ export interface ChatMsg {
   role: "user" | "assistant" | "system";
   content: string;
   ts: number;
-  kind?: "distill-draft" | "distill-saved" | "distill-discarded";
+  kind?: "distill-draft" | "distill-saved" | "distill-discarded" | "council-config";
 }
 
 export interface ChatSession {
@@ -214,6 +220,7 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
         session={session}
         tick={tick}
         suggestions={suggestions}
+        availableClis={availableClis}
         onAcceptDistill={(ts, content) =>
           onCommand(session.key, { kind: "accept-distill", ts, content })
         }
@@ -394,6 +401,7 @@ function Transcript({
   session,
   tick,
   suggestions,
+  availableClis,
   onAcceptDistill,
   onDiscardDistill,
   onPickSuggestion,
@@ -401,6 +409,7 @@ function Transcript({
   session: ChatSession;
   tick: number;
   suggestions: Suggestion[];
+  availableClis: AvailableCli[];
   onAcceptDistill: (ts: number, content: string) => void;
   onDiscardDistill: (ts: number) => void;
   onPickSuggestion: (s: Suggestion) => void;
@@ -439,6 +448,7 @@ function Transcript({
         <MessageBubble
           key={`m-${i}-${m.ts}`}
           msg={m}
+          availableClis={availableClis}
           onAcceptDistill={onAcceptDistill}
           onDiscardDistill={onDiscardDistill}
         />
@@ -578,15 +588,20 @@ function MetaLine({ session, visibleCount }: { session: ChatSession; visibleCoun
 
 function MessageBubble({
   msg,
+  availableClis,
   onAcceptDistill,
   onDiscardDistill,
 }: {
   msg: ChatMsg;
+  availableClis: AvailableCli[];
   onAcceptDistill: (ts: number, content: string) => void;
   onDiscardDistill: (ts: number) => void;
 }) {
   if (msg.kind === "distill-draft") {
     return <DistillDraftBubble msg={msg} onAccept={onAcceptDistill} onDiscard={onDiscardDistill} />;
+  }
+  if (msg.kind === "council-config") {
+    return <CouncilConfigBubble availableClis={availableClis} />;
   }
   if (msg.role === "system") {
     return (
@@ -683,6 +698,109 @@ function ThinkingBubble({ tick }: { tick: number }) {
       >
         <text fg={theme.gold}>{char}</text>
         <text fg={theme.fgDim}>  {word}…</text>
+      </box>
+    </box>
+  );
+}
+
+const COUNCIL_KINDS: ConfigCliKind[] = ["claude", "codex", "gemini"];
+
+function CouncilConfigBubble({ availableClis }: { availableClis: AvailableCli[] }) {
+  // Force re-render after each click that mutates persistent config.
+  const [_revision, setRevision] = useState(0);
+  const cfg = readCouncilConfig();
+  const detectedKinds = new Set(availableClis.map((c) => c.kind));
+
+  const isInPanel = (k: ConfigCliKind): boolean => {
+    if (cfg.clis === null) return detectedKinds.has(k);
+    return cfg.clis.includes(k);
+  };
+
+  const togglePanel = (k: ConfigCliKind) => {
+    if (!detectedKinds.has(k)) return;
+    const detectedList = Array.from(detectedKinds) as ConfigCliKind[];
+    const current = cfg.clis ?? detectedList;
+    const next = current.includes(k)
+      ? current.filter((x) => x !== k)
+      : [...current, k];
+    setCouncilClis(next.length === 0 ? [] : next);
+    setRevision((r) => r + 1);
+  };
+
+  const pinModel = (k: ConfigCliKind, m: string | null) => {
+    setCouncilModel(k, m);
+    setRevision((r) => r + 1);
+  };
+
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <box
+        flexDirection="column"
+        border
+        borderColor={theme.gold}
+        backgroundColor={theme.bg}
+        title=" ⚖ council panel · click to toggle "
+        titleAlignment="left"
+        bottomTitle=" persists to ~/.aireadyu/config.json · used by /council "
+        bottomTitleAlignment="left"
+        paddingLeft={1}
+        paddingRight={1}
+        paddingTop={0}
+        paddingBottom={0}
+      >
+        {COUNCIL_KINDS.map((kind) => {
+          const detected = detectedKinds.has(kind);
+          const inPanel = detected && isInPanel(kind);
+          const checkbox = inPanel ? "[×]" : detected ? "[ ]" : "[—]";
+          const checkboxFg = inPanel
+            ? theme.gold
+            : detected
+              ? theme.fgDim
+              : theme.fgFaint;
+          const nameFg = detected ? theme.fg : theme.fgFaint;
+          const pinned = cfg.models[kind];
+          const picks = MODEL_QUICKPICKS[kind] ?? [];
+          return (
+            <box key={kind} flexDirection="column" paddingTop={0}>
+              <box flexDirection="row" height={1}>
+                <box
+                  flexDirection="row"
+                  onMouseDown={() => togglePanel(kind)}
+                  paddingRight={1}
+                >
+                  <text fg={checkboxFg} attributes={inPanel ? 1 : 0}>
+                    {checkbox}
+                  </text>
+                </box>
+                <text fg={nameFg} attributes={inPanel ? 1 : 0}>
+                  {kind}
+                </text>
+                {!detected && (
+                  <text fg={theme.fgFaint}>  (not on PATH)</text>
+                )}
+              </box>
+              {detected && (
+                <box flexDirection="row" height={1} paddingLeft={4}>
+                  <text fg={theme.fgFaint}>model </text>
+                  <ModelChip
+                    label="default"
+                    active={!pinned}
+                    onClick={() => pinModel(kind, null)}
+                  />
+                  {picks.map((p) => (
+                    <ModelChip
+                      key={p}
+                      label={p}
+                      active={pinned === p}
+                      onClick={() => pinModel(kind, p)}
+                    />
+                  ))}
+                </box>
+              )}
+              <text> </text>
+            </box>
+          );
+        })}
       </box>
     </box>
   );
