@@ -83,7 +83,7 @@ describe("buildCliArgs", () => {
       expect(args[args.length - 1]).toBe(PROMPT);
     });
 
-    test("manual is wrapped in <operating-manual> block in the prompt", () => {
+    test("manual is dropped — codex has no system-prompt channel and echoes the prompt", () => {
       const args = buildCliArgs({
         cli: "codex",
         prompt: PROMPT,
@@ -92,9 +92,9 @@ describe("buildCliArgs", () => {
         manual: "MANUAL CONTENT",
       });
       const last = args[args.length - 1] ?? "";
-      expect(last).toContain("<operating-manual>");
-      expect(last).toContain("MANUAL CONTENT");
-      expect(last).toContain(PROMPT);
+      expect(last).toBe(PROMPT);
+      expect(last).not.toContain("<operating-manual>");
+      expect(last).not.toContain("MANUAL CONTENT");
     });
   });
 

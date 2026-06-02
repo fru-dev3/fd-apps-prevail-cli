@@ -48,7 +48,7 @@ description: |
 
 ## Note
 
-This is a **reference plugin** shipped with aireadyu to demonstrate the LifeApp
+This is a **reference plugin** shipped with prevail to demonstrate the LifeApp
 plugin contract. It is intentionally synthetic — the SKILL.md describes the
 shape of a Plaid integration, but the cockpit ships no live HTTP code for it.
 A real implementation would call the Plaid API from a script under

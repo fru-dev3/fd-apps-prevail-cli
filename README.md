@@ -1,6 +1,6 @@
-# aireadyu
+# prevail
 
-> ai · ready · u — a terminal cockpit for your life domains
+> prevAIl — a terminal cockpit for your life domains
 
 A single-binary TUI that turns every part of your life — wealth, health, tax,
 career, content, real estate, … — into a chat-driven cockpit. Each domain is
@@ -8,25 +8,25 @@ just a folder of markdown. Each chat talks to Claude Code, Codex, or Gemini.
 All conversations run in parallel.
 
 ```
-   ╲ │ ╱     █▀█ █   █▀█ █▀▀ ▄▀█ █▀▄ █▄█   █ █          │   SUNDAY · MAY 31 · 2026
-   ─ ◈ ─     █▀█ █   █▀▄ ██▄ █▀█ █▄▀  █    █▄█          │   15:47  ·  live since 2026
-   ╱ │ ╲     a i · r e a d y · u — personal ai cockpit  │
-                                                        │   vault   ~/.ai/vault
-  EST 2026   19 life domains · 41 life apps · 65 open   │   cli     claude · codex · gemini
-                                                        │   chat    ●● 2 chats active
+   ╲ │ ╱     █▀█ █▀█ █▀▀ █ █ ▄▀█ █                       │   SUNDAY · JUN 1 · 2026
+   ─ ◈ ─     █▀▀ █▀▄ ██▄ ▀▄▀ █▀█ █▄▄                     │   15:47  ·  live since 2026
+   ╱ │ ╲     prev·AI·l — your AI life cockpit            │
+                                                         │   vault   ~/.ai/vault
+  EST 2026   19 life domains · 41 life apps · 65 open    │   cli     claude · codex · gemini
+                                                         │   chat    ●● 2 chats active
 ```
 
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fru-dev3/aireadyu/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fru-dev3/prevail/main/scripts/install.sh | bash
 ```
 
 or from source:
 
 ```bash
-git clone https://github.com/fru-dev3/aireadyu
-cd aireadyu
+git clone https://github.com/fru-dev3/prevail
+cd prevail
 bun install
 bun start
 ```
@@ -69,11 +69,11 @@ in the sidebar showing which ones are thinking.
 ## Commands
 
 ```bash
-aireadyu                    boot the cockpit (uses your saved vault)
-aireadyu init               run the first-run wizard
-aireadyu demo               ignore config, always boot the synthetic vault
-aireadyu doctor             check vault + installed AI CLIs
-aireadyu --vault <path>     override vault path for this run
+prevail                    boot the cockpit (uses your saved vault)
+prevail init               run the first-run wizard
+prevail demo               ignore config, always boot the synthetic vault
+prevail doctor             check vault + installed AI CLIs
+prevail --vault <path>     override vault path for this run
 ```
 
 ## Keys

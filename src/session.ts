@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 
-const DATA_DIR = join(homedir(), ".aireadyu");
+const DATA_DIR = join(homedir(), ".prevail");
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
 const PROMPTS_DIR = join(DATA_DIR, "prompts");
 const DB_PATH = join(DATA_DIR, "sessions.db");
@@ -15,7 +15,7 @@ function ensureDirs() {
   if (!existsSync(PROMPTS_DIR)) mkdirSync(PROMPTS_DIR, { recursive: true });
 }
 
-// Append a human-readable prompt entry to ~/.aireadyu/prompts/<domain>.md.
+// Append a human-readable prompt entry to ~/.prevail/prompts/<domain>.md.
 // One markdown block per prompt; assistant responses are NOT logged here —
 // this file is for what the user is asking, not what the model says back.
 function appendPromptFile(msg: PersistedMessage): void {

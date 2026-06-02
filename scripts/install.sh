@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# aireadyu installer — fetches the prebuilt binary for your platform from
-# the latest GitHub release and installs it to ~/.local/bin/aireadyu.
+# prevail installer — fetches the prebuilt binary for your platform from
+# the latest GitHub release and installs it to ~/.local/bin/prevail.
 #
-#   curl -fsSL https://aireadyu.life/install | bash
+#   curl -fsSL https://prevail.ai/install | bash
 #
 # Override the install dir:
-#   curl -fsSL https://aireadyu.life/install | AIREADYU_BIN_DIR=/usr/local/bin bash
+#   curl -fsSL https://prevail.ai/install | PREVAIL_BIN_DIR=/usr/local/bin bash
 
 set -euo pipefail
 
-REPO="${AIREADYU_REPO:-fru-dev3/aireadyu}"
-BIN_DIR="${AIREADYU_BIN_DIR:-$HOME/.local/bin}"
-DATA_DIR="${AIREADYU_DATA_DIR:-$HOME/.aireadyu}"
-VERSION="${AIREADYU_VERSION:-latest}"
+REPO="${PREVAIL_REPO:-fru-dev3/prevail}"
+BIN_DIR="${PREVAIL_BIN_DIR:-$HOME/.local/bin}"
+DATA_DIR="${PREVAIL_DATA_DIR:-$HOME/.prevail}"
+VERSION="${PREVAIL_VERSION:-latest}"
 
 bold=$(printf '\033[1m')
 gold=$(printf '\033[38;5;179m')
@@ -33,7 +33,7 @@ case "$uname_s-$uname_m" in
   *) echo "✗ unsupported platform: $uname_s $uname_m"; exit 1 ;;
 esac
 
-printf "\n  %s╲ │ ╱%s    %sAIREADYU%s\n" "$gold" "$reset" "$bold$gold" "$reset"
+printf "\n  %s╲ │ ╱%s    %sPREVAIL%s\n" "$gold" "$reset" "$bold$gold" "$reset"
 printf "  %s─ ◈ ─%s    a personal ai cockpit\n" "$gold" "$reset"
 printf "  %s╱ │ ╲%s    %sinstalling for %s%s\n\n" "$gold" "$reset" "$dim" "$target" "$reset"
 
@@ -43,7 +43,7 @@ if [ "$VERSION" = "latest" ]; then
   if [ -z "$VERSION" ]; then echo "✗ could not resolve latest release"; exit 1; fi
 fi
 
-ASSET="aireadyu-${VERSION}-${target}.tar.gz"
+ASSET="prevail-${VERSION}-${target}.tar.gz"
 URL="https://github.com/$REPO/releases/download/$VERSION/$ASSET"
 
 say "downloading $ASSET..."
@@ -53,10 +53,10 @@ curl -fsSL -o "$tmp/$ASSET" "$URL"
 tar -xzf "$tmp/$ASSET" -C "$tmp"
 
 mkdir -p "$BIN_DIR"
-mv "$tmp/aireadyu" "$BIN_DIR/aireadyu"
-chmod +x "$BIN_DIR/aireadyu"
+mv "$tmp/prevail" "$BIN_DIR/prevail"
+chmod +x "$BIN_DIR/prevail"
 
-say "installed binary to $BIN_DIR/aireadyu"
+say "installed binary to $BIN_DIR/prevail"
 
 if [ -d "$tmp/vault-demo" ]; then
   mkdir -p "$DATA_DIR"
@@ -81,6 +81,6 @@ case ":$PATH:" in
 esac
 
 printf "\n  %sdone.%s next:\n" "$bold" "$reset"
-printf "    %saireadyu%s          ← first-run wizard\n" "$gold" "$reset"
-printf "    %saireadyu demo%s     ← jump straight into the synthetic vault\n" "$gold" "$reset"
-printf "    %saireadyu doctor%s   ← check installed AI clis\n\n" "$gold" "$reset"
+printf "    %sprevail%s          ← first-run wizard\n" "$gold" "$reset"
+printf "    %sprevail demo%s     ← jump straight into the synthetic vault\n" "$gold" "$reset"
+printf "    %sprevail doctor%s   ← check installed AI clis\n\n" "$gold" "$reset"

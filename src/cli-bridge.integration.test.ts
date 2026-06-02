@@ -27,7 +27,7 @@ function findCli(kind: "claude" | "codex" | "gemini"): AvailableCli | null {
 function makeFakeVaultDir(): string {
   // Create a non-git temp dir to mimic a vault folder. This is the exact
   // shape that previously broke codex (no git repo, no trust list).
-  const dir = mkdtempSync(join(tmpdir(), "aireadyu-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "prevail-test-"));
   writeFileSync(join(dir, "state.md"), "# Test\nplaceholder.");
   return dir;
 }

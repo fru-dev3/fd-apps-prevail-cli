@@ -70,15 +70,32 @@ export function Branding({
   );
 }
 
-// AIREADY is at cols 0-57; the trailing U starts at col 58 (9 chars wide).
-const LOGO_U_OFFSET = 58;
-const LOGO_LINES = [
-  " █████╗ ██╗   ██████╗ ███████╗ █████╗ ██████╗ ██╗   ██╗   ██╗   ██╗",
-  "██╔══██╗██║   ██╔══██╗██╔════╝██╔══██╗██╔══██╗╚██╗ ██╔╝   ██║   ██║",
-  "███████║██║   ██████╔╝█████╗  ███████║██║  ██║ ╚████╔╝    ██║   ██║",
-  "██╔══██║██║   ██╔══██╗██╔══╝  ██╔══██║██║  ██║  ╚██╔╝     ██║   ██║",
-  "██║  ██║██║   ██║  ██║███████╗██║  ██║██████╔╝   ██║      ╚██████╔╝",
-  "╚═╝  ╚═╝╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝    ╚═╝       ╚═════╝ ",
+// PREVAIL logo, rendered as three side-by-side blocks so the "AI" stays
+// visually emphasized in goldBright while "PREV" and "L" sit in plain gold.
+// This is the brand thesis: prev·AI·l — the AI is the heart of the cockpit.
+const LOGO_PREV = [
+  "██████╗ ██████╗ ███████╗██╗   ██╗",
+  "██╔══██╗██╔══██╗██╔════╝██║   ██║",
+  "██████╔╝██████╔╝█████╗  ██║   ██║",
+  "██╔═══╝ ██╔══██╗██╔══╝  ╚██╗ ██╔╝",
+  "██║     ██║  ██║███████╗ ╚████╔╝ ",
+  "╚═╝     ╚═╝  ╚═╝╚══════╝  ╚═══╝  ",
+] as const;
+const LOGO_AI = [
+  " █████╗ ██╗",
+  "██╔══██╗██║",
+  "███████║██║",
+  "██╔══██║██║",
+  "██║  ██║██║",
+  "╚═╝  ╚═╝╚═╝",
+] as const;
+const LOGO_L = [
+  "██╗     ",
+  "██║     ",
+  "██║     ",
+  "██║     ",
+  "███████╗",
+  "╚══════╝",
 ] as const;
 
 function BrandColumn({
@@ -94,20 +111,17 @@ function BrandColumn({
     <box flexDirection="row" width={80}>
       <Mascot />
       <box flexDirection="column" paddingLeft={2}>
-        {LOGO_LINES.map((line, i) => {
-          const prefix = line.slice(0, LOGO_U_OFFSET);
-          const uChars = line.slice(LOGO_U_OFFSET);
-          return (
-            <text key={`logo-${i}`} fg={theme.gold} attributes={1}>
-              <span fg={theme.gold} attributes={1}>{prefix}</span>
-              <span fg={theme.goldBright} attributes={1}>{uChars}</span>
-            </text>
-          );
-        })}
+        {LOGO_PREV.map((_, i) => (
+          <text key={`logo-${i}`} fg={theme.gold} attributes={1}>
+            <span fg={theme.gold} attributes={1}>{LOGO_PREV[i]}</span>
+            <span fg={theme.goldBright} attributes={1}>{LOGO_AI[i]}</span>
+            <span fg={theme.gold} attributes={1}>{LOGO_L[i]}</span>
+          </text>
+        ))}
         <text fg={theme.goldDim}>
-          {"        a i  ·  r e a d y  ·  "}
-          <span fg={theme.goldBright}>u</span>
-          {"   —   personal ai cockpit"}
+          {"        p r e v  ·  "}
+          <span fg={theme.goldBright}>A I</span>
+          {"  ·  l   —   your AI life cockpit"}
         </text>
         <text> </text>
         <text fg={theme.fgDim}>
@@ -186,7 +200,7 @@ function StatusColumn({
         <text fg={theme.goldDim}>{`  ·  ${yearLabel}`}</text>
       </box>
       <text fg={theme.fgDim}>
-        {timeLabel}  ·  aireadyu  ·  opentui · zig core
+        {timeLabel}  ·  prevail  ·  opentui · zig core
       </text>
       <text> </text>
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />

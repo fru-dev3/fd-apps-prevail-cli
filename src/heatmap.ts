@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 // Reuse the existing SQLite store written by session.ts. Open read-only.
-const DB_PATH = join(homedir(), ".aireadyu", "sessions.db");
+const DB_PATH = join(homedir(), ".prevail", "sessions.db");
 
 let dbInstance: Database | null = null;
 function db(): Database | null {

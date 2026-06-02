@@ -15,7 +15,7 @@ function findOperatingManual(vaultPath: string): string | null {
   }
   const candidates: string[] = [
     join(vaultPath, OPERATING_MANUAL_FILE),
-    join(homedir(), ".aireadyu", OPERATING_MANUAL_FILE),
+    join(homedir(), ".prevail", OPERATING_MANUAL_FILE),
   ];
   try {
     candidates.push(resolve(dirname(process.execPath), OPERATING_MANUAL_FILE));
@@ -370,6 +370,17 @@ export interface ChatTurn {
   cli: AvailableCli;
   model: string;
   isFirst: boolean;
+  // Council Q&A calls pass bare=true to suppress the operating-manual
+  // preamble. The manual is multi-kB of agent-onboarding text — useful for
+  // normal chat sessions where the panelist takes follow-up actions, but
+  // pure noise for a one-shot question/answer/synthesize. It also caused
+  // codex to echo the manual verbatim back into the response bubble when it
+  // exited non-zero, polluting the transcript.
+  bare?: boolean;
+  // Optional cancellation. Aborting the signal SIGTERMs the child process so
+  // Escape in the cockpit can drop an in-flight prompt without waiting for
+  // the model to finish. runCapture resolves with "(cancelled)" on abort.
+  signal?: AbortSignal;
 }
 
 const WEB_DENY_NOTE = [
@@ -389,31 +400,46 @@ function augmentManualWithWebGate(manual: string | null): string | null {
   return `${manual}\n\n${WEB_DENY_NOTE}`;
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, signal }: ChatTurn): Promise<string> {
   const m = model.trim();
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
-  const manual = augmentManualWithWebGate(findOperatingManual(vaultPath));
+  // Only claude gets the manual — it has a real --append-system-prompt
+  // channel that the model treats as system context (not echoed in output).
+  // codex and gemini have no system-prompt flag in their CLIs, so the manual
+  // would have to be prepended to the user prompt — and both (codex
+  // especially) echo it verbatim into the response bubble, eating screen
+  // space. Better to send them a clean prompt.
+  const manualForClaude =
+    bare || cli.kind !== "claude"
+      ? null
+      : augmentManualWithWebGate(findOperatingManual(vaultPath));
 
   if (cli.kind === "claude") {
     const head = isFirst ? ["-p", prompt] : ["--continue", "-p", prompt];
     const args: string[] = [];
     if (m) args.push("--model", m);
     // --append-system-prompt is only meaningful on the first turn; --continue inherits it
-    if (manual && isFirst) args.push("--append-system-prompt", manual);
+    if (manualForClaude && isFirst) args.push("--append-system-prompt", manualForClaude);
     args.push(...head);
-    return runCapture(cli.bin, args, cwd);
+    return runCapture(cli.bin, args, cwd, signal);
   }
-  // codex + gemini don't have session continuation in our wrapper — prepend manual every turn
-  const augmentedPrompt = manual
-    ? `<operating-manual>\n${manual}\n</operating-manual>\n\n${prompt}`
-    : prompt;
   if (cli.kind === "codex") {
     // --skip-git-repo-check: vault dirs aren't git repos; without this codex
     // refuses to run with 'Not inside a trusted directory'.
     const base = ["exec", "--skip-git-repo-check"];
-    const args = m ? [...base, "-m", m, augmentedPrompt] : [...base, augmentedPrompt];
-    const raw = await runCapture(cli.bin, args, cwd);
+    // Codex's built-in system prompt frames it as a software engineering
+    // agent — it refuses non-coding asks with "I'm a coding agent, I can't
+    // help with that." For council Q&A (bare=true) this is wrong: the user
+    // is asking life-domain advisory questions, not requesting code. Codex
+    // doesn't expose a system-prompt override flag, but if the user prompt
+    // opens with framing it generally cooperates. Kept short so it doesn't
+    // dominate the prompt or leak noticeably in the reply.
+    const codexPrompt = bare
+      ? `(This is a general advisory question — not a software/coding task. Engage with it directly and give your real opinion.)\n\n${prompt}`
+      : prompt;
+    const args = m ? [...base, "-m", m, codexPrompt] : [...base, codexPrompt];
+    const raw = await runCapture(cli.bin, args, cwd, signal);
     return extractCodexReply(raw);
   }
   if (cli.kind === "gemini") {
@@ -422,9 +448,10 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst }: ChatTurn
     // directory' error.
     const base = ["--skip-trust"];
     const args = m
-      ? [...base, "-m", m, "-p", augmentedPrompt]
-      : [...base, "-p", augmentedPrompt];
-    return runCapture(cli.bin, args, cwd);
+      ? [...base, "-m", m, "-p", prompt]
+      : [...base, "-p", prompt];
+    const raw = await runCapture(cli.bin, args, cwd, signal);
+    return extractGeminiReply(raw);
   }
   return `(no handler for ${cli.kind})`;
 }
@@ -450,6 +477,15 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst }: ChatTurn
 // return the raw output as a fallback so we never silently drop content.
 export function extractCodexReply(raw: string): string {
   if (!raw) return raw;
+  // Detect the runCapture exit-code prefix — if codex exited non-zero,
+  // runCapture wraps the stderr in `(<bin> exited <code>)\n<stderr>` and
+  // gives us that. The envelope below is just noise; surface the actual
+  // error line instead.
+  const exitPrefix = raw.match(/^\((?:\S+\s+)?exited\s+\d+\)/);
+  if (exitPrefix) {
+    const errLine = extractCodexErrorLine(raw);
+    return errLine ?? raw.split("\n")[0]!;
+  }
   const lines = raw.split("\n");
   // Find the "codex" line — must be on its own line, possibly with trailing
   // whitespace. Walk from the bottom so we get the LAST one (in case codex
@@ -461,9 +497,20 @@ export function extractCodexReply(raw: string): string {
       break;
     }
   }
-  if (start === -1) return raw;
-  // Stop at the next envelope keyword we know about.
-  const stopRe = /^(tokens used|session id|reasoning effort|reasoning summaries|-{4,})\s*$/i;
+  if (start === -1) {
+    // No reply marker — codex output is just the startup envelope (model
+    // failed to produce a reply at all, e.g. invalid model id). Look for a
+    // line that reads like an actual error and surface that. Otherwise fall
+    // back to a concise "no reply" string so we don't dump workdir/model/etc.
+    const errLine = extractCodexErrorLine(raw);
+    return errLine ?? "(codex produced no reply)";
+  }
+  // Stop at the next envelope keyword we know about. The colon-suffixed keys
+  // come from codex's startup envelope; matching them protects against the
+  // rare case where codex re-prints envelope info after the reply. We require
+  // the colon (and an `^`) so a reply that mentions "model: gpt-5" in prose
+  // doesn't get truncated.
+  const stopRe = /^(tokens used\s*$|-{4,}\s*$|(?:session id|reasoning effort|reasoning summaries|workdir|model|provider|approval|sandbox):)/i;
   let end = lines.length;
   for (let i = start; i < lines.length; i++) {
     if (stopRe.test(lines[i]!.trim())) {
@@ -472,6 +519,60 @@ export function extractCodexReply(raw: string): string {
     }
   }
   const body = lines.slice(start, end).join("\n").trim();
+  return body || "(codex produced no reply)";
+}
+
+function extractCodexErrorLine(raw: string): string | null {
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    if (/^error[:\s]/i.test(t)) return t;
+    if (/not supported when using codex/i.test(t)) return t;
+    if (/^stream error[:\s]/i.test(t)) return t;
+  }
+  return null;
+}
+
+// Gemini CLI dumps a full Node.js stack trace on any API error: 30 lines of
+// "at classifyGoogleError (file:///opt/homebrew/Cellar/gemini-cli/.../...)"
+// frames after the actual human-readable error. The signal we want is
+// usually one line like "TerminalQuotaError: You have exhausted your
+// capacity...". This function pulls that out and drops the stack.
+//
+// On success (no error), Gemini's `-p` mode just prints the reply text — no
+// envelope to strip — so we return it unchanged.
+export function extractGeminiReply(raw: string): string {
+  if (!raw) return raw;
+  // runCapture prefixes non-zero exits with "(<bin> exited <code>)". When
+  // present, dig out the meaningful error line instead of the whole dump.
+  const exitPrefix = raw.match(/^\((?:\S+\s+)?exited\s+\d+\)/);
+  // Stack-trace markers — once we hit one, stop including the rest.
+  const stackRe = /^\s*at\s+[\w.<>$]+\s*\(/;
+  const lines = raw.split("\n");
+  const kept: string[] = [];
+  let sawError = false;
+  for (const line of lines) {
+    if (stackRe.test(line)) break;
+    // Strip Gemini's "Full report available at: /var/folders/...json"
+    // breadcrumb — points at a temp file the user can't read in context.
+    const cleaned = line.replace(/\s*Full report available at:\s*\S+/g, "").trimEnd();
+    if (!cleaned.trim()) continue;
+    kept.push(cleaned);
+    if (/error\b|exhausted|quota|429/i.test(cleaned)) sawError = true;
+  }
+  const body = kept.join("\n").trim();
+  if (exitPrefix && sawError) {
+    // Promote the most specific error line. Prefer a *Error: pattern.
+    const errLine = kept.find((l) =>
+      /^\s*\w*Error:|^\s*Error\b|exhausted/i.test(l),
+    );
+    if (errLine) {
+      // Often the prefix and the error line are concatenated on one line
+      // from gemini; if so, just return the error portion.
+      const idx = errLine.search(/\w*Error:|Error\b/);
+      return idx > 0 ? errLine.slice(idx).trim() : errLine.trim();
+    }
+  }
   return body || raw;
 }
 
@@ -500,25 +601,34 @@ export function buildCliArgs({
     else args.push("--continue", "-p", prompt);
     return args;
   }
-  const augmented = manual
-    ? `<operating-manual>\n${manual}\n</operating-manual>\n\n${prompt}`
-    : prompt;
+  // codex and gemini have no system-prompt channel; manual is intentionally
+  // dropped (it would otherwise be echoed back into the response bubble).
   if (cli === "codex") {
     const base = ["exec", "--skip-git-repo-check"];
-    return m ? [...base, "-m", m, augmented] : [...base, augmented];
+    return m ? [...base, "-m", m, prompt] : [...base, prompt];
   }
   if (cli === "gemini") {
     const base = ["--skip-trust"];
-    return m ? [...base, "-m", m, "-p", augmented] : [...base, "-p", augmented];
+    return m ? [...base, "-m", m, "-p", prompt] : [...base, "-p", prompt];
   }
   return [];
 }
 
-function runCapture(bin: string, args: string[], cwd: string): Promise<string> {
+function runCapture(
+  bin: string,
+  args: string[],
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<string> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let child;
+    // Pre-aborted signal — don't even spawn.
+    if (signal?.aborted) {
+      resolve("(cancelled)");
+      return;
+    }
     try {
       // stdin: "ignore" — same reason as probeCli. Without this, codex exec
       // hangs indefinitely from inside a spawn (no TTY, pipe never closes).
@@ -531,6 +641,19 @@ function runCapture(bin: string, args: string[], cwd: string): Promise<string> {
       resolve(`(error spawning ${bin}: ${(err as Error).message})`);
       return;
     }
+    // SIGTERM the child when the user hits Escape mid-turn. The "close"
+    // handler below still fires once the process actually exits, but we set
+    // `cancelled` first so it resolves with a clean "(cancelled)" instead of
+    // surfacing whatever partial stderr the CLI happened to emit on the way
+    // out. Listener is removed on close so we don't leak in long sessions.
+    let cancelled = false;
+    const onAbort = () => {
+      cancelled = true;
+      try {
+        child!.kill("SIGTERM");
+      } catch {}
+    };
+    signal?.addEventListener("abort", onAbort);
     child.stdout.on("data", (b) => {
       stdout += b.toString();
     });
@@ -538,6 +661,11 @@ function runCapture(bin: string, args: string[], cwd: string): Promise<string> {
       stderr += b.toString();
     });
     child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (cancelled) {
+        resolve("(cancelled)");
+        return;
+      }
       const out = stdout.trim();
       if (out.length > 0) {
         resolve(out);
@@ -548,7 +676,12 @@ function runCapture(bin: string, args: string[], cwd: string): Promise<string> {
       }
     });
     child.on("error", (err) => {
-      resolve(`(error running ${bin}: ${err.message})`);
+      signal?.removeEventListener("abort", onAbort);
+      if (cancelled) {
+        resolve("(cancelled)");
+      } else {
+        resolve(`(error running ${bin}: ${err.message})`);
+      }
     });
   });
 }

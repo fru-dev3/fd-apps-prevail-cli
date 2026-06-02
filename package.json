@@ -1,14 +1,14 @@
 {
-  "name": "aireadyu",
+  "name": "prevail",
   "version": "0.1.2",
-  "description": "ai · ready · u — a terminal cockpit for your life domains.",
+  "description": "prevAIl — a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,
   "license": "MIT",
-  "homepage": "https://github.com/fru-dev3/aireadyu",
+  "homepage": "https://github.com/fru-dev3/prevail",
   "repository": {
     "type": "git",
-    "url": "https://github.com/fru-dev3/aireadyu.git"
+    "url": "https://github.com/fru-dev3/prevail.git"
   },
   "keywords": [
     "tui",
@@ -24,7 +24,7 @@
     "opentui"
   ],
   "bin": {
-    "aireadyu": "./src/index.tsx",
+    "prevail": "./src/index.tsx",
     "aru": "./src/index.tsx"
   },
   "files": [
@@ -38,11 +38,11 @@
     "dev": "bun --watch run src/index.tsx",
     "demo": "bun run src/index.tsx demo",
     "doctor": "bun run src/index.tsx doctor",
-    "build": "bun build --compile --outfile=dist/aireadyu src/index.tsx",
-    "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 --outfile=dist/aireadyu-darwin-arm64 src/index.tsx",
-    "build:darwin-x64": "bun build --compile --target=bun-darwin-x64 --outfile=dist/aireadyu-darwin-x64 src/index.tsx",
-    "build:linux-x64": "bun build --compile --target=bun-linux-x64 --outfile=dist/aireadyu-linux-x64 src/index.tsx",
-    "build:linux-arm64": "bun build --compile --target=bun-linux-arm64 --outfile=dist/aireadyu-linux-arm64 src/index.tsx",
+    "build": "bun build --compile --outfile=dist/prevail src/index.tsx",
+    "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 --outfile=dist/prevail-darwin-arm64 src/index.tsx",
+    "build:darwin-x64": "bun build --compile --target=bun-darwin-x64 --outfile=dist/prevail-darwin-x64 src/index.tsx",
+    "build:linux-x64": "bun build --compile --target=bun-linux-x64 --outfile=dist/prevail-linux-x64 src/index.tsx",
+    "build:linux-arm64": "bun build --compile --target=bun-linux-arm64 --outfile=dist/prevail-linux-arm64 src/index.tsx",
     "typecheck": "bun node_modules/typescript/bin/tsc --noEmit",
     "test": "bun test src/",
     "test:integration": "INTEGRATION_TESTS=1 bun test src/cli-bridge.integration.test.ts"

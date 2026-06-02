@@ -98,7 +98,7 @@ export function runSchedule(entry: ScheduleEntry, vaultPath: string): Promise<Ru
     try {
       const child = spawn("sh", ["-c", entry.command], {
         cwd: vaultPath,
-        env: { ...process.env, AIREADYU_VAULT: vaultPath, AIREADYU_SCHEDULE_ID: entry.id },
+        env: { ...process.env, PREVAIL_VAULT: vaultPath, PREVAIL_SCHEDULE_ID: entry.id },
         detached: true,
         stdio: "ignore",
       });

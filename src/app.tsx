@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useKeyboard, useRenderer } from "@opentui/react";
 import { Sidebar, type ChatStatus, type SidebarFocus } from "./sidebar.tsx";
 import { DomainDetail } from "./domain-detail.tsx";
@@ -101,6 +101,13 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   const [clis] = useState<AvailableCli[]>(() => detectClis());
   const [cliIdx, setCliIdx] = useState(0);
   const [chats, setChats] = useState<Map<string, ChatSession>>(new Map());
+  // One AbortController per in-flight session turn. When the user hits Escape
+  // mid-prompt we abort the controller, which SIGTERMs the CLI child process
+  // in runCapture. The .then/.catch handlers on the runChatTurn promise still
+  // fire — they just write a "(cancelled)" bubble instead of the model reply.
+  // Council shares one controller across all panelists + the synthesis call
+  // so a single Escape kills the whole batch.
+  const cancelControllersRef = useRef<Map<string, AbortController>>(new Map());
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
@@ -198,7 +205,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
 
   // background watcher — every 5 minutes, scan domains+apps for fresh
   // observations (stale state, loops spike, cold domain). NEW findings are
-  // persisted to ~/.aireadyu/watcher.jsonl and the most-severe one surfaces
+  // persisted to ~/.prevail/watcher.jsonl and the most-severe one surfaces
   // in the command bar so the user sees something proactively.
   useEffect(() => {
     const tickWatcher = () => {
@@ -953,10 +960,22 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         pending: true,
       });
     });
-    const promptForCli = makeSeedPrompt(
+    // Each panelist call to a CLI is one-shot — codex/gemini have no session
+    // continuation in our wrapper, and we set isFirst=true for claude too so
+    // every panelist starts clean. That means follow-up council turns lose all
+    // prior context unless we hand-roll it: walk the message log, pull prior
+    // user turns + council verdicts + single-CLI assistant turns, and prepend
+    // that as a conversation transcript so each panelist sees what was said
+    // before. Without this they answer the follow-up as if it were a totally
+    // fresh question.
+    const promptForCli = buildCouncilTurnPrompt(
       { ...session, messages: [...session.messages, userMsg] },
       text,
     );
+    // Shared abort controller for the whole council batch. Escape kills every
+    // panelist and the synthesis call in one shot.
+    const controller = new AbortController();
+    cancelControllersRef.current.set(key, controller);
     // Collect successful responses in a closure so we can synthesize them
     // into a verdict after all panel members return.
     type Collected = { cli: AvailableCli; model: string; response: string; ok: boolean };
@@ -993,6 +1012,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           cli,
           model: mdl,
           isFirst: true,
+          bare: true,
+          signal: controller.signal,
         }),
         PANELIST_TIMEOUT_MS,
         mdl ? `${cli.label}·${mdl}` : cli.label,
@@ -1138,6 +1159,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               cli: synthCli,
               model: synthModel,
               isFirst: true,
+              bare: true,
+              signal: controller.signal,
             }),
             PANELIST_TIMEOUT_MS,
             `${synthCli.label} (synthesis)`,
@@ -1207,6 +1230,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           hasFirstTurn: true,
         });
       });
+    }).finally(() => {
+      if (cancelControllersRef.current.get(key) === controller) {
+        cancelControllersRef.current.delete(key);
+      }
     });
   }
 
@@ -1236,12 +1263,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         pending: true,
       });
     });
+    const controller = new AbortController();
+    cancelControllersRef.current.set(key, controller);
     runChatTurn({
       prompt: promptForCli,
       cwd: session.hostDomain.path,
       cli: session.cli,
       model: session.model,
       isFirst: !session.hasFirstTurn,
+      signal: controller.signal,
     })
       .then((response) => {
         const ts = Date.now();
@@ -1282,7 +1312,30 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             hasFirstTurn: true,
           });
         });
+      })
+      .finally(() => {
+        // Only forget the controller if it's still the same one — a new turn
+        // could have replaced it (shouldn't happen since pending blocks new
+        // sends, but be defensive).
+        if (cancelControllersRef.current.get(key) === controller) {
+          cancelControllersRef.current.delete(key);
+        }
       });
+  }
+
+  // Abort the in-flight turn for a session. The CLI child process gets
+  // SIGTERM; the runChatTurn promise resolves with "(cancelled)" and the
+  // .then handler writes that into the transcript. Returns true if a turn
+  // was actually aborted, so callers can fall through to other Escape
+  // behaviors when nothing was pending.
+  function cancelChat(key: string): boolean {
+    const ctl = cancelControllersRef.current.get(key);
+    if (!ctl) return false;
+    cancelControllersRef.current.delete(key);
+    try {
+      ctl.abort();
+    } catch {}
+    return true;
   }
 
   function doEdit() {
@@ -1443,6 +1496,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   onSend={sendMessage}
                   onCommand={handleChatCommand}
                   onExit={exitChat}
+                  onCancel={cancelChat}
                   onAutocompleteChange={setAutocompleteOpen}
                   topBar={tabBar}
                 />
@@ -1522,4 +1576,62 @@ function summarize(domains: Domain[], apps: AppSkill[]) {
     totalLoops,
     totalApps: apps.length,
   };
+}
+
+// Build the prompt sent to each council panelist for the CURRENT turn.
+//
+// If there's prior conversation in this session, we pull user questions,
+// council verdicts, and single-CLI assistant replies into a compact
+// transcript so the panelists actually see what was said before. Without
+// this, every council follow-up is treated as a fresh question and the
+// models say "I don't have prior context" — which is what was happening.
+//
+// We deliberately skip individual panelist responses (council-response)
+// because each panel turn produces 3+ of those and they bloat the prompt
+// fast. Verdicts are the synthesized summary so they carry the key signal.
+//
+// Pending placeholders, system messages, and empty assistant turns are
+// filtered out. The new user text is appended last as the live question.
+function buildCouncilTurnPrompt(
+  session: ChatSession,
+  newUserText: string,
+): string {
+  const history: string[] = [];
+  for (const m of session.messages) {
+    if (m.kind === "council-pending" || m.kind === "council-synthesizing") continue;
+    if (m.role === "system") continue;
+    if (!m.content || !m.content.trim()) continue;
+    if (m.role === "user") {
+      // Skip the just-added userMsg — it's the question we'll surface at the
+      // end. Its content matches `/council ${newUserText}`.
+      const stripped = m.content.replace(/^\/council\s+/, "").trim();
+      if (stripped === newUserText.trim()) continue;
+      history.push(`USER: ${stripped}`);
+    } else if (m.kind === "council-verdict") {
+      const who = m.cli ? ` (synthesized by ${m.cli}${m.model ? ` · ${m.model}` : ""})` : "";
+      history.push(`COUNCIL VERDICT${who}: ${m.content.trim()}`);
+    } else if (m.role === "assistant" && !m.kind) {
+      // Single-CLI chat reply from a non-council turn earlier in the session.
+      history.push(`ASSISTANT: ${m.content.trim()}`);
+    }
+  }
+  // No prior conversation — use the original seed (sets the life-domain
+  // framing for the very first turn).
+  if (history.length === 0) {
+    return makeSeedPrompt(session, newUserText);
+  }
+  // Truncate any individual line to a sane length so a runaway prior reply
+  // doesn't blow up the prompt. 1600 chars ≈ 400 tokens; preserves the gist.
+  const trimmed = history.map((line) =>
+    line.length > 1600 ? `${line.slice(0, 1600)}... [truncated]` : line,
+  );
+  return [
+    "You are continuing a multi-CLI council conversation. Prior turns in this session:",
+    "",
+    trimmed.join("\n\n"),
+    "",
+    "---",
+    "",
+    `Current user question: ${newUserText}`,
+  ].join("\n");
 }

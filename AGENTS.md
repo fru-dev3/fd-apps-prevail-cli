@@ -1,4 +1,4 @@
-# aireadyu — project map for humans
+# prevail — project map for humans
 
 > A terminal cockpit for your life domains. Wealth, health, tax, career, real-estate, business — each one is a folder of markdown, each one talks to Claude Code, Codex, or Gemini, all running in parallel.
 
@@ -8,7 +8,7 @@ This file is the orientation map for **humans** working on the project (contribu
 
 ## What this is
 
-aireadyu is a single-binary TUI written in Bun + TypeScript + [OpenTUI](https://opentui.com) (Zig core, React reconciler). At launch it shows two columns:
+prevail is a single-binary TUI written in Bun + TypeScript + [OpenTUI](https://opentui.com) (Zig core, React reconciler). At launch it shows two columns:
 
 - **Left:** a sidebar with two scrollable sections — `LIFE DOMAINS` (one row per domain folder you've defined) and `LIFE APPS` (deduplicated app integrations across all domains). Each row shows an open-loops badge and a live status glyph (spinner while that chat is thinking, dot when idle).
 - **Right:** an auto-opened chat for whatever domain or app you've focused. The chat has a clickable CLI picker (Claude · Codex · Gemini), a model quickpick row, a context card (state.md preview + open items + clickable folder path), a transcript with bordered user/assistant bubbles, a skills strip (clickable list of agent skills for that domain), and a bordered input box.
@@ -18,11 +18,11 @@ Everything is markdown. There's no database. You can sync via git, Dropbox, Sync
 ## Repository layout
 
 ```
-aireadyu/
+prevail/
 ├── src/                         TypeScript source (entry: src/index.tsx)
 │   ├── index.tsx                arg parsing, wizard launch, cockpit launch
 │   ├── app.tsx                  top-level layout, mode routing, chat state Map
-│   ├── branding.tsx             header (mascot + AIREADYU + status panel)
+│   ├── branding.tsx             header (mascot + PREVAIL + status panel)
 │   ├── sidebar.tsx              LIFE DOMAINS + LIFE APPS sections
 │   ├── chat-pane.tsx            chat pane, CLI/model picker, slash commands, skills strip
 │   ├── domain-detail.tsx        legacy tabs (state/open-items/quickstart/prompts/skills) — used as fallback
@@ -33,7 +33,7 @@ aireadyu/
 │   ├── cli-bridge.ts            spawns claude/codex/gemini; model + flag handling
 │   ├── vault.ts                 scanVault, scanApps, buildDomainContext, file readers
 │   ├── domain-scaffold.ts       creates a new domain folder with default markdown
-│   ├── config.ts                ~/.aireadyu/config.json + first-run candidate detection
+│   ├── config.ts                ~/.prevail/config.json + first-run candidate detection
 │   ├── markdown-lite.tsx        line-by-line markdown styling (gold headings, ◯ checklists)
 │   ├── system.ts                openInFinder (cross-platform folder open)
 │   └── theme.ts                 colors (gold #C4A35A) + spinner chars
@@ -44,7 +44,7 @@ aireadyu/
 │   └── profile.md
 ├── scripts/install.sh           curl-installer (lands binary + vault-demo)
 ├── .github/workflows/release.yml matrix build on v* tag → 4 binaries
-├── package.json                 name=aireadyu, bin: aireadyu+aru, build scripts
+├── package.json                 name=prevail, bin: prevail+aru, build scripts
 ├── tsconfig.json
 ├── README.md                    user-facing docs
 ├── AGENTS.md                    this file — orientation for human contributors
@@ -57,12 +57,12 @@ aireadyu/
 
 ```bash
 # clone + install
-git clone https://github.com/fru-dev3/aireadyu
-cd aireadyu
+git clone https://github.com/fru-dev3/prevail
+cd prevail
 bun install
 
 # run from source
-bun start             # boots wizard if no ~/.aireadyu/config.json
+bun start             # boots wizard if no ~/.prevail/config.json
 bun run demo          # ignore config, boot synthetic vault
 bun run doctor        # check installed CLIs + vault path
 
@@ -70,7 +70,7 @@ bun run doctor        # check installed CLIs + vault path
 bun node_modules/typescript/bin/tsc --noEmit
 
 # compile single binary for current platform
-bun build --compile --outfile=dist/aireadyu src/index.tsx
+bun build --compile --outfile=dist/prevail src/index.tsx
 ```
 
 The TUI requires UTF-8 + true-color support and at least one of `claude`, `codex`, or `gemini` on `PATH` for the chat to actually do anything. The TUI itself works without them — you just can't talk to a model.
@@ -86,7 +86,7 @@ The TUI requires UTF-8 + true-color support and at least one of `claude`, `codex
 
 ## Distribution
 
-`bun --compile` produces a ~72 MB single binary. Release matrix in `.github/workflows/release.yml` builds for `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64` on every `v*` tag push and attaches `.tar.gz` archives to the GitHub Release. The tarballs include both `aireadyu` and `vault-demo/`. The curl installer (`scripts/install.sh`) places the binary in `~/.local/bin/` and the demo vault in `~/.aireadyu/vault-demo/`.
+`bun --compile` produces a ~72 MB single binary. Release matrix in `.github/workflows/release.yml` builds for `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64` on every `v*` tag push and attaches `.tar.gz` archives to the GitHub Release. The tarballs include both `prevail` and `vault-demo/`. The curl installer (`scripts/install.sh`) places the binary in `~/.local/bin/` and the demo vault in `~/.prevail/vault-demo/`.
 
 ## Contributing
 

@@ -105,7 +105,7 @@ function skillRank(id: string): number {
 
 export function resolveDefaultVaultPath(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  const candidate = resolve(here, "..", "..", "fd-apps-aireadyu-life", "vault-demo");
+  const candidate = resolve(here, "..", "..", "fd-apps-prevail-life", "vault-demo");
   return candidate;
 }
 
@@ -202,7 +202,7 @@ function extractOpenItemsSection(content: string): string | null {
 
 function scanSkills(lifePath: string, vaultPath: string, domain: string): DomainSkill[] {
   // Try vault-internal layout first (vault-demo/<domain>/skills/), then sibling layout
-  // (<lifeRoot>/<domain>/skills/) for compatibility with the original AIReadyU structure.
+  // (<lifeRoot>/<domain>/skills/) for compatibility with the original Prevail structure.
   const candidates = [
     join(vaultPath, domain, "skills"),
     join(lifePath, domain, "skills"),
@@ -388,7 +388,7 @@ export interface CommunityAppManifest {
 
 function communityAppsDirs(): string[] {
   const dirs: string[] = [];
-  dirs.push(join(homedir(), ".aireadyu", "apps"));
+  dirs.push(join(homedir(), ".prevail", "apps"));
   try {
     dirs.push(resolve(dirname(process.execPath), "apps", "community"));
   } catch {}

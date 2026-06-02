@@ -148,7 +148,7 @@ export function setWebAccess(mode: "allow" | "deny"): void {
 }
 
 export function configDir(): string {
-  return join(homedir(), ".aireadyu");
+  return join(homedir(), ".prevail");
 }
 
 export function configFile(): string {
@@ -174,16 +174,16 @@ export function writeConfig(cfg: UserConfig): void {
 
 export function bundledDemoVaultPath(): string {
   // Resolve in priority order:
-  // 1. ~/.aireadyu/vault-demo — where the installer drops it
-  // 2. AIREADYU_DATA_DIR/vault-demo if env var is set
+  // 1. ~/.prevail/vault-demo — where the installer drops it
+  // 2. PREVAIL_DATA_DIR/vault-demo if env var is set
   // 3. next to the binary (unpacked tarball before install)
   // 4. relative to argv[1] (script-mode)
   // 5. relative to import.meta.url (source run via bun)
   // 6. cwd
   const candidates: string[] = [];
-  candidates.push(join(homedir(), ".aireadyu", "vault-demo"));
-  if (process.env.AIREADYU_DATA_DIR) {
-    candidates.push(join(process.env.AIREADYU_DATA_DIR, "vault-demo"));
+  candidates.push(join(homedir(), ".prevail", "vault-demo"));
+  if (process.env.PREVAIL_DATA_DIR) {
+    candidates.push(join(process.env.PREVAIL_DATA_DIR, "vault-demo"));
   }
   try {
     const execDir = dirname(process.execPath);
@@ -218,7 +218,7 @@ export function detectVaultCandidates(): VaultCandidate[] {
   const home = homedir();
   const cwdVault = join(cwd, "vault");
   const aiVault = join(home, ".ai", "vault");
-  const aireadyuVault = join(home, ".aireadyu", "vault");
+  const prevailVault = join(home, ".prevail", "vault");
   const demo = bundledDemoVaultPath();
   return [
     {
@@ -229,7 +229,7 @@ export function detectVaultCandidates(): VaultCandidate[] {
     },
     {
       kind: "ai-folder",
-      label: "~/.ai/vault (existing AIReadyU-style folder)",
+      label: "~/.ai/vault (existing Prevail-style folder)",
       path: aiVault,
       exists: existsSync(aiVault),
     },
@@ -241,9 +241,9 @@ export function detectVaultCandidates(): VaultCandidate[] {
     },
     {
       kind: "default-home",
-      label: "~/.aireadyu/vault (fresh start — scaffold 22 default domains)",
-      path: aireadyuVault,
-      exists: existsSync(aireadyuVault),
+      label: "~/.prevail/vault (fresh start — scaffold 22 default domains)",
+      path: prevailVault,
+      exists: existsSync(prevailVault),
     },
   ];
 }

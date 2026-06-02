@@ -1,6 +1,6 @@
-# Contributing to aireadyu
+# Contributing to prevail
 
-Thanks for considering a contribution. aireadyu is a single-binary terminal
+Thanks for considering a contribution. prevail is a single-binary terminal
 cockpit for life domains (wealth, health, tax, career, …). The most valuable
 contributions today are **LifeApp plugins** — drop-in adapters that let a
 domain chat talk to a real-world service (Plaid for banking, Greenhouse for
@@ -115,7 +115,7 @@ Open a PR adding the directory. CI just checks that `manifest.json` parses and
 that `SKILL.md` exists.
 
 Users who don't want to vendor your plugin upstream can drop the same
-directory at `~/.aireadyu/apps/<plugin-id>/` on their machine and the cockpit
+directory at `~/.prevail/apps/<plugin-id>/` on their machine and the cockpit
 will pick it up on next launch.
 
 ---
@@ -125,7 +125,7 @@ will pick it up on next launch.
 `scanCommunityApps()` (in `src/vault.ts`) scans these locations, in order, and
 dedups by `manifest.id`:
 
-1. `~/.aireadyu/apps/` — user-installed plugins
+1. `~/.prevail/apps/` — user-installed plugins
 2. `<binary>/apps/community/` — plugins bundled with a release tarball
 3. `<repo>/apps/community/` — dev-mode (running `bun run dev` from a clone)
 

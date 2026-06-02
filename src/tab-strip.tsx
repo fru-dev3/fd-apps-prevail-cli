@@ -108,12 +108,15 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
               {cli.councilMode ? "▣ Council ON" : "⚖ Council"}
             </text>
           </box>
+          <text fg={theme.fgFaint}> </text>
           <box
             flexDirection="row"
             onMouseDown={cli.onOpenCouncilConfig}
             paddingLeft={1}
+            paddingRight={1}
+            backgroundColor={theme.bgPanel}
           >
-            <text fg={theme.goldDim}>⚙</text>
+            <text fg={theme.gold}>⚙ configure</text>
           </box>
         </>
       )}
@@ -187,7 +190,12 @@ function ModelChips({
   const picks = MODEL_QUICKPICKS[currentCli] ?? [];
   const isDefault = !model.trim();
   const currentLower = model.trim().toLowerCase();
-  const currentLabel = isDefault ? "default" : model.trim();
+  // Aliases ("opus", "sonnet", "haiku") resolve to the latest model in their
+  // tier. Without the (latest) suffix users assume there's a missing version
+  // number — make the alias semantics visible.
+  const isAlias = (s: string) => !/-\d/.test(s) && s !== "default";
+  const decorate = (id: string) => (isAlias(id) ? `${id} (latest)` : id);
+  const currentLabel = isDefault ? "default" : decorate(model.trim());
   // Build the list of alternatives the user hasn't currently selected.
   const alts = ["default", ...picks].filter((id) => {
     if (id === "default") return !isDefault;
@@ -206,7 +214,12 @@ function ModelChips({
       />
       {open &&
         alts.map((id) => (
-          <Chip key={id} label={id} active={false} onClick={() => pick(id)} />
+          <Chip
+            key={id}
+            label={decorate(id)}
+            active={false}
+            onClick={() => pick(id)}
+          />
         ))}
     </>
   );

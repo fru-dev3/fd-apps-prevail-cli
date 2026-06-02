@@ -25,6 +25,7 @@ import {
   setCouncilModel,
   addCouncilModel,
   removeCouncilModel,
+  setCouncilChair,
   type CliKind as ConfigCliKind,
 } from "./config.ts";
 import {
@@ -111,11 +112,15 @@ interface Props {
   onSend: (key: string, text: string) => void;
   onCommand: (key: string, command: ChatCommand) => void;
   onExit: () => void;
+  // Cancel the in-flight prompt for this session. Returns true if there was
+  // actually a turn to abort. Escape calls this first when pending; only
+  // falls through to onExit when nothing is running.
+  onCancel?: (key: string) => boolean;
   onAutocompleteChange?: (open: boolean) => void;
   topBar?: React.ReactNode;
 }
 
-export function ChatPane({ session, availableClis, tick, councilMode, onToggleCouncilMode, onSend, onCommand, onExit, onAutocompleteChange, topBar }: Props) {
+export function ChatPane({ session, availableClis, tick, councilMode, onToggleCouncilMode, onSend, onCommand, onExit, onCancel, onAutocompleteChange, topBar }: Props) {
   const ref = useRef<any>(null);
   // Hoisted from InputBox so the popover renders ABOVE InputBox at the
   // chat-pane level, keeping the input row at a stable bottom position.
@@ -200,7 +205,16 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
   }, [session.key]);
 
   useKeyboard((evt) => {
-    if (evt.name === "escape") onExit();
+    if (evt.name !== "escape") return;
+    // When a prompt is in flight, Escape cancels the request instead of
+    // exiting the chat. This lets the user kill a slow CLI mid-turn without
+    // losing their place in the conversation. If nothing is pending or no
+    // cancel handler is wired, Escape exits as before.
+    if (session.pending && onCancel) {
+      const cancelled = onCancel(session.key);
+      if (cancelled) return;
+    }
+    onExit();
   });
 
   const handleSubmit = (raw: string) => {
@@ -901,7 +915,7 @@ function CouncilConfigBubble({
         backgroundColor={theme.bg}
         title=" ⚖ council panel · click to toggle "
         titleAlignment="left"
-        bottomTitle=" persists to ~/.aireadyu/config.json "
+        bottomTitle=" persists to ~/.prevail/config.json "
         bottomTitleAlignment="left"
         paddingLeft={1}
         paddingRight={1}
@@ -940,27 +954,52 @@ function CouncilConfigBubble({
                 {!detected && (
                   <text fg={theme.fgFaint}>  (not on PATH)</text>
                 )}
+                {detected && (
+                  <text fg={theme.fgFaint}>
+                    {"  → "}
+                    {hasAnyPin ? pinnedList.join(", ") : "default model"}
+                  </text>
+                )}
               </box>
               {detected && (() => {
-                // Split chips into two rows so the long full-version IDs
-                // (claude-opus-4-7, gemini-2.5-pro, ...) don't overflow a
-                // single line. Aliases on row 1, versioned IDs on row 2.
-                // Any custom pins the user added go on a third row so they
-                // stay obvious.
+                // Aliases ("opus", "sonnet", "haiku") are CLI shorthand that
+                // resolves to *the latest* model in that tier. Versioned IDs
+                // ("claude-opus-4-7") pin a specific version. We show them on
+                // separate rows so the comparison is explicit.
+                //
+                // Width matters: cramming all 6 claude versions on one row
+                // overflows the bubble and right-edge chips get clipped
+                // mid-string (the user sees "claude-opus-" with no number).
+                // So we group versions by tier prefix (opus / sonnet / haiku)
+                // and render each tier on its own row.
                 const isVersionId = (s: string) => /-\d/.test(s);
                 const aliasPicks = picks.filter((p) => !isVersionId(p));
                 const versionPicks = picks.filter(isVersionId);
-                const renderChip = (p: string) => {
+                const renderChip = (p: string, displayLabel?: string) => {
                   const isOn = pinnedList.includes(p);
                   return (
                     <CouncilModelChip
                       key={p}
-                      label={p}
+                      label={displayLabel ?? p}
                       active={isOn}
                       onClick={() => toggleVariant(kind, p, isOn)}
                     />
                   );
                 };
+                // Group versions by tier so claude's 6 IDs become 3 rows of
+                // 1-3 chips each. For codex/gemini (4 versions) the group is
+                // just one row, which is fine.
+                const tierOf = (s: string): string => {
+                  const m = s.match(/^(?:claude-|gemini-|gpt-)?([a-z0-9]+)/i);
+                  return m?.[1]?.toLowerCase() ?? s;
+                };
+                const versionTiers = new Map<string, string[]>();
+                for (const v of versionPicks) {
+                  const t = tierOf(v);
+                  const arr = versionTiers.get(t) ?? [];
+                  arr.push(v);
+                  versionTiers.set(t, arr);
+                }
                 return (
                   <box flexDirection="column">
                     <box flexDirection="row" height={1} paddingLeft={2}>
@@ -970,12 +1009,38 @@ function CouncilConfigBubble({
                         active={!hasAnyPin}
                         onClick={() => resetModels(kind)}
                       />
-                      {aliasPicks.map(renderChip)}
+                      {aliasPicks.map((p) =>
+                        renderChip(p, `${p} (latest)`),
+                      )}
                     </box>
-                    {versionPicks.length > 0 && (
+                    {[...versionTiers.entries()].map(([tier, list]) => (
+                      <box
+                        key={tier}
+                        flexDirection="row"
+                        height={1}
+                        paddingLeft={2}
+                      >
+                        <text fg={theme.fgFaint}>
+                          {`${tier.padEnd(8, " ")}:`}
+                        </text>
+                        {list.map((p) =>
+                          // Codex pinned versions are blocked when codex is
+                          // logged in via ChatGPT-account auth (the common
+                          // case). Suffix the chip label with * so the user
+                          // sees up-front which picks need API-key auth; the
+                          // footer below the section explains.
+                          renderChip(
+                            p,
+                            kind === "codex" ? `${p} *` : undefined,
+                          ),
+                        )}
+                      </box>
+                    ))}
+                    {kind === "codex" && versionPicks.length > 0 && (
                       <box flexDirection="row" height={1} paddingLeft={2}>
-                        <text fg={theme.fgFaint}>versions:</text>
-                        {versionPicks.map(renderChip)}
+                        <text fg={theme.fgFaint}>
+                          {"         * pinned codex models require codex login --api-key — ChatGPT-account auth only allows the default"}
+                        </text>
                       </box>
                     )}
                     {customPins.length > 0 && (
@@ -998,6 +1063,49 @@ function CouncilConfigBubble({
             </box>
           );
         })}
+        {(() => {
+          // Verdict synthesizer (chair). null = auto: first panelist that
+          // returns. Pinning lets the user always have e.g. claude write the
+          // verdict no matter who else is on the panel. Click a chip to set;
+          // click "auto" to clear.
+          const chair = cfg.chair;
+          const pickChair = (next: { cli: ConfigCliKind } | null) => {
+            setCouncilChair(next);
+            setRevision((r) => r + 1);
+          };
+          return (
+            <box flexDirection="column" paddingTop={0}>
+              <box flexDirection="row" height={1}>
+                <text fg={theme.gold} attributes={1}>verdict synthesizer</text>
+                <text fg={theme.fgFaint}>
+                  {"  → "}
+                  {chair
+                    ? chair.model
+                      ? `${chair.cli} · ${chair.model}`
+                      : chair.cli
+                    : "auto (first panelist to reply)"}
+                </text>
+              </box>
+              <box flexDirection="row" height={1} paddingLeft={2}>
+                <text fg={theme.fgFaint}>chair:   </text>
+                <CouncilModelChip
+                  label="auto"
+                  active={chair === null}
+                  onClick={() => pickChair(null)}
+                />
+                {COUNCIL_KINDS.map((k) => (
+                  <CouncilModelChip
+                    key={k}
+                    label={k}
+                    active={chair?.cli === k}
+                    onClick={() => pickChair({ cli: k })}
+                  />
+                ))}
+              </box>
+              <text> </text>
+            </box>
+          );
+        })()}
         <box
           flexDirection="row"
           height={1}
@@ -1026,7 +1134,7 @@ function CouncilConfigBubble({
 // Full-pane overlay version of the council configuration UI. Rendered by App
 // when councilConfigOpen is true — keeps the config out of the chat transcript.
 // ESC closes; clicking "done" closes; mutations persist immediately to
-// ~/.aireadyu/config.json (same handlers as the original bubble).
+// ~/.prevail/config.json (same handlers as the original bubble).
 export function CouncilConfigPanel({
   availableClis,
   councilMode,

@@ -17,7 +17,7 @@ export interface LlmCacheEntry {
   suggestions: LlmSuggestion[];
 }
 
-const DATA_DIR = join(homedir(), ".aireadyu");
+const DATA_DIR = join(homedir(), ".prevail");
 const CACHE_FILE = join(DATA_DIR, "suggestions-cache.json");
 const DEFAULT_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 const LABEL_MAX = 50;

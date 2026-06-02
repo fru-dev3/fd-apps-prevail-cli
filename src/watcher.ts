@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AppSkill, Domain } from "./vault.ts";
 import { buildDomainHeatmap } from "./heatmap.ts";
 
-const DATA_DIR = join(homedir(), ".aireadyu");
+const DATA_DIR = join(homedir(), ".prevail");
 const WATCHER_LOG = join(DATA_DIR, "watcher.jsonl");
 
 export type ObservationKind =

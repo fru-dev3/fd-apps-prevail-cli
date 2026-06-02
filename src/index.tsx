@@ -53,15 +53,15 @@ function parseArgs(argv: string[]): Args {
 }
 
 function printHelp() {
-  console.log(`aireadyu — a terminal cockpit for your life domains
+  console.log(`prevail — a terminal cockpit for your life domains
 
 USAGE
-  aireadyu                     boot the cockpit (uses your saved vault)
-  aireadyu init                run the first-run wizard
-  aireadyu demo                ignore config, boot the synthetic vault
-  aireadyu doctor              check installed AI clis + vault shape
-  aireadyu schedule [...]      manage embedded cron-style schedules
-  aireadyu --vault <path>      override vault path for one session
+  prevail                     boot the cockpit (uses your saved vault)
+  prevail init                run the first-run wizard
+  prevail demo                ignore config, boot the synthetic vault
+  prevail doctor              check installed AI clis + vault shape
+  prevail schedule [...]      manage embedded cron-style schedules
+  prevail --vault <path>      override vault path for one session
 
 OPTIONS
   -d, --vault <path>           use this vault root for this run
@@ -102,7 +102,7 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
     const schedules = loadSchedules(vault);
     if (schedules.length === 0) {
       console.log(`no schedules in ${vault}/.schedule.json`);
-      console.log(`add one with: aireadyu schedule add "<cron>" "<command>" [--name <name>]`);
+      console.log(`add one with: prevail schedule add "<cron>" "<command>" [--name <name>]`);
       return;
     }
     console.log(`schedules in ${vault}/.schedule.json:\n`);
@@ -124,7 +124,7 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
     const cron = args[1];
     const command = args[2];
     if (!cron || !command) {
-      console.error('usage: aireadyu schedule add "<cron>" "<command>" [--name <name>]');
+      console.error('usage: prevail schedule add "<cron>" "<command>" [--name <name>]');
       process.exit(1);
     }
     if (!isValidCron(cron)) {
@@ -159,7 +159,7 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
   if (sub === "remove" || sub === "rm") {
     const id = args[1];
     if (!id) {
-      console.error("usage: aireadyu schedule remove <id>");
+      console.error("usage: prevail schedule remove <id>");
       process.exit(1);
     }
     const before = loadSchedules(vault);
@@ -176,7 +176,7 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
   if (sub === "run") {
     const id = args[1];
     if (!id) {
-      console.error("usage: aireadyu schedule run <id>");
+      console.error("usage: prevail schedule run <id>");
       process.exit(1);
     }
     const schedules = loadSchedules(vault);
@@ -212,17 +212,17 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
 
   console.error(`unknown subcommand: ${sub}\n`);
   console.error("usage:");
-  console.error("  aireadyu schedule list");
-  console.error('  aireadyu schedule add "<cron>" "<command>" [--name <name>]');
-  console.error("  aireadyu schedule remove <id>");
-  console.error("  aireadyu schedule run <id>");
+  console.error("  prevail schedule list");
+  console.error('  prevail schedule add "<cron>" "<command>" [--name <name>]');
+  console.error("  prevail schedule remove <id>");
+  console.error("  prevail schedule run <id>");
   process.exit(1);
 }
 
 async function doctor() {
   const { detectClis } = await import("./cli-bridge.ts");
   const cfg = readConfig();
-  console.log("aireadyu doctor\n");
+  console.log("prevail doctor\n");
   console.log(`config       ${cfg ? "found" : "missing (will run wizard on next boot)"}`);
   if (cfg) {
     const ok = existsSync(cfg.vaultPath);
@@ -249,7 +249,7 @@ async function main() {
     return;
   }
   if (args.version) {
-    console.log("aireadyu 0.1.2");
+    console.log("prevail 0.1.2");
     return;
   }
   if (args.doctor) {
@@ -276,7 +276,7 @@ async function main() {
 
   if (!existsSync(vaultPath)) {
     console.error(`vault path not found: ${vaultPath}`);
-    console.error("run `aireadyu init` to set up, or `aireadyu demo` for the synthetic vault.");
+    console.error("run `prevail init` to set up, or `prevail demo` for the synthetic vault.");
     process.exit(1);
   }
 

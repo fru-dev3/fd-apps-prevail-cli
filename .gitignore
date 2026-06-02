@@ -4,3 +4,5 @@ dist/
 .DS_Store
 bun.lockb
 .*.bun-build
+/aireadyu
+/prevail

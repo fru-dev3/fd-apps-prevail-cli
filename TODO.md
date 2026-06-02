@@ -1,4 +1,4 @@
-# aireadyu — work-in-progress checklist
+# prevail — work-in-progress checklist
 
 > **For future Claude (or any agent picking this up cold):** This file is the source of truth across sessions. Update STATUS each work session. Tick boxes and add `(done: yyyy-mm-dd)`. If you finish all items, write a v0.2.0 release note and archive this file to `docs/archive/TODO-v0.1.x.md`.
 
@@ -8,20 +8,20 @@
 - **current version on main:** v0.1.2 (P1.1 + P1.2 staged for v0.1.3)
 - **next milestone:** v0.2.0 — "the agent that grows with you" (Hermes-inspired feature pack)
 - **active item:** v0.2.0 release tagging (P5.1) — P1+P2+P3 all done, ready to tag
-- **just finished:** P3.2 — LifeApp plugin contract. `apps/community/<id>/{manifest.json,SKILL.md}` drop-in protocol. `scanCommunityApps()` in `src/vault.ts` scans `~/.aireadyu/apps/`, `<binary>/apps/community/`, and `<repo>/apps/community/`, dedups by id. Sidebar renders `★` prefix for community apps. Reference plugin `apps/community/plaid/` ships. `CONTRIBUTING.md` at repo root documents the protocol.
+- **just finished:** P3.2 — LifeApp plugin contract. `apps/community/<id>/{manifest.json,SKILL.md}` drop-in protocol. `scanCommunityApps()` in `src/vault.ts` scans `~/.prevail/apps/`, `<binary>/apps/community/`, and `<repo>/apps/community/`, dedups by id. Sidebar renders `★` prefix for community apps. Reference plugin `apps/community/plaid/` ships. `CONTRIBUTING.md` at repo root documents the protocol.
 
 ## BACKGROUND (read this if you have no context)
 
-aireadyu is a single-binary terminal cockpit for life domains (wealth, health, tax, career, …) built in Bun + TypeScript + OpenTUI. Each domain gets its own auto-opened chat that runs on a user-selected CLI (Claude Code, Codex, or Gemini), against a markdown vault. The bundled vault-demo persona is Alex Rivera (synthetic). Repo is MIT, public, single-maintainer.
+prevail is a single-binary terminal cockpit for life domains (wealth, health, tax, career, …) built in Bun + TypeScript + OpenTUI. Each domain gets its own auto-opened chat that runs on a user-selected CLI (Claude Code, Codex, or Gemini), against a markdown vault. The bundled vault-demo persona is Alex Rivera (synthetic). Repo is MIT, public, single-maintainer.
 
 Key files:
 - `src/app.tsx` — top-level UI state and routing
 - `src/chat-pane.tsx` — chat right pane, CLI/model picker, context card, skills strip, slash commands
 - `src/cli-bridge.ts` — `runChatTurn()` spawns `claude -p` / `codex exec` / `gemini -p`
 - `src/vault.ts` — `scanVault()`, `scanApps()`, `buildDomainContext()`
-- `src/config.ts` — `~/.aireadyu/config.json`, `bundledDemoVaultPath()`, first-run candidate detection
+- `src/config.ts` — `~/.prevail/config.json`, `bundledDemoVaultPath()`, first-run candidate detection
 - `src/wizard.tsx` — first-run wizard
-- `scripts/install.sh` — `curl | bash` installer (lands binary at `~/.local/bin/aireadyu` + vault-demo at `~/.aireadyu/vault-demo`)
+- `scripts/install.sh` — `curl | bash` installer (lands binary at `~/.local/bin/prevail` + vault-demo at `~/.prevail/vault-demo`)
 - `.github/workflows/release.yml` — matrix build on `v*` tag
 
 These items derive from a strategic comparison against Nous Research's Hermes Agent (`github.com/nousresearch/hermes-agent`). The full analysis is in the 2026-06-01 conversation thread; the headline pulls are the loop-closer (`/distill`), session search (FTS5), embedded scheduler, plugin contract, and a properly split AGENTS.md.
@@ -33,7 +33,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 - [x] **P1.1 — Create `AGENTS.md` (project map) and `AGENTS-operating.md` (agent operating manual)** (done: 2026-06-01, commit 21eb13a)
   - **why:** Hermes treats `AGENTS.md` as *the* contract for any agent that boots into the repo. We don't have one. Two files keeps human contributors and AI runtimes from stepping on each other.
   - **acceptance:**
-    - `AGENTS.md` at repo root — describes the project for humans (what is aireadyu, layout, conventions, how to contribute). Linked from `README.md`.
+    - `AGENTS.md` at repo root — describes the project for humans (what is prevail, layout, conventions, how to contribute). Linked from `README.md`.
     - `AGENTS-operating.md` at repo root — written *to* the agent: vault path conventions, slash commands, how to invoke skills, what files are off-limits, do/don't behaviors during a chat. ~300-500 lines.
   - **files:** `AGENTS.md` (new), `AGENTS-operating.md` (new), `README.md` (add link)
   - **effort:** 2 hours
@@ -52,7 +52,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 ### P2 — THIS WEEK (the v0.2 narrative: "the agent that grows with you")
 
 - [x] **P2.1 — `/distill` slash command — close the learning loop** (done: 2026-06-01)
-  - **why:** turn a successful chat into a new SKILL.md proposal for the focused domain. This is THE feature that differentiates aireadyu from "yet another chat launcher." Cite: Hermes `agent/curator.py`, `memory_manager.py`, `insights.py`, `background_review.py`.
+  - **why:** turn a successful chat into a new SKILL.md proposal for the focused domain. This is THE feature that differentiates prevail from "yet another chat launcher." Cite: Hermes `agent/curator.py`, `memory_manager.py`, `insights.py`, `background_review.py`.
   - **acceptance:**
     - typing `/distill` in any chat triggers an agent call (use the chat's current CLI) that synthesizes the conversation into a SKILL.md draft
     - draft shown in a diff-preview overlay (or inline in chat as fenced markdown)
@@ -66,8 +66,8 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 - [x] **P2.2 — Session persistence + FTS5 search + `/search`** (done: 2026-06-01)
   - **why:** chats currently die when the pane closes. For life domains, "what did I decide about Roth conversion in March?" is the killer query. Cite: Hermes session search.
   - **acceptance:**
-    - every chat message is appended to `~/.aireadyu/sessions/<domain>-<session_id>.jsonl` (one JSON object per line: `{ts, role, content, model, cli}`)
-    - SQLite FTS5 index at `~/.aireadyu/sessions.db` mirrors the .jsonl content for full-text search
+    - every chat message is appended to `~/.prevail/sessions/<domain>-<session_id>.jsonl` (one JSON object per line: `{ts, role, content, model, cli}`)
+    - SQLite FTS5 index at `~/.prevail/sessions.db` mirrors the .jsonl content for full-text search
     - `/search <query>` slash command returns top 5 matches with date, domain, and a 200-char excerpt; click result → loads that historical message into the current chat as a context line
     - on domain auto-open, if there are 3+ historical messages in that domain, show a "▸ 4 past chats · last on May 12 · click to browse" chip above the input
   - **files:** `src/session.ts` (new — append, search), `src/chat-pane.tsx` (search overlay + history chip), `src/app.tsx` (wire session writes into `sendMessage()`)
@@ -76,10 +76,10 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 
 ### P3 — NEXT SPRINT (unlocks live demo + community contributions)
 
-- [x] **P3.1 — Embedded scheduler (`aireadyu schedule`)** (done: 2026-06-01)
+- [x] **P3.1 — Embedded scheduler (`prevail schedule`)** (done: 2026-06-01)
   - **why:** so the Alex Rivera demo can show *live* recurring activity, and so `fru-*-monthly-sync`-style routines work without macOS launchd. Cite: Hermes `cron/scheduler.py` (87KB).
   - **acceptance:**
-    - new subcommand `aireadyu schedule list/add/remove/run`
+    - new subcommand `prevail schedule list/add/remove/run`
     - persistent state at `<vault>/.schedule.json`: `[{id, cron, command, last_run, enabled}]`
     - background tick runs every minute when the cockpit is open; surfaces "next run" times in the chat header for the focused domain
     - vault-demo ships seed schedules (e.g., "monthly wealth sync on the 1st") so the demo feels alive
@@ -99,8 +99,8 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 
 ### P4 — BOOKMARKED (revisit on user feedback)
 
-- [ ] **P4.1 — Windows PowerShell installer (`install.ps1`)** — 3× distribution reach. Drop binary to `%LOCALAPPDATA%\aireadyu`, add to user PATH, no UAC. Effort: 1 day.
-- [ ] **P4.2 — Signal messenger gateway (`aireadyu serve` → Signal)** — defer until v0.3. Hermes pattern: `gateway/platforms/signal.py`. Effort: ~1 week.
+- [ ] **P4.1 — Windows PowerShell installer (`install.ps1`)** — 3× distribution reach. Drop binary to `%LOCALAPPDATA%\prevail`, add to user PATH, no UAC. Effort: 1 day.
+- [ ] **P4.2 — Signal messenger gateway (`prevail serve` → Signal)** — defer until v0.3. Hermes pattern: `gateway/platforms/signal.py`. Effort: ~1 week.
 - [ ] **P4.3 — Execution-target abstraction (run skills via SSH on remote host)** — defer until v0.4. Lets `ssh mini` execute a skill remotely. Effort: ~1 week.
 - [ ] **P4.4 — i18n key extraction** — no translation yet, just refactor `theme.ts` strings into a keyed lookup so future translation is cheap. Effort: 2 hours.
 - [ ] **P4.5 — VHS demo recording for README hero** — `brew install vhs`, write `demo.tape`, ship `demo.gif`. Use the Charm tool even before any framework migration. Effort: half a day.
@@ -109,19 +109,19 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 ### P5 — RELEASE & MARKETING (do after P1 + P2 ship)
 
 - [ ] **P5.1 — Cut v0.2.0** — tag `v0.2.0`, release notes call out the loop closer + session search as the headline ("the agent that grows with you").
-- [ ] **P5.2 — Show HN post** — title: *"aireadyu — a terminal cockpit for life domains, now with a learning loop"*. Lead with the VHS GIF.
+- [ ] **P5.2 — Show HN post** — title: *"prevail — a terminal cockpit for life domains, now with a learning loop"*. Lead with the VHS GIF.
 - [ ] **P5.3 — Update README hero** — replace static ASCII layout block with the VHS-recorded GIF.
 
 ### P6 — STRATEGIC CHECK-IN (already scheduled — do not duplicate)
 
-- [x] **P6.1 — 90-day Bubble Tea migration re-evaluation** — scheduled remote agent fires Sun Aug 30 2026 at 10am CT, routine `aireadyu-90day-review` (id `trig_017S2Q5e4JipZbp2Ti5BZA8Q`), opens a draft PR with the recommendation. (scheduled: 2026-06-01)
+- [x] **P6.1 — 90-day Bubble Tea migration re-evaluation** — scheduled remote agent fires Sun Aug 30 2026 at 10am CT, routine `prevail-90day-review` (id `trig_017S2Q5e4JipZbp2Ti5BZA8Q`), opens a draft PR with the recommendation. (scheduled: 2026-06-01)
 
 ---
 
 ## Working notes (append things future-you will want)
 
-- v0.1.2 release page: https://github.com/fru-dev3/aireadyu/releases/tag/v0.1.2
+- v0.1.2 release page: https://github.com/fru-dev3/prevail/releases/tag/v0.1.2
 - Routine console: https://claude.ai/code/routines/trig_017S2Q5e4JipZbp2Ti5BZA8Q
 - Hermes source for inspiration: https://github.com/nousresearch/hermes-agent (Python — only borrow patterns, not code)
-- Vault-demo path on dev machine: `~/Documents/aireadyu/vault-demo/`
-- Mac install location (per install.sh): `~/.local/bin/aireadyu` + `~/.aireadyu/vault-demo/`
+- Vault-demo path on dev machine: `~/Documents/prevail/vault-demo/`
+- Mac install location (per install.sh): `~/.local/bin/prevail` + `~/.prevail/vault-demo/`

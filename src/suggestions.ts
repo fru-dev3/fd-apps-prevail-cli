@@ -37,7 +37,7 @@ interface ClickStore {
   clicks: Record<string, ClickRecord>;
 }
 
-const DATA_DIR = join(homedir(), ".aireadyu");
+const DATA_DIR = join(homedir(), ".prevail");
 const CLICK_FILE = join(DATA_DIR, "suggestions.json");
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_THRESHOLD_MS = 14 * DAY_MS;
