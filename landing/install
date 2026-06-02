@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# prevail.ai/install — redirects to the canonical installer in the repo.
+# Hosted at https://prevail.ai/install so the README banner stays clean:
+#   curl -fsSL prevail.ai/install | bash
+# is the user-facing command; this file just shims to the maintained one.
+exec /usr/bin/env bash <(curl -fsSL https://raw.githubusercontent.com/fru-dev3/prevail/main/scripts/install.sh) "$@"

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>prevAIl — a terminal cockpit for your life domains</title>
+  <meta name="description" content="Ask Claude, Codex, and Gemini the same question in parallel. Let the council vote. A single-binary terminal cockpit for high-stakes decisions across every part of your life." />
+  <meta property="og:title" content="prevAIl" />
+  <meta property="og:description" content="Fan high-stakes questions out to Claude + Codex + Gemini in parallel. Let the council vote." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://prevail.ai" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <style>
+    :root {
+      --bg: #0e0e0e;
+      --bg-panel: #161616;
+      --gold: #c4a35a;
+      --gold-dim: #8a7340;
+      --gold-bright: #f5e0a8;
+      --ai: #3cd8ff;
+      --fg: #e6e6e6;
+      --fg-dim: #9a9a9a;
+      --fg-faint: #5a5a5a;
+      --border: #3a3a3a;
+    }
+    * { box-sizing: border-box; }
+    html, body { background: var(--bg); color: var(--fg); margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+    a { color: var(--gold); text-decoration: none; border-bottom: 1px solid var(--gold-dim); }
+    a:hover { color: var(--gold-bright); border-bottom-color: var(--gold-bright); }
+    code, pre, .mono { font-family: "JetBrains Mono", Menlo, Consolas, "Courier New", monospace; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 64px 24px 96px; }
+
+    /* Wordmark */
+    .wordmark {
+      display: inline-flex;
+      align-items: baseline;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+    .wordmark .prev, .wordmark .l { color: var(--gold); }
+    .wordmark .ai {
+      color: var(--ai);
+      font-size: 1.18em;
+      letter-spacing: -0.05em;
+      margin: 0 0.02em;
+    }
+
+    /* Hero */
+    .hero { padding-bottom: 48px; border-bottom: 1px solid var(--border); }
+    .hero .wordmark { font-size: 96px; }
+    .hero .tagline {
+      color: var(--fg-dim);
+      font-size: 22px;
+      margin: 24px 0 16px;
+      max-width: 640px;
+    }
+    .hero .pitch {
+      color: var(--fg);
+      font-size: 28px;
+      line-height: 1.45;
+      max-width: 720px;
+      margin: 24px 0 32px;
+      font-weight: 500;
+    }
+    .hero .pitch em { color: var(--ai); font-style: normal; font-weight: 600; }
+
+    .cta-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+    .cta {
+      display: inline-block;
+      padding: 14px 24px;
+      border: 1px solid var(--gold);
+      color: var(--gold-bright);
+      background: rgba(196, 163, 90, 0.08);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      transition: all 120ms ease;
+    }
+    .cta:hover { background: rgba(196, 163, 90, 0.16); color: var(--gold-bright); border-color: var(--gold-bright); }
+    .cta-mono { font-family: "JetBrains Mono", Menlo, Consolas, monospace; font-weight: 500; }
+    .cta-secondary { border-color: var(--border); color: var(--fg-dim); background: transparent; }
+    .cta-secondary:hover { color: var(--fg); border-color: var(--fg-dim); background: rgba(154, 154, 154, 0.05); }
+
+    /* Section common */
+    section { padding: 64px 0; border-bottom: 1px solid var(--border); }
+    section:last-child { border-bottom: none; }
+    h2 { color: var(--gold); font-size: 32px; margin: 0 0 24px; font-weight: 700; letter-spacing: -0.02em; }
+    h2 .ai-inline { color: var(--ai); }
+    p { font-size: 17px; color: var(--fg); margin: 0 0 16px; max-width: 720px; }
+    p.dim { color: var(--fg-dim); }
+
+    /* Council demo block */
+    .demo {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 24px;
+      font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.55;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      max-width: none;
+    }
+    .demo .user-prompt { color: var(--gold-bright); }
+    .demo .panelist-head { color: var(--ai); font-weight: 600; margin-top: 16px; display: block; }
+    .demo .verdict-head { color: var(--gold); font-weight: 700; margin-top: 16px; display: block; }
+    .demo .status { color: var(--fg-faint); font-size: 12px; display: block; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
+
+    /* Why grid */
+    .why { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 32px; }
+    @media (max-width: 700px) { .why { grid-template-columns: 1fr; } }
+    .why-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      padding: 24px;
+      border-radius: 6px;
+    }
+    .why-card h3 { color: var(--gold); margin: 0 0 12px; font-size: 18px; font-weight: 600; }
+    .why-card p { color: var(--fg-dim); font-size: 15px; margin: 0; }
+
+    /* Footer */
+    footer { padding: 32px 0 16px; color: var(--fg-faint); font-size: 14px; }
+    footer a { color: var(--fg-dim); border-color: transparent; }
+    footer a:hover { color: var(--gold); border-bottom-color: var(--gold-dim); }
+
+    /* Small ◈ mascot */
+    .mascot { color: var(--gold); margin-right: 12px; font-size: 28px; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <header class="hero">
+      <div>
+        <span class="mascot">◈</span>
+        <span class="wordmark"><span class="prev">prev</span><span class="ai">AI</span><span class="l">l</span></span>
+      </div>
+      <p class="tagline">your AI life cockpit · single-binary terminal app · bring-your-own CLI</p>
+      <p class="pitch">
+        For high-stakes calls, asking <em>one</em> AI is asking <em>one</em>
+        opinion. prevAIl fans your question out to Claude, Codex, and Gemini
+        in parallel — then a chair synthesizes a verdict from the panel.
+      </p>
+      <div class="cta-row">
+        <a class="cta cta-mono" href="#install">curl -fsSL prevail.ai/install | bash</a>
+        <a class="cta cta-secondary" href="https://github.com/fru-dev3/prevail">view on github →</a>
+      </div>
+    </header>
+
+    <section id="demo">
+      <h2>Council in action</h2>
+      <p class="dim">A real council turn. Three perspectives. One synthesized verdict.</p>
+
+      <div class="demo">
+<span class="user-prompt">› /council should I prepay the mortgage or invest the cash?</span>
+
+  ⚖ convening council: claude · codex · gemini
+
+<span class="panelist-head">◇ claude · opus-4-7</span>
+  At your effective tax rate, the deductible interest cuts your real
+  mortgage cost to ~4.1%. A diversified index portfolio has cleared 7%
+  long-run after tax. Math says invest. But if losing the cash flow if
+  markets crash would force you to sell, prepay buys you peace.
+
+<span class="panelist-head">◇ codex · gpt-5.4</span>
+  Run the spread: (expected_after_tax_return - effective_mortgage_rate)
+  × principal × years remaining. Positive → invest. Add a liquidity
+  floor of 6 months expenses before either move.
+
+<span class="panelist-head">◇ gemini · 2.5-pro</span>
+  Behavioral factor: prepaying is a guaranteed return on a known
+  liability; investing is a probabilistic return on volatility you
+  have to ride out. Pick the one you'll actually stick with under
+  stress. For most people that's the guarantee.
+
+<span class="verdict-head">⚖ council verdict · synthesized by claude</span>
+  Invest if (a) you have 6+ months liquidity, (b) you can stomach a
+  30% drawdown without selling, and (c) the rate spread is &gt; 2%.
+  Else prepay. Run the spread calc with your actual numbers and
+  check (b) honestly — that's the binding constraint, not the math.
+
+<span class="status">ready · type your next question              4 calls · 3k↑ 1.4k↓ tokens · ~$0.03</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Why <span class="ai-inline">council</span> beats a single model</h2>
+      <p>Single-model output is fine for routine asks. For decisions where the cost of being wrong is real, one AI gives you one viewpoint shaped by one company's data and one RLHF bias. You don't know what you're missing.</p>
+
+      <div class="why">
+        <div class="why-card">
+          <h3>Triangulation, not averaging</h3>
+          <p>When Claude, Codex, and Gemini converge — that's real signal. When they disagree, the disagreement is the trade-off you needed to think about. A single model would have papered over it.</p>
+        </div>
+        <div class="why-card">
+          <h3>Cancels per-model quirks</h3>
+          <p>Claude hedges, Codex is conservative on non-code, Gemini is verbose. The synthesizer chair reads all three and writes one direct answer with none of any single model's stylistic baggage.</p>
+        </div>
+        <div class="why-card">
+          <h3>Compare versions side-by-side</h3>
+          <p>Run Opus 4.7 and 4.6 in the same panel. Watch them disagree. Find out which one actually performs better on your kind of question, on questions about your actual life.</p>
+        </div>
+        <div class="why-card">
+          <h3>Your data, your machine</h3>
+          <p>Every chat runs against a folder of markdown — your vault, on your disk. No cloud sync, no app server, no telemetry. Bring your own CLI auth and your data never leaves the machine.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <h2>Install</h2>
+      <p class="dim">macOS (Apple Silicon, Intel) and Linux (x64, arm64) — single self-contained binary, no Node or Bun required at runtime.</p>
+      <p><code>curl -fsSL prevail.ai/install | bash</code></p>
+      <p class="dim">or from source: <code>git clone https://github.com/fru-dev3/prevail && cd prevail && bun install && bun run start</code></p>
+      <p class="dim">First boot opens a wizard: pick a vault (bring your own, point at <code>~/.ai/vault</code>, or accept the bundled synthetic demo). Then arrow up/down through your domains and start a chat.</p>
+    </section>
+
+    <footer>
+      built solo · MIT licensed · <a href="https://github.com/fru-dev3/prevail">source</a> · <a href="https://github.com/fru-dev3/prevail/issues">issues</a>
+    </footer>
+
+  </div>
+</body>
+</html>

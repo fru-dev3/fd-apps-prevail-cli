@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    prevAIl app icon.
+    Gold-on-charcoal disc with "prev" + bright "AI" + "l" wordmark.
+    The AI letters are rendered larger and in electric cyan against the
+    gold "prev" / "l" — high-contrast so the brand thesis (the AI hidden
+    inside prevail) reads at a glance from any distance.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#161616"/>
+      <stop offset="100%" stop-color="#0A0A0A"/>
+    </linearGradient>
+    <linearGradient id="goldEdge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#D8BC76"/>
+      <stop offset="100%" stop-color="#9C7E3F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Disc background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <rect x="6" y="6" width="500" height="500" rx="90" fill="none" stroke="url(#goldEdge)" stroke-width="4"/>
+
+  <!-- Small diamond mascot, mirrors the in-app ◈ logo -->
+  <g transform="translate(256 88)">
+    <polygon points="0,-22 22,0 0,22 -22,0" fill="none" stroke="#C4A35A" stroke-width="3"/>
+    <circle cx="0" cy="0" r="5" fill="#E9CC83"/>
+  </g>
+
+  <!-- Wordmark: prev / AI (bright) / l -->
+  <g font-family="Georgia, 'Times New Roman', serif" font-weight="700" text-anchor="middle">
+    <!-- prev -->
+    <text x="170" y="290" font-size="118" fill="#C4A35A" letter-spacing="-2">prev</text>
+    <!-- AI in electric cyan + slightly larger -->
+    <text x="278" y="298" font-size="148" fill="#3CD8FF" letter-spacing="-3">AI</text>
+    <!-- trailing l -->
+    <text x="356" y="290" font-size="118" fill="#C4A35A">l</text>
+  </g>
+
+  <!-- Subtle dot grid suggesting the TUI cockpit -->
+  <g fill="#3A2F18">
+    <circle cx="88"  cy="412" r="3"/>
+    <circle cx="120" cy="412" r="3"/>
+    <circle cx="152" cy="412" r="3"/>
+    <circle cx="360" cy="412" r="3"/>
+    <circle cx="392" cy="412" r="3"/>
+    <circle cx="424" cy="412" r="3"/>
+  </g>
+
+  <!-- Tagline -->
+  <text x="256" y="446" font-family="Menlo, monospace" font-size="20" fill="#7A6433" text-anchor="middle" letter-spacing="3">
+    YOUR · AI · LIFE · COCKPIT
+  </text>
+</svg>
