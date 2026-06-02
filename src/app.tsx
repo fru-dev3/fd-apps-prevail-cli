@@ -16,7 +16,16 @@ import {
 } from "./chat-pane.tsx";
 import { EditorPane } from "./editor-pane.tsx";
 import { TabStrip } from "./tab-strip.tsx";
-import { readWebAccess, setWebAccess } from "./config.ts";
+import {
+  ALL_CLI_KINDS,
+  isCliKind,
+  readCouncilConfig,
+  readWebAccess,
+  setCouncilClis,
+  setCouncilModel,
+  setWebAccess,
+  type CliKind,
+} from "./config.ts";
 import { buildDomainHeatmap, renderHeatmapText } from "./heatmap.ts";
 import {
   readRecentObservations,
@@ -554,6 +563,68 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         // Fire-and-forget — the council runner takes over from here.
         setTimeout(() => runCouncil(key, cmd.prompt), 0);
         return m;
+      } else if (cmd.kind === "council-config") {
+        const cfg = readCouncilConfig();
+        const detected = clis.map((c) => c.label).join(", ") || "none";
+        const panel = cfg.clis
+          ? cfg.clis.join(", ")
+          : "all detected (default)";
+        const modelLines =
+          Object.entries(cfg.models).length === 0
+            ? "  (none — each CLI uses its default model)"
+            : Object.entries(cfg.models)
+                .map(([k, v]) => `  · ${k}: ${v}`)
+                .join("\n");
+        systemNote = [
+          "council panel:",
+          `  detected on PATH: ${detected}`,
+          `  configured panel: ${panel}`,
+          "pinned models:",
+          modelLines,
+          "",
+          "change with:",
+          "  /council use claude codex          set panel (any of: claude, codex, gemini)",
+          "  /council use all                   reset to all detected",
+          "  /council model claude opus-4.7     pin a model for one CLI",
+          "  /council model gemini default      clear a pinned model",
+        ].join("\n");
+      } else if (cmd.kind === "council-use") {
+        if (cmd.clis.length === 0) {
+          systemNote = "usage: /council use <cli1> [cli2 ...]  ·  /council use all";
+        } else if (cmd.clis.length === 1 && cmd.clis[0] === "all") {
+          setCouncilClis(null);
+          systemNote = "council panel reset to all detected CLIs.";
+        } else {
+          const valid: CliKind[] = [];
+          const invalid: string[] = [];
+          for (const c of cmd.clis) {
+            if (isCliKind(c)) valid.push(c);
+            else invalid.push(c);
+          }
+          if (invalid.length > 0) {
+            systemNote = `unknown CLI: ${invalid.join(", ")}. valid: ${ALL_CLI_KINDS.join(", ")}`;
+          } else {
+            const dedup = Array.from(new Set(valid));
+            setCouncilClis(dedup);
+            systemNote = `council panel set to: ${dedup.join(", ")}.`;
+          }
+        }
+      } else if (cmd.kind === "council-model") {
+        if (!cmd.cli) {
+          systemNote = "usage: /council model <cli> <model>  ·  /council model <cli> default";
+        } else if (!isCliKind(cmd.cli)) {
+          systemNote = `unknown CLI: ${cmd.cli}. valid: ${ALL_CLI_KINDS.join(", ")}`;
+        } else if (!cmd.model.trim()) {
+          systemNote = `usage: /council model ${cmd.cli} <model>  ·  /council model ${cmd.cli} default`;
+        } else {
+          const wantDefault =
+            cmd.model.trim().toLowerCase() === "default" ||
+            cmd.model.trim().toLowerCase() === "clear";
+          setCouncilModel(cmd.cli, wantDefault ? null : cmd.model);
+          systemNote = wantDefault
+            ? `cleared pinned model for ${cmd.cli}.`
+            : `pinned ${cmd.cli} to model: ${cmd.model.trim()}.`;
+        }
       } else if (cmd.kind === "heatmap") {
         const days = cmd.days ?? 30;
         const required = domains.map((d) => d.name);
@@ -673,11 +744,30 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       });
   }
 
+  function resolveCouncilPanel(): {
+    panel: AvailableCli[];
+    models: Partial<Record<string, string>>;
+  } {
+    const cfg = readCouncilConfig();
+    let panel = clis;
+    if (cfg.clis && cfg.clis.length > 0) {
+      panel = clis.filter((c) => cfg.clis!.includes(c.kind));
+    }
+    return { panel, models: cfg.models };
+  }
+
   function runCouncil(key: string, prompt: string) {
     const session = chats.get(key);
     if (!session) return;
     if (clis.length === 0) {
       setMessage("no CLIs detected — install claude / codex / gemini first");
+      return;
+    }
+    const { panel, models } = resolveCouncilPanel();
+    if (panel.length === 0) {
+      setMessage(
+        "council panel is empty after filtering — /council config or /council use ... to fix",
+      );
       return;
     }
     const text = prompt.trim();
@@ -704,6 +794,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       const cur = m.get(key);
       if (!cur) return m;
       const introTs = userTs + 1;
+      const panelLabel = panel
+        .map((c) => {
+          const mdl = models[c.kind];
+          return mdl ? `${c.label}·${mdl}` : c.label;
+        })
+        .join(" · ");
       return new Map(m).set(key, {
         ...cur,
         messages: [
@@ -711,7 +807,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           userMsg,
           {
             role: "system" as const,
-            content: `convening council: ${clis.map((c) => c.label).join(" · ")}`,
+            content: `convening council: ${panelLabel}`,
             ts: introTs,
           },
         ],
@@ -722,17 +818,19 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       { ...session, messages: [...session.messages, userMsg] },
       text,
     );
-    const calls = clis.map((cli) =>
+    const calls = panel.map((cli) =>
       runChatTurn({
         prompt: promptForCli,
         cwd: session.hostDomain.path,
         cli,
-        model: "",
+        model: models[cli.kind] ?? "",
         isFirst: true,
       })
         .then((response) => {
           const ts = Date.now();
-          const content = `**[${cli.label}]**\n\n${response}`;
+          const mdl = models[cli.kind];
+          const tag = mdl ? `${cli.label}·${mdl}` : cli.label;
+          const content = `**[${tag}]**\n\n${response}`;
           persistMessage({
             domain: session.hostDomain.name,
             session_id: session.sessionId,
@@ -740,7 +838,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             content,
             ts,
             cli: cli.kind,
-            model: "",
+            model: models[cli.kind] ?? "",
           });
           setChats((m) => {
             const cur = m.get(key);
@@ -753,7 +851,9 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         })
         .catch((err: Error) => {
           const ts = Date.now();
-          const content = `**[${cli.label}]** — error: ${err.message}`;
+          const mdl = models[cli.kind];
+          const tag = mdl ? `${cli.label}·${mdl}` : cli.label;
+          const content = `**[${tag}]** — error: ${err.message}`;
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;

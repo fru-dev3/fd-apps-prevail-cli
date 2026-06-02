@@ -3,6 +3,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
+export type CliKind = "claude" | "codex" | "gemini";
+
+export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "gemini"];
+
+export function isCliKind(s: string): s is CliKind {
+  return s === "claude" || s === "codex" || s === "gemini";
+}
+
 export interface UserConfig {
   vaultPath: string;
   createdAt: string;
@@ -10,6 +18,50 @@ export interface UserConfig {
   // every CLI launch explicitly forbids WebSearch / WebFetch / network tools.
   // Default (when missing) is "allow" — so existing configs keep working.
   webAccess?: "allow" | "deny";
+  // /council panel — which CLIs participate (default: all detected) and which
+  // model to pin per CLI (default: each CLI's default).
+  councilClis?: CliKind[];
+  councilModels?: Partial<Record<CliKind, string>>;
+}
+
+export interface CouncilConfig {
+  clis: CliKind[] | null; // null = use all detected
+  models: Partial<Record<CliKind, string>>;
+}
+
+export function readCouncilConfig(): CouncilConfig {
+  const c = readConfig();
+  return {
+    clis: c?.councilClis ?? null,
+    models: c?.councilModels ?? {},
+  };
+}
+
+export function setCouncilClis(clis: CliKind[] | null): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (clis === null) delete next.councilClis;
+  else next.councilClis = clis;
+  writeConfig(next);
+}
+
+export function setCouncilModel(cli: CliKind, model: string | null): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const models = { ...(cfg.councilModels ?? {}) };
+  if (model === null || model.trim() === "" || model.trim().toLowerCase() === "default") {
+    delete models[cli];
+  } else {
+    models[cli] = model.trim();
+  }
+  const next: UserConfig = { ...cfg };
+  if (Object.keys(models).length === 0) {
+    delete next.councilModels;
+  } else {
+    next.councilModels = models;
+  }
+  writeConfig(next);
 }
 
 export function readWebAccess(): "allow" | "deny" {

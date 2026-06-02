@@ -73,6 +73,9 @@ export type ChatCommand =
   | { kind: "history"; limit?: number }
   | { kind: "web"; mode: "allow" | "deny" | "status" }
   | { kind: "council"; prompt: string }
+  | { kind: "council-config" }
+  | { kind: "council-use"; clis: string[] }
+  | { kind: "council-model"; cli: string; model: string }
   | { kind: "heatmap"; days?: number }
   | { kind: "watch"; limit?: number }
   | { kind: "unknown"; raw: string };
@@ -722,7 +725,7 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/search", arg: "<query>", desc: "FTS5 search across all past chats", aliases: ["/s"] },
   { cmd: "/history", arg: "[n]", desc: "show your past prompts for this domain (default 20)", aliases: ["/h", "/prompts"] },
   { cmd: "/web", arg: "[on|off]", desc: "global web access — toggle or check status (default: allow)" },
-  { cmd: "/council", arg: "<prompt>", desc: "ask claude, codex, AND gemini in parallel — for high-stakes decisions", aliases: ["/c", "/panel"] },
+  { cmd: "/council", arg: "<prompt>", desc: "ask the configured panel in parallel  ·  /council config to see panel, /council use ..., /council model ...", aliases: ["/c", "/panel"] },
   { cmd: "/heatmap", arg: "[days]", desc: "domain activity heatmap (default 30 days)", aliases: ["/heat", "/activity"] },
   { cmd: "/watch", arg: "[n]", desc: "show recent background-watcher observations (default 20)", aliases: ["/watcher", "/obs"] },
   { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
@@ -948,6 +951,19 @@ function parseSlashCommand(text: string): ChatCommand {
     return { kind: "web", mode: "status" };
   }
   if (cmd === "council" || cmd === "c" || cmd === "panel") {
+    const parts = arg.trim().split(/\s+/).filter(Boolean);
+    const sub = parts[0]?.toLowerCase();
+    if (sub === "config" || sub === "status" || sub === "show") {
+      return { kind: "council-config" };
+    }
+    if (sub === "use" || sub === "set") {
+      return { kind: "council-use", clis: parts.slice(1).map((s) => s.toLowerCase()) };
+    }
+    if (sub === "model") {
+      const cliArg = parts[1] ?? "";
+      const modelArg = parts.slice(2).join(" ");
+      return { kind: "council-model", cli: cliArg.toLowerCase(), model: modelArg };
+    }
     return { kind: "council", prompt: arg };
   }
   if (cmd === "heatmap" || cmd === "heat" || cmd === "activity") {
