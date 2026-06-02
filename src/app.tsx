@@ -927,6 +927,19 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       );
       return;
     }
+    // Distinct CLIs in the panel — counts unique kinds, since multiple
+    // model variants of one CLI still represent one provider's viewpoint.
+    // If a council ends up running with only one provider it isn't really
+    // a council anymore (no triangulation), so flag it visibly so the user
+    // can fix their config or wait for the missing provider to come back
+    // online (e.g. gemini quota reset).
+    const distinctClis = new Set(panelists.map((p) => p.cli.kind));
+    if (distinctClis.size < 2) {
+      const sole = panelists[0]!.cli.label;
+      setMessage(
+        `⚠ degraded council: only ${sole} will respond (no triangulation). check /council config or wait for the other providers to come back online.`,
+      );
+    }
     const text = prompt.trim();
     if (!text) {
       setMessage("usage: /council <your high-stakes question>");
