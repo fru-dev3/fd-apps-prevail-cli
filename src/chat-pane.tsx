@@ -305,6 +305,9 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
         onSubmit={handleSubmit}
         onAutocompleteChange={onAutocompleteChange}
         onPopoverChange={setPopover}
+        recentPrompts={session.messages
+          .filter((m) => m.role === "user" && m.content.trim().length > 0)
+          .map((m) => m.content)}
       />
     </box>
   );
@@ -1403,15 +1406,27 @@ function InputBox({
   onSubmit,
   onAutocompleteChange,
   onPopoverChange,
+  recentPrompts,
 }: {
   inputRef: React.RefObject<any>;
   disabled: boolean;
   onSubmit: (v: string) => void;
   onAutocompleteChange?: (open: boolean) => void;
   onPopoverChange?: (p: PopoverState | null) => void;
+  // Most-recent-last list of prior user prompts for ↑/↓ history recall.
+  // When the slash autocomplete is open, ↑/↓ still drives that menu (its
+  // handler runs first and returns). Otherwise ↑ walks backward through
+  // history (newest first), ↓ walks forward toward the original draft.
+  recentPrompts: string[];
 }) {
   const [value, setValue] = useState("");
   const [selectedIdx, setSelectedIdx] = useState(0);
+  // History-navigation state. historyIdx = 0 means "showing user's current
+  // draft"; 1 = most recent prior prompt; 2 = second most recent; etc.
+  // draftBeforeHistory snapshots the in-progress text so ↓ can return to it
+  // after the user walks up through history and decides to come back.
+  const historyIdxRef = useRef(0);
+  const draftBeforeHistoryRef = useRef("");
   const showAutocomplete = !disabled && value.startsWith("/");
   const matches = useMemo(
     () => (showAutocomplete ? matchSlashCommands(value) : []),
@@ -1454,6 +1469,16 @@ function InputBox({
     }
   }, [showAutocomplete, matches, selectedIdx, onPopoverChange]);
 
+  // Drop the input's text both in our state and in the underlying OpenTUI
+  // <input>. setText is the OpenTUI handle for programmatic value changes;
+  // setValue alone wouldn't make the cursor + visible text follow.
+  const setInputText = (next: string) => {
+    setValue(next);
+    try {
+      inputRef.current?.setText?.(next);
+    } catch {}
+  };
+
   const handleSubmit = (v: string) => {
     const trimmed = v.trim();
     if (showAutocomplete && matches.length > 0 && !trimmed.includes(" ")) {
@@ -1470,18 +1495,49 @@ function InputBox({
     }
     setValue("");
     setSelectedIdx(0);
+    // Successful send — reset history cursor so the next ↑ starts from the
+    // newest prompt again. Drop any saved draft too; the user just sent.
+    historyIdxRef.current = 0;
+    draftBeforeHistoryRef.current = "";
     onSubmit(v);
   };
 
   useKeyboard((evt) => {
-    if (!showAutocomplete || matches.length === 0) return;
+    // Slash-menu navigation takes priority when it's open.
+    if (showAutocomplete && matches.length > 0) {
+      if (evt.name === "up") {
+        setSelectedIdx((i) => (i - 1 + matches.length) % matches.length);
+        return;
+      } else if (evt.name === "down") {
+        setSelectedIdx((i) => (i + 1) % matches.length);
+        return;
+      } else if (evt.name === "tab") {
+        const pick = matches[selectedIdx];
+        if (pick) pickCommand(pick);
+        return;
+      }
+    }
+    // Otherwise ↑/↓ walks prior-prompt history (terminal-style recall).
+    // Empty session → nothing to recall, no-op.
+    if (recentPrompts.length === 0) return;
     if (evt.name === "up") {
-      setSelectedIdx((i) => (i - 1 + matches.length) % matches.length);
+      if (historyIdxRef.current === 0) {
+        // First step into history — snapshot whatever the user was typing
+        // so ↓ can bring it back when they walk forward past index 1.
+        draftBeforeHistoryRef.current = value;
+      }
+      const nextIdx = Math.min(historyIdxRef.current + 1, recentPrompts.length);
+      historyIdxRef.current = nextIdx;
+      setInputText(recentPrompts[recentPrompts.length - nextIdx] ?? "");
     } else if (evt.name === "down") {
-      setSelectedIdx((i) => (i + 1) % matches.length);
-    } else if (evt.name === "tab") {
-      const pick = matches[selectedIdx];
-      if (pick) pickCommand(pick);
+      if (historyIdxRef.current === 0) return; // already at draft
+      const nextIdx = historyIdxRef.current - 1;
+      historyIdxRef.current = nextIdx;
+      if (nextIdx === 0) {
+        setInputText(draftBeforeHistoryRef.current);
+      } else {
+        setInputText(recentPrompts[recentPrompts.length - nextIdx] ?? "");
+      }
     }
   });
 
@@ -1514,7 +1570,14 @@ function InputBox({
           }
           backgroundColor={theme.bgPanel}
           textColor={theme.fg}
-          onInput={setValue as any}
+          onInput={((next: string) => {
+            // User-typed change. Drop the history cursor so the next ↑ starts
+            // from the most recent prompt again (otherwise editing a recalled
+            // prompt then ↓ would surprise people by jumping back to draft).
+            setValue(next);
+            historyIdxRef.current = 0;
+            draftBeforeHistoryRef.current = "";
+          }) as any}
           onSubmit={handleSubmit as any}
         />
       </box>
