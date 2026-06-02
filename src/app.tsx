@@ -26,6 +26,7 @@ import {
   setCouncilModel,
   addCouncilModel,
   removeCouncilModel,
+  setCouncilChair,
   setWebAccess,
   type CliKind,
 } from "./config.ts";
@@ -697,6 +698,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             systemNote = `${cmd.cli} panel now: ${cmd.model.trim()}.`;
           }
         }
+      } else if (cmd.kind === "council-chair") {
+        const cur = readCouncilConfig();
+        if (!cmd.cli) {
+          systemNote = cur.chair
+            ? `chair: ${cur.chair.cli}${cur.chair.model ? "·" + cur.chair.model : ""}  ·  /council chair default to clear`
+            : "chair: auto (first successful panelist)  ·  /council chair <cli> [model] to pin";
+        } else if (cmd.cli === "default" || cmd.cli === "clear" || cmd.cli === "auto") {
+          setCouncilChair(null);
+          systemNote = "chair cleared — verdict will be synthesized by the first panelist that returns.";
+        } else if (!isCliKind(cmd.cli)) {
+          systemNote = `unknown CLI: ${cmd.cli}. valid: ${ALL_CLI_KINDS.join(", ")}`;
+        } else {
+          setCouncilChair({ cli: cmd.cli, model: cmd.model || undefined });
+          systemNote = `chair pinned to ${cmd.cli}${cmd.model ? "·" + cmd.model : ""}. verdicts will always be synthesized by this CLI.`;
+        }
       } else if (cmd.kind === "heatmap") {
         const days = cmd.days ?? 30;
         const required = domains.map((d) => d.name);
@@ -1048,12 +1064,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       const good = collected.filter((c) => c.ok);
       // Need ≥2 panel responses for a synthesis to be meaningful.
       if (good.length >= 2) {
-        // The chair is the first panelist that actually returned a valid
-        // response (not necessarily the first configured one — if that one
-        // timed out we'd be stuck). Falls back to first configured.
-        const synthSource = good[0] ?? panelists[0]!;
-        const synthCli = synthSource.cli;
-        const synthModel = synthSource.model;
+        // Pick the chair: prefer the config-pinned chair if its CLI is healthy
+        // and detected, otherwise fall back to the first panelist that
+        // actually returned a reply. Avoids surprises where a timed-out
+        // configured leader would have blocked the verdict.
+        const chairCfg = readCouncilConfig().chair;
+        let synthCli = (good[0] ?? panelists[0]!).cli;
+        let synthModel = (good[0] ?? panelists[0]!).model;
+        if (chairCfg) {
+          const chairCli = clis.find((c) => c.kind === chairCfg.cli);
+          const chairHealth = cliHealth.get(chairCfg.cli);
+          if (chairCli && (!chairHealth || chairHealth.ok)) {
+            synthCli = chairCli;
+            synthModel = chairCfg.model ?? "";
+          }
+        }
         // Drop a "synthesizing" placeholder so the user sees step 2 happen
         // explicitly (panel → synth → verdict) rather than wondering why the
         // chair is "thinking" alongside the panel.

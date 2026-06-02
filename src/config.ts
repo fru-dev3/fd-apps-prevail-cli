@@ -24,6 +24,9 @@ export interface UserConfig {
   // panel; pre-v0.3 single-string values are still read and auto-upgraded.
   councilClis?: CliKind[];
   councilModels?: Partial<Record<CliKind, string[] | string>>;
+  // Optional chair pin: who synthesizes the verdict. null/missing = use
+  // the first panelist that successfully replied (round-robin in practice).
+  councilChair?: { cli: CliKind; model?: string };
 }
 
 export interface CouncilConfig {
@@ -31,6 +34,7 @@ export interface CouncilConfig {
   // Per-CLI list of model variants to run as separate panelists. Empty list
   // (or empty string entry) means "use the CLI's default model once".
   models: Partial<Record<CliKind, string[]>>;
+  chair: { cli: CliKind; model?: string } | null;
 }
 
 function normalizeModels(
@@ -55,7 +59,19 @@ export function readCouncilConfig(): CouncilConfig {
   return {
     clis: c?.councilClis ?? null,
     models: normalizeModels(c?.councilModels),
+    chair: c?.councilChair ?? null,
   };
+}
+
+// Pin who synthesizes the verdict. Pass null to clear (auto: first panelist
+// that successfully returned a reply).
+export function setCouncilChair(chair: { cli: CliKind; model?: string } | null): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (chair === null) delete next.councilChair;
+  else next.councilChair = chair;
+  writeConfig(next);
 }
 
 export function setCouncilClis(clis: CliKind[] | null): void {

@@ -95,6 +95,7 @@ export type ChatCommand =
   | { kind: "council-mode-toggle" }
   | { kind: "council-use"; clis: string[] }
   | { kind: "council-model"; cli: string; model: string }
+  | { kind: "council-chair"; cli: string; model: string }
   | { kind: "heatmap"; days?: number }
   | { kind: "watch"; limit?: number }
   | { kind: "unknown"; raw: string };
@@ -1492,6 +1493,14 @@ function parseSlashCommand(text: string): ChatCommand {
       const cliArg = parts[1] ?? "";
       const modelArg = parts.slice(2).join(" ");
       return { kind: "council-model", cli: cliArg.toLowerCase(), model: modelArg };
+    }
+    if (sub === "chair" || sub === "synth" || sub === "synthesizer") {
+      // /council chair                  — show current chair
+      // /council chair default          — clear (auto: first successful panelist)
+      // /council chair <cli> [model]    — pin to a specific (cli, model)
+      const cliArg = (parts[1] ?? "").toLowerCase();
+      const modelArg = parts.slice(2).join(" ").trim();
+      return { kind: "council-chair", cli: cliArg, model: modelArg };
     }
     return { kind: "council", prompt: arg };
   }

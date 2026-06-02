@@ -50,7 +50,7 @@ export interface AvailableCli {
 }
 
 const CANDIDATES: { kind: CliKind; bins: string[]; label: string }[] = [
-  { kind: "claude", bins: ["claude"], label: "Claude Code" },
+  { kind: "claude", bins: ["claude"], label: "Claude" },
   { kind: "codex", bins: ["codex"], label: "Codex" },
   { kind: "gemini", bins: ["gemini"], label: "Gemini" },
 ];
@@ -61,13 +61,86 @@ export const CLI_MODEL_HINT: Record<CliKind, string> = {
   gemini: "e.g. gemini-2.5-pro, gemini-2.0-flash",
 };
 
-// Small curated short-list per CLI for the clickable picker. Not exhaustive — the
-// user can always type `/model <anything>` to pass a custom name straight through.
-export const MODEL_QUICKPICKS: Record<CliKind, string[]> = {
+// Minimal fallback aliases — only used when discoverModelHints() returns
+// nothing (CLI not yet probed, --help failed, etc.). Most users will see
+// the live-parsed list instead. Kept tiny on purpose so it never goes
+// stale and clashes with what the CLI actually accepts.
+export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
   claude: ["opus", "sonnet", "haiku"],
-  codex: ["gpt-5", "gpt-5.4", "o3"],
-  gemini: ["gemini-2.5-pro", "gemini-2.0-flash"],
+  codex: ["gpt-5.4"],
+  gemini: ["gemini-2.5-pro"],
 };
+
+// Run `<bin> --help` and pull every quoted token that looks like a model
+// alias or full id. None of the three CLIs ship a real `models list`
+// endpoint, so this is the closest we get to "what does THIS install
+// actually know about" — it picks up new aliases as the CLI's own docs
+// update. Codex/Gemini hint less than Claude; the fallback fills the gap.
+export async function discoverModelHints(cli: AvailableCli, timeoutMs = 4000): Promise<string[]> {
+  const help = await new Promise<string>((resolve) => {
+    let out = "";
+    let settled = false;
+    let child;
+    try {
+      child = spawn(cli.bin, ["--help"], {
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      resolve("");
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { child!.kill(); } catch {}
+      resolve(out);
+    }, timeoutMs);
+    child.stdout.on("data", (b) => (out += b.toString()));
+    child.stderr.on("data", (b) => (out += b.toString()));
+    child.on("close", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(out);
+    });
+  });
+  if (!help) return [];
+  // Grab any single- or double-quoted token that looks model-ish: kebab/
+  // dot/digit + letters. Tightly scoped so we don't pull random words.
+  const re = /['"]([a-zA-Z][a-zA-Z0-9._-]{2,40})['"]/g;
+  const found = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(help)) !== null) {
+    const tok = m[1]!;
+    if (looksLikeModel(cli.kind, tok)) found.add(tok);
+  }
+  return Array.from(found);
+}
+
+function looksLikeModel(kind: CliKind, t: string): boolean {
+  const low = t.toLowerCase();
+  if (kind === "claude") {
+    return (
+      low === "opus" ||
+      low === "sonnet" ||
+      low === "haiku" ||
+      low.startsWith("claude-")
+    );
+  }
+  if (kind === "codex") {
+    return /^(gpt|o\d|chatgpt)/.test(low);
+  }
+  if (kind === "gemini") {
+    return low.startsWith("gemini") || low.startsWith("gemma");
+  }
+  return false;
+}
+
+// Back-compat: callers that read MODEL_QUICKPICKS still work but only see
+// the fallback. App.tsx replaces this at runtime with the discovered list
+// once probes complete.
+export const MODEL_QUICKPICKS: Record<CliKind, string[]> = MODEL_QUICKPICKS_FALLBACK;
 
 export function formatModelBadge(model: string | null | undefined): string {
   if (!model || !model.trim()) return "default";
@@ -313,7 +386,8 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst }: ChatTurn
     // refuses to run with 'Not inside a trusted directory'.
     const base = ["exec", "--skip-git-repo-check"];
     const args = m ? [...base, "-m", m, augmentedPrompt] : [...base, augmentedPrompt];
-    return runCapture(cli.bin, args, cwd);
+    const raw = await runCapture(cli.bin, args, cwd);
+    return extractCodexReply(raw);
   }
   if (cli.kind === "gemini") {
     // --skip-trust: vault dirs aren't on gemini's trusted-folders list;
@@ -326,6 +400,52 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst }: ChatTurn
     return runCapture(cli.bin, args, cwd);
   }
   return `(no handler for ${cli.kind})`;
+}
+
+// Codex's `exec` mode wraps every reply in a noisy envelope:
+//
+//   reasoning effort: xhigh
+//   reasoning summaries: none
+//   session id: 019e889d-…
+//   --------
+//   user
+//   <our prompt — including the entire operating-manual block>
+//   codex
+//   <the actual model reply, possibly multi-line>
+//   tokens used
+//   1,985
+//
+// Returning that whole thing as the panelist's "answer" is what the user is
+// seeing as "codex talking about don't-do-this preamble" — the preamble is
+// our manual being echoed back. Strip everything except the model's reply:
+// the section between the line "codex" and the next envelope keyword (or
+// EOF). If the markers aren't present (unusual output, an error case),
+// return the raw output as a fallback so we never silently drop content.
+export function extractCodexReply(raw: string): string {
+  if (!raw) return raw;
+  const lines = raw.split("\n");
+  // Find the "codex" line — must be on its own line, possibly with trailing
+  // whitespace. Walk from the bottom so we get the LAST one (in case codex
+  // ever interleaves intermediate "codex" markers).
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.trim() === "codex") {
+      start = i + 1;
+      break;
+    }
+  }
+  if (start === -1) return raw;
+  // Stop at the next envelope keyword we know about.
+  const stopRe = /^(tokens used|session id|reasoning effort|reasoning summaries|-{4,})\s*$/i;
+  let end = lines.length;
+  for (let i = start; i < lines.length; i++) {
+    if (stopRe.test(lines[i]!.trim())) {
+      end = i;
+      break;
+    }
+  }
+  const body = lines.slice(start, end).join("\n").trim();
+  return body || raw;
 }
 
 // Exposed for tests: returns the exact argv we would pass to spawn for a
