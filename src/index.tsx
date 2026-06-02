@@ -21,6 +21,8 @@ interface Args {
   daemonArgs: string[];
   telegram: boolean;
   telegramArgs: string[];
+  briefing: boolean;
+  briefingArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -36,6 +38,8 @@ function parseArgs(argv: string[]): Args {
   let daemonArgs: string[] = [];
   let telegram = false;
   let telegramArgs: string[] = [];
+  let briefing = false;
+  let briefingArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -54,6 +58,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "telegram") {
       telegram = true;
       telegramArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "briefing" || a === "briefings") {
+      briefing = true;
+      briefingArgs = argv.slice(i + 1);
       break;
     } else if (a === "--vault" || a === "-d") {
       const next = argv[i + 1];
@@ -78,6 +86,8 @@ function parseArgs(argv: string[]): Args {
     daemonArgs,
     telegram,
     telegramArgs,
+    briefing,
+    briefingArgs,
   };
 }
 
@@ -91,7 +101,8 @@ USAGE
   prevail doctor              check installed AI clis + vault shape
   prevail schedule [...]      manage embedded cron-style schedules
   prevail telegram [...]      configure the Telegram bot bridge
-  prevail daemon --telegram   run the headless Telegram bot
+  prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
+  prevail daemon --telegram   run the headless Telegram bot + briefing ticker
   prevail --vault <path>      override vault path for one session
 
 OPTIONS
@@ -367,6 +378,168 @@ async function telegramCommand(args: string[]): Promise<void> {
   process.exit(1);
 }
 
+async function briefingCommand(args: string[], vaultOverride: string | null): Promise<void> {
+  const {
+    loadBriefings,
+    saveBriefings,
+    makeBriefingId,
+    runBriefing,
+    findDomain,
+  } = await import("./briefings.ts");
+  const { isValidCron, describeCron, nextRunWithin } = await import("./schedule.ts");
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  if (!existsSync(vault)) {
+    console.error(`vault path not found: ${vault}`);
+    process.exit(1);
+  }
+
+  const sub = args[0];
+  if (!sub || sub === "list" || sub === "ls") {
+    const briefings = loadBriefings(vault);
+    if (briefings.length === 0) {
+      console.log(`no briefings in ${vault}/.briefings.json`);
+      console.log(`add one with: prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver telegram|log|both]`);
+      return;
+    }
+    console.log(`briefings in ${vault}/.briefings.json:\n`);
+    for (const b of briefings) {
+      const next = nextRunWithin(b.cron);
+      const nextLabel = next ? new Date(next).toLocaleString() : "(none within 7d)";
+      const status = b.enabled ? "✓" : "✗";
+      console.log(`  ${status} ${b.id}`);
+      console.log(`    name:     ${b.name}`);
+      console.log(`    cron:     ${b.cron}  (${describeCron(b.cron)})`);
+      console.log(`    domain:   ${b.domain}`);
+      console.log(`    mode:     ${b.mode}`);
+      console.log(`    deliver:  ${b.deliver}`);
+      console.log(`    prompt:   ${b.prompt}`);
+      console.log(`    last:     ${b.last_run ? new Date(b.last_run).toLocaleString() : "(never)"}`);
+      console.log(`    next:     ${nextLabel}\n`);
+    }
+    return;
+  }
+
+  if (sub === "add") {
+    // Parse named flags so users can mix-and-match instead of positional args.
+    let cron = "";
+    let domain = "";
+    let prompt = "";
+    let name = "";
+    let mode: "single" | "council" = "single";
+    let deliver: "log" | "telegram" | "both" = "log";
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      const v = args[i + 1];
+      if (a === "--cron" && v) { cron = v; i++; }
+      else if (a === "--domain" && v) { domain = v; i++; }
+      else if (a === "--prompt" && v) { prompt = v; i++; }
+      else if (a === "--name" && v) { name = v; i++; }
+      else if (a === "--mode" && v) { mode = v === "council" ? "council" : "single"; i++; }
+      else if (a === "--deliver" && v) {
+        deliver = v === "telegram" || v === "both" ? v : "log";
+        i++;
+      }
+    }
+    if (!cron || !domain || !prompt) {
+      console.error('usage: prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver telegram|both]');
+      process.exit(1);
+    }
+    if (!isValidCron(cron)) {
+      console.error(`invalid cron: "${cron}" — needs 5 space-separated fields`);
+      process.exit(1);
+    }
+    if (!findDomain(vault, domain)) {
+      console.error(`domain "${domain}" not found in vault ${vault}`);
+      process.exit(1);
+    }
+    if (!name) name = `${domain} briefing`;
+    const entry = {
+      id: makeBriefingId(),
+      name,
+      cron,
+      domain,
+      prompt,
+      mode,
+      deliver,
+      enabled: true,
+      last_run: null,
+      created_at: Date.now(),
+    };
+    const list = loadBriefings(vault);
+    list.push(entry);
+    saveBriefings(vault, list);
+    console.log(`✓ added ${entry.id}`);
+    console.log(`  cron:     ${cron}  (${describeCron(cron)})`);
+    console.log(`  domain:   ${domain}`);
+    console.log(`  mode:     ${mode}`);
+    console.log(`  deliver:  ${deliver}`);
+    console.log(`  prompt:   ${prompt}`);
+    if (deliver !== "log") {
+      console.log("");
+      console.log("⚠ telegram delivery requires the daemon to be running:");
+      console.log("  prevail daemon --telegram");
+    }
+    return;
+  }
+
+  if (sub === "remove" || sub === "rm") {
+    const id = args[1];
+    if (!id) {
+      console.error("usage: prevail briefing remove <id>");
+      process.exit(1);
+    }
+    const before = loadBriefings(vault);
+    const after = before.filter((b) => b.id !== id);
+    if (after.length === before.length) {
+      console.error(`no briefing with id ${id}`);
+      process.exit(1);
+    }
+    saveBriefings(vault, after);
+    console.log(`✓ removed ${id}`);
+    return;
+  }
+
+  if (sub === "run") {
+    const id = args[1];
+    if (!id) {
+      console.error("usage: prevail briefing run <id>");
+      process.exit(1);
+    }
+    const list = loadBriefings(vault);
+    const entry = list.find((b) => b.id === id);
+    if (!entry) {
+      console.error(`no briefing with id ${id}`);
+      process.exit(1);
+    }
+    console.log(`running ${entry.id}: ${entry.name}`);
+    // Telegram delivery is only wired by the daemon — `prevail briefing run`
+    // is for one-off manual fires, so telegram delivery is skipped here even
+    // if the briefing is configured for it. The verdict still lands in the
+    // vault log either way.
+    const r = await runBriefing(entry, vault);
+    if (r.error) {
+      console.error(`✗ ${r.error}`);
+      process.exit(1);
+    }
+    entry.last_run = r.ts;
+    saveBriefings(vault, list);
+    console.log("");
+    console.log(r.output);
+    console.log("");
+    console.log(`✓ delivered to log: ${r.delivered.log}, telegram: ${r.delivered.telegram}`);
+    return;
+  }
+
+  console.error(`unknown briefing subcommand: ${sub}\n`);
+  console.error("usage:");
+  console.error("  prevail briefing list");
+  console.error('  prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver telegram|both]');
+  console.error("  prevail briefing remove <id>");
+  console.error("  prevail briefing run <id>");
+  process.exit(1);
+}
+
 async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const wantTelegram = args.includes("--telegram") || args.includes("-t");
   if (!wantTelegram) {
@@ -439,6 +612,10 @@ async function main() {
   }
   if (args.telegram) {
     await telegramCommand(args.telegramArgs);
+    return;
+  }
+  if (args.briefing) {
+    await briefingCommand(args.briefingArgs, args.vaultPath);
     return;
   }
   if (args.daemon) {

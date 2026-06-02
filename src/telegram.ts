@@ -11,6 +11,7 @@ import { runChatTurn } from "./cli-bridge.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { readTelegramConfig, type TelegramConfig } from "./telegram-config.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
+import { tickBriefings } from "./briefings.ts";
 
 // Per-chat state held in memory for the lifetime of the daemon. Lost on
 // restart — acceptable for v1 since the SQLite session log already persists
@@ -92,6 +93,37 @@ export async function runTelegramDaemon(opts: DaemonOptions): Promise<{ stop: ()
     `started. vault=${opts.vaultPath} domains=${domains.length} clis=${clis.map((c) => c.label).join(",")} allowList=${cfg.allowList.length}`,
   );
 
+  // Briefing ticker — fires due briefings every minute. Telegram delivery
+  // fans out to every allow-listed chat_id (so a couple's shared bot pings
+  // both phones). Returns the number of successful sends.
+  const deliverTelegram = async (text: string): Promise<number> => {
+    let ok = 0;
+    for (const id of cfg.allowList) {
+      try {
+        await sendLongMessage(cfg.botToken, id, text);
+        ok++;
+      } catch (err) {
+        log(`telegram delivery failed for chat_id=${id}: ${(err as Error).message}`);
+      }
+    }
+    return ok;
+  };
+  const briefingInterval = setInterval(() => {
+    void tickBriefings(opts.vaultPath, deliverTelegram).then((results) => {
+      for (const r of results) {
+        if (r.error) {
+          log(`briefing ${r.id} error: ${r.error}`);
+        } else {
+          log(`briefing ${r.id} fired · domain=${r.domain} · delivered log=${r.delivered.log} tg=${r.delivered.telegram}`);
+        }
+      }
+    });
+  }, 60_000);
+  // Stop the ticker when the daemon is asked to stop.
+  const originalStop = () => {
+    clearInterval(briefingInterval);
+  };
+
   // Long-poll loop. timeout=30 means each request blocks for up to 30s on
   // the server side; messages arrive with near-zero latency on top of that.
   // Drops into a tight catch-and-retry loop if the network blinks — backoff
@@ -118,6 +150,7 @@ export async function runTelegramDaemon(opts: DaemonOptions): Promise<{ stop: ()
   return {
     stop: () => {
       stopped = true;
+      originalStop();
     },
   };
 }

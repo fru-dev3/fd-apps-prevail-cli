@@ -16,6 +16,12 @@ The release page on GitHub mirrors the same notes for each tag:
   - Friendly probe error when the configured model isn't pulled (`ollama pull <name>`)
   - Council bubble color: electric cyan (matches the AI in prevAIl)
 
+### Added — Scheduled domain briefings
+- **`prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver log|telegram|both]`** — typed, domain-aware, council-aware scheduled prompts. Sits on top of the existing 5-field cron scheduler but adds structure (which domain, which mode, where to deliver) that ad-hoc shell schedules don't carry.
+- The daemon now runs a 60-second tick loop: any due briefing fires, the verdict lands in `<domain>/_log/YYYY-MM-DD.md` (via the same auto-summary hook), and if `deliver=telegram|both` the chair's verdict is pushed to every allow-listed chat. So at 7am your wealth panel runs, at 7:01am your phone has the verdict.
+- `prevail briefing run <id>` — manual fire for testing without waiting for cron. Log delivery still happens; telegram delivery is daemon-only.
+- Storage: `<vault>/.briefings.json` (separate from `.schedule.json` so the two systems can evolve independently).
+
 ### Added — Self-curating vault
 - **Per-domain auto-summarization writeback.** Every chat turn (and every council verdict) appends a one-paragraph snapshot to `<domain>/_log/YYYY-MM-DD.md` — the user prompt + the reply, timestamped, tagged with the CLI/chair that answered. Over time each domain becomes its own decision log without the user having to take notes. Hooks the TUI's `sendMessage` + council-verdict path AND the Telegram daemon's chat/council reply path through one shared `writeTurnSummary()` helper. Pure heuristic (no extra LLM call), silent failure mode (never blocks the user).
 
