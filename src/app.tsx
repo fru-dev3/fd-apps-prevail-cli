@@ -55,7 +55,8 @@ import {
 } from "./session.ts";
 import { tickAndRunDue } from "./schedule.ts";
 import {
-  detectClis,
+  detectOllama,
+  detectSubprocessClis,
   formatModelBadge,
   probeCli,
   runChatTurn,
@@ -101,8 +102,27 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   const [skillIdx, setSkillIdx] = useState(0);
   const [mode, setMode] = useState<Mode>("idle");
   const [message, setMessage] = useState<string | null>(null);
-  const [clis] = useState<AvailableCli[]>(() => detectClis());
+  // CLIs are seeded synchronously with the subprocess detections so the UI
+  // never flashes an empty CLI bar. Ollama is appended asynchronously after
+  // the HTTP probe completes (see the effect below).
+  const [clis, setClis] = useState<AvailableCli[]>(() => detectSubprocessClis());
   const [cliIdx, setCliIdx] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    detectOllama().then((o) => {
+      if (cancelled || !o) return;
+      setClis((prev) => (prev.some((c) => c.kind === "ollama") ? prev : [...prev, o]));
+      setCliHealth((prev) => {
+        if (prev.has("ollama")) return prev;
+        const next = new Map(prev);
+        next.set("ollama", null);
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [chats, setChats] = useState<Map<string, ChatSession>>(new Map());
   // One AbortController per in-flight session turn. When the user hits Escape
   // mid-prompt we abort the controller, which SIGTERMs the CLI child process
@@ -126,7 +146,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // is null while probing.
   const [cliHealth, setCliHealth] = useState<Map<string, CliHealth | null>>(() => {
     const m = new Map<string, CliHealth | null>();
-    for (const c of detectClis()) m.set(c.kind, null);
+    for (const c of detectSubprocessClis()) m.set(c.kind, null);
     return m;
   });
   useEffect(() => {

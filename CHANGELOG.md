@@ -7,6 +7,17 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [Unreleased]
+
+### Added — Engines
+- **Ollama / OpenAI-compatible 4th engine.** Any endpoint that speaks `/v1/chat/completions` (Ollama, LM Studio, llama.cpp server, vLLM) is now a first-class panelist alongside Claude / Codex / Gemini. Detected automatically by probing `GET /api/tags` (falls back to `/v1/models`); shows up in the CLI bar and in the council picker. Privacy-sensitive domains (health, wealth) can run a local-model-only council.
+  - Default endpoint: `http://localhost:11434` (override with `PREVAIL_OLLAMA_URL`)
+  - Default model: `llama3.1` (override with `PREVAIL_OLLAMA_MODEL`)
+  - Friendly probe error when the configured model isn't pulled (`ollama pull <name>`)
+  - Council bubble color: electric cyan (matches the AI in prevAIl)
+
+---
+
 ## [0.2.0] — 2026-06-02 · rebrand + council mode
 
 The launch of **prevAIl** (formerly `aireadyu`). Repo, binary, and brand all moved. Headline feature is **council mode** — ask one question, get three AIs in parallel, and a synthesized verdict.

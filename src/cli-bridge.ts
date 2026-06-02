@@ -42,7 +42,12 @@ export function refreshOperatingManualCache(): void {
   operatingManualCache = null;
 }
 
-export type CliKind = "claude" | "codex" | "gemini";
+// "ollama" is an OpenAI-compatible HTTP endpoint (default
+// http://localhost:11434/v1) — covers Ollama, LM Studio, llama.cpp
+// server, vLLM, anything that speaks OpenAI's /chat/completions schema.
+// Treated as a 4th "engine" alongside the three subprocess CLIs so the
+// rest of the code can fan out to it through the same runChatTurn path.
+export type CliKind = "claude" | "codex" | "gemini" | "ollama";
 
 export interface AvailableCli {
   kind: CliKind;
@@ -56,9 +61,15 @@ const CANDIDATES: { kind: CliKind; bins: string[]; label: string }[] = [
   { kind: "gemini", bins: ["gemini"], label: "Gemini" },
 ];
 
+// Ollama / OpenAI-compatible local-model endpoint. Override via env var.
+// Probed at launch and treated as available iff GET /api/tags responds.
+export const OLLAMA_BASE_URL = process.env.PREVAIL_OLLAMA_URL || "http://localhost:11434";
+export const OLLAMA_DEFAULT_MODEL = process.env.PREVAIL_OLLAMA_MODEL || "llama3.1";
+
 export const CLI_MODEL_HINT: Record<CliKind, string> = {
   claude: "e.g. opus, sonnet, haiku, or full id like claude-opus-4-7",
   codex: "e.g. gpt-5, gpt-5.4, o3 (whatever your codex install accepts)",
+  ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
   gemini: "e.g. gemini-2.5-pro, gemini-2.0-flash",
 };
 
@@ -93,10 +104,15 @@ const GEMINI_VERSIONS = [
   "gemini-2.0-flash",
 ];
 
+// Common Ollama tags — covers the models most users have already pulled.
+// Replaced at runtime by the real list from /api/tags when ollama is detected.
+const OLLAMA_VERSIONS = ["llama3.1", "llama3.2", "mistral", "qwen2.5", "phi3", "gemma2"];
+
 export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
   claude: [...CLAUDE_ALIASES, ...CLAUDE_VERSIONS],
   codex: CODEX_VERSIONS,
   gemini: GEMINI_VERSIONS,
+  ollama: OLLAMA_VERSIONS,
 };
 
 // Run `<bin> --help` and pull every quoted token that looks like a model
@@ -162,6 +178,11 @@ function looksLikeModel(kind: CliKind, t: string): boolean {
   if (kind === "gemini") {
     return low.startsWith("gemini") || low.startsWith("gemma");
   }
+  if (kind === "ollama") {
+    // Ollama tags come from /api/tags at runtime — looksLikeModel is only
+    // used by the --help scraper which doesn't apply to ollama.
+    return true;
+  }
   return false;
 }
 
@@ -220,6 +241,27 @@ function classifyProbeError(cli: CliKind, output: string): string | undefined {
 // 15-20s on slow networks.
 export function probeCli(cli: AvailableCli, timeoutMs = 45000): Promise<CliHealth> {
   const probePrompt = "Reply with the single word: ready";
+  // Ollama is an HTTP endpoint, not a subprocess — probe it by running a
+  // tiny chat completion via the same path runChatTurn uses. Short timeout
+  // since we already know the daemon is up (detectOllama confirmed) and a
+  // 6B model should reply to "say ready" in well under 5s.
+  if (cli.kind === "ollama") {
+    return runOllamaChat({
+      baseUrl: cli.bin,
+      model: OLLAMA_DEFAULT_MODEL,
+      prompt: probePrompt,
+    }).then((reply) => {
+      if (reply.startsWith("(ollama:")) {
+        // Model-not-pulled is the overwhelmingly common error; surface a
+        // friendly hint instead of the raw HTTP body.
+        const hint = /model.*not.*found|not.*available|pull/i.test(reply)
+          ? `model "${OLLAMA_DEFAULT_MODEL}" isn't pulled. Run \`ollama pull ${OLLAMA_DEFAULT_MODEL}\` or set PREVAIL_OLLAMA_MODEL to one you already have.`
+          : undefined;
+        return { ok: false, message: reply.slice(0, 220), hint };
+      }
+      return { ok: true, message: `ready (${OLLAMA_DEFAULT_MODEL})` };
+    });
+  }
   // Build the exact same argv shape runChatTurn would for a manual-less,
   // model-default, fresh-session turn. Reusing buildCliArgs guarantees the
   // probe exercises the real codepath.
@@ -305,7 +347,11 @@ export function probeCli(cli: AvailableCli, timeoutMs = 45000): Promise<CliHealt
   });
 }
 
-export function detectClis(): AvailableCli[] {
+// Synchronous half — finds the three subprocess CLIs on $PATH. Split out so
+// callers that need a fast "what binaries do we have" answer don't pay the
+// HTTP roundtrip cost of probing Ollama. detectClis() composes this with the
+// async Ollama probe.
+export function detectSubprocessClis(): AvailableCli[] {
   const paths = (process.env.PATH ?? "").split(":");
   const out: AvailableCli[] = [];
   for (const c of CANDIDATES) {
@@ -326,6 +372,67 @@ export function detectClis(): AvailableCli[] {
     }
   }
   return out;
+}
+
+// Quick health check for Ollama / any OpenAI-compatible endpoint. GET /api/tags
+// is the native Ollama endpoint and 200's instantly if the daemon is up.
+// For non-Ollama OpenAI-compatibles (LM Studio, llama.cpp server), /api/tags
+// returns 404 — we fall back to /v1/models which every OpenAI-compat
+// implementation exposes. A 200 from either is enough to call it available.
+// Returns null if nothing's listening. 1.5s timeout — local should be instant.
+export async function detectOllama(): Promise<AvailableCli | null> {
+  const base = OLLAMA_BASE_URL.replace(/\/+$/, "");
+  const tryUrls = [`${base}/api/tags`, `${base}/v1/models`];
+  for (const url of tryUrls) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        return {
+          kind: "ollama",
+          bin: base,
+          label: base.includes("11434") ? "Ollama" : "Local",
+        };
+      }
+    } catch {
+      // network error / timeout — try next URL
+    }
+  }
+  return null;
+}
+
+// Async detection — subprocess CLIs (sync) + Ollama (HTTP probe in parallel).
+// Used at app launch and by `prevail daemon`. Callers that don't care about
+// Ollama can use detectSubprocessClis() directly.
+export async function detectClis(): Promise<AvailableCli[]> {
+  const subprocess = detectSubprocessClis();
+  const ollama = await detectOllama();
+  return ollama ? [...subprocess, ollama] : subprocess;
+}
+
+// Pull the actually-installed Ollama models so the model picker can offer
+// real options instead of the static fallback. Returns null if Ollama isn't
+// reachable or the response can't be parsed. Used by the model-discovery
+// pass in app.tsx the same way --help is scraped for claude/codex/gemini.
+export async function discoverOllamaModels(): Promise<string[] | null> {
+  try {
+    const base = OLLAMA_BASE_URL.replace(/\/+$/, "");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(`${base}/api/tags`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { models?: Array<{ name?: string }> };
+    if (!Array.isArray(body.models)) return null;
+    const names = body.models
+      .map((m) => m.name)
+      .filter((n): n is string => typeof n === "string" && n.length > 0);
+    return names.length > 0 ? names : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface SpawnResult {
@@ -460,7 +567,70 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     const raw = await runCapture(cli.bin, args, cwd, signal);
     return extractGeminiReply(raw);
   }
+  if (cli.kind === "ollama") {
+    // OpenAI-compatible /chat/completions. cli.bin holds the base URL
+    // (e.g. http://localhost:11434) — not a binary path. No operating
+    // manual, no envelope, just a one-shot completion. Local models are
+    // private by design, so the web-access gate doesn't apply.
+    return runOllamaChat({
+      baseUrl: cli.bin,
+      model: m || OLLAMA_DEFAULT_MODEL,
+      prompt: framedPrompt,
+      signal,
+    });
+  }
   return `(no handler for ${cli.kind})`;
+}
+
+interface OllamaChatArgs {
+  baseUrl: string;
+  model: string;
+  prompt: string;
+  signal?: AbortSignal;
+}
+
+// One-shot chat completion against an OpenAI-compatible endpoint (Ollama,
+// LM Studio, llama.cpp server, vLLM — all speak the same /v1/chat/completions
+// schema). Non-streaming so the caller gets the full text or an error in one
+// shot, matching how runCapture works for the subprocess CLIs. Errors are
+// returned as the reply string (prefixed `(ollama: ...)`) instead of thrown,
+// so a single panelist failure doesn't blow up the whole council fanout.
+export async function runOllamaChat(args: OllamaChatArgs): Promise<string> {
+  const { baseUrl, model, prompt, signal } = args;
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/chat/completions`;
+  const body = {
+    model,
+    stream: false,
+    messages: [{ role: "user", content: prompt }],
+  };
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return `(ollama: HTTP ${res.status} — ${truncate(text, 200)})`;
+    }
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      error?: { message?: string };
+    };
+    if (data.error?.message) return `(ollama: ${data.error.message})`;
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) return "(ollama: empty reply)";
+    return content.trim();
+  } catch (err) {
+    const e = err as { name?: string; message?: string };
+    if (e?.name === "AbortError") return "(cancelled)";
+    return `(ollama: ${e?.message ?? "request failed"})`;
+  }
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
 // Codex's `exec` mode wraps every reply in a noisy envelope:

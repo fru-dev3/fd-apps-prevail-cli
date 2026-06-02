@@ -16,12 +16,12 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCliArgs, detectClis, type AvailableCli } from "./cli-bridge.ts";
+import { buildCliArgs, detectSubprocessClis, type AvailableCli } from "./cli-bridge.ts";
 
 const SHOULD_RUN = process.env.INTEGRATION_TESTS === "1";
 
 function findCli(kind: "claude" | "codex" | "gemini"): AvailableCli | null {
-  return detectClis().find((c) => c.kind === kind) ?? null;
+  return detectSubprocessClis().find((c) => c.kind === kind) ?? null;
 }
 
 function makeFakeVaultDir(): string {
@@ -118,7 +118,8 @@ describe.if(SHOULD_RUN)("cli-bridge integration", () => {
 // This catches the case where a CLI was uninstalled or its binary is broken,
 // without needing network/auth.
 describe("cli --help smoke", () => {
-  const clis = detectClis();
+  // Subprocess CLIs only — ollama is an HTTP endpoint, not a binary.
+  const clis = detectSubprocessClis();
   for (const cli of clis) {
     test(`${cli.kind} --help exits 0`, () => {
       const r = spawnSync(cli.bin, ["--help"], { encoding: "utf8", timeout: 10_000 });

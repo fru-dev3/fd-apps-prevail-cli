@@ -877,7 +877,7 @@ function ThinkingBubble({ tick, cliLabel }: { tick: number; cliLabel: string }) 
   );
 }
 
-const COUNCIL_KINDS: ConfigCliKind[] = ["claude", "codex", "gemini"];
+const COUNCIL_KINDS: ConfigCliKind[] = ["claude", "codex", "gemini", "ollama"];
 
 function CouncilConfigBubble({
   availableClis,
@@ -1246,6 +1246,7 @@ const COUNCIL_CLI_COLORS: Record<CliKind, string> = {
   claude: theme.gold, // warm gold — matches brand
   codex: theme.bubbleAssistant, // muted blue
   gemini: theme.ok, // green
+  ollama: theme.aiAccent, // electric cyan — the "local AI" panelist
 };
 
 // Per-panelist placeholder rendered the instant runCouncil fans out, so the

@@ -5,12 +5,12 @@ import { homedir } from "node:os";
 
 import type { FrameworkId } from "./framework.ts";
 
-export type CliKind = "claude" | "codex" | "gemini";
+export type CliKind = "claude" | "codex" | "gemini" | "ollama";
 
-export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "gemini"];
+export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "gemini", "ollama"];
 
 export function isCliKind(s: string): s is CliKind {
-  return s === "claude" || s === "codex" || s === "gemini";
+  return s === "claude" || s === "codex" || s === "gemini" || s === "ollama";
 }
 
 export interface UserConfig {

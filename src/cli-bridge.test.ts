@@ -4,6 +4,7 @@ import {
   detectClis,
   extractCodexReply,
   extractGeminiReply,
+  runOllamaChat,
 } from "./cli-bridge.ts";
 
 describe("buildCliArgs", () => {
@@ -146,13 +147,42 @@ describe("buildCliArgs", () => {
   });
 });
 
+describe("runOllamaChat", () => {
+  // Ollama daemon won't be running in CI / under `bun test`, so these tests
+  // just verify the error-path returns a string (not a thrown exception) so
+  // a council fanout with ollama in the panel doesn't crash the whole batch.
+  test("unreachable endpoint returns a string error, doesn't throw", async () => {
+    const r = await runOllamaChat({
+      baseUrl: "http://127.0.0.1:1",
+      model: "llama3.1",
+      prompt: "hi",
+    });
+    expect(typeof r).toBe("string");
+    expect(r).toMatch(/^\(ollama:/);
+  });
+
+  test("pre-aborted signal returns (cancelled), not a thrown abort", async () => {
+    const c = new AbortController();
+    c.abort();
+    const r = await runOllamaChat({
+      baseUrl: "http://127.0.0.1:1",
+      model: "llama3.1",
+      prompt: "hi",
+      signal: c.signal,
+    });
+    expect(r).toBe("(cancelled)");
+  });
+});
+
 describe("detectClis", () => {
-  test("returns an array (length depends on installed CLIs)", () => {
-    const clis = detectClis();
+  test("returns an array (length depends on installed CLIs)", async () => {
+    const clis = await detectClis();
     expect(Array.isArray(clis)).toBe(true);
     for (const c of clis) {
-      expect(["claude", "codex", "gemini"]).toContain(c.kind);
-      expect(c.bin).toMatch(/\//);
+      expect(["claude", "codex", "gemini", "ollama"]).toContain(c.kind);
+      // ollama's bin is a URL (http://...) — the others are file paths.
+      if (c.kind === "ollama") expect(c.bin).toMatch(/^https?:\/\//);
+      else expect(c.bin).toMatch(/\//);
       expect(c.label.length).toBeGreaterThan(0);
     }
   });

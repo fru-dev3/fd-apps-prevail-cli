@@ -231,12 +231,13 @@ async function doctor() {
   const ai = `${homedir()}/.ai/vault`;
   console.log(`~/.ai/vault  ${existsSync(ai) ? "found — will be offered in wizard" : "not present"}`);
   console.log("");
-  const clis = detectClis();
+  const clis = await detectClis();
   if (clis.length === 0) {
     console.log("clis         none detected — install at least one:");
     console.log("             claude   https://claude.com/code");
     console.log("             codex    https://github.com/openai/codex");
     console.log("             gemini   https://github.com/google-gemini/gemini-cli");
+    console.log("             ollama   https://ollama.com  (run `ollama serve`)");
   } else {
     for (const c of clis) console.log(`cli          ${c.label.padEnd(14)} ${c.bin}`);
   }
