@@ -61,14 +61,41 @@ export const CLI_MODEL_HINT: Record<CliKind, string> = {
   gemini: "e.g. gemini-2.5-pro, gemini-2.0-flash",
 };
 
-// Minimal fallback aliases — only used when discoverModelHints() returns
-// nothing (CLI not yet probed, --help failed, etc.). Most users will see
-// the live-parsed list instead. Kept tiny on purpose so it never goes
-// stale and clashes with what the CLI actually accepts.
+// Quick-pick chips shown in the council config bubble. Two tiers:
+//
+// 1. ALIASES — the short names the CLI resolves to its latest version
+//    ("opus" → latest claude opus). Useful when you don't care about pinning.
+//
+// 2. VERSIONS — specific full model IDs so you can compare e.g. claude-opus-4-7
+//    vs claude-opus-4-8 in the same council run. THIS is what makes
+//    cross-model compare actually possible from the UI. We can't query the
+//    CLIs for these (none of them expose a models list endpoint — verified),
+//    so the list is hand-maintained per provider. Slash command
+//    `/council model <cli> add <name>` still works for anything missing.
+//
+// Add new versions here when providers ship them. Stale entries are
+// harmless — the CLI rejects them and the panelist returns an error bubble.
+const CLAUDE_ALIASES = ["opus", "sonnet", "haiku"];
+const CLAUDE_VERSIONS = [
+  "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-opus-4-5",
+  "claude-sonnet-4-7",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5",
+];
+const CODEX_VERSIONS = ["gpt-5.4", "gpt-5", "gpt-5-codex", "o3"];
+const GEMINI_VERSIONS = [
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.0-pro",
+  "gemini-2.0-flash",
+];
+
 export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
-  claude: ["opus", "sonnet", "haiku"],
-  codex: ["gpt-5.4"],
-  gemini: ["gemini-2.5-pro"],
+  claude: [...CLAUDE_ALIASES, ...CLAUDE_VERSIONS],
+  codex: CODEX_VERSIONS,
+  gemini: GEMINI_VERSIONS,
 };
 
 // Run `<bin> --help` and pull every quoted token that looks like a model

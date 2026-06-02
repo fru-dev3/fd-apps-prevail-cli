@@ -941,35 +941,59 @@ function CouncilConfigBubble({
                   <text fg={theme.fgFaint}>  (not on PATH)</text>
                 )}
               </box>
-              {detected && (
-                <box flexDirection="row" height={1} paddingLeft={2}>
-                  <text fg={theme.fgFaint}>models: </text>
-                  <CouncilModelChip
-                    label="default"
-                    active={!hasAnyPin}
-                    onClick={() => resetModels(kind)}
-                  />
-                  {picks.map((p) => {
-                    const isOn = pinnedList.includes(p);
-                    return (
-                      <CouncilModelChip
-                        key={p}
-                        label={p}
-                        active={isOn}
-                        onClick={() => toggleVariant(kind, p, isOn)}
-                      />
-                    );
-                  })}
-                  {customPins.map((p) => (
+              {detected && (() => {
+                // Split chips into two rows so the long full-version IDs
+                // (claude-opus-4-7, gemini-2.5-pro, ...) don't overflow a
+                // single line. Aliases on row 1, versioned IDs on row 2.
+                // Any custom pins the user added go on a third row so they
+                // stay obvious.
+                const isVersionId = (s: string) => /-\d/.test(s);
+                const aliasPicks = picks.filter((p) => !isVersionId(p));
+                const versionPicks = picks.filter(isVersionId);
+                const renderChip = (p: string) => {
+                  const isOn = pinnedList.includes(p);
+                  return (
                     <CouncilModelChip
                       key={p}
                       label={p}
-                      active
-                      onClick={() => toggleVariant(kind, p, true)}
+                      active={isOn}
+                      onClick={() => toggleVariant(kind, p, isOn)}
                     />
-                  ))}
-                </box>
-              )}
+                  );
+                };
+                return (
+                  <box flexDirection="column">
+                    <box flexDirection="row" height={1} paddingLeft={2}>
+                      <text fg={theme.fgFaint}>aliases: </text>
+                      <CouncilModelChip
+                        label="default"
+                        active={!hasAnyPin}
+                        onClick={() => resetModels(kind)}
+                      />
+                      {aliasPicks.map(renderChip)}
+                    </box>
+                    {versionPicks.length > 0 && (
+                      <box flexDirection="row" height={1} paddingLeft={2}>
+                        <text fg={theme.fgFaint}>versions:</text>
+                        {versionPicks.map(renderChip)}
+                      </box>
+                    )}
+                    {customPins.length > 0 && (
+                      <box flexDirection="row" height={1} paddingLeft={2}>
+                        <text fg={theme.fgFaint}>custom:  </text>
+                        {customPins.map((p) => (
+                          <CouncilModelChip
+                            key={p}
+                            label={p}
+                            active
+                            onClick={() => toggleVariant(kind, p, true)}
+                          />
+                        ))}
+                      </box>
+                    )}
+                  </box>
+                );
+              })()}
               <text> </text>
             </box>
           );
