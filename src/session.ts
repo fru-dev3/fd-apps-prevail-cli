@@ -5,12 +5,33 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 
 const DATA_DIR = join(homedir(), ".aireadyu");
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
+const PROMPTS_DIR = join(DATA_DIR, "prompts");
 const DB_PATH = join(DATA_DIR, "sessions.db");
 
 let dbInstance: Database | null = null;
 
 function ensureDirs() {
   if (!existsSync(SESSIONS_DIR)) mkdirSync(SESSIONS_DIR, { recursive: true });
+  if (!existsSync(PROMPTS_DIR)) mkdirSync(PROMPTS_DIR, { recursive: true });
+}
+
+// Append a human-readable prompt entry to ~/.aireadyu/prompts/<domain>.md.
+// One markdown block per prompt; assistant responses are NOT logged here —
+// this file is for what the user is asking, not what the model says back.
+function appendPromptFile(msg: PersistedMessage): void {
+  if (msg.role !== "user") return;
+  try {
+    ensureDirs();
+    const safe = msg.domain.replace(/[^a-z0-9-_]/gi, "_").toLowerCase();
+    const filename = join(PROMPTS_DIR, `${safe}.md`);
+    const when = new Date(msg.ts).toISOString();
+    const cliTag = msg.cli ? ` · ${msg.cli}${msg.model ? "·" + msg.model : ""}` : "";
+    // Header line per entry, then a blockquote of the prompt so multi-line
+    // prompts stay readable and don't collide with the next entry.
+    const lines = msg.content.split("\n").map((l) => `> ${l}`).join("\n");
+    const block = `### ${when}${cliTag} · session ${msg.session_id}\n\n${lines}\n\n`;
+    appendFileSync(filename, block);
+  } catch {}
 }
 
 function db(): Database | null {
@@ -62,7 +83,14 @@ export function persistMessage(msg: PersistedMessage): void {
         ],
       );
     }
+    // Per-domain prompt log — human-readable, prompts only.
+    appendPromptFile(msg);
   } catch {}
+}
+
+export function promptLogPath(domain: string): string {
+  const safe = domain.replace(/[^a-z0-9-_]/gi, "_").toLowerCase();
+  return join(PROMPTS_DIR, `${safe}.md`);
 }
 
 export interface SearchHit {

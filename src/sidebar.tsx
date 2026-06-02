@@ -214,10 +214,22 @@ function Section({
   const accent = focused ? theme.gold : theme.fgDim;
   const scrollRef = useRef<any>(null);
   useEffect(() => {
-    if (!followId || !scrollRef.current) return;
-    try {
-      scrollRef.current.scrollChildIntoView?.(followId);
-    } catch {}
+    if (!followId) return;
+    // Retry across a few frames: the scrollbox's children may not be laid out
+    // by the time the effect fires (especially after a focus switch or a
+    // sidebar resize), so a single call can no-op. The retries are cheap.
+    const tryScroll = () => {
+      try {
+        scrollRef.current?.scrollChildIntoView?.(followId);
+      } catch {}
+    };
+    tryScroll();
+    const t1 = setTimeout(tryScroll, 30);
+    const t2 = setTimeout(tryScroll, 120);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [followId]);
   return (
     <box
