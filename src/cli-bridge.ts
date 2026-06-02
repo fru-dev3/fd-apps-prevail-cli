@@ -52,7 +52,7 @@ export interface AvailableCli {
 const CANDIDATES: { kind: CliKind; bins: string[]; label: string }[] = [
   { kind: "claude", bins: ["claude"], label: "Claude Code" },
   { kind: "codex", bins: ["codex"], label: "Codex" },
-  { kind: "gemini", bins: ["gemini"], label: "Gemini CLI" },
+  { kind: "gemini", bins: ["gemini"], label: "Gemini" },
 ];
 
 export const CLI_MODEL_HINT: Record<CliKind, string> = {

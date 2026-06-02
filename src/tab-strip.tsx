@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { theme } from "./theme.ts";
 import type { ViewKey } from "./vault.ts";
 import { MODEL_QUICKPICKS, type AvailableCli, type CliKind } from "./cli-bridge.ts";
@@ -10,7 +11,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { key: "chat", label: "chat" },
   { key: "state", label: "state" },
-  { key: "quickstart", label: "qs" },
+  { key: "quickstart", label: "quick start" },
   { key: "prompts", label: "prompts" },
   { key: "skills", label: "skills" },
 ];
@@ -131,6 +132,10 @@ function CliChips({
   );
 }
 
+// Dropdown — collapsed by default to one chip showing the active model.
+// Click the chip to expand the alternatives inline; pick one to apply + close.
+// Default selection always shows literal "default" so the user knows nothing is
+// overridden.
 function ModelChips({
   currentCli,
   model,
@@ -140,24 +145,31 @@ function ModelChips({
   model: string;
   onPickModel: (model: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const picks = MODEL_QUICKPICKS[currentCli] ?? [];
   const isDefault = !model.trim();
   const currentLower = model.trim().toLowerCase();
+  const currentLabel = isDefault ? "default" : model.trim();
+  // Build the list of alternatives the user hasn't currently selected.
+  const alts = ["default", ...picks].filter((id) => {
+    if (id === "default") return !isDefault;
+    return id !== currentLower && !currentLower.includes(id);
+  });
+  const pick = (id: string) => {
+    onPickModel(id);
+    setOpen(false);
+  };
   return (
     <>
       <Chip
-        label="default"
-        active={isDefault}
-        onClick={() => !isDefault && onPickModel("default")}
+        label={`${currentLabel} ${open ? "▴" : "▾"}`}
+        active
+        onClick={() => setOpen((v) => !v)}
       />
-      {picks.map((id) => (
-        <Chip
-          key={id}
-          label={id}
-          active={!isDefault && (id === currentLower || currentLower.includes(id))}
-          onClick={() => onPickModel(id)}
-        />
-      ))}
+      {open &&
+        alts.map((id) => (
+          <Chip key={id} label={id} active={false} onClick={() => pick(id)} />
+        ))}
     </>
   );
 }
