@@ -7,6 +7,7 @@ import { Branding } from "./branding.tsx";
 import { CommandBar } from "./command-bar.tsx";
 import {
   ChatPane,
+  CouncilConfigPanel,
   SLASH_HELP,
   makeInitialMessages,
   makeSeedPrompt,
@@ -99,6 +100,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
   const [tick, setTick] = useState(0);
+  // Council UX state, lifted from ChatPane so the top-right chip and the
+  // dedicated config overlay can both observe / mutate it. councilModeMap is
+  // per-session — each chat decides whether its next prompt fans out.
+  const [councilModeMap, setCouncilModeMap] = useState<Map<string, boolean>>(new Map());
+  const [councilConfigOpen, setCouncilConfigOpen] = useState(false);
+  const councilModeFor = (key: string | null): boolean =>
+    key ? councilModeMap.get(key) ?? false : false;
+  const toggleCouncilModeFor = (key: string) => {
+    setCouncilModeMap((m) => {
+      const next = new Map(m);
+      next.set(key, !(m.get(key) ?? false));
+      return next;
+    });
+  };
 
   const view = VIEW_ORDER[viewIdx];
   const domain = domains[domainIdx] ?? null;
@@ -567,20 +582,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         setTimeout(() => runCouncil(key, cmd.prompt), 0);
         return m;
       } else if (cmd.kind === "council-config") {
-        // Drop an interactive bubble into the transcript instead of plain
-        // text — clicks on the checkboxes/model chips mutate ~/.aireadyu/
-        // config.json directly.
-        const bubble = {
-          role: "assistant" as const,
-          content: "",
-          ts: Date.now(),
-          kind: "council-config" as const,
-        };
-        next = {
-          ...next,
-          messages: [...next.messages, bubble],
-        };
-        return new Map(m).set(key, next);
+        // Open the dedicated full-pane config overlay rather than dropping a
+        // bubble into the chat. Keeps the transcript focused on the actual
+        // conversation; configuration is a separate surface.
+        setCouncilConfigOpen(true);
+        return m;
       } else if (cmd.kind === "council-use") {
         if (cmd.clis.length === 0) {
           systemNote = "usage: /council use <cli1> [cli2 ...]  ·  /council use all";
@@ -1140,6 +1146,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                           clis,
                           currentCli: activeSession.cli.kind,
                           model: activeSession.model,
+                          councilMode: councilModeFor(activeSession.key),
                           onSwitchCli: (k) =>
                             handleChatCommand(activeSession.key, {
                               kind: "switch-cli",
@@ -1151,22 +1158,37 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                               kind: "switch-model",
                               model: mdl,
                             }),
-                          onOpenCouncilConfig: () =>
-                            handleChatCommand(activeSession.key, {
-                              kind: "council-config",
-                            }),
+                          onToggleCouncilMode: () =>
+                            toggleCouncilModeFor(activeSession.key),
+                          onOpenCouncilConfig: () => setCouncilConfigOpen(true),
                         }
                       : undefined
                   }
                 />
               ) : undefined;
 
+            if (councilConfigOpen) {
+              return (
+                <CouncilConfigPanel
+                  availableClis={clis}
+                  councilMode={councilModeFor(activeKey)}
+                  onToggleCouncilMode={() => {
+                    if (activeKey) toggleCouncilModeFor(activeKey);
+                  }}
+                  onClose={() => setCouncilConfigOpen(false)}
+                />
+              );
+            }
             if (inChat) {
               return (
                 <ChatPane
                   session={activeSession!}
                   availableClis={clis}
                   tick={tick}
+                  councilMode={councilModeFor(activeSession!.key)}
+                  onToggleCouncilMode={() =>
+                    toggleCouncilModeFor(activeSession!.key)
+                  }
                   onSend={sendMessage}
                   onCommand={handleChatCommand}
                   onExit={exitChat}

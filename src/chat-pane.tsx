@@ -99,6 +99,10 @@ interface Props {
   session: ChatSession;
   availableClis: AvailableCli[];
   tick: number;
+  // councilMode is owned by App so the top-right toggle chip and the
+  // optional config overlay stay in sync across re-renders / pane switches.
+  councilMode: boolean;
+  onToggleCouncilMode: () => void;
   onSend: (key: string, text: string) => void;
   onCommand: (key: string, command: ChatCommand) => void;
   onExit: () => void;
@@ -106,14 +110,11 @@ interface Props {
   topBar?: React.ReactNode;
 }
 
-export function ChatPane({ session, availableClis, tick, onSend, onCommand, onExit, onAutocompleteChange, topBar }: Props) {
+export function ChatPane({ session, availableClis, tick, councilMode, onToggleCouncilMode, onSend, onCommand, onExit, onAutocompleteChange, topBar }: Props) {
   const ref = useRef<any>(null);
   // Hoisted from InputBox so the popover renders ABOVE InputBox at the
   // chat-pane level, keeping the input row at a stable bottom position.
   const [popover, setPopover] = useState<PopoverState | null>(null);
-  // When true, the next normal-text submit fans out via /council instead of
-  // running on a single CLI. Toggled from the council-config bubble.
-  const [councilMode, setCouncilMode] = useState(false);
 
   const userMsgCount = session.messages.filter((m) => m.role === "user").length;
   const showSuggestions = userMsgCount === 0;
@@ -236,7 +237,7 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
         suggestions={suggestions}
         availableClis={availableClis}
         councilMode={councilMode}
-        onToggleCouncilMode={() => setCouncilMode((m) => !m)}
+        onToggleCouncilMode={onToggleCouncilMode}
         onAcceptDistill={(ts, content) =>
           onCommand(session.key, { kind: "accept-distill", ts, content })
         }
@@ -652,15 +653,10 @@ function MessageBubble({
   if (msg.kind === "distill-draft") {
     return <DistillDraftBubble msg={msg} onAccept={onAcceptDistill} onDiscard={onDiscardDistill} />;
   }
-  if (msg.kind === "council-config") {
-    return (
-      <CouncilConfigBubble
-        availableClis={availableClis}
-        councilMode={councilMode}
-        onToggleCouncilMode={onToggleCouncilMode}
-      />
-    );
-  }
+  // council-config bubbles are no longer rendered inline — config moved to a
+  // dedicated overlay (see CouncilConfigPanel below). Existing transcripts may
+  // still contain the kind so we silently skip them.
+  if (msg.kind === "council-config") return null;
   if (msg.kind === "council-response") {
     return <CouncilResponseBubble msg={msg} />;
   }
@@ -891,6 +887,60 @@ function CouncilConfigBubble({
           )}
         </box>
         <text> </text>
+      </box>
+    </box>
+  );
+}
+
+// Full-pane overlay version of the council configuration UI. Rendered by App
+// when councilConfigOpen is true — keeps the config out of the chat transcript.
+// ESC closes; clicking "done" closes; mutations persist immediately to
+// ~/.aireadyu/config.json (same handlers as the original bubble).
+export function CouncilConfigPanel({
+  availableClis,
+  councilMode,
+  onToggleCouncilMode,
+  onClose,
+}: {
+  availableClis: AvailableCli[];
+  councilMode: boolean;
+  onToggleCouncilMode: () => void;
+  onClose: () => void;
+}) {
+  useKeyboard((evt) => {
+    if (evt.name === "escape") onClose();
+  });
+  return (
+    <box
+      flexDirection="column"
+      flexGrow={1}
+      border
+      borderColor={theme.borderFocus}
+      backgroundColor={theme.bg}
+      title=" ⚖ configure council "
+      titleAlignment="left"
+      bottomTitle=" esc or click [done] to close · changes save instantly "
+      bottomTitleAlignment="left"
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+      paddingBottom={1}
+    >
+      <text fg={theme.fgDim}>
+        Pick which CLIs run when council mode is active, and (optionally) pin a
+        specific model per CLI. The toggle at the bottom is the same toggle as
+        the [⚖ Council] chip in the top-right of the chat.
+      </text>
+      <text> </text>
+      <CouncilConfigBubble
+        availableClis={availableClis}
+        councilMode={councilMode}
+        onToggleCouncilMode={onToggleCouncilMode}
+      />
+      <box flexGrow={1} />
+      <box flexDirection="row" height={1} onMouseDown={onClose}>
+        <text fg={theme.gold} attributes={1}>[ done ]</text>
+        <text fg={theme.fgFaint}>  · esc also closes</text>
       </box>
     </box>
   );

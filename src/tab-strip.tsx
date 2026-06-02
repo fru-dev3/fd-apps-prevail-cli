@@ -29,8 +29,10 @@ export interface TabStripCliProps {
   clis: AvailableCli[];
   currentCli: CliKind;
   model: string;
+  councilMode: boolean;
   onSwitchCli: (cli: CliKind) => void;
   onPickModel: (model: string) => void;
+  onToggleCouncilMode: () => void;
   onOpenCouncilConfig: () => void;
 }
 
@@ -89,9 +91,29 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
         </box>
       )}
       {cli && inChat && (
-        <box flexDirection="row" onMouseDown={cli.onOpenCouncilConfig} paddingLeft={1}>
-          <text fg={theme.gold}>⚖ Council</text>
-        </box>
+        <>
+          <box
+            flexDirection="row"
+            onMouseDown={cli.onToggleCouncilMode}
+            paddingLeft={1}
+            paddingRight={1}
+            backgroundColor={cli.councilMode ? theme.selBg : theme.bg}
+          >
+            <text
+              fg={cli.councilMode ? theme.goldBright : theme.gold}
+              attributes={cli.councilMode ? 1 : 0}
+            >
+              {cli.councilMode ? "▣ Council ON" : "⚖ Council"}
+            </text>
+          </box>
+          <box
+            flexDirection="row"
+            onMouseDown={cli.onOpenCouncilConfig}
+            paddingLeft={1}
+          >
+            <text fg={theme.goldDim}>⚙</text>
+          </box>
+        </>
       )}
     </box>
   );
