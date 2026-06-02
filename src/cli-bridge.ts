@@ -77,21 +77,65 @@ export function formatModelBadge(model: string | null | undefined): string {
 export interface CliHealth {
   ok: boolean;
   message: string;
+  hint?: string;
 }
 
-// Smoke-test a CLI by running `<bin> --version`. Cheap, no network, no model
-// call — just confirms the binary exists, is executable, and doesn't crash
-// on a trivial invocation. Failures here mean council mode will produce
-// errors for that CLI, so we surface them at launch instead of waiting for
-// the user to try /council.
-export function probeCli(cli: AvailableCli, timeoutMs = 5000): Promise<CliHealth> {
+// Recognize common provider/environment errors and turn them into actionable
+// remediation hints. The error strings are matched conservatively; if no rule
+// matches the user just sees the raw stderr, which is still useful.
+function classifyProbeError(cli: CliKind, output: string): string | undefined {
+  const o = output.toLowerCase();
+  if (cli === "codex") {
+    if (o.includes("not supported when using codex with a chatgpt account")) {
+      return "your ChatGPT-account auth doesn't allow this model. Either run `codex login` to switch to an OpenAI API key, or set a model your subscription supports via `/council model codex <name>` (or codex's interactive picker).";
+    }
+    if (o.includes("not inside a trusted directory")) {
+      return "codex blocked an untrusted directory. The wrapper passes `--skip-git-repo-check`; if you see this, check ~/.codex/config.toml for restrictive `[projects]` rules.";
+    }
+    if (o.includes("rate limit") || o.includes("quota")) {
+      return "codex hit a rate limit or quota cap on your account.";
+    }
+  }
+  if (cli === "gemini") {
+    if (o.includes("agent execution blocked") || o.includes("hook(s)") || o.includes("hook execution")) {
+      return "gemini's BeforeAgent/AfterAgent hooks are blocking execution. Check ~/.gemini/settings.json and either fix the hook script path or remove the broken `hooks` entries.";
+    }
+    if (o.includes("not running in a trusted") || o.includes("trusted")) {
+      return "gemini blocked an untrusted folder. The wrapper passes `--skip-trust`; if you still see this, the workspace sandbox in ~/.gemini/settings.json may be restricting reach.";
+    }
+    if (o.includes("quota") || o.includes("rate")) {
+      return "gemini hit a quota or rate limit.";
+    }
+  }
+  return undefined;
+}
+
+// Smoke-test a CLI by running a real one-shot prompt through the same args
+// path the council uses (no operating manual, no model — keeps it cheap).
+// `--version` would only catch a totally broken install; the actual failure
+// modes we see in council mode (ChatGPT-subscription model gating for codex,
+// stale hooks for gemini, missing auth) only surface when the model is hit.
+// Timeout is generous because cold cli startup + a small model call can take
+// 15-20s on slow networks.
+export function probeCli(cli: AvailableCli, timeoutMs = 45000): Promise<CliHealth> {
+  const probePrompt = "Reply with the single word: ready";
+  // Build the exact same argv shape runChatTurn would for a manual-less,
+  // model-default, fresh-session turn. Reusing buildCliArgs guarantees the
+  // probe exercises the real codepath.
+  const args = buildCliArgs({
+    cli: cli.kind,
+    prompt: probePrompt,
+    model: "",
+    isFirst: true,
+    manual: null,
+  });
   return new Promise((resolveProbe) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
     let child;
     try {
-      child = spawn(cli.bin, ["--version"], { env: process.env });
+      child = spawn(cli.bin, args, { env: process.env });
     } catch (err) {
       resolveProbe({ ok: false, message: (err as Error).message });
       return;
@@ -102,7 +146,14 @@ export function probeCli(cli: AvailableCli, timeoutMs = 5000): Promise<CliHealth
       try {
         child!.kill();
       } catch {}
-      resolveProbe({ ok: false, message: `--version timed out after ${timeoutMs}ms` });
+      resolveProbe({
+        ok: false,
+        message: `probe timed out after ${timeoutMs / 1000}s`,
+        hint:
+          cli.kind === "codex"
+            ? "codex cold-start can be slow; if it works in /council later, this is just startup latency."
+            : undefined,
+      });
     }, timeoutMs);
     child.stdout.on("data", (b) => {
       stdout += b.toString();
@@ -120,15 +171,29 @@ export function probeCli(cli: AvailableCli, timeoutMs = 5000): Promise<CliHealth
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const out = (stdout + stderr).trim();
-      if (code === 0) {
-        resolveProbe({ ok: true, message: out.split("\n")[0] ?? "ok" });
-      } else {
-        resolveProbe({
-          ok: false,
-          message: `exited ${code}${out ? `: ${out.split("\n")[0]}` : ""}`,
-        });
+      const combined = (stdout + "\n" + stderr).trim();
+      // Treat as ok only if exit was clean AND output contains *something*
+      // resembling a model reply. Codex/gemini sometimes exit 0 even after
+      // an ERROR line, so look for "ready" in stdout to confirm a real call.
+      const looksReady = stdout.toLowerCase().includes("ready");
+      if (code === 0 && looksReady) {
+        resolveProbe({ ok: true, message: "real prompt succeeded" });
+        return;
       }
+      // Pull the first error-ish line to keep the message short.
+      const firstErrLine =
+        combined
+          .split("\n")
+          .map((l) => l.trim())
+          .find((l) => l.toLowerCase().includes("error") || l.toLowerCase().includes("blocked") || l.toLowerCase().includes("not supported")) ||
+        combined.split("\n")[combined.split("\n").length - 1] ||
+        `exited ${code}`;
+      const hint = classifyProbeError(cli.kind, combined);
+      resolveProbe({
+        ok: false,
+        message: firstErrLine.slice(0, 220),
+        hint,
+      });
     });
   });
 }

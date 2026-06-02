@@ -1339,9 +1339,14 @@ function CliHealthBanner({
       {failed.map((c) => {
         const h = cliHealth.get(c.kind)!;
         return (
-          <text key={c.kind} fg={theme.warn}>
-            ⚠ {c.label} not usable for council — {h.message}
-          </text>
+          <box key={c.kind} flexDirection="column">
+            <text fg={theme.warn}>
+              ⚠ {c.label} not usable for council — {h.message}
+            </text>
+            {h.hint && (
+              <text fg={theme.fgFaint}>   ↪ {h.hint}</text>
+            )}
+          </box>
         );
       })}
     </box>

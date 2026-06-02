@@ -510,7 +510,7 @@ function Transcript({
           onDiscardDistill={onDiscardDistill}
         />
       ))}
-      {session.pending && <ThinkingBubble tick={tick} />}
+      {session.pending && <ThinkingBubble tick={tick} cliLabel={session.cli.label} />}
     </scrollbox>
   );
 }
@@ -680,7 +680,15 @@ function MessageBubble({
   }
   const isUser = msg.role === "user";
   const color = isUser ? theme.bubbleUser : theme.bubbleAssistant;
-  const label = isUser ? " you " : " claude ";
+  // Prefer the CLI the message was actually produced by (msg.cli is set when
+  // we persist responses), else fall back to the session's current CLI. We
+  // can't read session here, so leave assistant unlabeled when msg.cli is
+  // missing — TabStrip already shows the active CLI prominently.
+  const label = isUser
+    ? " you "
+    : msg.cli
+      ? ` ${msg.cli}${msg.model ? ` · ${msg.model}` : ""} `
+      : " assistant ";
   return (
     <box flexDirection="column" paddingBottom={1}>
       <box
@@ -749,7 +757,7 @@ function DistillDraftBubble({
   );
 }
 
-function ThinkingBubble({ tick }: { tick: number }) {
+function ThinkingBubble({ tick, cliLabel }: { tick: number; cliLabel: string }) {
   const char = spinnerChar(tick);
   const word = thinkingWord(tick);
   return (
@@ -759,7 +767,7 @@ function ThinkingBubble({ tick }: { tick: number }) {
         border
         borderColor={theme.bubbleAssistant}
         backgroundColor={theme.bg}
-        title=" claude "
+        title={` ${cliLabel} `}
         titleAlignment="left"
         paddingLeft={1}
         paddingRight={1}
