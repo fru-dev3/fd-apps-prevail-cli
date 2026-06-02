@@ -73,6 +73,8 @@ export type ChatCommand =
   | { kind: "history"; limit?: number }
   | { kind: "web"; mode: "allow" | "deny" | "status" }
   | { kind: "council"; prompt: string }
+  | { kind: "heatmap"; days?: number }
+  | { kind: "watch"; limit?: number }
   | { kind: "unknown"; raw: string };
 
 interface Props {
@@ -721,6 +723,8 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/history", arg: "[n]", desc: "show your past prompts for this domain (default 20)", aliases: ["/h", "/prompts"] },
   { cmd: "/web", arg: "[on|off]", desc: "global web access — toggle or check status (default: allow)" },
   { cmd: "/council", arg: "<prompt>", desc: "ask claude, codex, AND gemini in parallel — for high-stakes decisions", aliases: ["/c", "/panel"] },
+  { cmd: "/heatmap", arg: "[days]", desc: "domain activity heatmap (default 30 days)", aliases: ["/heat", "/activity"] },
+  { cmd: "/watch", arg: "[n]", desc: "show recent background-watcher observations (default 20)", aliases: ["/watcher", "/obs"] },
   { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
   { cmd: "/codex", arg: "[model]", desc: "switch this chat to Codex" },
   { cmd: "/gemini", arg: "[model]", desc: "switch this chat to Gemini CLI" },
@@ -945,6 +949,14 @@ function parseSlashCommand(text: string): ChatCommand {
   }
   if (cmd === "council" || cmd === "c" || cmd === "panel") {
     return { kind: "council", prompt: arg };
+  }
+  if (cmd === "heatmap" || cmd === "heat" || cmd === "activity") {
+    const n = parseInt(arg, 10);
+    return { kind: "heatmap", days: Number.isFinite(n) && n > 0 ? n : undefined };
+  }
+  if (cmd === "watch" || cmd === "watcher" || cmd === "obs") {
+    const n = parseInt(arg, 10);
+    return { kind: "watch", limit: Number.isFinite(n) && n > 0 ? n : undefined };
   }
   return { kind: "unknown", raw: text };
 }

@@ -17,6 +17,13 @@ import {
 import { EditorPane } from "./editor-pane.tsx";
 import { TabStrip } from "./tab-strip.tsx";
 import { readWebAccess, setWebAccess } from "./config.ts";
+import { buildDomainHeatmap, renderHeatmapText } from "./heatmap.ts";
+import {
+  readRecentObservations,
+  recordObservations,
+  renderObservationsText,
+  runWatcher,
+} from "./watcher.ts";
 import { scanApps, scanCommunityApps, scanVault, type AppSkill, type Domain, type ViewKey } from "./vault.ts";
 import { theme } from "./theme.ts";
 import { scaffoldApp, scaffoldDomain } from "./domain-scaffold.ts";
@@ -103,6 +110,26 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     const t = setTimeout(() => setMessage(null), 4000);
     return () => clearTimeout(t);
   }, [message]);
+
+  // background watcher — every 5 minutes, scan domains+apps for fresh
+  // observations (stale state, loops spike, cold domain). NEW findings are
+  // persisted to ~/.aireadyu/watcher.jsonl and the most-severe one surfaces
+  // in the command bar so the user sees something proactively.
+  useEffect(() => {
+    const tickWatcher = () => {
+      const obs = runWatcher(domains, apps);
+      if (obs.length === 0) return;
+      recordObservations(obs);
+      const worst =
+        obs.find((o) => o.severity === "critical") ??
+        obs.find((o) => o.severity === "warn") ??
+        obs[0]!;
+      setMessage(`watcher: ${worst.message}  ·  /watch for more`);
+    };
+    tickWatcher();
+    const id = setInterval(tickWatcher, 5 * 60_000);
+    return () => clearInterval(id);
+  }, [vaultPath, domains, apps]);
 
   // schedule tick — check every minute for due jobs in this vault
   useEffect(() => {
@@ -527,6 +554,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         // Fire-and-forget — the council runner takes over from here.
         setTimeout(() => runCouncil(key, cmd.prompt), 0);
         return m;
+      } else if (cmd.kind === "heatmap") {
+        const days = cmd.days ?? 30;
+        const required = domains.map((d) => d.name);
+        const rows = buildDomainHeatmap(days, required);
+        systemNote = renderHeatmapText(rows, days);
+      } else if (cmd.kind === "watch") {
+        const limit = cmd.limit ?? 20;
+        const obs = readRecentObservations(limit);
+        systemNote = renderObservationsText(obs);
       } else if (cmd.kind === "web") {
         if (cmd.mode === "status") {
           const current = readWebAccess();
