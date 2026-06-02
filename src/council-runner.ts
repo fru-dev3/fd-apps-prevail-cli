@@ -176,10 +176,17 @@ export async function runCouncilOneShot(args: {
   const panelistList = good
     .map((c) => (c.model ? `${c.cli.label}·${c.model}` : c.cli.label))
     .join(", ");
+  // SECURITY: panelist replies are LLM-generated text that may itself contain
+  // markdown headers, including a counterfeit "## Verdict" section designed
+  // to hijack the chair's synthesis or the downstream parseVerdict matcher.
+  // We block-quote any line that would otherwise be a chair-level heading so
+  // the embedded content can never masquerade as chair output. The chair
+  // still reads the content fine — it just can't be confused for structure.
   const panelBlock = good
     .map((c) => {
       const tag = c.model ? `${c.cli.label}·${c.model}` : c.cli.label;
-      return `--- ${tag} ---\n${c.reply.trim()}`;
+      const sanitized = c.reply.trim().replace(/^(##\s)/gm, "(panelist) $1");
+      return `--- ${tag} ---\n${sanitized}`;
     })
     .join("\n\n");
 

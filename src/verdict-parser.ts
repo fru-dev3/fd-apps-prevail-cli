@@ -37,16 +37,25 @@ export interface ParsedVerdict {
 function sectionRegex(name: string): RegExp {
   // Capture from "## NAME" to the next "## " or end-of-string.
   // (?:\*\*)? handles optional bold markdown wrap.
+  // SECURITY: matched globally + `pick` returns the LAST match so a
+  // panelist-injected "## Verdict" embedded earlier in the chair's reply
+  // (via the "What each panelist said" quotation) can't take precedence
+  // over the chair's real "## Verdict" near the end. Combined with the
+  // council-runner sanitizer, this gives two independent layers of
+  // defense against verdict spoofing.
   return new RegExp(
     `##\\s*\\*?\\*?\\s*${name}\\s*\\*?\\*?\\s*\\n([\\s\\S]*?)(?=\\n##\\s|$)`,
-    "i",
+    "gi",
   );
 }
 
 function pick(raw: string, name: string): string | null {
-  const m = raw.match(sectionRegex(name));
-  if (!m) return null;
-  const body = m[1]!.trim();
+  const re = sectionRegex(name);
+  let last: RegExpExecArray | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) last = m;
+  if (!last) return null;
+  const body = last[1]!.trim();
   return body.length === 0 ? null : body;
 }
 

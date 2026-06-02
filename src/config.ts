@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -190,8 +190,16 @@ export function readConfig(): UserConfig | null {
 
 export function writeConfig(cfg: UserConfig): void {
   const dir = configDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(configFile(), JSON.stringify(cfg, null, 2));
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+    try { chmodSync(dir, 0o700); } catch { /* best effort */ }
+  }
+  const file = configFile();
+  writeFileSync(file, JSON.stringify(cfg, null, 2));
+  // SECURITY: config holds the vault path + saved chair / model pins. Not
+  // as sensitive as telegram.json or sessions.db, but still cheap to lock
+  // down to owner-only access.
+  try { chmodSync(file, 0o600); } catch { /* best effort */ }
 }
 
 export function bundledDemoVaultPath(): string {

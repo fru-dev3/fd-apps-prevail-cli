@@ -87,8 +87,14 @@ export async function runTelegramDaemon(opts: DaemonOptions): Promise<{ stop: ()
     domains.find((d) => d.name === cfg.defaultDomain) ?? domains[0]!;
 
   const states = new Map<number, ChatState>();
+  const firstSeen = new Set<number>();
   let stopped = false;
   let offset = 0;
+  // SECURITY: daemon-wide AbortController. Stop() aborts it, which SIGTERMs
+  // every in-flight runChatTurn child + cancels every in-flight council
+  // fanout. Without this, Ctrl-C leaves N panelist processes burning API
+  // budget for up to 120s each while the operator thinks the daemon is down.
+  const daemonAbort = new AbortController();
 
   log(
     `started. vault=${opts.vaultPath} domains=${domains.length} clis=${clis.map((c) => c.label).join(",")} allowList=${cfg.allowList.length}`,
@@ -110,7 +116,7 @@ export async function runTelegramDaemon(opts: DaemonOptions): Promise<{ stop: ()
     return ok;
   };
   const briefingInterval = setInterval(() => {
-    void tickBriefings(opts.vaultPath, deliverTelegram).then((results) => {
+    void tickBriefings(opts.vaultPath, deliverTelegram, undefined, daemonAbort.signal).then((results) => {
       for (const r of results) {
         if (r.error) {
           log(`briefing ${r.id} error: ${r.error}`);
@@ -120,9 +126,12 @@ export async function runTelegramDaemon(opts: DaemonOptions): Promise<{ stop: ()
       }
     });
   }, 60_000);
-  // Stop the ticker when the daemon is asked to stop.
+  // Stop the ticker AND abort every in-flight LLM call when the daemon is
+  // asked to stop. Without daemonAbort.abort(), Ctrl-C leaves N panelist
+  // subprocesses running for up to 120s each — silently burning API credits.
   const originalStop = () => {
     clearInterval(briefingInterval);
+    daemonAbort.abort();
   };
 
   // Long-poll loop. timeout=30 means each request blocks for up to 30s on
@@ -138,7 +147,7 @@ export async function runTelegramDaemon(opts: DaemonOptions): Promise<{ stop: ()
         backoff = 1000;
         for (const u of updates) {
           offset = Math.max(offset, u.update_id + 1);
-          await handleUpdate(u, cfg, states, domains, clis, defaultCli, defaultDomain, opts.vaultPath, log);
+          await handleUpdate(u, cfg, states, firstSeen, domains, clis, defaultCli, defaultDomain, opts.vaultPath, log, daemonAbort.signal);
         }
       } catch (err) {
         log(`poll error: ${(err as Error).message} — retry in ${backoff / 1000}s`);
@@ -160,26 +169,46 @@ async function handleUpdate(
   u: TelegramUpdate,
   cfg: TelegramConfig,
   states: Map<number, ChatState>,
+  firstSeen: Set<number>,
   domains: Domain[],
   clis: AvailableCli[],
   defaultCli: AvailableCli,
   defaultDomain: Domain,
   vaultPath: string,
   log: (s: string) => void,
+  signal: AbortSignal,
 ): Promise<void> {
   const msg = u.message;
   if (!msg || !msg.text) return;
   const chatId = msg.chat.id;
-  if (!cfg.allowList.includes(chatId)) {
+  const fromId = msg.from?.id;
+  const chatType = msg.chat.type ?? "private";
+  // SECURITY: refuse group / supergroup / channel chats by default. In a
+  // group, chat.id is the room and from.id is the sender, so allow-listing
+  // a group lets every current and future member act as the operator. Keep
+  // it private 1:1 only — covers 95% of real usage.
+  if (chatType !== "private") {
+    log(`ignored chat_id=${chatId} type=${chatType} (only private chats supported)`);
+    return;
+  }
+  // SECURITY: require BOTH the chat AND the sender to be allow-listed.
+  // For private chats they're equal, so this is a belt-and-suspenders check
+  // — but it means if Telegram ever lets a third party impersonate via a
+  // crafted update payload, the sender mismatch catches it.
+  if (!fromId || !cfg.allowList.includes(fromId) || !cfg.allowList.includes(chatId)) {
     log(
-      `ignored chat_id=${chatId} (not in allowList). Add with: prevail telegram add-user ${chatId}`,
+      `ignored chat_id=${chatId} from=${fromId ?? "?"} (not in allowList). Add with: prevail telegram add-user ${chatId}`,
     );
-    // Friendly nudge for the first-time user trying to bootstrap.
-    await tgSendMessage(
-      cfg.botToken,
-      chatId,
-      `Hi — this prevail bot doesn't recognize you yet. Ask its owner to run:\n\nprevail telegram add-user ${chatId}\n\nThen try again.`,
-    ).catch(() => {});
+    // First-message-only bootstrap reply, so an attacker can't use the bot
+    // as a free amplifier by flooding with new chat IDs.
+    if (!firstSeen.has(chatId)) {
+      firstSeen.add(chatId);
+      await tgSendMessage(
+        cfg.botToken,
+        chatId,
+        `Hi — this prevail bot doesn't recognize you yet. Ask its owner to run:\n\nprevail telegram add-user ${chatId}\n\nThen try again.`,
+      ).catch(() => {});
+    }
     return;
   }
 
@@ -218,6 +247,7 @@ async function handleUpdate(
       prompt: text,
       cwd: state.domain.path,
       panelists: panel,
+      signal,
     });
     await sendCouncilResult(cfg.botToken, chatId, result.panel, result.verdict, result.chairLabel, result.degraded);
     // Self-curating vault: log the verdict, same hook the TUI uses.
@@ -240,6 +270,7 @@ async function handleUpdate(
         model: state.model,
         isFirst: true,
         bare: true,
+        signal,
       });
       await sendLongMessage(cfg.botToken, chatId, reply);
       writeTurnSummary({

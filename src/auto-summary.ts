@@ -61,9 +61,6 @@ function timeKey(ts: number): string {
 
 function renderEntry(args: TurnSummaryArgs): string {
   const q = heuristicSummarize(args.userPrompt, 220);
-  // For council verdicts, prefer the structured Verdict section as the
-  // assistant snippet — that's what the user actually took away, not the
-  // chair's full four-section breakdown.
   let assistantSnippet = args.assistantReply;
   let divergenceFlag = "";
   if (args.kind === "council-verdict") {
@@ -73,15 +70,30 @@ function renderEntry(args: TurnSummaryArgs): string {
   }
   const a = heuristicSummarize(assistantSnippet, 400);
   const tag = args.kind === "council-verdict" ? "⚖ council" : args.cliLabel;
+  // SECURITY: the Q + A blocks contain LLM-generated text that downstream
+  // agents (Paperclip, OpenClaw morning-brief, future briefing prompts)
+  // may re-ingest as context. Prefix every line with "> " so the embedded
+  // content is a markdown blockquote — semantically "user-quoted text,
+  // not instructions for you" — and cannot persist a prompt-injection
+  // backdoor across sessions. The blockquote stays human-readable and
+  // searchable, but a re-reading model treats it as data, not commands.
   return [
     "",
     `## ${timeKey(args.ts)}  ·  ${tag}${divergenceFlag}`,
     "",
-    `**Q:** ${q}`,
+    `**Q:** ${quoteShield(q)}`,
     "",
-    `**A:** ${a}`,
+    `**A:** ${quoteShield(a)}`,
     "",
   ].join("\n");
+}
+
+function quoteShield(s: string): string {
+  // Single-line snippets stay inline; multi-line indent each subsequent
+  // line so the markdown rendering shows a clean blockquote / continuation.
+  const lines = s.split("\n");
+  if (lines.length <= 1) return s;
+  return lines.map((l, i) => (i === 0 ? l : `> ${l}`)).join("\n");
 }
 
 // Squeeze a long piece of text into its lead sentence + (if room) the next

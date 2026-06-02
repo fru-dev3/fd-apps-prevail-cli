@@ -75,6 +75,7 @@ export async function runBriefing(
   entry: BriefingEntry,
   vaultPath: string,
   deliverTelegram?: TelegramDelivery,
+  signal?: AbortSignal,
 ): Promise<BriefingResult> {
   const ts = Date.now();
   const domains = scanVault(vaultPath);
@@ -120,6 +121,7 @@ export async function runBriefing(
         prompt: entry.prompt,
         cwd: domain.path,
         panelists: panel,
+        signal,
       });
       output = result.verdict;
       cliLabel = `Council ⚖ ${result.chairLabel} (briefing)`;
@@ -132,6 +134,7 @@ export async function runBriefing(
         model: "",
         isFirst: true,
         bare: true,
+        signal,
       });
       cliLabel = `${cli.label} (briefing)`;
     }
@@ -178,6 +181,7 @@ export async function tickBriefings(
   vaultPath: string,
   deliverTelegram?: TelegramDelivery,
   now: Date = new Date(),
+  signal?: AbortSignal,
 ): Promise<BriefingResult[]> {
   const briefings = loadBriefings(vaultPath);
   const minuteStart = Math.floor(now.getTime() / 60000) * 60000;
@@ -189,7 +193,8 @@ export async function tickBriefings(
   );
   const results: BriefingResult[] = [];
   for (const b of due) {
-    const r = await runBriefing(b, vaultPath, deliverTelegram);
+    if (signal?.aborted) break;
+    const r = await runBriefing(b, vaultPath, deliverTelegram, signal);
     results.push(r);
     b.last_run = now.getTime();
   }

@@ -49,6 +49,39 @@ export function refreshOperatingManualCache(): void {
 // rest of the code can fan out to it through the same runChatTurn path.
 export type CliKind = "claude" | "codex" | "gemini" | "ollama";
 
+// SECURITY: env vars that look like provider/operator secrets are stripped
+// when spawning subprocess CLIs. The CLIs read their own auth files
+// (~/.claude/, ~/.codex/, ~/.config/gcloud/) so they don't NEED these in the
+// env, but inheriting them creates a prompt-injection exfiltration channel —
+// a tool-using panelist that runs `env | grep TOKEN` would dump the
+// operator's Telegram bot token and any API keys into a reply that lands in
+// the vault log and ships to Telegram. Belt-and-suspenders: even if a
+// model never voluntarily ran `env`, prompt injection inside vault content
+// could trick it.
+const SECRET_ENV_PREFIXES = [
+  "PREVAIL_TELEGRAM_",
+  "ANTHROPIC_API_",
+  "OPENAI_API_",
+  "GOOGLE_API_",
+  "GEMINI_API_",
+  "TELEGRAM_BOT_",
+  "AWS_",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
+  "OP_SERVICE_ACCOUNT_TOKEN",
+];
+const SECRET_ENV_SUBSTRINGS = ["_SECRET", "_PRIVATE_KEY", "_PASSWORD"];
+
+export function scrubbedEnv(): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (SECRET_ENV_PREFIXES.some((p) => k.startsWith(p))) continue;
+    if (SECRET_ENV_SUBSTRINGS.some((s) => k.includes(s))) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 export interface AvailableCli {
   kind: CliKind;
   bin: string;
@@ -127,7 +160,7 @@ export async function discoverModelHints(cli: AvailableCli, timeoutMs = 4000): P
     let child;
     try {
       child = spawn(cli.bin, ["--help"], {
-        env: process.env,
+        env: scrubbedEnv(),
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {
@@ -282,7 +315,7 @@ export function probeCli(cli: AvailableCli, timeoutMs = 45000): Promise<CliHealt
       // forever waiting for input from the (open) stdin pipe and never starts
       // the model call. Spent half a day on this; do not "fix" back to pipe.
       child = spawn(cli.bin, args, {
-        env: process.env,
+        env: scrubbedEnv(),
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
@@ -449,7 +482,7 @@ export function runExternal(
     const r = spawnSync(bin, args, {
       stdio: "inherit",
       cwd,
-      env: process.env,
+      env: scrubbedEnv(),
     });
     if (r.error) return { ok: false, message: r.error.message };
     if (r.status !== 0 && r.status !== null) {
@@ -825,7 +858,7 @@ function runCapture(
       // hangs indefinitely from inside a spawn (no TTY, pipe never closes).
       child = spawn(bin, args, {
         cwd,
-        env: process.env,
+        env: scrubbedEnv(),
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {

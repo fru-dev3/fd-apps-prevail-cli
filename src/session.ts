@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync } from "node:fs";
 
 const DATA_DIR = join(homedir(), ".prevail");
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
@@ -10,9 +10,33 @@ const DB_PATH = join(DATA_DIR, "sessions.db");
 
 let dbInstance: Database | null = null;
 
+// SECURITY: lock files down to user-only access. Session DB + JSONL +
+// prompt logs contain everything the operator told the model — including
+// any secrets pasted into a prompt. Default umask is 0644 (world-readable
+// on macOS / shared machines / cloud-backup tier). 0600 makes them
+// owner-only. tryChmod swallows errors because chmod can fail on certain
+// network mounts; the data is still written, just less locked down there.
+function tryChmod(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    /* best-effort */
+  }
+}
+
 function ensureDirs() {
-  if (!existsSync(SESSIONS_DIR)) mkdirSync(SESSIONS_DIR, { recursive: true });
-  if (!existsSync(PROMPTS_DIR)) mkdirSync(PROMPTS_DIR, { recursive: true });
+  if (!existsSync(DATA_DIR)) {
+    mkdirSync(DATA_DIR, { recursive: true });
+    tryChmod(DATA_DIR, 0o700);
+  }
+  if (!existsSync(SESSIONS_DIR)) {
+    mkdirSync(SESSIONS_DIR, { recursive: true });
+    tryChmod(SESSIONS_DIR, 0o700);
+  }
+  if (!existsSync(PROMPTS_DIR)) {
+    mkdirSync(PROMPTS_DIR, { recursive: true });
+    tryChmod(PROMPTS_DIR, 0o700);
+  }
 }
 
 // Append a human-readable prompt entry to ~/.prevail/prompts/<domain>.md.
@@ -30,7 +54,9 @@ function appendPromptFile(msg: PersistedMessage): void {
     // prompts stay readable and don't collide with the next entry.
     const lines = msg.content.split("\n").map((l) => `> ${l}`).join("\n");
     const block = `### ${when}${cliTag} · session ${msg.session_id}\n\n${lines}\n\n`;
+    const isNew = !existsSync(filename);
     appendFileSync(filename, block);
+    if (isNew) tryChmod(filename, 0o600);
   } catch {}
 }
 
@@ -38,7 +64,9 @@ function db(): Database | null {
   if (dbInstance) return dbInstance;
   try {
     ensureDirs();
+    const isNew = !existsSync(DB_PATH);
     const d = new Database(DB_PATH);
+    if (isNew) tryChmod(DB_PATH, 0o600);
     d.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS messages USING fts5(
         domain, session_id, role, content,
@@ -67,7 +95,9 @@ export function persistMessage(msg: PersistedMessage): void {
   try {
     ensureDirs();
     const filename = join(SESSIONS_DIR, `${msg.domain}-${msg.session_id}.jsonl`);
+    const isNew = !existsSync(filename);
     appendFileSync(filename, JSON.stringify(msg) + "\n");
+    if (isNew) tryChmod(filename, 0o600);
     const handle = db();
     if (handle) {
       handle.run(

@@ -92,9 +92,31 @@ export interface RunResult {
   ok: boolean;
 }
 
+// SECURITY: vault schedules execute arbitrary shell. If the vault is synced
+// from another machine (Tailscale, Dropbox, iCloud) or written to by another
+// agent (Paperclip, OpenClaw), a malicious .schedule.json entry would RCE the
+// operator. We gate the shell-out behind an explicit env opt-in so the
+// dangerous path is never the default. Run `PREVAIL_ALLOW_VAULT_SHELL=1
+// prevail daemon` (or the same env in the TUI shell) to enable.
+function vaultShellAllowed(): boolean {
+  return process.env.PREVAIL_ALLOW_VAULT_SHELL === "1";
+}
+
 export function runSchedule(entry: ScheduleEntry, vaultPath: string): Promise<RunResult> {
   return new Promise((resolve) => {
     const ts = Date.now();
+    if (!vaultShellAllowed()) {
+      // Refuse — log the attempt loudly but don't execute. Honoring this
+      // refusal is the difference between "schedule didn't fire" (annoying)
+      // and "any agent on any machine I sync with can RCE me" (a breach).
+      console.error(
+        `[prevail][schedule] refused to execute ${entry.id} — vault shell is disabled.\n` +
+          `  command: ${entry.command.slice(0, 200)}\n` +
+          `  set PREVAIL_ALLOW_VAULT_SHELL=1 to allow vault-driven shell schedules.`,
+      );
+      resolve({ id: entry.id, ts, exit: null, ok: false });
+      return;
+    }
     try {
       const child = spawn("sh", ["-c", entry.command], {
         cwd: vaultPath,

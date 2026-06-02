@@ -445,6 +445,57 @@ function communityAppsDirs(): string[] {
   return dirs;
 }
 
+// Validate + coerce a parsed manifest.json into a shape that's safe to
+// render. Every field has a defensive fallback so a hostile or malformed
+// manifest cannot crash the scanner or contaminate the AppSkill list.
+const VALID_INTEGRATIONS = new Set([
+  "api",
+  "oauth",
+  "browser",
+  "mcp",
+  "manual",
+]);
+
+interface CoercedManifest {
+  id: string;
+  name: string;
+  description: string;
+  domains: string[];
+  integration: "api" | "oauth" | "browser" | "mcp" | "manual";
+  connection?: string;
+}
+
+function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManifest {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const str = (v: unknown, cap: number, fallback: string): string => {
+    if (typeof v !== "string") return fallback;
+    const trimmed = v.trim();
+    return trimmed.length > cap ? trimmed.slice(0, cap) : trimmed;
+  };
+  const arrStr = (v: unknown, cap: number): string[] => {
+    if (!Array.isArray(v)) return [];
+    return v
+      .filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 64)
+      .slice(0, cap);
+  };
+  // ID must match a tight character class so it can't escape the connector
+  // directory in any path join downstream. Falls back to the directory
+  // name (which we KNOW is safe — it came from readdirSync).
+  const idCandidate = str(o.id, 64, "");
+  const id = /^[a-z0-9_-]+$/i.test(idCandidate) ? idCandidate : fallbackId;
+  const integration = typeof o.integration === "string" && VALID_INTEGRATIONS.has(o.integration)
+    ? (o.integration as CoercedManifest["integration"])
+    : "manual";
+  return {
+    id,
+    name: str(o.name, 80, fallbackId),
+    description: str(o.description, 240, ""),
+    domains: arrStr(o.domains, 16),
+    integration,
+    connection: typeof o.connection === "string" ? str(o.connection, 2000, "") : undefined,
+  };
+}
+
 export function scanCommunityApps(): AppSkill[] {
   const seen = new Set<string>();
   const out: AppSkill[] = [];
@@ -463,19 +514,26 @@ export function scanCommunityApps(): AppSkill[] {
       const manifestPath = join(root, "manifest.json");
       const skillPath = join(root, "SKILL.md");
       if (!existsSync(manifestPath) || !existsSync(skillPath)) continue;
-      let manifest: CommunityAppManifest;
+      let manifestRaw: unknown;
       try {
-        manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CommunityAppManifest;
+        manifestRaw = JSON.parse(readFileSync(manifestPath, "utf8"));
       } catch {
         continue;
       }
+      // SECURITY: a malformed manifest (wrong types, junk fields, hostile
+      // shape) used to bubble a TypeError out of scanCommunityApps and drop
+      // every later community app silently — perfect cover for a hostile
+      // manifest to neuter the legit ones. Coerce defensively: anything
+      // not the expected primitive type falls back to a safe default. Cap
+      // string lengths so a single bloated manifest can't OOM the sidebar.
+      const m = coerceCommunityManifest(manifestRaw, e.name);
       seen.add(e.name);
       const conn = readConnector(root);
       out.push({
-        id: manifest.id || e.name,
-        title: manifest.name || e.name,
-        description: (manifest.description || "").trim().slice(0, 240),
-        domains: manifest.domains || [],
+        id: m.id,
+        title: m.name,
+        description: m.description,
+        domains: m.domains,
         path: root,
         hasState: false,
         openLoopCount: 0,
@@ -483,8 +541,8 @@ export function scanCommunityApps(): AppSkill[] {
         skills: scanAppSkills(root),
         community: true,
         manifestPath,
-        integration: manifest.integration ?? "manual",
-        connectionNotes: manifest.connection ?? conn.notes,
+        integration: m.integration,
+        connectionNotes: m.connection ?? conn.notes,
         status: conn.status,
         lastSuccessTs: conn.lastSuccessTs,
         lastError: conn.lastError,
