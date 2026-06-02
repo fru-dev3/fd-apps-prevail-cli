@@ -259,9 +259,13 @@ export function readDomainView(domain: Domain, view: ViewKey): string {
     quickstart: "QUICKSTART.md",
     prompts: "PROMPTS.md",
   };
-  const file = join(domain.path, fileMap[view]);
+  // Belt-and-suspenders: if `view` is somehow neither of the early-return
+  // keys nor a fileMap key (e.g. an out-of-bounds viewIdx slipping through),
+  // fall back to state.md instead of letting join() throw on undefined.
+  const filename = fileMap[view] ?? "state.md";
+  const file = join(domain.path, filename);
   if (!existsSync(file)) {
-    return `*No ${fileMap[view]} for ${domain.name}.*`;
+    return `*No ${filename} for ${domain.name}.*`;
   }
   try {
     return readFileSync(file, "utf8");

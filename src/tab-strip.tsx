@@ -71,18 +71,12 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
       })}
       {cli && inChat && (
         <>
-          <text fg={theme.fgFaint}>  │  </text>
+          <text fg={theme.fgFaint}>{"   "}</text>
           <CliChips
             clis={cli.clis}
             currentCli={cli.currentCli}
             cliHealth={cli.cliHealth}
             onSwitchCli={cli.onSwitchCli}
-          />
-          <text fg={theme.fgFaint}>  │  </text>
-          <ModelChips
-            currentCli={cli.currentCli}
-            model={cli.model}
-            onPickModel={cli.onPickModel}
           />
         </>
       )}

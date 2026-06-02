@@ -37,7 +37,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={12}
+      height={9}
       border={["bottom"]}
       borderStyle="double"
       borderColor={theme.gold}
@@ -50,11 +50,7 @@ export function Branding({
         paddingRight={3}
         paddingTop={1}
       >
-        <BrandColumn
-          domainCount={domainCount}
-          appCount={appCount}
-          totalLoops={totalLoops}
-        />
+        <BrandColumn />
         <Separator />
         <StatusColumn
           dateLabel={dateLabel}
@@ -64,6 +60,9 @@ export function Branding({
           cliText={cliText}
           activeChats={activeChats}
           pendingChats={pendingChats}
+          domainCount={domainCount}
+          appCount={appCount}
+          totalLoops={totalLoops}
         />
       </box>
     </box>
@@ -100,15 +99,7 @@ const LOGO_L = [
   "╚══════╝",
 ] as const;
 
-function BrandColumn({
-  domainCount,
-  appCount,
-  totalLoops,
-}: {
-  domainCount: number;
-  appCount: number;
-  totalLoops: number;
-}) {
+function BrandColumn() {
   return (
     <box flexDirection="row" width={80}>
       <Mascot />
@@ -124,18 +115,6 @@ function BrandColumn({
           {"        p r e v  ·  "}
           <span fg={theme.aiAccent}>A I</span>
           {"  ·  l   —   your AI life cockpit"}
-        </text>
-        <text> </text>
-        <text fg={theme.fgDim}>
-          {"        "}
-          <span fg={theme.fg}>{domainCount.toString().padStart(2, " ")}</span>
-          {" life domains   "}
-          <span fg={theme.fg}>{appCount.toString().padStart(2, " ")}</span>
-          {" life apps   "}
-          <span fg={totalLoops > 0 ? theme.warn : theme.fg}>
-            {totalLoops.toString().padStart(2, " ")}
-          </span>
-          {" open items"}
         </text>
       </box>
     </box>
@@ -157,7 +136,7 @@ function Mascot() {
 function Separator() {
   return (
     <box flexDirection="column" width={3} paddingLeft={1} paddingRight={1}>
-      {Array.from({ length: 12 }, (_, i) => (
+      {Array.from({ length: 8 }, (_, i) => (
         <text key={`sep-${i}`} fg={theme.border}>
           │
         </text>
@@ -174,6 +153,9 @@ function StatusColumn({
   cliText,
   activeChats,
   pendingChats,
+  domainCount,
+  appCount,
+  totalLoops,
 }: {
   dateLabel: string;
   yearLabel: number;
@@ -182,6 +164,9 @@ function StatusColumn({
   cliText: string;
   activeChats: number;
   pendingChats: number;
+  domainCount: number;
+  appCount: number;
+  totalLoops: number;
 }) {
   const statusGlyph = pendingChats > 0 ? "⠋" : activeChats > 0 ? "●" : "○";
   const statusColor =
@@ -200,6 +185,17 @@ function StatusColumn({
           {dateLabel}
         </text>
         <text fg={theme.goldDim}>{`  ·  ${yearLabel}`}</text>
+        <box flexGrow={1} />
+        {/* Compact stats moved here from the brand column so the banner is
+            shorter and the chat area gets more vertical real estate. */}
+        <text fg={theme.fgDim}>
+          <span fg={theme.fg}>{domainCount}</span>
+          {" dom · "}
+          <span fg={theme.fg}>{appCount}</span>
+          {" apps · "}
+          <span fg={totalLoops > 0 ? theme.warn : theme.fg}>{totalLoops}</span>
+          {" open"}
+        </text>
       </box>
       <text fg={theme.fgDim}>
         {timeLabel}  ·  prevail  ·  opentui · zig core

@@ -366,7 +366,13 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     } else if (name === "e") {
       doEdit();
     } else if (name >= "1" && name <= "5") {
-      if (focus === "domains") setViewIdx(Number(name) - 1);
+      // Numbers map 1..N to VIEW_ORDER indices. Guard against pressing a
+      // number past the end of the view list — VIEW_ORDER has 4 entries
+      // (state/quickstart/prompts/skills) so pressing "5" used to leave
+      // viewIdx=4, which then read VIEW_ORDER[4]=undefined and crashed
+      // readDomainView with "paths[1] must be string, got undefined".
+      const idx = Number(name) - 1;
+      if (focus === "domains" && idx < VIEW_ORDER.length) setViewIdx(idx);
     }
   });
 
