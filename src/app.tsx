@@ -1316,9 +1316,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   );
 }
 
-// Visible launch-time status row: only renders if anything is mid-probe or
-// failed. Each failed CLI gets a one-line "⚠ <cli>: <message>" so the user
-// sees up front that council mode will produce errors for that one.
+// Compact one-line-per-CLI status strip. Shows positive confirmations
+// (✓ ready) and clear failure summaries (⚠ <short reason>). Flat <text>
+// rows — no nested <box> — so OpenTUI doesn't collapse the children onto
+// the same line. Detailed hints are *not* shown here; the user can run
+// /council for the full error message when they need it.
 function CliHealthBanner({
   clis,
   cliHealth,
@@ -1326,31 +1328,50 @@ function CliHealthBanner({
   clis: AvailableCli[];
   cliHealth: Map<string, CliHealth | null>;
 }) {
-  const failed = clis.filter((c) => cliHealth.get(c.kind)?.ok === false);
-  const probing = clis.filter((c) => cliHealth.get(c.kind) === null);
-  if (failed.length === 0 && probing.length === 0) return null;
+  if (clis.length === 0) return null;
+  // Build the segments first so we can join with a separator on one line.
+  const segments = clis.map((c) => {
+    const h = cliHealth.get(c.kind);
+    if (h === null || h === undefined) {
+      return { color: theme.fgFaint, text: `… ${c.label}` };
+    }
+    if (h.ok) {
+      return { color: theme.ok, text: `✓ ${c.label}` };
+    }
+    return { color: theme.warn, text: `⚠ ${c.label} (${shortReason(c.kind, h)})` };
+  });
   return (
-    <box flexDirection="column" paddingLeft={2} paddingRight={2}>
-      {probing.length > 0 && (
-        <text fg={theme.fgFaint}>
-          probing: {probing.map((c) => c.label).join(", ")}…
-        </text>
-      )}
-      {failed.map((c) => {
-        const h = cliHealth.get(c.kind)!;
-        return (
-          <box key={c.kind} flexDirection="column">
-            <text fg={theme.warn}>
-              ⚠ {c.label} not usable for council — {h.message}
-            </text>
-            {h.hint && (
-              <text fg={theme.fgFaint}>   ↪ {h.hint}</text>
-            )}
-          </box>
-        );
-      })}
+    <box flexDirection="row" paddingLeft={2} paddingRight={2} height={1}>
+      <text fg={theme.fgFaint}>council:  </text>
+      {segments.map((s, i) => (
+        <box key={i} flexDirection="row">
+          <text fg={s.color}>{s.text}</text>
+          {i < segments.length - 1 && <text fg={theme.fgFaint}>  ·  </text>}
+        </box>
+      ))}
     </box>
   );
+}
+
+// Boil the probe error down to one short phrase the user can act on. Keeps
+// the council status strip readable; the long-form hint still lives in
+// CliHealth.hint for deeper surfacing later.
+function shortReason(kind: string, h: CliHealth): string {
+  const msg = h.message.toLowerCase();
+  if (kind === "codex") {
+    if (msg.includes("not supported when using codex with a chatgpt account"))
+      return "model gated on chatgpt account — run codex login";
+    if (msg.includes("timed out"))
+      return "timed out — likely model gated or rate limit";
+  }
+  if (kind === "gemini") {
+    if (msg.includes("agent execution blocked") || msg.includes("hook"))
+      return "hooks blocking — fix ~/.gemini/settings.json";
+    if (msg.includes("trusted"))
+      return "workspace untrusted";
+  }
+  // Generic fallback: first 40 chars of the raw error.
+  return h.message.slice(0, 40);
 }
 
 function summarize(domains: Domain[], apps: AppSkill[]) {
