@@ -523,6 +523,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           });
           systemNote = `your last ${prompts.length} prompt${prompts.length === 1 ? "" : "s"} for ${next.hostDomain.name} (newest first):\n${lines.join("\n")}\n\nfull log: ${filePath}`;
         }
+      } else if (cmd.kind === "council") {
+        // Fire-and-forget — the council runner takes over from here.
+        setTimeout(() => runCouncil(key, cmd.prompt), 0);
+        return m;
       } else if (cmd.kind === "web") {
         if (cmd.mode === "status") {
           const current = readWebAccess();
@@ -631,6 +635,110 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           });
         });
       });
+  }
+
+  function runCouncil(key: string, prompt: string) {
+    const session = chats.get(key);
+    if (!session) return;
+    if (clis.length === 0) {
+      setMessage("no CLIs detected — install claude / codex / gemini first");
+      return;
+    }
+    const text = prompt.trim();
+    if (!text) {
+      setMessage("usage: /council <your high-stakes question>");
+      return;
+    }
+    const userTs = Date.now();
+    const userMsg = {
+      role: "user" as const,
+      content: `/council ${text}`,
+      ts: userTs,
+    };
+    persistMessage({
+      domain: session.hostDomain.name,
+      session_id: session.sessionId,
+      role: "user",
+      content: userMsg.content,
+      ts: userTs,
+      cli: "council",
+      model: "",
+    });
+    setChats((m) => {
+      const cur = m.get(key);
+      if (!cur) return m;
+      const introTs = userTs + 1;
+      return new Map(m).set(key, {
+        ...cur,
+        messages: [
+          ...cur.messages,
+          userMsg,
+          {
+            role: "system" as const,
+            content: `convening council: ${clis.map((c) => c.label).join(" · ")}`,
+            ts: introTs,
+          },
+        ],
+        pending: true,
+      });
+    });
+    const promptForCli = makeSeedPrompt(
+      { ...session, messages: [...session.messages, userMsg] },
+      text,
+    );
+    const calls = clis.map((cli) =>
+      runChatTurn({
+        prompt: promptForCli,
+        cwd: session.hostDomain.path,
+        cli,
+        model: "",
+        isFirst: true,
+      })
+        .then((response) => {
+          const ts = Date.now();
+          const content = `**[${cli.label}]**\n\n${response}`;
+          persistMessage({
+            domain: session.hostDomain.name,
+            session_id: session.sessionId,
+            role: "assistant",
+            content,
+            ts,
+            cli: cli.kind,
+            model: "",
+          });
+          setChats((m) => {
+            const cur = m.get(key);
+            if (!cur) return m;
+            return new Map(m).set(key, {
+              ...cur,
+              messages: [...cur.messages, { role: "assistant" as const, content, ts }],
+            });
+          });
+        })
+        .catch((err: Error) => {
+          const ts = Date.now();
+          const content = `**[${cli.label}]** — error: ${err.message}`;
+          setChats((m) => {
+            const cur = m.get(key);
+            if (!cur) return m;
+            return new Map(m).set(key, {
+              ...cur,
+              messages: [...cur.messages, { role: "assistant" as const, content, ts }],
+            });
+          });
+        }),
+    );
+    Promise.allSettled(calls).then(() => {
+      setChats((m) => {
+        const cur = m.get(key);
+        if (!cur) return m;
+        return new Map(m).set(key, {
+          ...cur,
+          pending: false,
+          hasFirstTurn: true,
+        });
+      });
+    });
   }
 
   function sendMessage(key: string, text: string) {
