@@ -1,0 +1,18 @@
+{
+  "id": "linkedin",
+  "name": "LinkedIn",
+  "version": "0.1.0",
+  "description": "Scrape LinkedIn profile activity, post performance, and inbox via a logged-in Chrome session (no API access available to civilians). Used by the brand and career domains to track engagement + reach over time.",
+  "domains": ["brand", "career", "content"],
+  "integration": "browser",
+  "connection": "Browser automation via Playwright using your existing logged-in Chrome profile. No API token needed — but Playwright must be installed and the Chrome cookies must be fresh (LinkedIn enforces a 30-day session). When the cookie file goes stale, log into LinkedIn in your browser then run the scrape again.",
+  "auth_check": {
+    "kind": "command",
+    "command": "playwright",
+    "command_args": ["--version"],
+    "expect_stdout": "Version"
+  },
+  "homepage": "https://linkedin.com",
+  "license": "MIT",
+  "author": {"name": "fru-dev3", "url": "https://github.com/fru-dev3/prevail"}
+}

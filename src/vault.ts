@@ -408,6 +408,10 @@ export interface AppSkill {
   // the sidebar to differentiate "freshly installed, untouched" from
   // "in use" at a glance.
   configured: boolean;
+  // Raw auth_check block from manifest.json — defines HOW to test the
+  // connector's auth. Read by connector-probe.ts. Opaque object here so
+  // we don't have to import the probe module from vault.ts.
+  authCheck?: unknown;
 }
 
 export type ConnectorStatus = "connected" | "not-configured" | "expired" | "error";
@@ -463,6 +467,7 @@ interface CoercedManifest {
   domains: string[];
   integration: "api" | "oauth" | "browser" | "mcp" | "manual";
   connection?: string;
+  authCheck?: unknown;
 }
 
 function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManifest {
@@ -493,6 +498,10 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     domains: arrStr(o.domains, 16),
     integration,
     connection: typeof o.connection === "string" ? str(o.connection, 2000, "") : undefined,
+    // SECURITY: validated by connector-probe.ts at probe time. We pass it
+    // through opaquely here — coercion in the probe layer is safer because
+    // it can validate each kind's specific subfields.
+    authCheck: typeof o.auth_check === "object" && o.auth_check !== null ? o.auth_check : undefined,
   };
 }
 
@@ -547,6 +556,7 @@ export function scanCommunityApps(): AppSkill[] {
         lastSuccessTs: conn.lastSuccessTs,
         lastError: conn.lastError,
         configured: conn.configured,
+        authCheck: m.authCheck,
       });
     }
   }

@@ -141,8 +141,15 @@ const GEMINI_VERSIONS = [
 // Replaced at runtime by the real list from /api/tags when ollama is detected.
 const OLLAMA_VERSIONS = ["llama3.1", "llama3.2", "mistral", "qwen2.5", "phi3", "gemma2"];
 
+// Versioned IDs come FIRST so the picker always shows real version numbers
+// at a glance (claude-opus-4-7, not just "opus"). Naked aliases live at the
+// end as a fallback for users who don't care which generation runs — the
+// CLI itself resolves "opus" → its current default. This was a long-standing
+// UX bug: with aliases first, the picker visually read as "opus / sonnet /
+// haiku ..." and users couldn't tell which version of each they'd actually
+// get without typing /model.
 export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
-  claude: [...CLAUDE_ALIASES, ...CLAUDE_VERSIONS],
+  claude: [...CLAUDE_VERSIONS, ...CLAUDE_ALIASES],
   codex: CODEX_VERSIONS,
   gemini: GEMINI_VERSIONS,
   ollama: OLLAMA_VERSIONS,

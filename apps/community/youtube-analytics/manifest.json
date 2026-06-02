@@ -1,0 +1,16 @@
+{
+  "id": "youtube-analytics",
+  "name": "YouTube Analytics",
+  "version": "0.1.0",
+  "description": "Pull channel performance from the YouTube Analytics API: views, watch time, subscribers, retention. Used by the content domain to track which videos earned their reach.",
+  "domains": ["content", "brand"],
+  "integration": "oauth",
+  "connection": "OAuth 2.0 flow with Google. The refresh token lives at ~/.prevail/connectors/youtube-analytics/auth/refresh.token (chmod 600). When that file is missing or the refresh fails, run `prevail connectors youtube-analytics oauth` to walk through the consent flow in your browser.",
+  "auth_check": {
+    "kind": "file-exists",
+    "files": ["~/.prevail/connectors/youtube-analytics/auth/refresh.token"]
+  },
+  "homepage": "https://developers.google.com/youtube/analytics",
+  "license": "MIT",
+  "author": {"name": "fru-dev3", "url": "https://github.com/fru-dev3/prevail"}
+}

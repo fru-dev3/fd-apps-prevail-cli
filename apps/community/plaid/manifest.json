@@ -8,6 +8,10 @@
   "connection": "REST API. Authenticate with PLAID_CLIENT_ID + PLAID_SECRET (env vars). Per-institution PLAID_ACCESS_TOKEN values are stored in auth/ — one per linked institution. The connector polls /transactions/sync for incremental updates; pulled rows land under data/transactions/<institution>/YYYY-MM.jsonl for any domain skill to consume.",
   "auth": "api-key",
   "auth_env_vars": ["PLAID_CLIENT_ID", "PLAID_SECRET", "PLAID_ACCESS_TOKEN"],
+  "auth_check": {
+    "kind": "env-keys",
+    "env_keys": ["PLAID_CLIENT_ID", "PLAID_SECRET"]
+  },
   "homepage": "https://plaid.com",
   "license": "MIT",
   "author": {

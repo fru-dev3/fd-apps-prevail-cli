@@ -793,6 +793,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         } else {
           systemNote = `unknown framework "${arg}". try /framework list.`;
         }
+      } else if (cmd.kind === "telegram") {
+        systemNote = handleTelegramCommand(cmd.sub, cmd.arg);
+      } else if (cmd.kind === "briefing") {
+        systemNote = handleBriefingCommand(cmd.sub, cmd.arg, vaultPath, apps, domains);
+      } else if (cmd.kind === "connectors") {
+        systemNote = renderConnectorOverview(apps);
       } else if (cmd.kind === "unknown") {
         systemNote = `unknown command ${cmd.raw}. try /help.`;
       }
@@ -1673,6 +1679,221 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       />
     </box>
   );
+}
+
+// /telegram — surface daemon status, allowlist, and setup hints inside the
+// TUI so users don't have to drop to a shell to configure it. Mutating ops
+// (setup, add, remove) still write to ~/.prevail/telegram.json the same way
+// the CLI subcommand does — same source of truth, two surfaces.
+function handleTelegramCommand(sub: string, arg: string): string {
+  // Lazy require so we don't pay the import cost on every slash command.
+  const tg = require("./telegram-config.ts") as typeof import("./telegram-config.ts");
+  const cur = tg.readTelegramConfig();
+  if (sub === "status" || sub === "show") {
+    if (!cur) {
+      return [
+        "telegram: not configured",
+        "",
+        "to set up:",
+        "  /telegram setup <bot-token>",
+        "",
+        "get a token by messaging @BotFather on Telegram and running /newbot.",
+        "after setup, message your bot once, then run /telegram add <chat_id>",
+        "with the chat_id from the daemon log.",
+        "",
+        "to launch the bot: /telegram launch  (prints the shell command to run)",
+      ].join("\n");
+    }
+    const tokenPreview = cur.botToken ? `${cur.botToken.slice(0, 6)}…${cur.botToken.slice(-4)}` : "(missing)";
+    return [
+      `telegram: configured`,
+      `  token:           ${tokenPreview}`,
+      `  allow-list:      ${cur.allowList.length === 0 ? "(empty — bot refuses everyone)" : cur.allowList.join(", ")}`,
+      `  default cli:     ${cur.defaultCli ?? "(auto)"}`,
+      `  default domain:  ${cur.defaultDomain ?? "(first in vault)"}`,
+      `  council default: ${cur.councilByDefault ? "on" : "off"}`,
+      "",
+      "/telegram setup <token>      replace the bot token",
+      "/telegram add <chat_id>      allow-list a chat ID",
+      "/telegram remove <chat_id>   un-allow-list a chat ID",
+      "/telegram launch             print the daemon command to run",
+    ].join("\n");
+  }
+  if (sub === "setup") {
+    if (!arg) return "usage: /telegram setup <bot-token>  (token from @BotFather)";
+    tg.setTelegramToken(arg);
+    return `✓ token saved to ~/.prevail/telegram.json (chmod 0600).\nnext: message your bot once, then /telegram add <chat_id>.`;
+  }
+  if (sub === "add" || sub === "add-user") {
+    const id = parseInt(arg, 10);
+    if (!Number.isFinite(id)) return "usage: /telegram add <chat_id>";
+    try {
+      const added = tg.addAllowedChatId(id);
+      return added ? `✓ chat_id ${id} allow-listed` : `(${id} was already on the list)`;
+    } catch (err) {
+      return (err as Error).message;
+    }
+  }
+  if (sub === "remove" || sub === "rm" || sub === "remove-user") {
+    const id = parseInt(arg, 10);
+    if (!Number.isFinite(id)) return "usage: /telegram remove <chat_id>";
+    const removed = tg.removeAllowedChatId(id);
+    return removed ? `✓ removed ${id}` : `(${id} wasn't on the list)`;
+  }
+  if (sub === "launch" || sub === "start" || sub === "run") {
+    return [
+      "the daemon runs as a separate long-running process so it doesn't",
+      "block the TUI. open a new terminal and run:",
+      "",
+      "  prevail daemon --telegram",
+      "",
+      "it will poll Telegram, dispatch messages through the same engines",
+      "as this TUI, and fire any due briefings.",
+    ].join("\n");
+  }
+  return `unknown /telegram subcommand: ${sub}\ntry /telegram status`;
+}
+
+// /briefing — list, add, run, remove scheduled domain briefings without
+// dropping to a shell. Same .briefings.json storage as `prevail briefing`.
+function handleBriefingCommand(sub: string, arg: string, vaultPath: string, _apps: AppSkill[], domains: Domain[]): string {
+  const br = require("./briefings.ts") as typeof import("./briefings.ts");
+  const sched = require("./schedule.ts") as typeof import("./schedule.ts");
+  if (sub === "list" || sub === "ls" || sub === "show") {
+    const list = br.loadBriefings(vaultPath);
+    if (list.length === 0) {
+      return [
+        "no briefings yet",
+        "",
+        'add one with: /briefing add "<cron>" <domain> "<prompt>" [council] [telegram]',
+        '  e.g. /briefing add "0 7 * * *" wealth "what is new this week?" council both',
+        "",
+        "cron format: 5 fields (min hr day-of-month month day-of-week). use * for any.",
+      ].join("\n");
+    }
+    return [
+      `${list.length} briefing${list.length === 1 ? "" : "s"}:`,
+      "",
+      ...list.map((b) => {
+        const next = sched.nextRunWithin(b.cron);
+        const nextLabel = next ? new Date(next).toLocaleString() : "(none within 7d)";
+        return [
+          `  ${b.enabled ? "✓" : "✗"} ${b.id}  ·  ${b.name}`,
+          `      cron:    ${b.cron}  (${sched.describeCron(b.cron)})`,
+          `      domain:  ${b.domain}  ·  mode: ${b.mode}  ·  deliver: ${b.deliver}`,
+          `      prompt:  ${b.prompt.slice(0, 120)}${b.prompt.length > 120 ? "…" : ""}`,
+          `      next:    ${nextLabel}`,
+        ].join("\n");
+      }),
+    ].join("\n");
+  }
+  if (sub === "add") {
+    // /briefing add "<cron>" <domain> "<prompt>" [mode] [deliver]
+    // Parse quoted strings + bare tokens. Loose parser — accepts both
+    // quoted and bare cron/prompt depending on user habit.
+    const tokens = tokenizeBriefingAdd(arg);
+    if (tokens.length < 3) {
+      return 'usage: /briefing add "<cron>" <domain> "<prompt>" [single|council] [log|telegram|both]';
+    }
+    const [cron, domainName, prompt, modeRaw, deliverRaw] = tokens;
+    if (!sched.isValidCron(cron!)) return `invalid cron: "${cron}" — needs 5 fields`;
+    if (!domains.find((d) => d.name.toLowerCase() === domainName!.toLowerCase())) {
+      return `unknown domain "${domainName}". /domains in cockpit to see options.`;
+    }
+    const mode = modeRaw === "council" ? "council" : "single";
+    const deliver = deliverRaw === "telegram" || deliverRaw === "both" ? deliverRaw : "log";
+    const list = br.loadBriefings(vaultPath);
+    const entry = {
+      id: br.makeBriefingId(),
+      name: `${domainName} briefing`,
+      cron: cron!,
+      domain: domainName!,
+      prompt: prompt!,
+      mode: mode as "single" | "council",
+      deliver: deliver as "log" | "telegram" | "both",
+      enabled: true,
+      last_run: null,
+      created_at: Date.now(),
+    };
+    list.push(entry);
+    br.saveBriefings(vaultPath, list);
+    return `✓ added ${entry.id}\n  cron:    ${cron}  (${sched.describeCron(cron!)})\n  domain:  ${domainName}\n  mode:    ${mode}\n  deliver: ${deliver}` +
+      (deliver !== "log"
+        ? "\n\n⚠ telegram delivery requires the daemon: prevail daemon --telegram"
+        : "");
+  }
+  if (sub === "remove" || sub === "rm") {
+    if (!arg) return "usage: /briefing remove <id>";
+    const list = br.loadBriefings(vaultPath);
+    const after = list.filter((b) => b.id !== arg);
+    if (after.length === list.length) return `no briefing with id ${arg}`;
+    br.saveBriefings(vaultPath, after);
+    return `✓ removed ${arg}`;
+  }
+  if (sub === "run") {
+    if (!arg) return "usage: /briefing run <id>  (fires it now, log delivery only)";
+    return `running briefings inside the TUI would block. use the cli for now:\n\n  prevail briefing run ${arg}\n\nor wait for the daemon to fire it on cron.`;
+  }
+  return `unknown /briefing subcommand: ${sub}\ntry /briefing list`;
+}
+
+// Mini tokenizer for /briefing add — supports double-quoted strings so a
+// cron expression or a multi-word prompt stays intact.
+function tokenizeBriefingAdd(input: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuote = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+    if (!inQuote && /\s/.test(ch!)) {
+      if (cur) {
+        out.push(cur);
+        cur = "";
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+// /connectors — quick-glance auth status for every app. Same data the app
+// detail view shows, just flattened so users can audit "what's set up"
+// without clicking each tile.
+function renderConnectorOverview(apps: AppSkill[]): string {
+  if (apps.length === 0) return "no apps registered. drop manifests into ~/.prevail/apps/<id>/";
+  const integrationLabel: Record<string, string> = {
+    api: "API",
+    oauth: "OAuth",
+    browser: "Browser",
+    mcp: "MCP",
+    manual: "manual",
+  };
+  const lines: string[] = [
+    `${apps.length} apps · connection-status snapshot`,
+    "",
+    "  STATUS  TYPE      ID                 LAST SYNC",
+    "  ──────  ────────  ─────────────────  ──────────",
+  ];
+  for (const a of apps) {
+    const glyph =
+      a.status === "connected" ? "✓ ok  "
+      : a.status === "expired" ? "⚠ exp "
+      : a.status === "error"   ? "✗ err "
+      : "○ off ";
+    const type = (integrationLabel[a.integration ?? "manual"] ?? "manual").padEnd(8);
+    const id = a.id.padEnd(17).slice(0, 17);
+    const last = a.lastSuccessTs ? new Date(a.lastSuccessTs).toLocaleDateString() : "(never)";
+    lines.push(`  ${glyph} ${type}  ${id}  ${last}`);
+  }
+  lines.push("");
+  lines.push("click an app in the sidebar to see auth method + skills + 'Test connection'.");
+  return lines.join("\n");
 }
 
 function summarize(domains: Domain[], apps: AppSkill[]) {

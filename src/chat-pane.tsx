@@ -110,6 +110,9 @@ export type ChatCommand =
   | { kind: "heatmap"; days?: number }
   | { kind: "watch"; limit?: number }
   | { kind: "framework"; id: string }
+  | { kind: "telegram"; sub: string; arg: string }
+  | { kind: "briefing"; sub: string; arg: string }
+  | { kind: "connectors" }
   | { kind: "unknown"; raw: string };
 
 interface Props {
@@ -1553,9 +1556,13 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/heatmap", arg: "[days]", desc: "domain activity heatmap (default 30 days)", aliases: ["/heat", "/activity"] },
   { cmd: "/watch", arg: "[n]", desc: "show recent background-watcher observations (default 20)", aliases: ["/watcher", "/obs"] },
   { cmd: "/framework", arg: "[id|list|none]", desc: "set response framework (bluf · win · scqa · sbar · ooda · proscons · steelman)", aliases: ["/fw"] },
+  { cmd: "/telegram", arg: "[status|setup|add|remove|launch]", desc: "manage the Telegram bot bridge from inside the cockpit", aliases: ["/tg"] },
+  { cmd: "/briefing", arg: "[list|add|run|remove]", desc: "manage scheduled domain briefings", aliases: ["/brief", "/briefings"] },
+  { cmd: "/connectors", desc: "show connection status for every app (auth type · status · last sync)", aliases: ["/conn", "/connect"] },
   { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
   { cmd: "/codex", arg: "[model]", desc: "switch this chat to Codex" },
   { cmd: "/gemini", arg: "[model]", desc: "switch this chat to Gemini CLI" },
+  { cmd: "/ollama", arg: "[model]", desc: "switch this chat to local Ollama (or any OpenAI-compatible endpoint)" },
   { cmd: "/model", arg: "<name>", desc: "set model on the current CLI · /model default clears it", aliases: ["/m"] },
   { cmd: "/clear", desc: "clear conversation messages (keeps session config)", aliases: ["/reset"] },
   { cmd: "/help", desc: "show all slash commands", aliases: ["/?"] },
@@ -1839,6 +1846,7 @@ function parseSlashCommand(text: string): ChatCommand {
   if (cmd === "claude") return { kind: "switch-cli", cli: "claude", model: arg || undefined };
   if (cmd === "codex") return { kind: "switch-cli", cli: "codex", model: arg || undefined };
   if (cmd === "gemini") return { kind: "switch-cli", cli: "gemini", model: arg || undefined };
+  if (cmd === "ollama") return { kind: "switch-cli", cli: "ollama", model: arg || undefined };
   if (cmd === "model" || cmd === "m") return { kind: "switch-model", model: arg };
   if (cmd === "distill" || cmd === "skill") return { kind: "distill" };
   if (cmd === "search" || cmd === "s") return { kind: "search", query: arg };
@@ -1854,6 +1862,17 @@ function parseSlashCommand(text: string): ChatCommand {
   }
   if (cmd === "framework" || cmd === "fw") {
     return { kind: "framework", id: arg.trim().toLowerCase() };
+  }
+  if (cmd === "telegram" || cmd === "tg") {
+    const parts = arg.trim().split(/\s+/).filter(Boolean);
+    return { kind: "telegram", sub: (parts[0] ?? "status").toLowerCase(), arg: parts.slice(1).join(" ").trim() };
+  }
+  if (cmd === "briefing" || cmd === "brief" || cmd === "briefings") {
+    const parts = arg.trim().split(/\s+/).filter(Boolean);
+    return { kind: "briefing", sub: (parts[0] ?? "list").toLowerCase(), arg: parts.slice(1).join(" ").trim() };
+  }
+  if (cmd === "connectors" || cmd === "conn" || cmd === "connect") {
+    return { kind: "connectors" };
   }
   if (cmd === "council" || cmd === "c" || cmd === "panel") {
     const parts = arg.trim().split(/\s+/).filter(Boolean);

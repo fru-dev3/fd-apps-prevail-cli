@@ -1,0 +1,16 @@
+{
+  "id": "google-calendar",
+  "name": "Google Calendar",
+  "version": "0.1.0",
+  "description": "Manage events and find free time via an installed MCP server. Used by calendar and chief domains to weave meetings into daily briefings.",
+  "domains": ["calendar", "chief"],
+  "integration": "mcp",
+  "connection": "Wrapped via an MCP server installed locally. The server handles its own OAuth dance; prevail just needs to know the server binary is on PATH. Install via `npm i -g @anthropic-ai/mcp-server-gcal` (or whichever provider you use), then probe.",
+  "auth_check": {
+    "kind": "mcp",
+    "mcp_command": "mcp-server-gcal"
+  },
+  "homepage": "https://calendar.google.com",
+  "license": "MIT",
+  "author": {"name": "fru-dev3", "url": "https://github.com/fru-dev3/prevail"}
+}

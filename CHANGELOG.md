@@ -7,6 +7,44 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [Unreleased]
+
+### Security — adversarial sweep
+External review surfaced 10 findings. This batch ships the 8 actionable ones:
+- **Vault-shell gate** — `prevail schedule` now refuses `sh -c` unless `PREVAIL_ALLOW_VAULT_SHELL=1`. Without the gate, a malicious entry in a synced vault could RCE the operator.
+- **Council injection chain blocked** — panelist replies have their `## section` headers blockquoted before embedding in the chair synthesis; the verdict parser now matches the LAST `## Verdict` section so a panelist-quoted fake can't override the chair's real verdict.
+- **Telegram `from.id` validated** — both sender AND chat now must be on the allowlist, and non-private chats (groups/supergroups/channels) are refused outright.
+- **Subprocess env scrub** — `PREVAIL_TELEGRAM_*`, `ANTHROPIC_API_*`, `OPENAI_API_*`, `GOOGLE_API_*`, `AWS_*`, `GITHUB_TOKEN`, `OP_SERVICE_ACCOUNT_TOKEN`, and `*_SECRET/*_PRIVATE_KEY/*_PASSWORD` are stripped before spawning Claude/Codex/Gemini. A prompt-injected `env | grep TOKEN` can no longer exfiltrate them.
+- **Daemon abort cancellation** — Ctrl-C now SIGTERMs every in-flight panelist + briefing instead of leaving subprocesses burning API budget for up to 120s.
+- **Session DB / config chmod 0600** — sessions.db, prompt logs, JSONL session files, and config.json are no longer world-readable under default umask.
+- **Defensive manifest coercion** — a malformed `manifest.json` no longer crashes `scanCommunityApps` or hides itself by neutering legit entries; every field is type-checked, length-capped, and char-class-restricted.
+- **Auto-summary quote-shields LLM output** — verdicts written to `_log/YYYY-MM-DD.md` use markdown blockquotes so a prompt-injected verdict can't persist as instructions for tomorrow's Paperclip/OpenClaw morning brief.
+
+### Added — TUI surfacing for every feature
+Every shipping feature now has a visible UI surface, not just a CLI subcommand:
+- **`/telegram`** in chat — status, setup, allow/remove chat IDs, launch hint. Same `~/.prevail/telegram.json` storage as `prevail telegram`.
+- **`/briefing`** in chat — list, add (with quoted-string parser for cron + prompt), remove. Same `.briefings.json` storage as `prevail briefing`.
+- **`/connectors`** in chat — quick auth-status snapshot for every app at a glance.
+- **`/ollama`** — switch the chat's engine to your local Ollama instance.
+- **Test Connection button** in every app detail view — runs the manifest's declared `auth_check` and shows the live result (status, what's missing, fix hint).
+
+### Added — Per-app auth validation
+Each connector manifest can now declare an `auth_check` block describing how to verify it works. The probe runner handles five auth kinds:
+- **`env-keys`** — required env vars must be present + non-empty (e.g. Plaid: `PLAID_CLIENT_ID`, `PLAID_SECRET`)
+- **`file-exists`** — required files must exist (e.g. YouTube Analytics OAuth refresh token at `~/.prevail/connectors/youtube-analytics/auth/refresh.token`)
+- **`command`** — spawn a binary, check exit code + optional stdout match (e.g. LinkedIn: `playwright --version`)
+- **`http`** — GET a URL with optional `auth_header_env` for API-key auth; 401/403 surfaces as `expired` (e.g. GitHub: `https://api.github.com/user` with `GH_TOKEN`)
+- **`mcp`** — verify a stdio MCP binary is on PATH OR ping an HTTP MCP server (e.g. Google Calendar via `mcp-server-gcal`)
+- **`manual`** — manual-step list + optional freshness check on a watched file
+The app detail view auto-probes on open and shows live status/detail/fix-hint plus a clickable `⟳ Test Connection` button. SSRF-guarded against metadata endpoints (`169.254.169.254`, `metadata.google.internal`).
+
+Example connectors shipping with auth_check blocks: Plaid (api), LinkedIn (browser), YouTube Analytics (oauth), GitHub (http+api), Google Calendar (mcp).
+
+### Fixed
+- **Model picker shows version numbers first.** `claude-opus-4-7` / `claude-sonnet-4-7` / etc. now lead the council model picker; naked aliases (`opus`, `sonnet`, `haiku`) fall to the end. Previously the picker visually read as "opus / sonnet / haiku ..." and users couldn't tell which version each alias resolved to.
+
+---
+
 ## [0.3.0] — 2026-06-02 · cockpit reaches out
 
 This release pulls prevAIl out of the terminal. Local models, Telegram bridge, scheduled briefings, a self-curating vault, and a council that finally shows you the disagreement.

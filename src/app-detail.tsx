@@ -1,4 +1,5 @@
 import type React from "react";
+import { useEffect, useState } from "react";
 import { theme } from "./theme.ts";
 import {
   formatRelativeTime,
@@ -8,6 +9,7 @@ import {
   type ViewKey,
 } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
+import { probeConnector, type AuthCheckSpec, type ProbeResult } from "./connector-probe.ts";
 
 interface Props {
   app: AppSkill;
@@ -124,26 +126,83 @@ function ConnectorOverview({ app }: { app: AppSkill }) {
     manual: "manual · drop files in watched folder",
   };
   const integration = app.integration ?? "manual";
+  // Live auth probe — runs the manifest's auth_check (env keys / file
+  // exists / HTTP / spawn / MCP / manual) and shows the result. Auto-fires
+  // on app open AND on Test Connection click. Falls back to the
+  // declared connection-status.json when no auth_check is provided.
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
+  const [probing, setProbing] = useState(false);
+
+  const runProbe = () => {
+    setProbing(true);
+    probeConnector(app, (app.authCheck as AuthCheckSpec | undefined) ?? null)
+      .then((r) => setProbe(r))
+      .finally(() => setProbing(false));
+  };
+  useEffect(() => {
+    let cancelled = false;
+    setProbe(null);
+    setProbing(true);
+    probeConnector(app, (app.authCheck as AuthCheckSpec | undefined) ?? null)
+      .then((r) => {
+        if (!cancelled) setProbe(r);
+      })
+      .finally(() => {
+        if (!cancelled) setProbing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [app.id]);
+
+  // Use the live probe when we have one; fall back to the static
+  // connection-status.json snapshot. This is what makes the badge real:
+  // open Plaid and you see "API · ✓ env keys present" or "✗ missing
+  // PLAID_SECRET" instantly, not a stale value from a side-channel file.
+  const effectiveStatus = probe?.status ?? app.status;
   const statusGlyph =
-    app.status === "connected" ? "☑ connected" :
-    app.status === "error" ? "☒ error" :
-    app.status === "expired" ? "☒ auth expired" :
+    effectiveStatus === "connected" ? "☑ connected" :
+    effectiveStatus === "error" ? "☒ error" :
+    effectiveStatus === "expired" ? "☒ auth expired" :
     "☐ not configured";
   const statusFg =
-    app.status === "connected" ? theme.ok :
-    app.status === "error" || app.status === "expired" ? theme.warn :
+    effectiveStatus === "connected" ? theme.ok :
+    effectiveStatus === "error" || effectiveStatus === "expired" ? theme.warn :
     theme.fgDim;
-  const lastSync = app.lastSuccessTs
-    ? formatRelativeTime(app.lastSuccessTs)
-    : "never";
+  const lastSync = probe?.ts
+    ? formatRelativeTime(probe.ts)
+    : app.lastSuccessTs
+      ? formatRelativeTime(app.lastSuccessTs)
+      : "never";
   return (
     <box flexDirection="column">
       <text fg={theme.gold} attributes={1}>▸ Connection</text>
       <text fg={theme.fgDim}>{"  type:   "}<span fg={theme.fg}>{integrationLabel[integration]}</span></text>
-      <text fg={theme.fgDim}>{"  status: "}<span fg={statusFg}>{statusGlyph}</span><span fg={theme.fgFaint}>{`   ·   last sync ${lastSync}`}</span></text>
-      {app.lastError && (
+      <text fg={theme.fgDim}>
+        {"  status: "}
+        <span fg={statusFg}>{probing ? "⠋ probing…" : statusGlyph}</span>
+        <span fg={theme.fgFaint}>{`   ·   probed ${lastSync}`}</span>
+      </text>
+      {probe?.message && (
+        <text fg={theme.fgDim}>{"  detail: "}<span fg={probe.ok ? theme.fg : theme.warn}>{probe.message}</span></text>
+      )}
+      {probe?.fixHint && (
+        <text fg={theme.fgDim}>{"  fix:    "}<span fg={theme.aiAccent}>{probe.fixHint}</span></text>
+      )}
+      {!probe && app.lastError && (
         <text fg={theme.fgDim}>{"  error:  "}<span fg={theme.warn}>{app.lastError}</span></text>
       )}
+      <text> </text>
+      <box
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        border={["left", "right"]}
+        borderColor={theme.aiAccent}
+        onMouseDown={runProbe}
+      >
+        <text fg={theme.aiAccent} attributes={1}>{probing ? " ⠋ testing… " : " ⟳ Test Connection "}</text>
+      </box>
       {app.connectionNotes && (
         <>
           <text> </text>
