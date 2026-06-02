@@ -74,6 +74,65 @@ export function formatModelBadge(model: string | null | undefined): string {
   return model.trim();
 }
 
+export interface CliHealth {
+  ok: boolean;
+  message: string;
+}
+
+// Smoke-test a CLI by running `<bin> --version`. Cheap, no network, no model
+// call — just confirms the binary exists, is executable, and doesn't crash
+// on a trivial invocation. Failures here mean council mode will produce
+// errors for that CLI, so we surface them at launch instead of waiting for
+// the user to try /council.
+export function probeCli(cli: AvailableCli, timeoutMs = 5000): Promise<CliHealth> {
+  return new Promise((resolveProbe) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let child;
+    try {
+      child = spawn(cli.bin, ["--version"], { env: process.env });
+    } catch (err) {
+      resolveProbe({ ok: false, message: (err as Error).message });
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child!.kill();
+      } catch {}
+      resolveProbe({ ok: false, message: `--version timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
+    child.stdout.on("data", (b) => {
+      stdout += b.toString();
+    });
+    child.stderr.on("data", (b) => {
+      stderr += b.toString();
+    });
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveProbe({ ok: false, message: err.message });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const out = (stdout + stderr).trim();
+      if (code === 0) {
+        resolveProbe({ ok: true, message: out.split("\n")[0] ?? "ok" });
+      } else {
+        resolveProbe({
+          ok: false,
+          message: `exited ${code}${out ? `: ${out.split("\n")[0]}` : ""}`,
+        });
+      }
+    });
+  });
+}
+
 export function detectClis(): AvailableCli[] {
   const paths = (process.env.PATH ?? "").split(":");
   const out: AvailableCli[] = [];

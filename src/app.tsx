@@ -51,8 +51,10 @@ import { tickAndRunDue } from "./schedule.ts";
 import {
   detectClis,
   formatModelBadge,
+  probeCli,
   runChatTurn,
   type AvailableCli,
+  type CliHealth,
 } from "./cli-bridge.ts";
 
 const VIEW_ORDER: ViewKey[] = ["state", "quickstart", "prompts", "skills"];
@@ -105,6 +107,31 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // per-session — each chat decides whether its next prompt fans out.
   const [councilModeMap, setCouncilModeMap] = useState<Map<string, boolean>>(new Map());
   const [councilConfigOpen, setCouncilConfigOpen] = useState(false);
+  // CLI health from a launch-time `<bin> --version` probe. Surfaces broken
+  // codex / gemini installs (wrong path, missing auth, sandbox issue) before
+  // the user tries council mode and is met with silent error bubbles. Value
+  // is null while probing.
+  const [cliHealth, setCliHealth] = useState<Map<string, CliHealth | null>>(() => {
+    const m = new Map<string, CliHealth | null>();
+    for (const c of detectClis()) m.set(c.kind, null);
+    return m;
+  });
+  useEffect(() => {
+    let cancelled = false;
+    clis.forEach((c) => {
+      probeCli(c).then((h) => {
+        if (cancelled) return;
+        setCliHealth((prev) => {
+          const next = new Map(prev);
+          next.set(c.kind, h);
+          return next;
+        });
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [clis]);
   const councilModeFor = (key: string | null): boolean =>
     key ? councilModeMap.get(key) ?? false : false;
   const toggleCouncilModeFor = (key: string) => {
@@ -762,7 +789,25 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       setMessage("no CLIs detected — install claude / codex / gemini first");
       return;
     }
-    const { panel, models } = resolveCouncilPanel();
+    const { panel: configuredPanel, models } = resolveCouncilPanel();
+    // Drop any panelist that failed the launch-time `--version` probe so the
+    // user doesn't get a guaranteed-broken bubble in the response set. A null
+    // health entry means the probe hasn't finished yet — give it the benefit
+    // of the doubt and let it run.
+    const skipped: AvailableCli[] = [];
+    const panel = configuredPanel.filter((c) => {
+      const h = cliHealth.get(c.kind);
+      if (h && !h.ok) {
+        skipped.push(c);
+        return false;
+      }
+      return true;
+    });
+    if (skipped.length > 0) {
+      setMessage(
+        `skipped ${skipped.map((c) => c.label).join(", ")} — failed launch probe`,
+      );
+    }
     if (panel.length === 0) {
       setMessage(
         "council panel is empty after filtering — /council config or /council use ... to fix",
@@ -899,14 +944,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             return `--- ${tag} ---\n${c.response.trim()}`;
           })
           .join("\n\n");
+        const panelistList = good
+          .map((c) => (c.model ? `${c.cli.label}·${c.model}` : c.cli.label))
+          .join(", ");
         const synthPrompt =
-          `You are synthesizing ${good.length} independent answers from different AI models to the same user question. ` +
-          `Identify points of agreement and disagreement, then deliver a single decisive recommendation as the panel's verdict.\n\n` +
+          `You are the chair of an AI council. ${good.length} independent panelists (${panelistList}) just answered the same user question. ` +
+          `Your job: name the consensus, name the divergence, then deliver one decisive verdict. Do not hedge — pick a side.\n\n` +
           `USER QUESTION:\n${text}\n\n` +
           `PANEL RESPONSES:\n${panelBlock}\n\n` +
-          `Output exactly two sections, no preamble:\n` +
-          `1. **Where the panel converged / diverged** — one short paragraph naming who agreed on what and where they split.\n` +
-          `2. **VERDICT** — one sentence on what to do, in plain language. Start that sentence with the literal word VERDICT:`;
+          `Output exactly these three sections in this order, no preamble, no closing remarks:\n\n` +
+          `## Consensus\n` +
+          `Bulleted list of every concrete point the panel agreed on. If they disagreed on everything, write "None — see divergence."\n\n` +
+          `## Divergence\n` +
+          `Bulleted list of every point where panelists materially disagreed. For each bullet, name which panelist took which side using their label (e.g. "Claude Code: X, Codex: Y"). Skip stylistic differences; only flag substantive disagreements.\n\n` +
+          `## Verdict\n` +
+          `One single sentence starting with the literal word "VERDICT:" giving the decisive call. Plain language. No qualifiers like "consider" or "you might". Tell the user what to do.`;
 
         try {
           const verdict = await runChatTurn({
@@ -1092,6 +1144,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         activeChats={chatCounts.active}
         pendingChats={chatCounts.pending}
       />
+      <CliHealthBanner clis={clis} cliHealth={cliHealth} />
       <box flexDirection="row" flexGrow={1}>
         <Sidebar
           domains={domains}
@@ -1259,6 +1312,38 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           else if (a === "quit") doQuit();
         }}
       />
+    </box>
+  );
+}
+
+// Visible launch-time status row: only renders if anything is mid-probe or
+// failed. Each failed CLI gets a one-line "⚠ <cli>: <message>" so the user
+// sees up front that council mode will produce errors for that one.
+function CliHealthBanner({
+  clis,
+  cliHealth,
+}: {
+  clis: AvailableCli[];
+  cliHealth: Map<string, CliHealth | null>;
+}) {
+  const failed = clis.filter((c) => cliHealth.get(c.kind)?.ok === false);
+  const probing = clis.filter((c) => cliHealth.get(c.kind) === null);
+  if (failed.length === 0 && probing.length === 0) return null;
+  return (
+    <box flexDirection="column" paddingLeft={2} paddingRight={2}>
+      {probing.length > 0 && (
+        <text fg={theme.fgFaint}>
+          probing: {probing.map((c) => c.label).join(", ")}…
+        </text>
+      )}
+      {failed.map((c) => {
+        const h = cliHealth.get(c.kind)!;
+        return (
+          <text key={c.kind} fg={theme.warn}>
+            ⚠ {c.label} not usable for council — {h.message}
+          </text>
+        );
+      })}
     </box>
   );
 }
