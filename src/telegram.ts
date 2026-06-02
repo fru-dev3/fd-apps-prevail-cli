@@ -10,6 +10,7 @@ import { FRAMEWORKS, getFramework, isFrameworkId } from "./framework.ts";
 import { runChatTurn } from "./cli-bridge.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { readTelegramConfig, type TelegramConfig } from "./telegram-config.ts";
+import { writeTurnSummary } from "./auto-summary.ts";
 
 // Per-chat state held in memory for the lifetime of the daemon. Lost on
 // restart — acceptable for v1 since the SQLite session log already persists
@@ -185,6 +186,17 @@ async function handleUpdate(
       panelists: panel,
     });
     await sendCouncilResult(cfg.botToken, chatId, result.panel, result.verdict, result.chairLabel, result.degraded);
+    // Self-curating vault: log the verdict, same hook the TUI uses.
+    if (result.verdict && !result.verdict.startsWith("(")) {
+      writeTurnSummary({
+        domainPath: state.domain.path,
+        userPrompt: text,
+        assistantReply: result.verdict,
+        cliLabel: `Council ⚖ ${result.chairLabel} (via telegram)`,
+        ts: Date.now(),
+        kind: "council-verdict",
+      });
+    }
   } else {
     try {
       const reply = await runChatTurn({
@@ -196,6 +208,16 @@ async function handleUpdate(
         bare: true,
       });
       await sendLongMessage(cfg.botToken, chatId, reply);
+      writeTurnSummary({
+        domainPath: state.domain.path,
+        userPrompt: text,
+        assistantReply: reply,
+        cliLabel: state.model
+          ? `${state.cli.label}·${state.model} (via telegram)`
+          : `${state.cli.label} (via telegram)`,
+        ts: Date.now(),
+        kind: "chat",
+      });
     } catch (err) {
       await tgSendMessage(cfg.botToken, chatId, `error: ${(err as Error).message}`);
     }

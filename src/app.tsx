@@ -54,6 +54,7 @@ import {
   searchMessages,
 } from "./session.ts";
 import { tickAndRunDue } from "./schedule.ts";
+import { writeTurnSummary } from "./auto-summary.ts";
 import {
   detectOllama,
   detectSubprocessClis,
@@ -1249,6 +1250,17 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             cli: synthCli.kind,
             model: synthModel,
           });
+          // Self-curating vault: log the verdict (not the individual panel
+          // responses — those are kept in the session log but the verdict is
+          // what the user actually took away).
+          writeTurnSummary({
+            domainPath: session.hostDomain.path,
+            userPrompt: text,
+            assistantReply: verdict,
+            cliLabel: `Council ⚖ ${synthCli.label}`,
+            ts,
+            kind: "council-verdict",
+          });
           // Replace the synthesizing placeholder with the verdict, AND flip
           // pending=false in the same setChats so the spinner stops the
           // instant the verdict bubble appears.
@@ -1362,6 +1374,17 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           ts,
           cli: session.cli.kind,
           model: session.model,
+        });
+        // Self-curating vault: append a one-paragraph snapshot of this turn
+        // to <domain>/_log/YYYY-MM-DD.md so the vault remembers what was
+        // discussed without the user having to take notes.
+        writeTurnSummary({
+          domainPath: session.hostDomain.path,
+          userPrompt: text,
+          assistantReply: response,
+          cliLabel: session.model ? `${session.cli.label}·${session.model}` : session.cli.label,
+          ts,
+          kind: "chat",
         });
         setChats((m) => {
           const cur = m.get(key);

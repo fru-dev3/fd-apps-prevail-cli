@@ -16,6 +16,9 @@ The release page on GitHub mirrors the same notes for each tag:
   - Friendly probe error when the configured model isn't pulled (`ollama pull <name>`)
   - Council bubble color: electric cyan (matches the AI in prevAIl)
 
+### Added — Self-curating vault
+- **Per-domain auto-summarization writeback.** Every chat turn (and every council verdict) appends a one-paragraph snapshot to `<domain>/_log/YYYY-MM-DD.md` — the user prompt + the reply, timestamped, tagged with the CLI/chair that answered. Over time each domain becomes its own decision log without the user having to take notes. Hooks the TUI's `sendMessage` + council-verdict path AND the Telegram daemon's chat/council reply path through one shared `writeTurnSummary()` helper. Pure heuristic (no extra LLM call), silent failure mode (never blocks the user).
+
 ### Added — Telegram bridge
 - **`prevail daemon --telegram`** — headless mode that exposes the cockpit over Telegram. Same engines, same council, same `/framework` setting; just from your phone instead of the terminal.
   - `prevail telegram setup <bot-token>` — bootstrap (token from @BotFather)
