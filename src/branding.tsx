@@ -71,8 +71,10 @@ export function Branding({
 }
 
 // PREVAIL logo, rendered as three side-by-side blocks so the "AI" stays
-// visually emphasized in goldBright while "PREV" and "L" sit in plain gold.
-// This is the brand thesis: prev·AI·l — the AI is the heart of the cockpit.
+// visually emphasized in aiAccent (electric cyan) while "PREV" and "L"
+// sit in plain gold. High-contrast pairing — the AI is the unmistakable
+// heart of the cockpit, not just a slightly-brighter shade of the same
+// color it sits next to.
 const LOGO_PREV = [
   "██████╗ ██████╗ ███████╗██╗   ██╗",
   "██╔══██╗██╔══██╗██╔════╝██║   ██║",
@@ -114,13 +116,13 @@ function BrandColumn({
         {LOGO_PREV.map((_, i) => (
           <text key={`logo-${i}`} fg={theme.gold} attributes={1}>
             <span fg={theme.gold} attributes={1}>{LOGO_PREV[i]}</span>
-            <span fg={theme.goldBright} attributes={1}>{LOGO_AI[i]}</span>
+            <span fg={theme.aiAccent} attributes={1}>{LOGO_AI[i]}</span>
             <span fg={theme.gold} attributes={1}>{LOGO_L[i]}</span>
           </text>
         ))}
         <text fg={theme.goldDim}>
           {"        p r e v  ·  "}
-          <span fg={theme.goldBright}>A I</span>
+          <span fg={theme.aiAccent}>A I</span>
           {"  ·  l   —   your AI life cockpit"}
         </text>
         <text> </text>

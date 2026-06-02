@@ -149,16 +149,18 @@ function Header() {
         <text fg={theme.goldDim}> ╱ │ ╲ </text>
       </box>
       <box flexDirection="column" paddingLeft={2}>
-        {/* prevAIl — "AI" rendered in goldBright while "prev" and "l"
-            sit in plain gold, mirroring the main cockpit logo. */}
+        {/* prevAIl — "AI" rendered in aiAccent (electric cyan) for high
+            contrast against the gold "prev" / "l". Mirrors the main
+            cockpit logo so first-run and steady-state feel like the
+            same brand surface. */}
         <text attributes={1}>
           <span fg={theme.gold}>{"█▀█ █▀▄ █▀▀ █ █ "}</span>
-          <span fg={theme.goldBright}>{"▄▀█ █"}</span>
+          <span fg={theme.aiAccent}>{"▄▀█ █"}</span>
           <span fg={theme.gold}>{" █  "}</span>
         </text>
         <text attributes={1}>
           <span fg={theme.gold}>{"█▀▀ █▀▄ ██▄  █  "}</span>
-          <span fg={theme.goldBright}>{"█▀█ █"}</span>
+          <span fg={theme.aiAccent}>{"█▀█ █"}</span>
           <span fg={theme.gold}>{" █▄▄"}</span>
         </text>
         <text fg={theme.goldDim}>first run · welcome to prevAIl</text>

@@ -2,8 +2,9 @@
   <!--
     prevAIl app icon.
     Gold-on-charcoal disc with "prev" + bright "AI" + "l" wordmark.
-    The AI letters are rendered larger and brighter so the brand thesis
-    (the AI hidden inside prevail) reads at a glance.
+    The AI letters are rendered larger and in electric cyan against the
+    gold "prev" / "l" — high-contrast so the brand thesis (the AI hidden
+    inside prevail) reads at a glance from any distance.
   -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
@@ -30,8 +31,8 @@
   <g font-family="Georgia, 'Times New Roman', serif" font-weight="700" text-anchor="middle">
     <!-- prev -->
     <text x="170" y="290" font-size="118" fill="#C4A35A" letter-spacing="-2">prev</text>
-    <!-- AI emphasized in brighter gold + slightly larger -->
-    <text x="278" y="298" font-size="148" fill="#E9CC83" letter-spacing="-3">AI</text>
+    <!-- AI in electric cyan + slightly larger -->
+    <text x="278" y="298" font-size="148" fill="#3CD8FF" letter-spacing="-3">AI</text>
     <!-- trailing l -->
     <text x="356" y="290" font-size="118" fill="#C4A35A">l</text>
   </g>
