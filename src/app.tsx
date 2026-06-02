@@ -811,6 +811,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       { ...session, messages: [...session.messages, userMsg] },
       text,
     );
+    // Collect successful responses in a closure so we can synthesize them
+    // into a verdict after all panel members return.
+    type Collected = { cli: AvailableCli; model: string; response: string; ok: boolean };
+    const collected: Collected[] = [];
+
     const calls = panel.map((cli) =>
       runChatTurn({
         prompt: promptForCli,
@@ -822,6 +827,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         .then((response) => {
           const ts = Date.now();
           const mdl = models[cli.kind] ?? "";
+          collected.push({ cli, model: mdl, response, ok: true });
           persistMessage({
             domain: session.hostDomain.name,
             session_id: session.sessionId,
@@ -853,6 +859,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         .catch((err: Error) => {
           const ts = Date.now();
           const mdl = models[cli.kind] ?? "";
+          collected.push({ cli, model: mdl, response: err.message, ok: false });
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
@@ -873,7 +880,68 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           });
         }),
     );
-    Promise.allSettled(calls).then(() => {
+
+    Promise.allSettled(calls).then(async () => {
+      const good = collected.filter((c) => c.ok);
+      // Need ≥2 panel responses for a synthesis to be meaningful.
+      if (good.length >= 2) {
+        const synthCli = panel[0]!; // use the first panel member to synthesize
+        const synthModel = models[synthCli.kind] ?? "";
+        const panelBlock = good
+          .map((c) => {
+            const tag = c.model ? `${c.cli.label}·${c.model}` : c.cli.label;
+            return `--- ${tag} ---\n${c.response.trim()}`;
+          })
+          .join("\n\n");
+        const synthPrompt =
+          `You are synthesizing ${good.length} independent answers from different AI models to the same user question. ` +
+          `Identify points of agreement and disagreement, then deliver a single decisive recommendation as the panel's verdict.\n\n` +
+          `USER QUESTION:\n${text}\n\n` +
+          `PANEL RESPONSES:\n${panelBlock}\n\n` +
+          `Output exactly two sections, no preamble:\n` +
+          `1. **Where the panel converged / diverged** — one short paragraph naming who agreed on what and where they split.\n` +
+          `2. **VERDICT** — one sentence on what to do, in plain language. Start that sentence with the literal word VERDICT:`;
+
+        try {
+          const verdict = await runChatTurn({
+            prompt: synthPrompt,
+            cwd: session.hostDomain.path,
+            cli: synthCli,
+            model: synthModel,
+            isFirst: true,
+          });
+          const ts = Date.now();
+          persistMessage({
+            domain: session.hostDomain.name,
+            session_id: session.sessionId,
+            role: "assistant",
+            content: verdict,
+            ts,
+            cli: synthCli.kind,
+            model: synthModel,
+          });
+          setChats((m) => {
+            const cur = m.get(key);
+            if (!cur) return m;
+            return new Map(m).set(key, {
+              ...cur,
+              messages: [
+                ...cur.messages,
+                {
+                  role: "assistant" as const,
+                  content: verdict,
+                  ts,
+                  kind: "council-verdict" as const,
+                  cli: synthCli.kind,
+                  model: synthModel,
+                },
+              ],
+            });
+          });
+        } catch {
+          // synthesis failed silently — user still has the panel responses.
+        }
+      }
       setChats((m) => {
         const cur = m.get(key);
         if (!cur) return m;
@@ -1122,7 +1190,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   app={app}
                   view={view}
                   skillIdx={skillIdx}
-                  onPickSkill={(i) => setSkillIdx(i)}
+                  onPickSkill={(i) => {
+                    setSkillIdx(i);
+                    const sk = app.skills[i];
+                    if (sk) openChatForSkill(sk);
+                  }}
                   topBar={tabBar}
                 />
               );
@@ -1133,7 +1205,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 view={view}
                 skillIdx={skillIdx}
                 apps={apps}
-                onPickSkill={(i) => setSkillIdx(i)}
+                onPickSkill={(i) => {
+                  setSkillIdx(i);
+                  const sk = domain?.skills[i];
+                  if (sk) openChatForSkill(sk);
+                }}
                 topBar={tabBar}
               />
             );

@@ -54,7 +54,8 @@ export interface ChatMsg {
     | "distill-saved"
     | "distill-discarded"
     | "council-config"
-    | "council-response";
+    | "council-response"
+    | "council-verdict";
   cli?: CliKind; // for council-response bubbles
   model?: string;
 }
@@ -245,13 +246,6 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
         onPickSuggestion={(s) => {
           recordSuggestionClick(s.id);
           onSend(session.key, s.prompt);
-        }}
-      />
-      <SkillStrip
-        session={session}
-        onPickSkill={(skillId, title) => {
-          const msg = `Use the ${skillId} skill (${title}). Read its SKILL.md under ${session.hostDomain.path}/../skills/${skillId}/, confirm any inputs you need, then run it on this vault.`;
-          onSend(session.key, msg);
         }}
       />
       {councilMode && (
@@ -670,6 +664,9 @@ function MessageBubble({
   if (msg.kind === "council-response") {
     return <CouncilResponseBubble msg={msg} />;
   }
+  if (msg.kind === "council-verdict") {
+    return <CouncilVerdictBubble msg={msg} />;
+  }
   if (msg.role === "system") {
     return (
       <box flexDirection="column" paddingTop={1} paddingBottom={1}>
@@ -920,6 +917,32 @@ function CouncilResponseBubble({ msg }: { msg: ChatMsg }) {
         backgroundColor={theme.bg}
         title={title}
         titleAlignment="left"
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        {renderMarkdownLines(msg.content)}
+      </box>
+    </box>
+  );
+}
+
+// Final synthesized recommendation across the council. Visually distinct:
+// brighter gold border, thicker title, and a clear bottom-title hint.
+function CouncilVerdictBubble({ msg }: { msg: ChatMsg }) {
+  const synthCli = msg.cli ?? "claude";
+  const labelParts: string[] = [synthCli];
+  if (msg.model) labelParts.push(msg.model);
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <box
+        flexDirection="column"
+        border
+        borderColor={theme.goldBright}
+        backgroundColor={theme.bg}
+        title=" ⚖ council verdict "
+        titleAlignment="left"
+        bottomTitle={` synthesized by ${labelParts.join(" · ")} `}
+        bottomTitleAlignment="left"
         paddingLeft={1}
         paddingRight={1}
       >
