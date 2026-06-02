@@ -1,3 +1,4 @@
+import type React from "react";
 import { theme } from "./theme.ts";
 import {
   formatRelativeTime,
@@ -15,9 +16,10 @@ interface Props {
   skillIdx: number;
   apps: AppSkill[];
   onPickSkill: (i: number) => void;
+  topBar?: React.ReactNode;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar }: Props) {
   if (!domain) {
     return (
       <box
@@ -48,6 +50,7 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill }: Prop
       bottomTitle={` updated ${updated}  ·  skills ${domain.skills.length}  ·  open ${domain.openLoopCount} `}
       bottomTitleAlignment="left"
     >
+      {topBar}
       <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
         {view === "skills" ? (
           <SkillsList

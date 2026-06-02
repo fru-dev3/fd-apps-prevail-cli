@@ -106,7 +106,7 @@ export function Sidebar({
         count={domains.length}
         focused={focus === "domains"}
         flexGrow={3}
-        columnHeader="    domain        loops"
+        columnHeader="    domain        skills"
         followId={focus === "domains" ? `dom-${domains[domainIdx]?.name ?? ""}` : null}
         footer={<NewRow label="+ new domain" onClick={onNewDomain} />}
       >
@@ -115,8 +115,11 @@ export function Sidebar({
           const fg = active ? theme.selFg : theme.fg;
           const bg = active ? theme.selBg : theme.bgPanel;
           const pointer = active ? "› " : "  ";
-          const badgeColor = d.openLoopCount > 0 ? theme.warn : theme.fgFaint;
-          const badge = d.openLoopCount.toString().padStart(2, " ");
+          // Show skill count, not open-loop count — skills are the action
+          // surface for each domain, open loops live inside state.md.
+          const skillsCount = d.skills.length;
+          const badgeColor = skillsCount > 0 ? theme.gold : theme.fgFaint;
+          const badge = skillsCount.toString().padStart(2, " ");
           const icon = domainIcon(d.name);
           const iconFg = active ? theme.selFg : theme.gold;
           const namePadded = d.name.padEnd(14, " ").slice(0, 14);
@@ -144,7 +147,7 @@ export function Sidebar({
         count={apps.length}
         focused={focus === "apps"}
         flexGrow={2}
-        columnHeader="    app           loops"
+        columnHeader="    app           skills"
         followId={focus === "apps" ? `app-${apps[appIdx]?.id ?? ""}` : null}
         footer={<NewRow label="+ new app" onClick={onNewApp} />}
       >
@@ -153,8 +156,9 @@ export function Sidebar({
           const fg = active ? theme.selFg : theme.fg;
           const bg = active ? theme.selBg : theme.bgPanel;
           const pointer = active ? "› " : "  ";
-          const badgeColor = a.openLoopCount > 0 ? theme.warn : theme.fgFaint;
-          const badge = a.openLoopCount.toString().padStart(2, " ");
+          const skillsCount = a.skills.length;
+          const badgeColor = skillsCount > 0 ? theme.gold : theme.fgFaint;
+          const badge = skillsCount.toString().padStart(2, " ");
           // ★ marks community apps; vault apps get a per-id icon.
           const icon = a.community ? "★" : appIcon(a.id);
           const iconFg = active ? theme.selFg : a.community ? theme.gold : theme.gold;

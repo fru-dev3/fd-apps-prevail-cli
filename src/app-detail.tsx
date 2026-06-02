@@ -1,3 +1,4 @@
+import type React from "react";
 import { theme } from "./theme.ts";
 import {
   formatRelativeTime,
@@ -13,9 +14,10 @@ interface Props {
   view: ViewKey;
   skillIdx: number;
   onPickSkill: (i: number) => void;
+  topBar?: React.ReactNode;
 }
 
-export function AppDetail({ app, view, skillIdx, onPickSkill }: Props) {
+export function AppDetail({ app, view, skillIdx, onPickSkill, topBar }: Props) {
   const updated = formatRelativeTime(app.stateMtime);
   const domainsLabel =
     app.domains.length > 0 ? `used in ${app.domains.join(", ")}` : "no linked domains";
@@ -31,6 +33,7 @@ export function AppDetail({ app, view, skillIdx, onPickSkill }: Props) {
       bottomTitle={` ${communityMark}${domainsLabel}  ·  updated ${updated}  ·  skills ${app.skills.length} `}
       bottomTitleAlignment="left"
     >
+      {topBar}
       <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
         {view === "skills" ? (
           <SkillsList

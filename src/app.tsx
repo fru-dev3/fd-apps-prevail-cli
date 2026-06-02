@@ -1047,76 +1047,97 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           }}
         />
         <box flexDirection="column" flexGrow={1}>
-          {focus === "domains" && domain && !inEdit && (
-            <TabStrip
-              domainName={domain.name}
-              activeView={view}
-              inChat={Boolean(inChat)}
-              onPickView={(i) => {
-                setFocus("domains");
-                setViewIdx(i);
-                if (mode === "chat") setMode("idle");
-              }}
-              onPickChat={() => {
-                if (domain) openChatForDomain(domain);
-              }}
-              onEdit={() => {
-                if (mode === "chat") setMode("idle");
-                doEdit();
-              }}
-            />
-          )}
-          {focus === "apps" && app && !inEdit && (
-            <TabStrip
-              domainName={app.id}
-              activeView={view}
-              inChat={Boolean(inChat)}
-              onPickView={(i) => {
-                setFocus("apps");
-                setViewIdx(i);
-                if (mode === "chat") setMode("idle");
-              }}
-              onPickChat={() => {
-                if (app) openChatForApp(app);
-              }}
-              onEdit={() => {
-                if (mode === "chat") setMode("idle");
-                doEdit();
-              }}
-            />
-          )}
-          {inChat ? (
-            <ChatPane
-              session={activeSession!}
-              availableClis={clis}
-              tick={tick}
-              onSend={sendMessage}
-              onCommand={handleChatCommand}
-              onExit={exitChat}
-              onAutocompleteChange={setAutocompleteOpen}
-            />
-          ) : inEdit && editFilename && editTarget ? (
-            <EditorPane
-              target={editTarget}
-              filename={editFilename}
-              onExit={exitEditor}
-            />
-          ) : focus === "apps" && app ? (
-            <AppDetail
-              app={app}
-              view={view}
-              skillIdx={skillIdx}
-              onPickSkill={(i) => setSkillIdx(i)}
-            />
-          ) : (
-            <DomainDetail
-              domain={domain}
-              view={view}
-              skillIdx={skillIdx}
-              apps={apps}
-              onPickSkill={(i) => setSkillIdx(i)}
-            />
-          )}
+          {(() => {
+            const tabBar =
+              ((focus === "domains" && domain) || (focus === "apps" && app)) && !inEdit ? (
+                <TabStrip
+                  activeView={view}
+                  inChat={Boolean(inChat)}
+                  onPickView={(i) => {
+                    setFocus(focus);
+                    setViewIdx(i);
+                    if (mode === "chat") setMode("idle");
+                  }}
+                  onPickChat={() => {
+                    if (focus === "apps" && app) openChatForApp(app);
+                    else if (domain) openChatForDomain(domain);
+                  }}
+                  onEdit={() => {
+                    if (mode === "chat") setMode("idle");
+                    doEdit();
+                  }}
+                  cli={
+                    inChat && activeSession
+                      ? {
+                          clis,
+                          currentCli: activeSession.cli.kind,
+                          model: activeSession.model,
+                          onSwitchCli: (k) =>
+                            handleChatCommand(activeSession.key, {
+                              kind: "switch-cli",
+                              cli: k,
+                              model: undefined,
+                            }),
+                          onPickModel: (mdl) =>
+                            handleChatCommand(activeSession.key, {
+                              kind: "switch-model",
+                              model: mdl,
+                            }),
+                          onOpenCouncilConfig: () =>
+                            handleChatCommand(activeSession.key, {
+                              kind: "council-config",
+                            }),
+                        }
+                      : undefined
+                  }
+                />
+              ) : undefined;
+
+            if (inChat) {
+              return (
+                <ChatPane
+                  session={activeSession!}
+                  availableClis={clis}
+                  tick={tick}
+                  onSend={sendMessage}
+                  onCommand={handleChatCommand}
+                  onExit={exitChat}
+                  onAutocompleteChange={setAutocompleteOpen}
+                  topBar={tabBar}
+                />
+              );
+            }
+            if (inEdit && editFilename && editTarget) {
+              return (
+                <EditorPane
+                  target={editTarget}
+                  filename={editFilename}
+                  onExit={exitEditor}
+                />
+              );
+            }
+            if (focus === "apps" && app) {
+              return (
+                <AppDetail
+                  app={app}
+                  view={view}
+                  skillIdx={skillIdx}
+                  onPickSkill={(i) => setSkillIdx(i)}
+                  topBar={tabBar}
+                />
+              );
+            }
+            return (
+              <DomainDetail
+                domain={domain}
+                view={view}
+                skillIdx={skillIdx}
+                apps={apps}
+                onPickSkill={(i) => setSkillIdx(i)}
+                topBar={tabBar}
+              />
+            );
+          })()}
         </box>
       </box>
       <CommandBar

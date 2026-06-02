@@ -102,9 +102,10 @@ interface Props {
   onCommand: (key: string, command: ChatCommand) => void;
   onExit: () => void;
   onAutocompleteChange?: (open: boolean) => void;
+  topBar?: React.ReactNode;
 }
 
-export function ChatPane({ session, availableClis, tick, onSend, onCommand, onExit, onAutocompleteChange }: Props) {
+export function ChatPane({ session, availableClis, tick, onSend, onCommand, onExit, onAutocompleteChange, topBar }: Props) {
   const ref = useRef<any>(null);
   // Hoisted from InputBox so the popover renders ABOVE InputBox at the
   // chat-pane level, keeping the input row at a stable bottom position.
@@ -222,23 +223,12 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
       border
       borderColor={theme.borderFocus}
       backgroundColor={theme.bg}
+      title={` ${session.label} `}
+      titleAlignment="left"
       bottomTitle={` enter send · / for commands · esc back `}
       bottomTitleAlignment="left"
     >
-      <PickerBar
-        clis={availableClis}
-        currentCli={session.cli.kind}
-        model={session.model}
-        onSwitchCli={(cli) =>
-          onCommand(session.key, { kind: "switch-cli", cli, model: undefined })
-        }
-        onPickModel={(model) =>
-          onCommand(session.key, { kind: "switch-model", model })
-        }
-        onOpenCouncilConfig={() =>
-          onCommand(session.key, { kind: "council-config" })
-        }
-      />
+      {topBar}
       <Transcript
         session={session}
         tick={tick}
