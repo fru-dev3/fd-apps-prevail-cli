@@ -952,13 +952,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           `Your job: name the consensus, name the divergence, then deliver one decisive verdict. Do not hedge — pick a side.\n\n` +
           `USER QUESTION:\n${text}\n\n` +
           `PANEL RESPONSES:\n${panelBlock}\n\n` +
+          `MAJORITY RULE — read carefully:\n` +
+          `When panelists give different concrete answers to the same factual question (a specific date, number, dollar amount, name, yes/no call, recommended action), the verdict MUST side with the majority answer. Example: if 2 panelists say "file in June" and 1 says "file in August", the verdict is June — full stop. Treat near-identical answers as the same vote (June 13 and June 14 are both "June"). The minority position only wins if it cites a hard external fact the majority got demonstrably wrong (a wrong year, a missed deadline, etc); if you invoke this exception, name the fact explicitly in Divergence.\n\n` +
           `Output exactly these three sections in this order, no preamble, no closing remarks:\n\n` +
           `## Consensus\n` +
-          `Bulleted list of every concrete point the panel agreed on. If they disagreed on everything, write "None — see divergence."\n\n` +
+          `Bulleted list of every concrete point the panel agreed on (or where a clear majority converged). If they disagreed on everything, write "None — see divergence."\n\n` +
           `## Divergence\n` +
-          `Bulleted list of every point where panelists materially disagreed. For each bullet, name which panelist took which side using their label (e.g. "Claude Code: X, Codex: Y"). Skip stylistic differences; only flag substantive disagreements.\n\n` +
+          `Bulleted list of every point where panelists materially disagreed. For each bullet, name which panelist took which side using their label (e.g. "Claude Code: June 14, Codex: August 14, Gemini: June 13 → majority: June"). Skip stylistic differences; only flag substantive disagreements.\n\n` +
           `## Verdict\n` +
-          `One single sentence starting with the literal word "VERDICT:" giving the decisive call. Plain language. No qualifiers like "consider" or "you might". Tell the user what to do.`;
+          `One single sentence starting with the literal word "VERDICT:" giving the decisive call. Plain language. No qualifiers like "consider" or "you might". Tell the user what to do. The verdict must reflect the majority position from above.`;
 
         try {
           const verdict = await runChatTurn({
