@@ -450,6 +450,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         messages: makeInitialMessages(d.name, cli),
         pending: false,
         hasFirstTurn: false,
+        usage: { calls: 0, promptChars: 0, replyChars: 0 },
         sessionId: makeSessionId(),
       };
       return new Map(m).set(key, session);
@@ -478,6 +479,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         messages: makeInitialMessages(label, cli),
         pending: false,
         hasFirstTurn: false,
+        usage: { calls: 0, promptChars: 0, replyChars: 0 },
         sessionId: makeSessionId(),
       };
       return new Map(m).set(key, session);
@@ -538,6 +540,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       messages: makeInitialMessages(open.label, cli),
       pending: false,
       hasFirstTurn: false,
+      usage: { calls: 0, promptChars: 0, replyChars: 0 },
       sessionId: makeSessionId(),
     };
     setChats((m) => new Map(m).set(open.key, session));
@@ -1051,7 +1054,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               idx >= 0
                 ? [...cur.messages.slice(0, idx), responseMsg, ...cur.messages.slice(idx + 1)]
                 : [...cur.messages, responseMsg];
-            return new Map(m).set(key, { ...cur, messages: nextMessages });
+            return new Map(m).set(key, {
+              ...cur,
+              messages: nextMessages,
+              usage: {
+                calls: cur.usage.calls + 1,
+                promptChars: cur.usage.promptChars + promptForCli.length,
+                replyChars: cur.usage.replyChars + response.length,
+              },
+            });
           });
         })
         .catch((err: Error) => {
@@ -1201,6 +1212,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               messages: nextMessages,
               pending: false,
               hasFirstTurn: true,
+              usage: {
+                calls: cur.usage.calls + 1,
+                promptChars: cur.usage.promptChars + synthPrompt.length,
+                replyChars: cur.usage.replyChars + verdict.length,
+              },
             });
           });
           return; // verdict landed — done.
@@ -1295,6 +1311,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             ],
             pending: false,
             hasFirstTurn: true,
+            usage: {
+              calls: cur.usage.calls + 1,
+              promptChars: cur.usage.promptChars + promptForCli.length,
+              replyChars: cur.usage.replyChars + response.length,
+            },
           });
         });
       })

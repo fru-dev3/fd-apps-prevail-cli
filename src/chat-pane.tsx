@@ -77,6 +77,12 @@ export interface ChatSession {
   pending: boolean;
   hasFirstTurn: boolean;
   sessionId: string;
+  // Per-session usage counter for the status-line meter. calls = total CLI
+  // spawns (council fires N+1 per question for N panelists + chair).
+  // promptChars + replyChars are coarse proxies for cost — exact tokens
+  // would require per-CLI envelope parsing which the wrappers don't all
+  // expose consistently. Used only for display; never persisted.
+  usage: { calls: number; promptChars: number; replyChars: number };
 }
 
 export type ChatCommand =
@@ -1357,8 +1363,45 @@ function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: numb
             : "ready · seeded with " + describeSeed(session.seed)}
         </text>
       )}
+      <box flexGrow={1} />
+      <UsageBadge usage={session.usage} />
     </box>
   );
+}
+
+// Right-aligned session usage meter. Shows # of CLI invocations + a
+// proxy size + estimated cost. Council fires N+1 calls per turn, so this
+// is the cleanest spot to keep users grounded in what each turn actually
+// costs. Numbers are coarse (chars, not tokens) so the cost is rendered
+// with a tilde — exact billing would need per-CLI envelope parsing the
+// wrappers don't all expose.
+function UsageBadge({ usage }: { usage: ChatSession["usage"] }) {
+  if (usage.calls === 0) return <text fg={theme.fgFaint}></text>;
+  // ~4 chars per token is a decent rule of thumb across these models.
+  // Mixed-tier blended cost ≈ $3 in / $15 out per 1M tokens for the
+  // current Opus/GPT-5/Gemini Pro range — round numbers, displayed as
+  // approximate so nobody mistakes it for an invoice.
+  const tokensIn = Math.round(usage.promptChars / 4);
+  const tokensOut = Math.round(usage.replyChars / 4);
+  const dollars = (tokensIn / 1_000_000) * 3 + (tokensOut / 1_000_000) * 15;
+  const costLabel = dollars < 0.01 ? "<$0.01" : `~$${dollars.toFixed(2)}`;
+  return (
+    <text fg={theme.fgFaint}>
+      <span fg={theme.fgDim}>{usage.calls}</span>
+      {" calls · "}
+      <span fg={theme.fgDim}>
+        {fmtK(tokensIn)}↑ {fmtK(tokensOut)}↓
+      </span>
+      {" tokens · "}
+      <span fg={theme.gold}>{costLabel}</span>
+    </text>
+  );
+}
+
+function fmtK(n: number): string {
+  if (n < 1000) return n.toString();
+  if (n < 1_000_000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
 }
 
 interface SlashCommandSpec {
