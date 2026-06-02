@@ -193,6 +193,10 @@ Inside any chat:
 
 [OpenTUI](https://opentui.com) (Zig core, TypeScript bindings, React reconciler) + [Bun](https://bun.sh).
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for what's shipped in each tag. Latest releases on [GitHub](https://github.com/fru-dev3/prevail/releases).
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
