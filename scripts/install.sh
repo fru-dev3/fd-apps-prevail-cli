@@ -37,6 +37,15 @@ printf "\n  %s╲ │ ╱%s    %sPREVAIL%s\n" "$gold" "$reset" "$bold$gold" "$re
 printf "  %s─ ◈ ─%s    a personal ai cockpit\n" "$gold" "$reset"
 printf "  %s╱ │ ╲%s    %sinstalling for %s%s\n\n" "$gold" "$reset" "$dim" "$target" "$reset"
 
+# Auto-migrate legacy ~/.aireadyu/ (pre-rename installs from v0.1.x) into
+# the new ~/.prevail/. Only fires when the new dir doesn't exist yet, so
+# repeat-installs don't shuffle live data around. Preserves config + any
+# user-installed plugin apps the user had collected.
+if [ -d "$HOME/.aireadyu" ] && [ ! -d "$DATA_DIR" ]; then
+  say "migrating ~/.aireadyu → $DATA_DIR (legacy v0.1.x layout)"
+  mv "$HOME/.aireadyu" "$DATA_DIR"
+fi
+
 if [ "$VERSION" = "latest" ]; then
   say "fetching latest release tag..."
   VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')

@@ -249,7 +249,7 @@ async function main() {
     return;
   }
   if (args.version) {
-    console.log("prevail 0.1.2");
+    console.log("prevail 0.2.0");
     return;
   }
   if (args.doctor) {
