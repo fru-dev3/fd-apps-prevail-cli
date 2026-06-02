@@ -20,4 +20,4 @@ jobs:
       - name: unit tests + --help smoke
         run: bun run test
       - name: build (verify single-binary compiles)
-        run: bun build --compile ./src/index.tsx --outfile aireadyu
+        run: bun build --compile ./src/index.tsx --outfile prevail

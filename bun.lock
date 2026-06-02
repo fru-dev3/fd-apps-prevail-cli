@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "aireadyu",
+      "name": "prevail",
       "dependencies": {
         "@opentui/core": "^0.3.0",
         "@opentui/react": "^0.3.0",

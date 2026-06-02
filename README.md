@@ -8,12 +8,12 @@ just a folder of markdown. Each chat talks to Claude Code, Codex, or Gemini.
 All conversations run in parallel.
 
 ```
-   ╲ │ ╱     █▀█ █▀█ █▀▀ █ █ ▄▀█ █                       │   SUNDAY · JUN 1 · 2026
-   ─ ◈ ─     █▀▀ █▀▄ ██▄ ▀▄▀ █▀█ █▄▄                     │   15:47  ·  live since 2026
-   ╱ │ ╲     prev·AI·l — your AI life cockpit            │
-                                                         │   vault   ~/.ai/vault
-  EST 2026   19 life domains · 41 life apps · 65 open    │   cli     claude · codex · gemini
-                                                         │   chat    ●● 2 chats active
+   ╲ │ ╱     █▀█ █▀▄ █▀▀ █ █ ▄▀█ █ █              │   SUNDAY · JUN 1 · 2026
+   ─ ◈ ─     █▀▀ █▀▄ ██▄  █  █▀█ █ █▄▄            │   15:47  ·  live since 2026
+   ╱ │ ╲     prev · AI · l  —  your AI cockpit    │
+                                                  │   vault   ~/.ai/vault
+  EST 2026   19 domains · 41 apps · 65 open       │   cli     claude · codex · gemini
+                                                  │   chat    ●● 2 chats active
 ```
 
 ## Install

@@ -149,13 +149,19 @@ function Header() {
         <text fg={theme.goldDim}> ╱ │ ╲ </text>
       </box>
       <box flexDirection="column" paddingLeft={2}>
-        <text fg={theme.gold} attributes={1}>
-          █▀█ █   █▀█ █▀▀ ▄▀█ █▀▄ █▄█   █ █
+        {/* prevAIl — "AI" rendered in goldBright while "prev" and "l"
+            sit in plain gold, mirroring the main cockpit logo. */}
+        <text attributes={1}>
+          <span fg={theme.gold}>{"█▀█ █▀▄ █▀▀ █ █ "}</span>
+          <span fg={theme.goldBright}>{"▄▀█ █"}</span>
+          <span fg={theme.gold}>{" █  "}</span>
         </text>
-        <text fg={theme.gold} attributes={1}>
-          █▀█ █   █▀▄ ██▄ █▀█ █▄▀  █    █▄█
+        <text attributes={1}>
+          <span fg={theme.gold}>{"█▀▀ █▀▄ ██▄  █  "}</span>
+          <span fg={theme.goldBright}>{"█▀█ █"}</span>
+          <span fg={theme.gold}>{" █▄▄"}</span>
         </text>
-        <text fg={theme.goldDim}>first run · welcome</text>
+        <text fg={theme.goldDim}>first run · welcome to prevAIl</text>
       </box>
     </box>
   );

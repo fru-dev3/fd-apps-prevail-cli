@@ -47,21 +47,21 @@ jobs:
           mkdir -p dist
           bun build --compile \
             --target=${{ matrix.bun-target }} \
-            --outfile=dist/aireadyu \
+            --outfile=dist/prevail \
             src/index.tsx
           # bundle the vault-demo and operating manual alongside the binary
           cp -R vault-demo dist/vault-demo
           cp AGENTS-operating.md dist/AGENTS-operating.md
-          chmod +x dist/aireadyu
+          chmod +x dist/prevail
 
       - name: package
         working-directory: dist
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
-          tar -czf "aireadyu-${VERSION}-${{ matrix.target }}.tar.gz" aireadyu vault-demo AGENTS-operating.md
+          tar -czf "prevail-${VERSION}-${{ matrix.target }}.tar.gz" prevail vault-demo AGENTS-operating.md
           ls -la
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/aireadyu-*.tar.gz
+          files: dist/prevail-*.tar.gz
           generate_release_notes: true
