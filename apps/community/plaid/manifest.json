@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "description": "Aggregate bank, brokerage, and credit card transaction history via the Plaid API. Used by wealth, tax, and business domains to keep state.md in sync with the institutions Plaid is linked to.",
   "domains": ["wealth", "tax", "business"],
+  "integration": "api",
+  "connection": "REST API. Authenticate with PLAID_CLIENT_ID + PLAID_SECRET (env vars). Per-institution PLAID_ACCESS_TOKEN values are stored in auth/ — one per linked institution. The connector polls /transactions/sync for incremental updates; pulled rows land under data/transactions/<institution>/YYYY-MM.jsonl for any domain skill to consume.",
   "auth": "api-key",
   "auth_env_vars": ["PLAID_CLIENT_ID", "PLAID_SECRET", "PLAID_ACCESS_TOKEN"],
   "homepage": "https://plaid.com",

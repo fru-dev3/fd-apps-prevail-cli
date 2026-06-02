@@ -157,12 +157,24 @@ export function Sidebar({
           const bg = active ? theme.selBg : theme.bgPanel;
           const pointer = active ? "› " : "  ";
           const skillsCount = a.skills.length;
+          // Connector status glyph + color. Leading checkbox:
+          //   ☑  = connected and healthy
+          //   ☒  = error or expired (re-auth needed)
+          //   ☐  = not configured yet (or freshly installed)
+          // This replaces the per-id app icon for connectors that have
+          // explicit status; legacy apps without status info still get ☐.
+          const connGlyph =
+            a.status === "connected" ? "☑" :
+            a.status === "error" || a.status === "expired" ? "☒" :
+            "☐";
+          const connFg = active
+            ? theme.selFg
+            : a.status === "connected" ? theme.ok
+            : a.status === "error" || a.status === "expired" ? theme.warn
+            : theme.fgDim;
           const badgeColor = skillsCount > 0 ? theme.gold : theme.fgFaint;
           const badge = skillsCount.toString().padStart(2, " ");
-          // ★ marks community apps; vault apps get a per-id icon.
-          const icon = a.community ? "★" : appIcon(a.id);
-          const iconFg = active ? theme.selFg : a.community ? theme.gold : theme.gold;
-          const namePadded = a.id.padEnd(14, " ").slice(0, 14);
+          const namePadded = a.id.padEnd(13, " ").slice(0, 13);
           const status = appStatus.get(a.id) ?? "idle";
           return (
             <box
@@ -174,7 +186,7 @@ export function Sidebar({
               onMouseDown={() => onPickApp(i)}
             >
               <text fg={fg} bg={bg}>{pointer}</text>
-              <text fg={iconFg} bg={bg}>{icon} </text>
+              <text fg={connFg} bg={bg}>{connGlyph} </text>
               <text fg={fg} bg={bg}>{namePadded}</text>
               <text fg={badgeColor} bg={bg}>{badge}</text>
               <StatusGlyph status={status} tick={tick} bg={bg} />

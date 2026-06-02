@@ -367,10 +367,17 @@ function extractStateHeadline(content: string, max: number): string[] {
 // openLoopCount, stateMtime, skills) plus app-specific metadata. Vault apps
 // (<vault>/apps/<id>/) populate hasState=true and a real skill list.
 // Community apps populate hasState=false and just point at their SKILL.md.
+// An "app" (now also called a "connector") is a third-party integration —
+// US Bank, Google Calendar, MyChart, etc — that produces data which one
+// or more life domains consume. The shape evolved from "skill bundle that
+// happened to be filed under apps/" to a richer record with explicit
+// connection metadata + per-connector health.
 export interface AppSkill {
   id: string;
   title: string;
   description: string;
+  // Life domains that consume this connector's data. A connector can
+  // be wired to multiple — US Bank statements feed wealth, tax, and home.
   domains: string[];
   path: string;
   hasState: boolean;
@@ -379,7 +386,31 @@ export interface AppSkill {
   skills: DomainSkill[];
   community: boolean;
   manifestPath?: string;
+  // --- new connector fields (all optional so legacy apps keep loading) ---
+  // How the connector talks to the third party. "api" = REST/GraphQL with
+  // stored key; "oauth" = token-refresh flow; "browser" = playwright/cookie
+  // scrape; "mcp" = wrapped via an installed MCP server; "manual" = user
+  // drops files in a watched folder.
+  integration?: "api" | "oauth" | "browser" | "mcp" | "manual";
+  // Free-form human-readable description of HOW the connector connects —
+  // rendered in the app detail view's Connection section. Comes from
+  // connection.md in the connector folder if present.
+  connectionNotes?: string;
+  // Current health, derived from connection-status.json. Defaults to
+  // "not-configured" when missing.
+  status: ConnectorStatus;
+  // Last successful action timestamp (ms epoch), null if never run.
+  lastSuccessTs: number | null;
+  // Human label of the last error, if any.
+  lastError?: string;
+  // Whether the connector folder contains anything bespoke beyond the
+  // bundled manifest (auth files, downloaded data, status file). Used by
+  // the sidebar to differentiate "freshly installed, untouched" from
+  // "in use" at a glance.
+  configured: boolean;
 }
+
+export type ConnectorStatus = "connected" | "not-configured" | "expired" | "error";
 
 export interface CommunityAppManifest {
   id: string;
@@ -388,6 +419,12 @@ export interface CommunityAppManifest {
   domains?: string[];
   version?: string;
   homepage?: string;
+  // New: integration type metadata (optional). Older manifests without
+  // this field default to "manual" at scan time.
+  integration?: AppSkill["integration"];
+  // New: short description of how the connector connects. Inline
+  // alternative to a separate connection.md file.
+  connection?: string;
 }
 
 function communityAppsDirs(): string[] {
@@ -433,6 +470,7 @@ export function scanCommunityApps(): AppSkill[] {
         continue;
       }
       seen.add(e.name);
+      const conn = readConnector(root);
       out.push({
         id: manifest.id || e.name,
         title: manifest.name || e.name,
@@ -442,14 +480,62 @@ export function scanCommunityApps(): AppSkill[] {
         hasState: false,
         openLoopCount: 0,
         stateMtime: null,
-        skills: [],
+        skills: scanAppSkills(root),
         community: true,
         manifestPath,
+        integration: manifest.integration ?? "manual",
+        connectionNotes: manifest.connection ?? conn.notes,
+        status: conn.status,
+        lastSuccessTs: conn.lastSuccessTs,
+        lastError: conn.lastError,
+        configured: conn.configured,
       });
     }
   }
   out.sort((a, b) => a.id.localeCompare(b.id));
   return out;
+}
+
+// Read the connector-status side-channel files (connection.md and
+// connection-status.json) co-located with the connector manifest. All
+// fields are optional; defaults assume an untouched, never-run connector.
+interface ConnectorState {
+  notes: string;
+  status: ConnectorStatus;
+  lastSuccessTs: number | null;
+  lastError?: string;
+  configured: boolean;
+}
+function readConnector(root: string): ConnectorState {
+  let notes = "";
+  const connectionMd = join(root, "connection.md");
+  if (existsSync(connectionMd)) {
+    try { notes = readFileSync(connectionMd, "utf8").trim(); } catch {}
+  }
+  let status: ConnectorStatus = "not-configured";
+  let lastSuccessTs: number | null = null;
+  let lastError: string | undefined;
+  const statusJson = join(root, "connection-status.json");
+  if (existsSync(statusJson)) {
+    try {
+      const raw = JSON.parse(readFileSync(statusJson, "utf8"));
+      if (raw && typeof raw === "object") {
+        if (typeof raw.status === "string" &&
+            ["connected", "not-configured", "expired", "error"].includes(raw.status)) {
+          status = raw.status as ConnectorStatus;
+        }
+        if (typeof raw.lastSuccessTs === "number") lastSuccessTs = raw.lastSuccessTs;
+        if (typeof raw.lastError === "string") lastError = raw.lastError;
+      }
+    } catch {}
+  }
+  // "configured" = anything in the auth/ folder OR a non-empty status
+  // file. Distinguishes "freshly cloned bundled connector with zero local
+  // state" from "user has done at least one thing here".
+  const authDir = join(root, "auth");
+  const hasAuth = existsSync(authDir);
+  const configured = hasAuth || existsSync(statusJson);
+  return { notes, status, lastSuccessTs, lastError, configured };
 }
 
 // Vault apps live at <vault>/apps/<id>/ and mirror the domain shape exactly:
@@ -485,6 +571,7 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
         openLoopCount = countUncheckedBoxes(content);
       } catch {}
     }
+    const conn = readConnector(appPath);
     out.push({
       id: entry.name,
       title: extractAppTitle(appPath, entry.name),
@@ -496,6 +583,15 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
       stateMtime,
       skills: scanAppSkills(appPath),
       community: false,
+      // Vault apps don't yet ship integration metadata in their state.md
+      // frontmatter — leave undefined; the detail view shows "manual"
+      // when missing. Future: parse from state.md frontmatter.
+      integration: undefined,
+      connectionNotes: conn.notes,
+      status: conn.status,
+      lastSuccessTs: conn.lastSuccessTs,
+      lastError: conn.lastError,
+      configured: conn.configured || hasState,
     });
   }
   out.sort((a, b) => a.id.localeCompare(b.id));
