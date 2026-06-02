@@ -311,9 +311,13 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
         onSubmit={handleSubmit}
         onAutocompleteChange={onAutocompleteChange}
         onPopoverChange={setPopover}
-        recentPrompts={session.messages
-          .filter((m) => m.role === "user" && m.content.trim().length > 0)
-          .map((m) => m.content)}
+        // Cross-session ↑/↓ recall: take the most recent 50 user prompts
+        // for this domain from the persisted log, oldest first, then
+        // append the in-progress session's user turns. ↑ walks back from
+        // newest (current session) into older history (prior sessions).
+        // Deduplicate adjacent repeats so spamming the same prompt twice
+        // doesn't make the user press ↑ twice to skip the dupe.
+        recentPrompts={buildRecallablePrompts(session)}
       />
     </box>
   );
@@ -1767,6 +1771,35 @@ export const SLASH_HELP = [
   "model is passed straight through to the CLI (--model <name>),",
   "so whatever your CLI accepts will work — opus, sonnet, gpt-5, etc.",
 ].join("\n");
+
+// Build the prompt-history list for ↑/↓ recall in the input. Pulls the last
+// 50 user prompts for this domain from the persisted SQLite log (newest
+// first → reversed to oldest first), then appends the live session's user
+// turns so the most recent thing the user just said is at the end. Adjacent
+// duplicates are collapsed so repeated prompts don't bloat the recall stack.
+function buildRecallablePrompts(session: ChatSession): string[] {
+  let priorRows: { content: string }[] = [];
+  try {
+    priorRows = getUserPromptsForDomain(session.hostDomain.name, 50);
+  } catch {}
+  // getUserPromptsForDomain returns newest-first; we want oldest-first so
+  // that ↑ walks from the END of the array (most recent prior) backward.
+  const prior = priorRows.map((r) => r.content).reverse();
+  const inSession = session.messages
+    .filter((m) => m.role === "user" && m.content.trim().length > 0)
+    .map((m) => m.content);
+  // Some in-session prompts will also appear in the persisted log (the
+  // session writes through on submit). Dedupe by collapsing adjacent
+  // duplicates after concatenation — handles both the "same prompt twice
+  // in a row" case AND the persistence overlap.
+  const combined: string[] = [];
+  for (const p of [...prior, ...inSession]) {
+    if (combined.length === 0 || combined[combined.length - 1] !== p) {
+      combined.push(p);
+    }
+  }
+  return combined;
+}
 
 export function makeInitialMessages(label: string, cli: AvailableCli): ChatMsg[] {
   return [
