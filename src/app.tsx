@@ -24,6 +24,8 @@ import {
   readWebAccess,
   setCouncilClis,
   setCouncilModel,
+  addCouncilModel,
+  removeCouncilModel,
   setWebAccess,
   type CliKind,
 } from "./config.ts";
@@ -665,19 +667,35 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         }
       } else if (cmd.kind === "council-model") {
         if (!cmd.cli) {
-          systemNote = "usage: /council model <cli> <model>  ·  /council model <cli> default";
+          systemNote =
+            "usage: /council model <cli> <model>            (replace list — single variant)\n" +
+            "       /council model <cli> add <model>       (add a variant for cross-model compare)\n" +
+            "       /council model <cli> remove <model>    (drop a variant)\n" +
+            "       /council model <cli> default           (clear all variants — use CLI's default)";
         } else if (!isCliKind(cmd.cli)) {
           systemNote = `unknown CLI: ${cmd.cli}. valid: ${ALL_CLI_KINDS.join(", ")}`;
         } else if (!cmd.model.trim()) {
-          systemNote = `usage: /council model ${cmd.cli} <model>  ·  /council model ${cmd.cli} default`;
+          systemNote = `usage: /council model ${cmd.cli} <model>  ·  /council model ${cmd.cli} add <model>  ·  /council model ${cmd.cli} default`;
         } else {
-          const wantDefault =
-            cmd.model.trim().toLowerCase() === "default" ||
-            cmd.model.trim().toLowerCase() === "clear";
-          setCouncilModel(cmd.cli, wantDefault ? null : cmd.model);
-          systemNote = wantDefault
-            ? `cleared pinned model for ${cmd.cli}.`
-            : `pinned ${cmd.cli} to model: ${cmd.model.trim()}.`;
+          // Sub-action parsing: first token may be add|remove|default|clear,
+          // remainder is the model name (allows e.g. "add gpt-5.4-mini").
+          const parts = cmd.model.trim().split(/\s+/);
+          const head = parts[0]?.toLowerCase() ?? "";
+          const tail = parts.slice(1).join(" ").trim();
+          if (head === "default" || head === "clear") {
+            setCouncilModel(cmd.cli, null);
+            systemNote = `cleared all model variants for ${cmd.cli} (will use default).`;
+          } else if (head === "add" && tail) {
+            addCouncilModel(cmd.cli, tail);
+            systemNote = `added ${tail} to ${cmd.cli} panel.`;
+          } else if (head === "remove" && tail) {
+            removeCouncilModel(cmd.cli, tail);
+            systemNote = `removed ${tail} from ${cmd.cli} panel.`;
+          } else {
+            // Bare model name: replace the list with this single entry.
+            setCouncilModel(cmd.cli, cmd.model.trim());
+            systemNote = `${cmd.cli} panel now: ${cmd.model.trim()}.`;
+          }
         }
       } else if (cmd.kind === "heatmap") {
         const days = cmd.days ?? 30;
@@ -798,16 +816,25 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       });
   }
 
+  // A panelist is one (cli, model) pair. Expanding the configured CLI list
+  // against each CLI's model variants lets users compare e.g. Claude Opus 4.7
+  // vs 4.8 in the same panel.
   function resolveCouncilPanel(): {
-    panel: AvailableCli[];
-    models: Partial<Record<string, string>>;
+    panelists: { cli: AvailableCli; model: string }[];
   } {
     const cfg = readCouncilConfig();
-    let panel = clis;
+    let activeClis = clis;
     if (cfg.clis && cfg.clis.length > 0) {
-      panel = clis.filter((c) => cfg.clis!.includes(c.kind));
+      activeClis = clis.filter((c) => cfg.clis!.includes(c.kind));
     }
-    return { panel, models: cfg.models };
+    const panelists: { cli: AvailableCli; model: string }[] = [];
+    for (const cli of activeClis) {
+      const variants = cfg.models[cli.kind] ?? [""]; // default = single panelist, default model
+      for (const m of variants) {
+        panelists.push({ cli, model: m });
+      }
+    }
+    return { panelists };
   }
 
   function runCouncil(key: string, prompt: string) {
@@ -817,26 +844,28 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       setMessage("no CLIs detected — install claude / codex / gemini first");
       return;
     }
-    const { panel: configuredPanel, models } = resolveCouncilPanel();
-    // Drop any panelist that failed the launch-time `--version` probe so the
-    // user doesn't get a guaranteed-broken bubble in the response set. A null
-    // health entry means the probe hasn't finished yet — give it the benefit
-    // of the doubt and let it run.
-    const skipped: AvailableCli[] = [];
-    const panel = configuredPanel.filter((c) => {
-      const h = cliHealth.get(c.kind);
+    const { panelists: configuredPanelists } = resolveCouncilPanel();
+    // Drop any panelist whose CLI failed the launch-time probe — same
+    // (cli, model) pairs as before but indexed by panelist now. Health is
+    // tracked per CLI (binary works/not), so all model variants of an
+    // unhealthy CLI are skipped together.
+    const skippedClis = new Set<string>();
+    const panelists = configuredPanelists.filter(({ cli }) => {
+      const h = cliHealth.get(cli.kind);
       if (h && !h.ok) {
-        skipped.push(c);
+        skippedClis.add(cli.kind);
         return false;
       }
       return true;
     });
-    if (skipped.length > 0) {
-      setMessage(
-        `skipped ${skipped.map((c) => c.label).join(", ")} — failed launch probe`,
-      );
+    const skippedLabels = Array.from(skippedClis).map((kind) => {
+      const c = clis.find((x) => x.kind === kind);
+      return c?.label ?? kind;
+    });
+    if (skippedLabels.length > 0) {
+      setMessage(`skipped ${skippedLabels.join(", ")} — failed launch probe`);
     }
-    if (panel.length === 0) {
+    if (panelists.length === 0) {
       setMessage(
         "council panel is empty after filtering — /council config or /council use ... to fix",
       );
@@ -862,21 +891,17 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       cli: "council",
       model: "",
     });
-    // Stable timestamps so we can find and replace per-panelist placeholders
-    // when each call returns. One ts per panelist, derived from userTs so
-    // they sort correctly into the transcript.
-    const pendingTsByCli = new Map<string, number>();
-    panel.forEach((c, i) => pendingTsByCli.set(c.kind, userTs + 100 + i));
+    // One ts per panelist (not per CLI) so we can have multiple panelists
+    // sharing a CLI — e.g. Claude opus-4-7 AND Claude opus-4-8 — and still
+    // replace the right placeholder when each lands.
+    const pendingTsByIdx = panelists.map((_, i) => userTs + 100 + i);
 
     setChats((m) => {
       const cur = m.get(key);
       if (!cur) return m;
       const introTs = userTs + 1;
-      const panelLabel = panel
-        .map((c) => {
-          const mdl = models[c.kind];
-          return mdl ? `${c.label}·${mdl}` : c.label;
-        })
+      const panelLabel = panelists
+        .map(({ cli, model }) => (model ? `${cli.label}·${model}` : cli.label))
         .join(" · ");
       const introMsgs: ChatSession["messages"] = [
         userMsg,
@@ -886,24 +911,24 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           ts: introTs,
         },
       ];
-      if (skipped.length > 0) {
+      if (skippedLabels.length > 0) {
         introMsgs.push({
           role: "system" as const,
-          content: `skipped (failed launch probe): ${skipped.map((c) => c.label).join(", ")}`,
+          content: `skipped (failed launch probe): ${skippedLabels.join(", ")}`,
           ts: introTs + 1,
         });
       }
       // Drop a "thinking" placeholder bubble per panelist immediately so
       // the user sees all panelists working at once instead of waiting in
       // silence for the first one to return.
-      panel.forEach((c) => {
+      panelists.forEach(({ cli, model }, i) => {
         introMsgs.push({
           role: "assistant" as const,
           content: "",
-          ts: pendingTsByCli.get(c.kind)!,
+          ts: pendingTsByIdx[i]!,
           kind: "council-pending" as const,
-          cli: c.kind,
-          model: models[c.kind] ?? "",
+          cli: cli.kind,
+          model,
         });
       });
       return new Map(m).set(key, {
@@ -944,21 +969,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       });
     }
 
-    const calls = panel.map((cli) =>
+    const calls = panelists.map(({ cli, model: mdl }, panelistIdx) =>
       withTimeout(
         runChatTurn({
           prompt: promptForCli,
           cwd: session.hostDomain.path,
           cli,
-          model: models[cli.kind] ?? "",
+          model: mdl,
           isFirst: true,
         }),
         PANELIST_TIMEOUT_MS,
-        cli.label,
+        mdl ? `${cli.label}·${mdl}` : cli.label,
       )
         .then((response) => {
           const ts = Date.now();
-          const mdl = models[cli.kind] ?? "";
           collected.push({ cli, model: mdl, response, ok: true });
           persistMessage({
             domain: session.hostDomain.name,
@@ -969,8 +993,9 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             cli: cli.kind,
             model: mdl,
           });
-          // Replace the pending placeholder for this CLI with the real reply.
-          const pendingTs = pendingTsByCli.get(cli.kind);
+          // Replace the pending placeholder for THIS panelist (by ts —
+          // multiple panelists may share a CLI so kind alone isn't enough).
+          const pendingTs = pendingTsByIdx[panelistIdx]!;
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
@@ -994,9 +1019,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         })
         .catch((err: Error) => {
           const ts = Date.now();
-          const mdl = models[cli.kind] ?? "";
           collected.push({ cli, model: mdl, response: err.message, ok: false });
-          const pendingTs = pendingTsByCli.get(cli.kind);
+          const pendingTs = pendingTsByIdx[panelistIdx]!;
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
@@ -1024,8 +1048,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       const good = collected.filter((c) => c.ok);
       // Need ≥2 panel responses for a synthesis to be meaningful.
       if (good.length >= 2) {
-        const synthCli = panel[0]!; // use the first panel member to synthesize
-        const synthModel = models[synthCli.kind] ?? "";
+        // The chair is the first panelist that actually returned a valid
+        // response (not necessarily the first configured one — if that one
+        // timed out we'd be stuck). Falls back to first configured.
+        const synthSource = good[0] ?? panelists[0]!;
+        const synthCli = synthSource.cli;
+        const synthModel = synthSource.model;
         // Drop a "synthesizing" placeholder so the user sees step 2 happen
         // explicitly (panel → synth → verdict) rather than wondering why the
         // chair is "thinking" alongside the panel.

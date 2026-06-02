@@ -19,21 +19,42 @@ export interface UserConfig {
   // Default (when missing) is "allow" — so existing configs keep working.
   webAccess?: "allow" | "deny";
   // /council panel — which CLIs participate (default: all detected) and which
-  // model to pin per CLI (default: each CLI's default).
+  // models to run per CLI (default: each CLI's default). councilModels became
+  // string[] in v0.3 so you can compare Claude Opus 4.7 vs 4.8 in the same
+  // panel; pre-v0.3 single-string values are still read and auto-upgraded.
   councilClis?: CliKind[];
-  councilModels?: Partial<Record<CliKind, string>>;
+  councilModels?: Partial<Record<CliKind, string[] | string>>;
 }
 
 export interface CouncilConfig {
   clis: CliKind[] | null; // null = use all detected
-  models: Partial<Record<CliKind, string>>;
+  // Per-CLI list of model variants to run as separate panelists. Empty list
+  // (or empty string entry) means "use the CLI's default model once".
+  models: Partial<Record<CliKind, string[]>>;
+}
+
+function normalizeModels(
+  raw: Partial<Record<CliKind, string[] | string>> | undefined,
+): Partial<Record<CliKind, string[]>> {
+  if (!raw) return {};
+  const out: Partial<Record<CliKind, string[]>> = {};
+  for (const k of Object.keys(raw) as CliKind[]) {
+    const v = raw[k];
+    if (!v) continue;
+    if (typeof v === "string") {
+      out[k] = [v];
+    } else if (Array.isArray(v) && v.length > 0) {
+      out[k] = v;
+    }
+  }
+  return out;
 }
 
 export function readCouncilConfig(): CouncilConfig {
   const c = readConfig();
   return {
     clis: c?.councilClis ?? null,
-    models: c?.councilModels ?? {},
+    models: normalizeModels(c?.councilModels),
   };
 }
 
@@ -46,15 +67,51 @@ export function setCouncilClis(clis: CliKind[] | null): void {
   writeConfig(next);
 }
 
+// Replace the entire model list for a CLI. Pass null or empty to clear (use
+// that CLI's default). Used by /council model <cli> <name> (single-value
+// replace, back-compat shape).
 export function setCouncilModel(cli: CliKind, model: string | null): void {
   const cfg = readConfig();
   if (!cfg) return;
-  const models = { ...(cfg.councilModels ?? {}) };
+  const cur = normalizeModels(cfg.councilModels);
   if (model === null || model.trim() === "" || model.trim().toLowerCase() === "default") {
-    delete models[cli];
+    delete cur[cli];
   } else {
-    models[cli] = model.trim();
+    cur[cli] = [model.trim()];
   }
+  writeCouncilModels(cfg, cur);
+}
+
+// Append a model variant to the CLI's list. No-op if already present.
+export function addCouncilModel(cli: CliKind, model: string): void {
+  const m = model.trim();
+  if (!m || m.toLowerCase() === "default") return;
+  const cfg = readConfig();
+  if (!cfg) return;
+  const cur = normalizeModels(cfg.councilModels);
+  const list = cur[cli] ? [...cur[cli]!] : [];
+  if (!list.includes(m)) list.push(m);
+  cur[cli] = list;
+  writeCouncilModels(cfg, cur);
+}
+
+// Remove a model variant from the CLI's list. If the list becomes empty,
+// the entry is dropped so the CLI runs once with its default model.
+export function removeCouncilModel(cli: CliKind, model: string): void {
+  const m = model.trim();
+  const cfg = readConfig();
+  if (!cfg) return;
+  const cur = normalizeModels(cfg.councilModels);
+  const list = (cur[cli] ?? []).filter((x) => x !== m);
+  if (list.length === 0) delete cur[cli];
+  else cur[cli] = list;
+  writeCouncilModels(cfg, cur);
+}
+
+function writeCouncilModels(
+  cfg: UserConfig,
+  models: Partial<Record<CliKind, string[]>>,
+): void {
   const next: UserConfig = { ...cfg };
   if (Object.keys(models).length === 0) {
     delete next.councilModels;

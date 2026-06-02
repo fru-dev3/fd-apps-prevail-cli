@@ -23,6 +23,8 @@ import {
   readCouncilConfig,
   setCouncilClis,
   setCouncilModel,
+  addCouncilModel,
+  removeCouncilModel,
   type CliKind as ConfigCliKind,
 } from "./config.ts";
 import {
@@ -875,8 +877,17 @@ function CouncilConfigBubble({
     setRevision((r) => r + 1);
   };
 
-  const pinModel = (k: ConfigCliKind, m: string | null) => {
-    setCouncilModel(k, m);
+  // Set "default" (no pin) — clears all model variants for this CLI.
+  const resetModels = (k: ConfigCliKind) => {
+    setCouncilModel(k, null);
+    setRevision((r) => r + 1);
+  };
+  // Toggle a model variant in/out of the panel for this CLI. Lets the user
+  // build a comparison panel (e.g. opus-4-7 + opus-4-8 + sonnet) by checking
+  // multiple chips on the same row.
+  const toggleVariant = (k: ConfigCliKind, m: string, isOn: boolean) => {
+    if (isOn) removeCouncilModel(k, m);
+    else addCouncilModel(k, m);
     setRevision((r) => r + 1);
   };
 
@@ -906,8 +917,12 @@ function CouncilConfigBubble({
               ? theme.fgDim
               : theme.fgFaint;
           const nameFg = detected ? theme.gold : theme.fgFaint;
-          const pinned = cfg.models[kind];
+          const pinnedList = cfg.models[kind] ?? [];
+          const hasAnyPin = pinnedList.length > 0;
           const picks = MODEL_QUICKPICKS[kind] ?? [];
+          // Surface custom model entries the user added that aren't in the
+          // built-in quickpicks (typed via /council model claude add foo).
+          const customPins = pinnedList.filter((m) => !picks.includes(m));
           return (
             <box key={kind} flexDirection="column" paddingTop={0}>
               <box
@@ -927,18 +942,29 @@ function CouncilConfigBubble({
               </box>
               {detected && (
                 <box flexDirection="row" height={1} paddingLeft={2}>
-                  <text fg={theme.fgFaint}>model: </text>
+                  <text fg={theme.fgFaint}>models: </text>
                   <CouncilModelChip
                     label="default"
-                    active={!pinned}
-                    onClick={() => pinModel(kind, null)}
+                    active={!hasAnyPin}
+                    onClick={() => resetModels(kind)}
                   />
-                  {picks.map((p) => (
+                  {picks.map((p) => {
+                    const isOn = pinnedList.includes(p);
+                    return (
+                      <CouncilModelChip
+                        key={p}
+                        label={p}
+                        active={isOn}
+                        onClick={() => toggleVariant(kind, p, isOn)}
+                      />
+                    );
+                  })}
+                  {customPins.map((p) => (
                     <CouncilModelChip
                       key={p}
                       label={p}
-                      active={pinned === p}
-                      onClick={() => pinModel(kind, p)}
+                      active
+                      onClick={() => toggleVariant(kind, p, true)}
                     />
                   ))}
                 </box>
