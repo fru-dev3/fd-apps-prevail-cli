@@ -475,17 +475,63 @@ function Transcript({
     suggestions.length > 0 &&
     messages.filter((m) => m.role === "user").length === 0;
   const scrollRef = useRef<any>(null);
+  // Track whether the user has scrolled UP and away from the bottom. If so,
+  // we don't yank them back — they're reading older history. Reset when a
+  // new turn fires (length jumps) so the next AI reply still snaps to view.
+  const userScrolledAwayRef = useRef(false);
 
-  // Auto-scroll to the latest message whenever the message count or the
-  // pending (assistant typing) state changes. Use a large scrollTo target so
-  // we land at the bottom regardless of total height.
+  // Auto-scroll on ANY message-array change (length grew OR a placeholder
+  // got replaced in place), not just length. Use messages reference as the
+  // dep — setChats always returns a new array, so this fires reliably.
+  // Retry across a few frames because OpenTUI's scrollbox can compute the
+  // new content height a tick or two after the React commit; one call alone
+  // sometimes lands on a stale height and we sit at the top.
   useEffect(() => {
+    if (userScrolledAwayRef.current) return;
     const node = scrollRef.current;
     if (!node) return;
-    try {
-      node.scrollTo?.(1e9);
-    } catch {}
-  }, [messages.length, session.pending, session.key]);
+    const tryScroll = () => {
+      try {
+        node.scrollTo?.(1e9);
+      } catch {}
+    };
+    tryScroll();
+    const t1 = setTimeout(tryScroll, 30);
+    const t2 = setTimeout(tryScroll, 120);
+    const t3 = setTimeout(tryScroll, 300);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [messages, session.pending, session.key]);
+
+  // Reset the "scrolled away" flag whenever a brand-new turn starts. Keeps
+  // the auto-follow behavior fresh per question — you can scroll up to read,
+  // then send a new prompt and we'll follow again.
+  useEffect(() => {
+    userScrolledAwayRef.current = false;
+  }, [messages.filter((m) => m.role === "user").length, session.key]);
+
+  // Keyboard nav: PgUp / PgDn / Home / End scroll the transcript without
+  // leaving the input. End also re-arms auto-follow so the next reply lands
+  // in view.
+  useKeyboard((evt) => {
+    const node = scrollRef.current;
+    if (!node) return;
+    if (evt.name === "pageup") {
+      userScrolledAwayRef.current = true;
+      try { node.scrollBy?.(0, -20) ?? node.scrollTo?.(0); } catch {}
+    } else if (evt.name === "pagedown") {
+      try { node.scrollBy?.(0, 20) ?? node.scrollTo?.(1e9); } catch {}
+    } else if (evt.name === "home" && evt.ctrl) {
+      userScrolledAwayRef.current = true;
+      try { node.scrollTo?.(0); } catch {}
+    } else if (evt.name === "end" && evt.ctrl) {
+      userScrolledAwayRef.current = false;
+      try { node.scrollTo?.(1e9); } catch {}
+    }
+  });
 
   return (
     <scrollbox
