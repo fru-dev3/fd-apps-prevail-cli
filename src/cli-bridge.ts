@@ -135,7 +135,13 @@ export function probeCli(cli: AvailableCli, timeoutMs = 45000): Promise<CliHealt
     let settled = false;
     let child;
     try {
-      child = spawn(cli.bin, args, { env: process.env });
+      // stdin MUST be "ignore" — with the default "pipe", codex exec blocks
+      // forever waiting for input from the (open) stdin pipe and never starts
+      // the model call. Spent half a day on this; do not "fix" back to pipe.
+      child = spawn(cli.bin, args, {
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
     } catch (err) {
       resolveProbe({ ok: false, message: (err as Error).message });
       return;
@@ -367,7 +373,13 @@ function runCapture(bin: string, args: string[], cwd: string): Promise<string> {
     let stderr = "";
     let child;
     try {
-      child = spawn(bin, args, { cwd, env: process.env });
+      // stdin: "ignore" — same reason as probeCli. Without this, codex exec
+      // hangs indefinitely from inside a spawn (no TTY, pipe never closes).
+      child = spawn(bin, args, {
+        cwd,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
     } catch (err) {
       resolve(`(error spawning ${bin}: ${(err as Error).message})`);
       return;
