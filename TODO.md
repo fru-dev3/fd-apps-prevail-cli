@@ -4,11 +4,11 @@
 
 ## STATUS
 
-- **last touched:** 2026-06-01
-- **current version on main:** v0.1.2 (P1.1 + P1.2 staged for v0.1.3)
-- **next milestone:** v0.2.0 — "the agent that grows with you" (Hermes-inspired feature pack)
-- **active item:** v0.2.0 release tagging (P5.1) — P1+P2+P3 all done, ready to tag
-- **just finished:** P3.2 — LifeApp plugin contract. `apps/community/<id>/{manifest.json,SKILL.md}` drop-in protocol. `scanCommunityApps()` in `src/vault.ts` scans `~/.prevail/apps/`, `<binary>/apps/community/`, and `<repo>/apps/community/`, dedups by id. Sidebar renders `★` prefix for community apps. Reference plugin `apps/community/plaid/` ships. `CONTRIBUTING.md` at repo root documents the protocol.
+- **last touched:** 2026-06-02
+- **current version on main:** v0.2.0 (tagged + binaries building)
+- **next milestone:** v0.3.0 — "council telemetry + native plugin marketplace"
+- **active item:** wait for v0.2.0 release build to land binaries, attach release notes (`/tmp/prevail-v0.2.0-notes.md` was drafted ahead of the build), and announce
+- **just finished:** v0.2.0 rebrand + council bundle. Headline is council mode — `/council` fans a question to claude+codex+gemini in parallel, a chair synthesizes a verdict. Plus QoL: ↑/↓ prompt recall, per-session usage meter, council-aware `/distill`, codex framing for non-coding asks, gemini stack-trace stripping, escape-to-cancel. Full repo rename `aireadyu` → `prevail` (URL redirect preserves stars/issues). New `prevAIl` wordmark with `AI` in electric cyan. Static landing page scaffold in `landing/` ready to deploy to prevail.ai.
 
 ## BACKGROUND (read this if you have no context)
 
