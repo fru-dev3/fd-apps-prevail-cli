@@ -949,18 +949,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           .join(", ");
         const synthPrompt =
           `You are the chair of an AI council. ${good.length} independent panelists (${panelistList}) just answered the same user question. ` +
-          `Your job: name the consensus, name the divergence, then deliver one decisive verdict. Do not hedge — pick a side.\n\n` +
+          `Your job: show what each panelist said and why, name the consensus, name the divergence, then deliver one decisive verdict with the reasoning tied back to the panelists. Do not hedge — pick a side.\n\n` +
           `USER QUESTION:\n${text}\n\n` +
           `PANEL RESPONSES:\n${panelBlock}\n\n` +
           `MAJORITY RULE — read carefully:\n` +
-          `When panelists give different concrete answers to the same factual question (a specific date, number, dollar amount, name, yes/no call, recommended action), the verdict MUST side with the majority answer. Example: if 2 panelists say "file in June" and 1 says "file in August", the verdict is June — full stop. Treat near-identical answers as the same vote (June 13 and June 14 are both "June"). The minority position only wins if it cites a hard external fact the majority got demonstrably wrong (a wrong year, a missed deadline, etc); if you invoke this exception, name the fact explicitly in Divergence.\n\n` +
-          `Output exactly these three sections in this order, no preamble, no closing remarks:\n\n` +
+          `When panelists give different concrete answers to the same factual question (a specific date, number, dollar amount, name, yes/no call, recommended action), the verdict MUST side with the majority answer. Example: if 2 panelists say "file in June" and 1 says "file in August", the verdict is June — full stop. Treat near-identical answers as the same vote (June 13 and June 14 are both "June"). The minority position only wins if it cites a hard external fact the majority got demonstrably wrong (a wrong year, a missed deadline, etc); if you invoke this exception, name the fact explicitly in Divergence and Why.\n\n` +
+          `Output exactly these four sections in this order, no preamble, no closing remarks:\n\n` +
+          `## What each panelist said\n` +
+          `One bullet per panelist, using their label exactly as shown above. Format: "**<label>**: <their concrete answer in <=1 sentence> — <key reason or citation they gave in <=1 sentence>>". If a panelist cited a source, date, number, or rule, include it verbatim. Do not paraphrase the answer into something softer than what they actually said.\n\n` +
           `## Consensus\n` +
           `Bulleted list of every concrete point the panel agreed on (or where a clear majority converged). If they disagreed on everything, write "None — see divergence."\n\n` +
           `## Divergence\n` +
-          `Bulleted list of every point where panelists materially disagreed. For each bullet, name which panelist took which side using their label (e.g. "Claude Code: June 14, Codex: August 14, Gemini: June 13 → majority: June"). Skip stylistic differences; only flag substantive disagreements.\n\n` +
+          `Bulleted list of every point where panelists materially disagreed. For each bullet, name which panelist took which side using their label and a vote tally (e.g. "Claude Code: June 14, Codex: August 14, Gemini: June 13 → majority: June (2 of 3)"). Skip stylistic differences; only flag substantive disagreements.\n\n` +
           `## Verdict\n` +
-          `One single sentence starting with the literal word "VERDICT:" giving the decisive call. Plain language. No qualifiers like "consider" or "you might". Tell the user what to do. The verdict must reflect the majority position from above.`;
+          `Two lines. Line 1 must start with the literal word "VERDICT:" followed by one single sentence giving the decisive call in plain language — no qualifiers, no "consider" or "you might", just tell the user what to do. The verdict must reflect the majority position from above. Line 2 must start with the literal word "Why:" followed by one short sentence tying the call back to the panelists by name — which ones supported the verdict, on what reasoning, and (if any) which panelist dissented and what they argued instead.`;
 
         try {
           const verdict = await runChatTurn({
