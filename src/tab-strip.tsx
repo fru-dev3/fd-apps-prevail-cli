@@ -7,11 +7,11 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
+  { key: "chat", label: "chat" },
   { key: "state", label: "state" },
   { key: "quickstart", label: "quickstart" },
   { key: "prompts", label: "prompts" },
   { key: "skills", label: "skills" },
-  { key: "chat", label: "chat" },
 ];
 
 const EDITABLE_VIEWS: ReadonlySet<ViewKey | "chat"> = new Set([

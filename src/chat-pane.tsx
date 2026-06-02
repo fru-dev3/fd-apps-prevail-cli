@@ -98,6 +98,9 @@ interface Props {
 
 export function ChatPane({ session, availableClis, tick, onSend, onCommand, onExit, onAutocompleteChange }: Props) {
   const ref = useRef<any>(null);
+  // Hoisted from InputBox so the popover renders ABOVE InputBox at the
+  // chat-pane level, keeping the input row at a stable bottom position.
+  const [popover, setPopover] = useState<PopoverState | null>(null);
 
   const userMsgCount = session.messages.filter((m) => m.role === "user").length;
   const showSuggestions = userMsgCount === 0;
@@ -215,6 +218,9 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
         onPickModel={(model) =>
           onCommand(session.key, { kind: "switch-model", model })
         }
+        onOpenCouncilConfig={() =>
+          onCommand(session.key, { kind: "council-config" })
+        }
       />
       <Transcript
         session={session}
@@ -240,11 +246,22 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
         }}
       />
       <StatusLine session={session} tick={tick} />
+      {popover && (
+        <box flexDirection="column" paddingLeft={2} paddingRight={2}>
+          <SlashAutocomplete
+            matches={popover.matches}
+            selectedIdx={popover.selectedIdx}
+            onPick={popover.onPick}
+            onHover={popover.onHover}
+          />
+        </box>
+      )}
       <InputBox
         inputRef={ref}
         disabled={session.pending}
         onSubmit={handleSubmit}
         onAutocompleteChange={onAutocompleteChange}
+        onPopoverChange={setPopover}
       />
     </box>
   );
@@ -262,12 +279,14 @@ function PickerBar({
   model,
   onSwitchCli,
   onPickModel,
+  onOpenCouncilConfig,
 }: {
   clis: AvailableCli[];
   currentCli: CliKind;
   model: string;
   onSwitchCli: (cli: CliKind) => void;
   onPickModel: (model: string) => void;
+  onOpenCouncilConfig: () => void;
 }) {
   const picks = MODEL_QUICKPICKS[currentCli] ?? [];
   const isDefault = !model.trim();
@@ -319,7 +338,15 @@ function PickerBar({
       ))}
       {customActive && <ModelChip label={model} active onClick={() => {}} />}
       <box flexGrow={1} />
-      <text fg={theme.fgFaint}>/model name</text>
+      <box
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        backgroundColor={theme.bg}
+        onMouseDown={onOpenCouncilConfig}
+      >
+        <text fg={theme.gold}>⚖ council</text>
+      </box>
     </box>
   );
 }
@@ -863,16 +890,25 @@ function matchSlashCommands(query: string): SlashCommandSpec[] {
   });
 }
 
+interface PopoverState {
+  matches: SlashCommandSpec[];
+  selectedIdx: number;
+  onHover: (i: number) => void;
+  onPick: (cmd: SlashCommandSpec) => void;
+}
+
 function InputBox({
   inputRef,
   disabled,
   onSubmit,
   onAutocompleteChange,
+  onPopoverChange,
 }: {
   inputRef: React.RefObject<any>;
   disabled: boolean;
   onSubmit: (v: string) => void;
   onAutocompleteChange?: (open: boolean) => void;
+  onPopoverChange?: (p: PopoverState | null) => void;
 }) {
   const [value, setValue] = useState("");
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -889,6 +925,34 @@ function InputBox({
   useEffect(() => {
     if (selectedIdx >= matches.length) setSelectedIdx(0);
   }, [matches.length, selectedIdx]);
+
+  const pickCommand = (cmd: SlashCommandSpec) => {
+    const needsArg = !!cmd.arg;
+    const next = needsArg ? `${cmd.cmd} ` : cmd.cmd;
+    setValue(next);
+    setSelectedIdx(0);
+    if (inputRef.current) {
+      try {
+        inputRef.current.value = next;
+        inputRef.current.focus?.();
+      } catch {}
+    }
+  };
+
+  // Surface the popover to the parent so it can render OUTSIDE InputBox and
+  // keep the input row at a stable bottom position when slash commands fire.
+  useEffect(() => {
+    if (showAutocomplete && matches.length > 0) {
+      onPopoverChange?.({
+        matches,
+        selectedIdx,
+        onHover: setSelectedIdx,
+        onPick: pickCommand,
+      });
+    } else {
+      onPopoverChange?.(null);
+    }
+  }, [showAutocomplete, matches, selectedIdx, onPopoverChange]);
 
   const handleSubmit = (v: string) => {
     const trimmed = v.trim();
@@ -909,19 +973,6 @@ function InputBox({
     onSubmit(v);
   };
 
-  const pickCommand = (cmd: SlashCommandSpec) => {
-    const needsArg = !!cmd.arg;
-    const next = needsArg ? `${cmd.cmd} ` : cmd.cmd;
-    setValue(next);
-    setSelectedIdx(0);
-    if (inputRef.current) {
-      try {
-        inputRef.current.value = next;
-        inputRef.current.focus?.();
-      } catch {}
-    }
-  };
-
   useKeyboard((evt) => {
     if (!showAutocomplete || matches.length === 0) return;
     if (evt.name === "up") {
@@ -940,15 +991,8 @@ function InputBox({
       paddingLeft={2}
       paddingRight={2}
       paddingBottom={1}
+      height={4}
     >
-      {showAutocomplete && matches.length > 0 && (
-        <SlashAutocomplete
-          matches={matches}
-          selectedIdx={selectedIdx}
-          onPick={pickCommand}
-          onHover={setSelectedIdx}
-        />
-      )}
       <box
         flexDirection="row"
         border
