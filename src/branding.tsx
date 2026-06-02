@@ -72,88 +72,56 @@ export function Branding({
 // sit in plain gold. High-contrast pairing — the AI is the unmistakable
 // heart of the cockpit, not just a slightly-brighter shade of the same
 // color it sits next to.
-// Per-letter blocks so the renderer can space them out evenly via gap.
-// Each LETTER[i] is one row of one letter; render joins them with a chosen
-// gap so the wordmark stretches to fill the available width.
-const L_P = [
-  "██████╗",
-  "██╔══██╗",
-  "██████╔╝",
-  "██╔═══╝",
-  "██║",
-  "╚═╝",
+// Three logo groups (PREV / AI / L) — each one preserves the original
+// ANSI-Shadow letter shapes that were designed to interlock as a readable
+// word. We only add space BETWEEN the groups, not between individual
+// letters, so each block stays as legible as the original wordmark while
+// the AI section still reads as the distinct visual center.
+const LOGO_PREV = [
+  "██████╗ ██████╗ ███████╗██╗   ██╗",
+  "██╔══██╗██╔══██╗██╔════╝██║   ██║",
+  "██████╔╝██████╔╝█████╗  ██║   ██║",
+  "██╔═══╝ ██╔══██╗██╔══╝  ╚██╗ ██╔╝",
+  "██║     ██║  ██║███████╗ ╚████╔╝ ",
+  "╚═╝     ╚═╝  ╚═╝╚══════╝  ╚═══╝  ",
 ] as const;
-const L_R = [
-  "██████╗",
-  "██╔══██╗",
-  "██████╔╝",
-  "██╔══██╗",
-  "██║  ██║",
-  "╚═╝  ╚═╝",
+const LOGO_AI = [
+  " █████╗ ██╗",
+  "██╔══██╗██║",
+  "███████║██║",
+  "██╔══██║██║",
+  "██║  ██║██║",
+  "╚═╝  ╚═╝╚═╝",
 ] as const;
-const L_E = [
-  "███████╗",
-  "██╔════╝",
-  "█████╗",
-  "██╔══╝",
-  "███████╗",
-  "╚══════╝",
-] as const;
-const L_V = [
-  "██╗   ██╗",
-  "██║   ██║",
-  "██║   ██║",
-  "╚██╗ ██╔╝",
-  " ╚████╔╝",
-  "  ╚═══╝",
-] as const;
-const L_A = [
-  " █████╗",
-  "██╔══██╗",
-  "███████║",
-  "██╔══██║",
-  "██║  ██║",
-  "╚═╝  ╚═╝",
-] as const;
-const L_I = [
-  "██╗",
-  "██║",
-  "██║",
-  "██║",
-  "██║",
-  "╚═╝",
-] as const;
-const L_L = [
-  "██╗",
-  "██║",
-  "██║",
-  "██║",
+const LOGO_L = [
+  "██╗     ",
+  "██║     ",
+  "██║     ",
+  "██║     ",
   "███████╗",
   "╚══════╝",
 ] as const;
-// Wider gap between letters than the old fixed-width strings used.
-// Tweaking GAP shifts how much horizontal space the wordmark eats.
-const LETTER_GAP = "   ";
+// Gap between groups. Three spaces is enough to make AI read as a distinct
+// visual center without breaking the wordmark into floating fragments.
+const GROUP_GAP = "   ";
 
 function BrandColumn() {
-  // Compose each row by joining the per-letter blocks with LETTER_GAP.
-  // PREV and L render in gold; AI renders in aiAccent (electric cyan) so
-  // the AI pops as the brand thesis.
-  const prev = (i: number) =>
-    [L_P[i], L_R[i], L_E[i], L_V[i]].join(LETTER_GAP);
-  const ai = (i: number) => [L_A[i], L_I[i]].join(LETTER_GAP);
-  const l = (i: number) => L_L[i]!;
+  // Render each row as three spans: PREV (gold) — gap — AI (cyan) — gap —
+  // L (gold). The per-group GAP keeps the original ANSI-Shadow letter
+  // shapes intact (which were tuned to interlock) so the word reads
+  // cleanly, while the gap on either side of AI makes the cyan block
+  // pop as the visual center.
   return (
     <box flexDirection="row" width={88}>
       <Mascot />
       <box flexDirection="column" paddingLeft={2}>
-        {L_P.map((_, i) => (
+        {LOGO_PREV.map((_, i) => (
           <text key={`logo-${i}`} attributes={1}>
-            <span fg={theme.gold} attributes={1}>{prev(i)}</span>
-            <span fg={theme.gold} attributes={1}>{LETTER_GAP}</span>
-            <span fg={theme.aiAccent} attributes={1}>{ai(i)}</span>
-            <span fg={theme.gold} attributes={1}>{LETTER_GAP}</span>
-            <span fg={theme.gold} attributes={1}>{l(i)}</span>
+            <span fg={theme.gold} attributes={1}>{LOGO_PREV[i]}</span>
+            <span fg={theme.gold} attributes={1}>{GROUP_GAP}</span>
+            <span fg={theme.aiAccent} attributes={1}>{LOGO_AI[i]}</span>
+            <span fg={theme.gold} attributes={1}>{GROUP_GAP}</span>
+            <span fg={theme.gold} attributes={1}>{LOGO_L[i]}</span>
           </text>
         ))}
         <text fg={theme.goldDim}>
