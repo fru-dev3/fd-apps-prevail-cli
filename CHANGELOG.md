@@ -16,6 +16,16 @@ The release page on GitHub mirrors the same notes for each tag:
   - Friendly probe error when the configured model isn't pulled (`ollama pull <name>`)
   - Council bubble color: electric cyan (matches the AI in prevAIl)
 
+### Added — Telegram bridge
+- **`prevail daemon --telegram`** — headless mode that exposes the cockpit over Telegram. Same engines, same council, same `/framework` setting; just from your phone instead of the terminal.
+  - `prevail telegram setup <bot-token>` — bootstrap (token from @BotFather)
+  - `prevail telegram add-user <chat_id>` — mandatory chat-ID allowlist (no open access)
+  - Per-chat state: domain, CLI, model, council on/off — set via `/domain`, `/use`, `/council on`
+  - Council fanout from Telegram: each panelist arrives as its own message, verdict gets a `⚖` header with the chair label
+  - Long-poll mode (no webhook / tunnel needed) — works behind NAT and on any laptop
+  - Token stored at `~/.prevail/telegram.json` (chmod 600), or `PREVAIL_TELEGRAM_TOKEN` env var
+- Extracted `runCouncilOneShot()` from app.tsx into `src/council-runner.ts` so the TUI and the daemon share the same fanout + synthesis pipeline (single source of truth for what "the panel" and "the verdict" mean).
+
 ---
 
 ## [0.2.0] — 2026-06-02 · rebrand + council mode

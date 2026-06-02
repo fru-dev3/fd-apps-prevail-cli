@@ -17,6 +17,10 @@ interface Args {
   doctor: boolean;
   schedule: boolean;
   scheduleArgs: string[];
+  daemon: boolean;
+  daemonArgs: string[];
+  telegram: boolean;
+  telegramArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -28,6 +32,10 @@ function parseArgs(argv: string[]): Args {
   let doctor = false;
   let schedule = false;
   let scheduleArgs: string[] = [];
+  let daemon = false;
+  let daemonArgs: string[] = [];
+  let telegram = false;
+  let telegramArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -39,6 +47,14 @@ function parseArgs(argv: string[]): Args {
       schedule = true;
       scheduleArgs = argv.slice(i + 1);
       break;
+    } else if (a === "daemon") {
+      daemon = true;
+      daemonArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "telegram") {
+      telegram = true;
+      telegramArgs = argv.slice(i + 1);
+      break;
     } else if (a === "--vault" || a === "-d") {
       const next = argv[i + 1];
       if (next) {
@@ -49,7 +65,20 @@ function parseArgs(argv: string[]): Args {
       vaultPath = resolve(process.cwd(), a.slice("--vault=".length));
     }
   }
-  return { vaultPath, forceInit, demo, help, version, doctor, schedule, scheduleArgs };
+  return {
+    vaultPath,
+    forceInit,
+    demo,
+    help,
+    version,
+    doctor,
+    schedule,
+    scheduleArgs,
+    daemon,
+    daemonArgs,
+    telegram,
+    telegramArgs,
+  };
 }
 
 function printHelp() {
@@ -61,6 +90,8 @@ USAGE
   prevail demo                ignore config, boot the synthetic vault
   prevail doctor              check installed AI clis + vault shape
   prevail schedule [...]      manage embedded cron-style schedules
+  prevail telegram [...]      configure the Telegram bot bridge
+  prevail daemon --telegram   run the headless Telegram bot
   prevail --vault <path>      override vault path for one session
 
 OPTIONS
@@ -219,6 +250,151 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
   process.exit(1);
 }
 
+async function telegramCommand(args: string[]): Promise<void> {
+  const {
+    readTelegramConfig,
+    writeTelegramConfig,
+    setTelegramToken,
+    addAllowedChatId,
+    removeAllowedChatId,
+    telegramConfigFile,
+  } = await import("./telegram-config.ts");
+  const sub = args[0];
+  if (!sub || sub === "status") {
+    const cur = readTelegramConfig();
+    if (!cur) {
+      console.log("telegram: not configured");
+      console.log(`           config file: ${telegramConfigFile()}`);
+      console.log("           setup with:  prevail telegram setup <bot-token>");
+      console.log("           or:          export PREVAIL_TELEGRAM_TOKEN=<token>");
+      return;
+    }
+    const tokenPreview = cur.botToken
+      ? `${cur.botToken.slice(0, 6)}…${cur.botToken.slice(-4)}`
+      : "(missing)";
+    console.log(`telegram: configured`);
+    console.log(`token:    ${tokenPreview}`);
+    console.log(`allow:    ${cur.allowList.length === 0 ? "(empty — bot will refuse everyone)" : cur.allowList.join(", ")}`);
+    console.log(`default cli:    ${cur.defaultCli ?? "(auto)"}`);
+    console.log(`default domain: ${cur.defaultDomain ?? "(first in vault)"}`);
+    console.log(`council default: ${cur.councilByDefault ? "on" : "off"}`);
+    return;
+  }
+  if (sub === "setup") {
+    const token = args[1];
+    if (!token) {
+      console.error("usage: prevail telegram setup <bot-token>");
+      console.error("");
+      console.error("To get a token:");
+      console.error("  1. Open Telegram, message @BotFather");
+      console.error("  2. Send /newbot and follow the prompts");
+      console.error("  3. Paste the token here");
+      process.exit(1);
+    }
+    setTelegramToken(token);
+    console.log(`✓ token saved to ${telegramConfigFile()} (chmod 600)`);
+    console.log("");
+    console.log("Next: message your bot once from your phone, then watch the daemon log");
+    console.log("for your chat_id. Add it with:");
+    console.log("  prevail telegram add-user <chat_id>");
+    console.log("");
+    console.log("Start the daemon:");
+    console.log("  prevail daemon --telegram");
+    return;
+  }
+  if (sub === "add-user") {
+    const id = parseInt(args[1] ?? "", 10);
+    if (!Number.isFinite(id)) {
+      console.error("usage: prevail telegram add-user <chat_id>");
+      process.exit(1);
+    }
+    try {
+      const added = addAllowedChatId(id);
+      if (added) console.log(`✓ chat_id ${id} allow-listed`);
+      else console.log(`(${id} was already on the list)`);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+    return;
+  }
+  if (sub === "remove-user" || sub === "rm-user") {
+    const id = parseInt(args[1] ?? "", 10);
+    if (!Number.isFinite(id)) {
+      console.error("usage: prevail telegram remove-user <chat_id>");
+      process.exit(1);
+    }
+    const removed = removeAllowedChatId(id);
+    console.log(removed ? `✓ removed ${id}` : `(${id} wasn't on the list)`);
+    return;
+  }
+  if (sub === "set-default") {
+    const k = args[1];
+    const v = args[2];
+    if (!k || !v) {
+      console.error("usage: prevail telegram set-default <cli|domain|council> <value>");
+      process.exit(1);
+    }
+    const cur = readTelegramConfig();
+    if (!cur) {
+      console.error("not configured — run `prevail telegram setup <token>` first");
+      process.exit(1);
+    }
+    if (k === "cli") {
+      if (!["claude", "codex", "gemini", "ollama"].includes(v)) {
+        console.error(`unknown cli "${v}"`);
+        process.exit(1);
+      }
+      writeTelegramConfig({ ...cur, defaultCli: v as "claude" | "codex" | "gemini" | "ollama" });
+    } else if (k === "domain") {
+      writeTelegramConfig({ ...cur, defaultDomain: v });
+    } else if (k === "council") {
+      writeTelegramConfig({ ...cur, councilByDefault: v === "on" || v === "true" || v === "1" });
+    } else {
+      console.error(`unknown key "${k}"`);
+      process.exit(1);
+    }
+    console.log(`✓ ${k}=${v}`);
+    return;
+  }
+  console.error(`unknown telegram subcommand: ${sub}\n`);
+  console.error("usage:");
+  console.error("  prevail telegram status");
+  console.error("  prevail telegram setup <bot-token>");
+  console.error("  prevail telegram add-user <chat_id>");
+  console.error("  prevail telegram remove-user <chat_id>");
+  console.error("  prevail telegram set-default <cli|domain|council> <value>");
+  process.exit(1);
+}
+
+async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
+  const wantTelegram = args.includes("--telegram") || args.includes("-t");
+  if (!wantTelegram) {
+    console.error("usage: prevail daemon --telegram");
+    console.error("");
+    console.error("Currently the daemon only supports the --telegram transport.");
+    console.error("Other transports (webhook, slack, sms) are on the roadmap.");
+    process.exit(1);
+  }
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  if (!existsSync(vault)) {
+    console.error(`vault path not found: ${vault}`);
+    process.exit(1);
+  }
+  const { runTelegramDaemon } = await import("./telegram.ts");
+  const handle = await runTelegramDaemon({ vaultPath: vault });
+  console.log("press ctrl-c to stop");
+  // Plain process — the daemon is the foreground loop, so just let it run.
+  // Ctrl-C → SIGINT → node default handler exits the process; runTelegramDaemon
+  // doesn't need explicit teardown because the only state is in memory.
+  process.on("SIGINT", () => {
+    handle.stop();
+    console.log("\n[telegram] stopped");
+    process.exit(0);
+  });
+}
+
 async function doctor() {
   const { detectClis } = await import("./cli-bridge.ts");
   const cfg = readConfig();
@@ -259,6 +435,14 @@ async function main() {
   }
   if (args.schedule) {
     await scheduleCommand(args.scheduleArgs, args.vaultPath);
+    return;
+  }
+  if (args.telegram) {
+    await telegramCommand(args.telegramArgs);
+    return;
+  }
+  if (args.daemon) {
+    await daemonCommand(args.daemonArgs, args.vaultPath);
     return;
   }
 
