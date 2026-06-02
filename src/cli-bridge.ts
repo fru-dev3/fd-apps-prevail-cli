@@ -179,14 +179,62 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst }: ChatTurn
     ? `<operating-manual>\n${manual}\n</operating-manual>\n\n${prompt}`
     : prompt;
   if (cli.kind === "codex") {
-    const args = m ? ["exec", "-m", m, augmentedPrompt] : ["exec", augmentedPrompt];
+    // --skip-git-repo-check: vault dirs aren't git repos; without this codex
+    // refuses to run with 'Not inside a trusted directory'.
+    const base = ["exec", "--skip-git-repo-check"];
+    const args = m ? [...base, "-m", m, augmentedPrompt] : [...base, augmentedPrompt];
     return runCapture(cli.bin, args, cwd);
   }
   if (cli.kind === "gemini") {
-    const args = m ? ["-m", m, "-p", augmentedPrompt] : ["-p", augmentedPrompt];
+    // --skip-trust: vault dirs aren't on gemini's trusted-folders list;
+    // without this gemini refuses to run with a 'not running in a trusted
+    // directory' error.
+    const base = ["--skip-trust"];
+    const args = m
+      ? [...base, "-m", m, "-p", augmentedPrompt]
+      : [...base, "-p", augmentedPrompt];
     return runCapture(cli.bin, args, cwd);
   }
   return `(no handler for ${cli.kind})`;
+}
+
+// Exposed for tests: returns the exact argv we would pass to spawn for a
+// given CLI. Lets us assert the command shape (skip-git-repo-check flag,
+// --skip-trust flag, -m model passing, etc) without actually spawning.
+export function buildCliArgs({
+  cli,
+  prompt,
+  model,
+  isFirst,
+  manual,
+}: {
+  cli: CliKind;
+  prompt: string;
+  model: string;
+  isFirst: boolean;
+  manual: string | null;
+}): string[] {
+  const m = model.trim();
+  if (cli === "claude") {
+    const args: string[] = [];
+    if (m) args.push("--model", m);
+    if (manual && isFirst) args.push("--append-system-prompt", manual);
+    if (isFirst) args.push("-p", prompt);
+    else args.push("--continue", "-p", prompt);
+    return args;
+  }
+  const augmented = manual
+    ? `<operating-manual>\n${manual}\n</operating-manual>\n\n${prompt}`
+    : prompt;
+  if (cli === "codex") {
+    const base = ["exec", "--skip-git-repo-check"];
+    return m ? [...base, "-m", m, augmented] : [...base, augmented];
+  }
+  if (cli === "gemini") {
+    const base = ["--skip-trust"];
+    return m ? [...base, "-m", m, "-p", augmented] : [...base, "-p", augmented];
+  }
+  return [];
 }
 
 function runCapture(bin: string, args: string[], cwd: string): Promise<string> {

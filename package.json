@@ -43,7 +43,9 @@
     "build:darwin-x64": "bun build --compile --target=bun-darwin-x64 --outfile=dist/aireadyu-darwin-x64 src/index.tsx",
     "build:linux-x64": "bun build --compile --target=bun-linux-x64 --outfile=dist/aireadyu-linux-x64 src/index.tsx",
     "build:linux-arm64": "bun build --compile --target=bun-linux-arm64 --outfile=dist/aireadyu-linux-arm64 src/index.tsx",
-    "typecheck": "bun node_modules/typescript/bin/tsc --noEmit"
+    "typecheck": "bun node_modules/typescript/bin/tsc --noEmit",
+    "test": "bun test src/",
+    "test:integration": "INTEGRATION_TESTS=1 bun test src/cli-bridge.integration.test.ts"
   },
   "dependencies": {
     "@opentui/core": "^0.3.0",
