@@ -2,6 +2,41 @@
 
 > prevAIl — a terminal cockpit for your life domains
 
+### Council mode in action
+
+```
+┌─ chief ──────────────────────────────────────────────────────────────────┐
+│ › /council should I prepay the mortgage or invest the cash?              │
+│                                                                          │
+│   ⚖ convening council: claude · codex · gemini                          │
+│                                                                          │
+│   ◇ claude · opus-4-7                                                   │
+│   At your effective tax rate, the deductible interest cuts your real    │
+│   mortgage cost to ~4.1%. A diversified index portfolio has cleared 7%  │
+│   long-run after tax. Math says invest. But if losing the cash flow if  │
+│   markets crash would force you to sell, prepay buys you peace.         │
+│                                                                          │
+│   ◇ codex · gpt-5.4                                                     │
+│   Run the spread: (expected_after_tax_return - effective_mortgage_rate) │
+│   × principal × years remaining. Positive → invest. Add a liquidity     │
+│   floor of 6 months expenses before either move.                         │
+│                                                                          │
+│   ◇ gemini · 2.5-pro                                                    │
+│   Behavioral factor: prepaying is a guaranteed return on a known        │
+│   liability; investing is a probabilistic return on volatility you      │
+│   have to ride out. Pick the one you'll actually stick with under       │
+│   stress. For most people that's the guarantee.                          │
+│                                                                          │
+│   ⚖ council verdict · synthesized by claude                            │
+│   Invest if (a) you have 6+ months liquidity, (b) you can stomach a    │
+│   30% drawdown without selling, and (c) the rate spread is > 2%. Else  │
+│   prepay. Run the spread calc with your actual numbers and check (b)   │
+│   honestly — that's the binding constraint, not the math.              │
+│                                                                          │
+│ ready · type your next question              4 calls · 3k↑ 1.4k↓ · ~$0.03│
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
 A single-binary TUI that turns every part of your life — wealth, health, tax,
 career, content, real estate, … — into a chat-driven cockpit. Each domain is
 just a folder of markdown. Each chat talks to Claude Code, Codex, or Gemini.
