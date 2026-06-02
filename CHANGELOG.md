@@ -7,7 +7,11 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
-## [Unreleased]
+## [0.3.0] — 2026-06-02 · cockpit reaches out
+
+This release pulls prevAIl out of the terminal. Local models, Telegram bridge, scheduled briefings, a self-curating vault, and a council that finally shows you the disagreement.
+
+The competitive-research thesis for this release: the closest comparables in the personal-AI space (Hermes, Khoj, Goose, Agent Zero) all have at least one of these features. prevAIl now has all four, plus the things they don't — single binary, domain-folder UX, council across the CLIs you already pay for.
 
 ### Added — Engines
 - **Ollama / OpenAI-compatible 4th engine.** Any endpoint that speaks `/v1/chat/completions` (Ollama, LM Studio, llama.cpp server, vLLM) is now a first-class panelist alongside Claude / Codex / Gemini. Detected automatically by probing `GET /api/tags` (falls back to `/v1/models`); shows up in the CLI bar and in the council picker. Privacy-sensitive domains (health, wealth) can run a local-model-only council.
@@ -15,6 +19,13 @@ The release page on GitHub mirrors the same notes for each tag:
   - Default model: `llama3.1` (override with `PREVAIL_OLLAMA_MODEL`)
   - Friendly probe error when the configured model isn't pulled (`ollama pull <name>`)
   - Council bubble color: electric cyan (matches the AI in prevAIl)
+
+### Added — Council surfaces disagreement
+- The chair's four-section synthesis output (`What each panelist said` / `Consensus` / `Divergence` / `Verdict`) is now **parsed and rendered as distinct visual blocks**, not one wall of text. The whole point of running a council is the disagreement; burying it inside paragraph three defeated the purpose. Three changes ship together:
+  - **TUI verdict bubble**: when divergence is substantive, it renders in its own electric-cyan accent panel under a `🔀 Where panelists disagreed` header. The Verdict line gets its own gold-edged hero block. Title bar shows `· 🔀 disagreement` when the panel split.
+  - **Telegram delivery** ships Consensus / Divergence / Verdict as **separate messages** so each section arrives with its own header on the user's phone — disagreement no longer drowns mid-paragraph.
+  - **Vault writeback** flags days with disagreements via a `🔀 disagreement` tag in the daily log header, and uses the structured Verdict line as the assistant snippet (not the chair's full breakdown). Scrolling the log, the user can spot which calls were contentious without re-reading the whole council session.
+- Falls back gracefully to plain rendering when the chair model ignores the format request — never silently drops content.
 
 ### Added — Scheduled domain briefings
 - **`prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver log|telegram|both]`** — typed, domain-aware, council-aware scheduled prompts. Sits on top of the existing 5-field cron scheduler but adds structure (which domain, which mode, where to deliver) that ad-hoc shell schedules don't carry.

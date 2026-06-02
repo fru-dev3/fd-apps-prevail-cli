@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseVerdict } from "./verdict-parser.ts";
 
 // Per-domain self-curating log. After every chat turn (and every council
 // verdict), append a one-paragraph snapshot to <domain>/_log/YYYY-MM-DD.md.
@@ -60,13 +61,21 @@ function timeKey(ts: number): string {
 
 function renderEntry(args: TurnSummaryArgs): string {
   const q = heuristicSummarize(args.userPrompt, 220);
-  const a = heuristicSummarize(args.assistantReply, 400);
+  // For council verdicts, prefer the structured Verdict section as the
+  // assistant snippet — that's what the user actually took away, not the
+  // chair's full four-section breakdown.
+  let assistantSnippet = args.assistantReply;
+  let divergenceFlag = "";
+  if (args.kind === "council-verdict") {
+    const parsed = parseVerdict(args.assistantReply);
+    if (parsed.verdict) assistantSnippet = parsed.verdict;
+    if (parsed.hasDivergence) divergenceFlag = "  ·  🔀 disagreement";
+  }
+  const a = heuristicSummarize(assistantSnippet, 400);
   const tag = args.kind === "council-verdict" ? "⚖ council" : args.cliLabel;
-  // Two-blank-line separator between entries so they render as distinct
-  // sections in markdown editors.
   return [
     "",
-    `## ${timeKey(args.ts)}  ·  ${tag}`,
+    `## ${timeKey(args.ts)}  ·  ${tag}${divergenceFlag}`,
     "",
     `**Q:** ${q}`,
     "",

@@ -75,6 +75,38 @@ describe("writeTurnSummary + readTodayLog", () => {
     expect(log).toContain("⚖");
   });
 
+  test("structured council verdict logs the 🔀 disagreement flag", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prevail-summary-"));
+    const STRUCTURED = `## Consensus\nMust file.\n\n## Divergence\n- Date: Claude June, Codex August, Gemini June → majority June.\n\n## Verdict\nVERDICT: File in June.\nWhy: 2 of 3.`;
+    writeTurnSummary({
+      domainPath: dir,
+      userPrompt: "when to file?",
+      assistantReply: STRUCTURED,
+      cliLabel: "Council ⚖ Claude",
+      ts: Date.now(),
+      kind: "council-verdict",
+    });
+    const log = readTodayLog(dir);
+    expect(log).toContain("🔀");
+    // Q+A line should use the Verdict section, not the full structured text
+    expect(log).toContain("File in June");
+  });
+
+  test("unanimous council verdict skips the 🔀 flag", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prevail-summary-"));
+    const UNANIMOUS = `## Consensus\nAll three agree.\n\n## Divergence\nNone — see divergence.\n\n## Verdict\nVERDICT: Yes.\nWhy: unanimous.`;
+    writeTurnSummary({
+      domainPath: dir,
+      userPrompt: "should I?",
+      assistantReply: UNANIMOUS,
+      cliLabel: "Council ⚖ Claude",
+      ts: Date.now(),
+      kind: "council-verdict",
+    });
+    const log = readTodayLog(dir);
+    expect(log).not.toContain("🔀");
+  });
+
   test("does not throw when domain path is invalid (silent failure mode)", () => {
     expect(() =>
       writeTurnSummary({

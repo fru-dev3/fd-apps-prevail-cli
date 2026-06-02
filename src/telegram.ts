@@ -12,6 +12,7 @@ import { scanVault, type Domain } from "./vault.ts";
 import { readTelegramConfig, type TelegramConfig } from "./telegram-config.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
 import { tickBriefings } from "./briefings.ts";
+import { parseVerdict } from "./verdict-parser.ts";
 
 // Per-chat state held in memory for the lifetime of the daemon. Lost on
 // restart — acceptable for v1 since the SQLite session log already persists
@@ -425,16 +426,37 @@ async function sendCouncilResult(
   degraded: boolean,
 ): Promise<void> {
   // Send each panel response as its own message so each panelist gets
-  // visual separation. Verdict comes last with a 🪶 marker.
+  // visual separation.
   for (const p of panel) {
     const tag = p.model ? `${p.cli.label}·${p.model}` : p.cli.label;
     const header = p.ok ? `🟦 ${tag}` : `⚠ ${tag}`;
     await sendLongMessage(token, chatId, `${header}\n\n${p.reply}`);
   }
-  const verdictHeader = degraded
-    ? `⚖ Verdict (⚠ degraded — single provider)`
-    : `⚖ Verdict${chairLabel ? ` · ${chairLabel}` : ""}`;
-  await sendLongMessage(token, chatId, `${verdictHeader}\n\n${verdict}`);
+  // Verdict delivery: when the chair produced the four-section format,
+  // ship Divergence and Verdict as separate messages so the disagreement
+  // surfaces with its own header on the user's phone instead of getting
+  // buried mid-paragraph. Same principle as the TUI's hero block.
+  const parsed = parseVerdict(verdict);
+  const chairTag = chairLabel ? ` · ${chairLabel}` : "";
+  const degradedTag = degraded ? " (⚠ degraded — single provider)" : "";
+  if (parsed.structured) {
+    if (parsed.panelistSaid) {
+      await sendLongMessage(token, chatId, `▸ What each panelist said\n\n${parsed.panelistSaid}`);
+    }
+    if (parsed.consensus) {
+      await sendLongMessage(token, chatId, `✅ Consensus\n\n${parsed.consensus}`);
+    }
+    if (parsed.divergence && parsed.hasDivergence) {
+      await sendLongMessage(token, chatId, `🔀 Where panelists disagreed\n\n${parsed.divergence}`);
+    }
+    if (parsed.verdict) {
+      await sendLongMessage(token, chatId, `⚖ Verdict${chairTag}${degradedTag}\n\n${parsed.verdict}`);
+    }
+  } else {
+    // Chair ignored the format — fall back to single-message verdict so
+    // we never silently drop content.
+    await sendLongMessage(token, chatId, `⚖ Verdict${chairTag}${degradedTag}\n\n${verdict}`);
+  }
 }
 
 // Split on paragraph boundaries to stay under Telegram's 4096-char ceiling.
