@@ -1086,7 +1086,11 @@ function CouncilModelChip({
   );
 }
 
-function StatusLine({ session, tick }: { session: ChatSession; tick: number }) {
+function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: number }) {
+  // When pending, the per-message ThinkingBubble at the end of the transcript
+  // already shows the spinner + "X is thinking…" word. Rendering the same
+  // here was a duplicate, so the status line stays silent during work and
+  // only carries the idle ready-prompt.
   return (
     <box
       flexDirection="row"
@@ -1096,10 +1100,7 @@ function StatusLine({ session, tick }: { session: ChatSession; tick: number }) {
       backgroundColor={theme.bg}
     >
       {session.pending ? (
-        <>
-          <text fg={theme.gold}>{spinnerChar(tick)}</text>
-          <text fg={theme.fgDim}>  {session.cli.label} is {thinkingWord(tick)}…</text>
-        </>
+        <text fg={theme.fgFaint}> </text>
       ) : (
         <text fg={theme.fgFaint}>
           {session.hasFirstTurn
