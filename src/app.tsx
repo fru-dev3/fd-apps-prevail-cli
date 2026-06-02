@@ -821,38 +821,54 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       })
         .then((response) => {
           const ts = Date.now();
-          const mdl = models[cli.kind];
-          const tag = mdl ? `${cli.label}·${mdl}` : cli.label;
-          const content = `**[${tag}]**\n\n${response}`;
+          const mdl = models[cli.kind] ?? "";
           persistMessage({
             domain: session.hostDomain.name,
             session_id: session.sessionId,
             role: "assistant",
-            content,
+            content: response,
             ts,
             cli: cli.kind,
-            model: models[cli.kind] ?? "",
+            model: mdl,
           });
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
             return new Map(m).set(key, {
               ...cur,
-              messages: [...cur.messages, { role: "assistant" as const, content, ts }],
+              messages: [
+                ...cur.messages,
+                {
+                  role: "assistant" as const,
+                  content: response,
+                  ts,
+                  kind: "council-response" as const,
+                  cli: cli.kind,
+                  model: mdl,
+                },
+              ],
             });
           });
         })
         .catch((err: Error) => {
           const ts = Date.now();
-          const mdl = models[cli.kind];
-          const tag = mdl ? `${cli.label}·${mdl}` : cli.label;
-          const content = `**[${tag}]** — error: ${err.message}`;
+          const mdl = models[cli.kind] ?? "";
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
             return new Map(m).set(key, {
               ...cur,
-              messages: [...cur.messages, { role: "assistant" as const, content, ts }],
+              messages: [
+                ...cur.messages,
+                {
+                  role: "assistant" as const,
+                  content: `error: ${err.message}`,
+                  ts,
+                  kind: "council-response" as const,
+                  cli: cli.kind,
+                  model: mdl,
+                },
+              ],
             });
           });
         }),

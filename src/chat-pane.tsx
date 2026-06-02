@@ -49,7 +49,14 @@ export interface ChatMsg {
   role: "user" | "assistant" | "system";
   content: string;
   ts: number;
-  kind?: "distill-draft" | "distill-saved" | "distill-discarded" | "council-config";
+  kind?:
+    | "distill-draft"
+    | "distill-saved"
+    | "distill-discarded"
+    | "council-config"
+    | "council-response";
+  cli?: CliKind; // for council-response bubbles
+  model?: string;
 }
 
 export interface ChatSession {
@@ -80,6 +87,7 @@ export type ChatCommand =
   | { kind: "web"; mode: "allow" | "deny" | "status" }
   | { kind: "council"; prompt: string }
   | { kind: "council-config" }
+  | { kind: "council-mode-toggle" }
   | { kind: "council-use"; clis: string[] }
   | { kind: "council-model"; cli: string; model: string }
   | { kind: "heatmap"; days?: number }
@@ -101,6 +109,9 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
   // Hoisted from InputBox so the popover renders ABOVE InputBox at the
   // chat-pane level, keeping the input row at a stable bottom position.
   const [popover, setPopover] = useState<PopoverState | null>(null);
+  // When true, the next normal-text submit fans out via /council instead of
+  // running on a single CLI. Toggled from the council-config bubble.
+  const [councilMode, setCouncilMode] = useState(false);
 
   const userMsgCount = session.messages.filter((m) => m.role === "user").length;
   const showSuggestions = userMsgCount === 0;
@@ -192,7 +203,13 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
       return;
     }
     if (session.pending) return;
-    onSend(session.key, text);
+    if (councilMode) {
+      // Fan-out: route the bare text through the council command instead of
+      // the single-CLI sendMessage path.
+      onCommand(session.key, { kind: "council", prompt: text });
+    } else {
+      onSend(session.key, text);
+    }
     try {
       ref.current?.setText?.("");
     } catch {}
@@ -227,6 +244,8 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
         tick={tick}
         suggestions={suggestions}
         availableClis={availableClis}
+        councilMode={councilMode}
+        onToggleCouncilMode={() => setCouncilMode((m) => !m)}
         onAcceptDistill={(ts, content) =>
           onCommand(session.key, { kind: "accept-distill", ts, content })
         }
@@ -245,6 +264,18 @@ export function ChatPane({ session, availableClis, tick, onSend, onCommand, onEx
           onSend(session.key, msg);
         }}
       />
+      {councilMode && (
+        <box
+          flexDirection="row"
+          height={1}
+          paddingLeft={2}
+          paddingRight={2}
+          backgroundColor={theme.selBg}
+        >
+          <text fg={theme.goldBright} attributes={1}>⚖ council mode ON</text>
+          <text fg={theme.fgDim}>  · your next message fans out to the panel</text>
+        </box>
+      )}
       <StatusLine session={session} tick={tick} />
       {popover && (
         <box flexDirection="column" paddingLeft={2} paddingRight={2}>
@@ -429,6 +460,8 @@ function Transcript({
   tick,
   suggestions,
   availableClis,
+  councilMode,
+  onToggleCouncilMode,
   onAcceptDistill,
   onDiscardDistill,
   onPickSuggestion,
@@ -437,6 +470,8 @@ function Transcript({
   tick: number;
   suggestions: Suggestion[];
   availableClis: AvailableCli[];
+  councilMode: boolean;
+  onToggleCouncilMode: () => void;
   onAcceptDistill: (ts: number, content: string) => void;
   onDiscardDistill: (ts: number) => void;
   onPickSuggestion: (s: Suggestion) => void;
@@ -476,6 +511,8 @@ function Transcript({
           key={`m-${i}-${m.ts}`}
           msg={m}
           availableClis={availableClis}
+          councilMode={councilMode}
+          onToggleCouncilMode={onToggleCouncilMode}
           onAcceptDistill={onAcceptDistill}
           onDiscardDistill={onDiscardDistill}
         />
@@ -616,11 +653,15 @@ function MetaLine({ session, visibleCount }: { session: ChatSession; visibleCoun
 function MessageBubble({
   msg,
   availableClis,
+  councilMode,
+  onToggleCouncilMode,
   onAcceptDistill,
   onDiscardDistill,
 }: {
   msg: ChatMsg;
   availableClis: AvailableCli[];
+  councilMode: boolean;
+  onToggleCouncilMode: () => void;
   onAcceptDistill: (ts: number, content: string) => void;
   onDiscardDistill: (ts: number) => void;
 }) {
@@ -628,7 +669,16 @@ function MessageBubble({
     return <DistillDraftBubble msg={msg} onAccept={onAcceptDistill} onDiscard={onDiscardDistill} />;
   }
   if (msg.kind === "council-config") {
-    return <CouncilConfigBubble availableClis={availableClis} />;
+    return (
+      <CouncilConfigBubble
+        availableClis={availableClis}
+        councilMode={councilMode}
+        onToggleCouncilMode={onToggleCouncilMode}
+      />
+    );
+  }
+  if (msg.kind === "council-response") {
+    return <CouncilResponseBubble msg={msg} />;
   }
   if (msg.role === "system") {
     return (
@@ -732,7 +782,15 @@ function ThinkingBubble({ tick }: { tick: number }) {
 
 const COUNCIL_KINDS: ConfigCliKind[] = ["claude", "codex", "gemini"];
 
-function CouncilConfigBubble({ availableClis }: { availableClis: AvailableCli[] }) {
+function CouncilConfigBubble({
+  availableClis,
+  councilMode,
+  onToggleCouncilMode,
+}: {
+  availableClis: AvailableCli[];
+  councilMode: boolean;
+  onToggleCouncilMode: () => void;
+}) {
   // Force re-render after each click that mutates persistent config.
   const [_revision, setRevision] = useState(0);
   const cfg = readCouncilConfig();
@@ -768,7 +826,7 @@ function CouncilConfigBubble({ availableClis }: { availableClis: AvailableCli[] 
         backgroundColor={theme.bg}
         title=" ⚖ council panel · click to toggle "
         titleAlignment="left"
-        bottomTitle=" persists to ~/.aireadyu/config.json · used by /council "
+        bottomTitle=" persists to ~/.aireadyu/config.json "
         bottomTitleAlignment="left"
         paddingLeft={1}
         paddingRight={1}
@@ -784,21 +842,19 @@ function CouncilConfigBubble({ availableClis }: { availableClis: AvailableCli[] 
             : detected
               ? theme.fgDim
               : theme.fgFaint;
-          const nameFg = detected ? theme.fg : theme.fgFaint;
+          const nameFg = detected ? theme.gold : theme.fgFaint;
           const pinned = cfg.models[kind];
           const picks = MODEL_QUICKPICKS[kind] ?? [];
           return (
             <box key={kind} flexDirection="column" paddingTop={0}>
-              <box flexDirection="row" height={1}>
-                <box
-                  flexDirection="row"
-                  onMouseDown={() => togglePanel(kind)}
-                  paddingRight={1}
-                >
-                  <text fg={checkboxFg} attributes={inPanel ? 1 : 0}>
-                    {checkbox}
-                  </text>
-                </box>
+              <box
+                flexDirection="row"
+                height={1}
+                onMouseDown={() => togglePanel(kind)}
+              >
+                <text fg={checkboxFg} attributes={inPanel ? 1 : 0}>
+                  {checkbox}{" "}
+                </text>
                 <text fg={nameFg} attributes={inPanel ? 1 : 0}>
                   {kind}
                 </text>
@@ -807,15 +863,15 @@ function CouncilConfigBubble({ availableClis }: { availableClis: AvailableCli[] 
                 )}
               </box>
               {detected && (
-                <box flexDirection="row" height={1} paddingLeft={4}>
-                  <text fg={theme.fgFaint}>model </text>
-                  <ModelChip
+                <box flexDirection="row" height={1} paddingLeft={2}>
+                  <text fg={theme.fgFaint}>model: </text>
+                  <CouncilModelChip
                     label="default"
                     active={!pinned}
                     onClick={() => pinModel(kind, null)}
                   />
                   {picks.map((p) => (
-                    <ModelChip
+                    <CouncilModelChip
                       key={p}
                       label={p}
                       active={pinned === p}
@@ -828,7 +884,89 @@ function CouncilConfigBubble({ availableClis }: { availableClis: AvailableCli[] 
             </box>
           );
         })}
+        <box
+          flexDirection="row"
+          height={1}
+          onMouseDown={onToggleCouncilMode}
+        >
+          <box
+            flexDirection="row"
+            paddingLeft={1}
+            paddingRight={1}
+            backgroundColor={councilMode ? theme.selBg : theme.bgPanel}
+          >
+            <text fg={councilMode ? theme.goldBright : theme.gold} attributes={1}>
+              {councilMode ? "▣ council mode ON" : "▸ ask the council  (next message fans out)"}
+            </text>
+          </box>
+          {councilMode && (
+            <text fg={theme.fgFaint}>  · click again to turn off · or just type /council</text>
+          )}
+        </box>
+        <text> </text>
       </box>
+    </box>
+  );
+}
+
+const COUNCIL_CLI_COLORS: Record<CliKind, string> = {
+  claude: theme.gold, // warm gold — matches brand
+  codex: theme.bubbleAssistant, // muted blue
+  gemini: theme.ok, // green
+};
+
+function CouncilResponseBubble({ msg }: { msg: ChatMsg }) {
+  const cli = msg.cli;
+  const color = cli ? COUNCIL_CLI_COLORS[cli] : theme.bubbleAssistant;
+  const labelParts = [cli ?? "unknown"];
+  if (msg.model) labelParts.push(msg.model);
+  const title = ` ⚖ ${labelParts.join(" · ")} `;
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <box
+        flexDirection="column"
+        border
+        borderColor={color}
+        backgroundColor={theme.bg}
+        title={title}
+        titleAlignment="left"
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        {renderMarkdownLines(msg.content)}
+      </box>
+    </box>
+  );
+}
+
+function CouncilModelChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  // Bordered chip — gives an obvious clickable hit target so the user sees
+  // these as buttons (the borderless ModelChip in the picker bar reads as
+  // text, which confused users in the inline council bubble).
+  const bg = active ? theme.selBg : theme.bgPanel;
+  const fg = active ? theme.goldBright : theme.gold;
+  const border = active ? theme.goldBright : theme.fgDim;
+  return (
+    <box
+      flexDirection="row"
+      paddingLeft={1}
+      paddingRight={1}
+      backgroundColor={bg}
+      borderColor={border}
+      border={["left", "right"]}
+      onMouseDown={onClick}
+    >
+      <text fg={fg} bg={bg} attributes={active ? 1 : 0}>
+        {label}
+      </text>
     </box>
   );
 }
