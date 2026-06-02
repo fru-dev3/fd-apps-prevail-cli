@@ -115,6 +115,14 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
   // Hoisted from InputBox so the popover renders ABOVE InputBox at the
   // chat-pane level, keeping the input row at a stable bottom position.
   const [popover, setPopover] = useState<PopoverState | null>(null);
+  // Mirror councilMode into a ref so handleSubmit always reads the latest
+  // value even if the underlying <input>'s onSubmit handler was bound on an
+  // earlier render. Without this, toggling council ON after the input mounts
+  // can leave the closure stale and route the message to the single-CLI path.
+  const councilModeRef = useRef(councilMode);
+  useEffect(() => {
+    councilModeRef.current = councilMode;
+  }, [councilMode]);
 
   const userMsgCount = session.messages.filter((m) => m.role === "user").length;
   const showSuggestions = userMsgCount === 0;
@@ -206,7 +214,7 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
       return;
     }
     if (session.pending) return;
-    if (councilMode) {
+    if (councilModeRef.current) {
       // Fan-out: route the bare text through the council command instead of
       // the single-CLI sendMessage path.
       onCommand(session.key, { kind: "council", prompt: text });
