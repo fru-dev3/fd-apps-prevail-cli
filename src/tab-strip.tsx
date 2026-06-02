@@ -89,7 +89,7 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
       )}
       {cli && inChat && (
         <box flexDirection="row" onMouseDown={cli.onOpenCouncilConfig} paddingLeft={1}>
-          <text fg={theme.gold}>⚖</text>
+          <text fg={theme.gold}>⚖ Council</text>
         </box>
       )}
     </box>
