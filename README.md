@@ -66,6 +66,55 @@ remembers its own CLI + model independently, so `wealth` can run on Opus while
 `content` runs on Gemini 2.5 Pro — both at the same time, with live spinners
 in the sidebar showing which ones are thinking.
 
+## Council mode — why ask one AI when you can convene three
+
+Single-model output is fine for routine questions. For **high-stakes decisions**
+— "should I prepay this mortgage or invest the cash?", "is this contract clause
+a deal-breaker?", "rewrite my resume for a Principal SA at Anthropic" —
+one model's answer is a single point of view shaped by one company's training
+data, one RLHF bias, and one set of blind spots. You don't actually know what
+you're missing.
+
+Council fixes that. Type `/council <your question>` (or toggle `▣ Council ON`
+in the tab strip) and prevAIl **fans the question out to Claude, Codex, and
+Gemini in parallel**, collects their answers, then has a **synthesizer** (the
+chair) read all three and produce a single verdict. You see three panelist
+bubbles, then a `⚖ council verdict` bubble distilling them.
+
+Why this beats just asking one model:
+
+- **Triangulation, not averaging.** When Claude, Codex, and Gemini agree, your
+  confidence in the call goes up — three different models trained on different
+  data corpora converging is real signal. When they *disagree*, that's even
+  more valuable: the disagreement itself surfaces the trade-off you needed to
+  think about, which a single model would have just papered over.
+- **Cancels per-model quirks.** Claude tends to hedge, Codex is conservative
+  on non-coding questions, Gemini is verbose. The synthesizer reads all three
+  and writes one direct answer — you get the substance without inheriting any
+  single model's stylistic baggage.
+- **Compare model versions side-by-side.** Council can run multiple variants
+  of the *same* CLI in the same panel. Want to see if Opus 4.7 still beats 4.6
+  on financial reasoning? Add both to the claude row in the config and they
+  show up as two separate panelists. The chair synthesizes across all of them.
+- **Pick your chair.** The chair is the model that writes the verdict from
+  the panel responses. Pin Claude if you trust its synthesis voice, pin Codex
+  if you want a terse engineer-style summary, pin Gemini if you want it
+  exhaustive. Set it once in the council config; or leave it `auto` and the
+  first panelist to reply takes the chair role.
+- **Follow-up context is preserved.** Council remembers the prior turns of
+  the conversation. Ask a follow-up and all three panelists see the previous
+  question + the prior verdict, so they're answering the next move, not
+  starting fresh.
+- **Escape cancels everything.** A council fan-out is three concurrent CLI
+  child processes. Hit Escape and prevAIl SIGTERMs all of them in one shot,
+  drops a `(cancelled)` bubble, and the chat goes idle. No waiting for slow
+  models to finish a turn you don't care about anymore.
+
+You can also run a degraded council — `claude` + `codex` only, no `gemini`
+(or any subset) — if you're out of quota on one provider or you want to save
+tokens on a less critical question. Configure who participates in the
+`⚙ configure` panel.
+
 ## Commands
 
 ```bash
