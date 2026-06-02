@@ -4,12 +4,39 @@ import type { ChatMsg } from "./chat-pane.tsx";
 import type { Domain } from "./vault.ts";
 
 export function buildDistillPrompt(domain: Domain, messages: ChatMsg[]): string {
+  // Council bubbles carry attribution (which CLI / model said what, whether
+  // it was a panelist response or the synthesized verdict). Surface that in
+  // the transcript so the distiller treats council exchanges differently
+  // from single-CLI turns — the SKILL.md it produces should reflect the
+  // multi-perspective decision framework, not just one voice.
+  const sawCouncil = messages.some(
+    (m) => m.kind === "council-response" || m.kind === "council-verdict",
+  );
   const transcript = messages
     .filter((m) => m.role !== "system")
-    .map((m) => `[${m.role}]\n${m.content}`)
+    // Drop in-flight placeholders that have no content yet.
+    .filter((m) => m.kind !== "council-pending" && m.kind !== "council-synthesizing")
+    // Drop empty / whitespace-only bubbles.
+    .filter((m) => m.content && m.content.trim().length > 0)
+    .map((m) => {
+      const tag = labelMessage(m);
+      return `[${tag}]\n${m.content}`;
+    })
     .join("\n\n---\n\n");
   const today = new Date().toISOString().slice(0, 10);
-  return `The user wants to distill the conversation below into a reusable skill for the "${domain.name}" life domain. Read the transcript and produce a complete SKILL.md draft they can save under <vault>/${domain.name}/skills/<slug>/.
+  const councilNote = sawCouncil
+    ? `
+
+NOTE: this transcript includes a council exchange — the user asked one
+question, three panelist CLIs (claude/codex/gemini) each answered, and a
+chair synthesized a verdict. When distilling, capture *the decision
+framework* the council used, not just one panelist's view. If the
+panelists disagreed and the verdict resolved the trade-off, that
+reasoning IS the skill. The resulting SKILL.md should help future
+agents know when to convene a council and what dimensions to weigh.
+`
+    : "";
+  return `The user wants to distill the conversation below into a reusable skill for the "${domain.name}" life domain. Read the transcript and produce a complete SKILL.md draft they can save under <vault>/${domain.name}/skills/<slug>/.${councilNote}
 
 REQUIRED OUTPUT FORMAT — return ONLY a single fenced markdown code block (no preamble, no explanation, no closing remarks). The block must contain frontmatter and the sections below, in this order:
 
@@ -118,4 +145,19 @@ export function writeDistilledSkill(domain: Domain, skillBody: string): WriteRes
   } catch (err) {
     return { ok: false, path: skillFile, slug, message: (err as Error).message };
   }
+}
+
+// Tag a chat message for the distill transcript. Council messages get
+// rich attribution so the distiller can see which CLI / model produced
+// which slice of the exchange.
+function labelMessage(m: ChatMsg): string {
+  if (m.kind === "council-response") {
+    const who = m.model ? `${m.cli ?? "?"}·${m.model}` : (m.cli ?? "?");
+    return `council panelist · ${who}`;
+  }
+  if (m.kind === "council-verdict") {
+    const who = m.model ? `${m.cli ?? "?"}·${m.model}` : (m.cli ?? "?");
+    return `council verdict · synthesized by ${who}`;
+  }
+  return m.role;
 }
