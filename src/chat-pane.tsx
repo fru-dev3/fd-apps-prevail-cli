@@ -54,6 +54,7 @@ export interface ChatMsg {
     | "distill-saved"
     | "distill-discarded"
     | "council-config"
+    | "council-pending"
     | "council-response"
     | "council-verdict";
   cli?: CliKind; // for council-response bubbles
@@ -503,6 +504,7 @@ function Transcript({
         <MessageBubble
           key={`m-${i}-${m.ts}`}
           msg={m}
+          tick={tick}
           availableClis={availableClis}
           councilMode={councilMode}
           onToggleCouncilMode={onToggleCouncilMode}
@@ -645,6 +647,7 @@ function MetaLine({ session, visibleCount }: { session: ChatSession; visibleCoun
 
 function MessageBubble({
   msg,
+  tick,
   availableClis,
   councilMode,
   onToggleCouncilMode,
@@ -652,6 +655,7 @@ function MessageBubble({
   onDiscardDistill,
 }: {
   msg: ChatMsg;
+  tick: number;
   availableClis: AvailableCli[];
   councilMode: boolean;
   onToggleCouncilMode: () => void;
@@ -665,6 +669,9 @@ function MessageBubble({
   // dedicated overlay (see CouncilConfigPanel below). Existing transcripts may
   // still contain the kind so we silently skip them.
   if (msg.kind === "council-config") return null;
+  if (msg.kind === "council-pending") {
+    return <CouncilPendingBubble msg={msg} tick={tick} />;
+  }
   if (msg.kind === "council-response") {
     return <CouncilResponseBubble msg={msg} />;
   }
@@ -967,6 +974,35 @@ const COUNCIL_CLI_COLORS: Record<CliKind, string> = {
   codex: theme.bubbleAssistant, // muted blue
   gemini: theme.ok, // green
 };
+
+// Per-panelist placeholder rendered the instant runCouncil fans out, so the
+// user sees all 3 (or however many) panelists working at once. Replaced by
+// CouncilResponseBubble when that panelist actually returns.
+function CouncilPendingBubble({ msg, tick }: { msg: ChatMsg; tick: number }) {
+  const cli = msg.cli;
+  const color = cli ? COUNCIL_CLI_COLORS[cli] : theme.bubbleAssistant;
+  const labelParts = [cli ?? "unknown"];
+  if (msg.model) labelParts.push(msg.model);
+  const title = ` ⚖ ${labelParts.join(" · ")} `;
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <box
+        flexDirection="row"
+        border
+        borderColor={color}
+        backgroundColor={theme.bg}
+        title={title}
+        titleAlignment="left"
+        paddingLeft={1}
+        paddingRight={1}
+        height={3}
+      >
+        <text fg={theme.gold}>{spinnerChar(tick)}</text>
+        <text fg={theme.fgDim}>  {thinkingWord(tick)}…</text>
+      </box>
+    </box>
+  );
+}
 
 function CouncilResponseBubble({ msg }: { msg: ChatMsg }) {
   const cli = msg.cli;

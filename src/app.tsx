@@ -834,6 +834,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       cli: "council",
       model: "",
     });
+    // Stable timestamps so we can find and replace per-panelist placeholders
+    // when each call returns. One ts per panelist, derived from userTs so
+    // they sort correctly into the transcript.
+    const pendingTsByCli = new Map<string, number>();
+    panel.forEach((c, i) => pendingTsByCli.set(c.kind, userTs + 100 + i));
+
     setChats((m) => {
       const cur = m.get(key);
       if (!cur) return m;
@@ -844,11 +850,14 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           return mdl ? `${c.label}·${mdl}` : c.label;
         })
         .join(" · ");
-      const introMsgs = [userMsg, {
-        role: "system" as const,
-        content: `convening council: ${panelLabel}`,
-        ts: introTs,
-      }];
+      const introMsgs: ChatSession["messages"] = [
+        userMsg,
+        {
+          role: "system" as const,
+          content: `convening council: ${panelLabel}`,
+          ts: introTs,
+        },
+      ];
       if (skipped.length > 0) {
         introMsgs.push({
           role: "system" as const,
@@ -856,6 +865,19 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           ts: introTs + 1,
         });
       }
+      // Drop a "thinking" placeholder bubble per panelist immediately so
+      // the user sees all panelists working at once instead of waiting in
+      // silence for the first one to return.
+      panel.forEach((c) => {
+        introMsgs.push({
+          role: "assistant" as const,
+          content: "",
+          ts: pendingTsByCli.get(c.kind)!,
+          kind: "council-pending" as const,
+          cli: c.kind,
+          model: models[c.kind] ?? "",
+        });
+      });
       return new Map(m).set(key, {
         ...cur,
         messages: [...cur.messages, ...introMsgs],
@@ -919,46 +941,53 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             cli: cli.kind,
             model: mdl,
           });
+          // Replace the pending placeholder for this CLI with the real reply.
+          const pendingTs = pendingTsByCli.get(cli.kind);
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
-            return new Map(m).set(key, {
-              ...cur,
-              messages: [
-                ...cur.messages,
-                {
-                  role: "assistant" as const,
-                  content: response,
-                  ts,
-                  kind: "council-response" as const,
-                  cli: cli.kind,
-                  model: mdl,
-                },
-              ],
-            });
+            const responseMsg = {
+              role: "assistant" as const,
+              content: response,
+              ts,
+              kind: "council-response" as const,
+              cli: cli.kind,
+              model: mdl,
+            };
+            const idx = cur.messages.findIndex(
+              (x) => x.kind === "council-pending" && x.ts === pendingTs,
+            );
+            const nextMessages =
+              idx >= 0
+                ? [...cur.messages.slice(0, idx), responseMsg, ...cur.messages.slice(idx + 1)]
+                : [...cur.messages, responseMsg];
+            return new Map(m).set(key, { ...cur, messages: nextMessages });
           });
         })
         .catch((err: Error) => {
           const ts = Date.now();
           const mdl = models[cli.kind] ?? "";
           collected.push({ cli, model: mdl, response: err.message, ok: false });
+          const pendingTs = pendingTsByCli.get(cli.kind);
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
-            return new Map(m).set(key, {
-              ...cur,
-              messages: [
-                ...cur.messages,
-                {
-                  role: "assistant" as const,
-                  content: `error: ${err.message}`,
-                  ts,
-                  kind: "council-response" as const,
-                  cli: cli.kind,
-                  model: mdl,
-                },
-              ],
-            });
+            const errMsg = {
+              role: "assistant" as const,
+              content: `error: ${err.message}`,
+              ts,
+              kind: "council-response" as const,
+              cli: cli.kind,
+              model: mdl,
+            };
+            const idx = cur.messages.findIndex(
+              (x) => x.kind === "council-pending" && x.ts === pendingTs,
+            );
+            const nextMessages =
+              idx >= 0
+                ? [...cur.messages.slice(0, idx), errMsg, ...cur.messages.slice(idx + 1)]
+                : [...cur.messages, errMsg];
+            return new Map(m).set(key, { ...cur, messages: nextMessages });
           });
         }),
     );
@@ -996,13 +1025,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           `Two lines. Line 1 must start with the literal word "VERDICT:" followed by one single sentence giving the decisive call in plain language — no qualifiers, no "consider" or "you might", just tell the user what to do. The verdict must reflect the majority position from above. Line 2 must start with the literal word "Why:" followed by one short sentence tying the call back to the panelists by name — which ones supported the verdict, on what reasoning, and (if any) which panelist dissented and what they argued instead.`;
 
         try {
-          const verdict = await runChatTurn({
-            prompt: synthPrompt,
-            cwd: session.hostDomain.path,
-            cli: synthCli,
-            model: synthModel,
-            isFirst: true,
-          });
+          // Synthesis itself can hang if the chair CLI is having a bad day.
+          // Cap it so the verdict either lands quickly or we fall through to
+          // pending=false cleanly.
+          const verdict = await withTimeout(
+            runChatTurn({
+              prompt: synthPrompt,
+              cwd: session.hostDomain.path,
+              cli: synthCli,
+              model: synthModel,
+              isFirst: true,
+            }),
+            PANELIST_TIMEOUT_MS,
+            `${synthCli.label} (synthesis)`,
+          );
           const ts = Date.now();
           persistMessage({
             domain: session.hostDomain.name,
@@ -1013,6 +1049,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             cli: synthCli.kind,
             model: synthModel,
           });
+          // Land the verdict AND flip pending=false in the same setChats so
+          // the spinner stops the instant the verdict bubble appears.
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
@@ -1029,12 +1067,17 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   model: synthModel,
                 },
               ],
+              pending: false,
+              hasFirstTurn: true,
             });
           });
+          return; // verdict landed — done.
         } catch {
           // synthesis failed silently — user still has the panel responses.
         }
       }
+      // No verdict (fewer than 2 successes, or synthesis failed) — still
+      // clear pending so the spinner stops.
       setChats((m) => {
         const cur = m.get(key);
         if (!cur) return m;
@@ -1179,7 +1222,6 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         activeChats={chatCounts.active}
         pendingChats={chatCounts.pending}
       />
-      <CliHealthBanner clis={clis} cliHealth={cliHealth} />
       <box flexDirection="row" flexGrow={1}>
         <Sidebar
           domains={domains}
@@ -1235,6 +1277,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                           currentCli: activeSession.cli.kind,
                           model: activeSession.model,
                           councilMode: councilModeFor(activeSession.key),
+                          cliHealth,
                           onSwitchCli: (k) =>
                             handleChatCommand(activeSession.key, {
                               kind: "switch-cli",
@@ -1349,64 +1392,6 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       />
     </box>
   );
-}
-
-// Compact one-line-per-CLI status strip. Shows positive confirmations
-// (✓ ready) and clear failure summaries (⚠ <short reason>). Flat <text>
-// rows — no nested <box> — so OpenTUI doesn't collapse the children onto
-// the same line. Detailed hints are *not* shown here; the user can run
-// /council for the full error message when they need it.
-function CliHealthBanner({
-  clis,
-  cliHealth,
-}: {
-  clis: AvailableCli[];
-  cliHealth: Map<string, CliHealth | null>;
-}) {
-  if (clis.length === 0) return null;
-  // Build the segments first so we can join with a separator on one line.
-  const segments = clis.map((c) => {
-    const h = cliHealth.get(c.kind);
-    if (h === null || h === undefined) {
-      return { color: theme.fgFaint, text: `… ${c.label}` };
-    }
-    if (h.ok) {
-      return { color: theme.ok, text: `✓ ${c.label}` };
-    }
-    return { color: theme.warn, text: `⚠ ${c.label} (${shortReason(c.kind, h)})` };
-  });
-  return (
-    <box flexDirection="row" paddingLeft={2} paddingRight={2} height={1}>
-      <text fg={theme.fgFaint}>council:  </text>
-      {segments.map((s, i) => (
-        <box key={i} flexDirection="row">
-          <text fg={s.color}>{s.text}</text>
-          {i < segments.length - 1 && <text fg={theme.fgFaint}>  ·  </text>}
-        </box>
-      ))}
-    </box>
-  );
-}
-
-// Boil the probe error down to one short phrase the user can act on. Keeps
-// the council status strip readable; the long-form hint still lives in
-// CliHealth.hint for deeper surfacing later.
-function shortReason(kind: string, h: CliHealth): string {
-  const msg = h.message.toLowerCase();
-  if (kind === "codex") {
-    if (msg.includes("not supported when using codex with a chatgpt account"))
-      return "model gated on chatgpt account — run codex login";
-    if (msg.includes("timed out"))
-      return "timed out — likely model gated or rate limit";
-  }
-  if (kind === "gemini") {
-    if (msg.includes("agent execution blocked") || msg.includes("hook"))
-      return "hooks blocking — fix ~/.gemini/settings.json";
-    if (msg.includes("trusted"))
-      return "workspace untrusted";
-  }
-  // Generic fallback: first 40 chars of the raw error.
-  return h.message.slice(0, 40);
 }
 
 function summarize(domains: Domain[], apps: AppSkill[]) {

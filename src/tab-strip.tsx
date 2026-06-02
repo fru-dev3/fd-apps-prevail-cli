@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { theme } from "./theme.ts";
 import type { ViewKey } from "./vault.ts";
-import { MODEL_QUICKPICKS, type AvailableCli, type CliKind } from "./cli-bridge.ts";
+import { MODEL_QUICKPICKS, type AvailableCli, type CliHealth, type CliKind } from "./cli-bridge.ts";
 
 interface TabDef {
   key: ViewKey | "chat";
@@ -30,6 +30,7 @@ export interface TabStripCliProps {
   currentCli: CliKind;
   model: string;
   councilMode: boolean;
+  cliHealth: Map<string, CliHealth | null>;
   onSwitchCli: (cli: CliKind) => void;
   onPickModel: (model: string) => void;
   onToggleCouncilMode: () => void;
@@ -74,6 +75,7 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
           <CliChips
             clis={cli.clis}
             currentCli={cli.currentCli}
+            cliHealth={cli.cliHealth}
             onSwitchCli={cli.onSwitchCli}
           />
           <text fg={theme.fgFaint}>  │  </text>
@@ -122,10 +124,12 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
 function CliChips({
   clis,
   currentCli,
+  cliHealth,
   onSwitchCli,
 }: {
   clis: AvailableCli[];
   currentCli: CliKind;
+  cliHealth: Map<string, CliHealth | null>;
   onSwitchCli: (cli: CliKind) => void;
 }) {
   return (
@@ -133,6 +137,17 @@ function CliChips({
       {clis.map((c) => {
         const active = c.kind === currentCli;
         const fg = active ? theme.gold : theme.fgDim;
+        // Inline health glyph next to each CLI label — ✓ ready, ⚠ failed
+        // probe, · still probing. Replaces the old top-of-screen banner row.
+        const h = cliHealth.get(c.kind);
+        const glyph =
+          h === null || h === undefined ? "·" : h.ok ? "✓" : "⚠";
+        const glyphFg =
+          h === null || h === undefined
+            ? theme.fgFaint
+            : h.ok
+              ? theme.ok
+              : theme.warn;
         return (
           <box
             key={c.kind}
@@ -144,6 +159,7 @@ function CliChips({
               if (!active) onSwitchCli(c.kind);
             }}
           >
+            <text fg={glyphFg}>{glyph} </text>
             <text fg={fg} attributes={active ? 1 : 0}>
               {active ? `▸${c.label}` : c.label}
             </text>
