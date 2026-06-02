@@ -37,9 +37,8 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={9}
+      height={8}
       border={["bottom"]}
-      borderStyle="double"
       borderColor={theme.gold}
       backgroundColor={theme.bg}
     >
@@ -48,7 +47,6 @@ export function Branding({
         flexGrow={1}
         paddingLeft={3}
         paddingRight={3}
-        paddingTop={1}
       >
         <BrandColumn />
         <Separator />
@@ -74,47 +72,94 @@ export function Branding({
 // sit in plain gold. High-contrast pairing — the AI is the unmistakable
 // heart of the cockpit, not just a slightly-brighter shade of the same
 // color it sits next to.
-const LOGO_PREV = [
-  "██████╗ ██████╗ ███████╗██╗   ██╗",
-  "██╔══██╗██╔══██╗██╔════╝██║   ██║",
-  "██████╔╝██████╔╝█████╗  ██║   ██║",
-  "██╔═══╝ ██╔══██╗██╔══╝  ╚██╗ ██╔╝",
-  "██║     ██║  ██║███████╗ ╚████╔╝ ",
-  "╚═╝     ╚═╝  ╚═╝╚══════╝  ╚═══╝  ",
+// Per-letter blocks so the renderer can space them out evenly via gap.
+// Each LETTER[i] is one row of one letter; render joins them with a chosen
+// gap so the wordmark stretches to fill the available width.
+const L_P = [
+  "██████╗",
+  "██╔══██╗",
+  "██████╔╝",
+  "██╔═══╝",
+  "██║",
+  "╚═╝",
 ] as const;
-const LOGO_AI = [
-  " █████╗ ██╗",
-  "██╔══██╗██║",
-  "███████║██║",
-  "██╔══██║██║",
-  "██║  ██║██║",
-  "╚═╝  ╚═╝╚═╝",
+const L_R = [
+  "██████╗",
+  "██╔══██╗",
+  "██████╔╝",
+  "██╔══██╗",
+  "██║  ██║",
+  "╚═╝  ╚═╝",
 ] as const;
-const LOGO_L = [
-  "██╗     ",
-  "██║     ",
-  "██║     ",
-  "██║     ",
+const L_E = [
+  "███████╗",
+  "██╔════╝",
+  "█████╗",
+  "██╔══╝",
   "███████╗",
   "╚══════╝",
 ] as const;
+const L_V = [
+  "██╗   ██╗",
+  "██║   ██║",
+  "██║   ██║",
+  "╚██╗ ██╔╝",
+  " ╚████╔╝",
+  "  ╚═══╝",
+] as const;
+const L_A = [
+  " █████╗",
+  "██╔══██╗",
+  "███████║",
+  "██╔══██║",
+  "██║  ██║",
+  "╚═╝  ╚═╝",
+] as const;
+const L_I = [
+  "██╗",
+  "██║",
+  "██║",
+  "██║",
+  "██║",
+  "╚═╝",
+] as const;
+const L_L = [
+  "██╗",
+  "██║",
+  "██║",
+  "██║",
+  "███████╗",
+  "╚══════╝",
+] as const;
+// Wider gap between letters than the old fixed-width strings used.
+// Tweaking GAP shifts how much horizontal space the wordmark eats.
+const LETTER_GAP = "   ";
 
 function BrandColumn() {
+  // Compose each row by joining the per-letter blocks with LETTER_GAP.
+  // PREV and L render in gold; AI renders in aiAccent (electric cyan) so
+  // the AI pops as the brand thesis.
+  const prev = (i: number) =>
+    [L_P[i], L_R[i], L_E[i], L_V[i]].join(LETTER_GAP);
+  const ai = (i: number) => [L_A[i], L_I[i]].join(LETTER_GAP);
+  const l = (i: number) => L_L[i]!;
   return (
-    <box flexDirection="row" width={80}>
+    <box flexDirection="row" width={88}>
       <Mascot />
       <box flexDirection="column" paddingLeft={2}>
-        {LOGO_PREV.map((_, i) => (
-          <text key={`logo-${i}`} fg={theme.gold} attributes={1}>
-            <span fg={theme.gold} attributes={1}>{LOGO_PREV[i]}</span>
-            <span fg={theme.aiAccent} attributes={1}>{LOGO_AI[i]}</span>
-            <span fg={theme.gold} attributes={1}>{LOGO_L[i]}</span>
+        {L_P.map((_, i) => (
+          <text key={`logo-${i}`} attributes={1}>
+            <span fg={theme.gold} attributes={1}>{prev(i)}</span>
+            <span fg={theme.gold} attributes={1}>{LETTER_GAP}</span>
+            <span fg={theme.aiAccent} attributes={1}>{ai(i)}</span>
+            <span fg={theme.gold} attributes={1}>{LETTER_GAP}</span>
+            <span fg={theme.gold} attributes={1}>{l(i)}</span>
           </text>
         ))}
         <text fg={theme.goldDim}>
-          {"        p r e v  ·  "}
+          {"        p r e v   ·   "}
           <span fg={theme.aiAccent}>A I</span>
-          {"  ·  l   —   your AI life cockpit"}
+          {"   ·   l   —   your AI life cockpit"}
         </text>
       </box>
     </box>
@@ -123,7 +168,7 @@ function BrandColumn() {
 
 function Mascot() {
   return (
-    <box flexDirection="column" width={9} paddingTop={2}>
+    <box flexDirection="column" width={9} paddingTop={1}>
       <text fg={theme.goldDim}> ╲ │ ╱ </text>
       <text fg={theme.gold} attributes={1}> ─ ◈ ─ </text>
       <text fg={theme.goldDim}> ╱ │ ╲ </text>
@@ -136,7 +181,7 @@ function Mascot() {
 function Separator() {
   return (
     <box flexDirection="column" width={3} paddingLeft={1} paddingRight={1}>
-      {Array.from({ length: 8 }, (_, i) => (
+      {Array.from({ length: 7 }, (_, i) => (
         <text key={`sep-${i}`} fg={theme.border}>
           │
         </text>
@@ -179,7 +224,7 @@ function StatusColumn({
         : "no chats yet";
 
   return (
-    <box flexDirection="column" flexGrow={1} paddingLeft={2} paddingTop={1}>
+    <box flexDirection="column" flexGrow={1} paddingLeft={2}>
       <box flexDirection="row" height={1}>
         <text fg={theme.gold} attributes={1}>
           {dateLabel}
