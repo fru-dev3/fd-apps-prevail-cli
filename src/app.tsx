@@ -16,6 +16,7 @@ import {
 } from "./chat-pane.tsx";
 import { EditorPane } from "./editor-pane.tsx";
 import { TabStrip } from "./tab-strip.tsx";
+import { readWebAccess, setWebAccess } from "./config.ts";
 import { scanApps, scanCommunityApps, scanVault, type AppSkill, type Domain, type ViewKey } from "./vault.ts";
 import { theme } from "./theme.ts";
 import { scaffoldApp, scaffoldDomain } from "./domain-scaffold.ts";
@@ -521,6 +522,16 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             return `  · ${when}${cliTag} — ${first}`;
           });
           systemNote = `your last ${prompts.length} prompt${prompts.length === 1 ? "" : "s"} for ${next.hostDomain.name} (newest first):\n${lines.join("\n")}\n\nfull log: ${filePath}`;
+        }
+      } else if (cmd.kind === "web") {
+        if (cmd.mode === "status") {
+          const current = readWebAccess();
+          systemNote = `web access is currently: ${current}. use /web on to allow, /web off to deny.`;
+        } else {
+          setWebAccess(cmd.mode);
+          systemNote = cmd.mode === "deny"
+            ? "web access disabled. CLIs will be told not to use WebSearch, WebFetch, or any network tools from the next turn onward."
+            : "web access enabled. CLIs may use WebSearch, WebFetch, and network tools as needed.";
         }
       } else if (cmd.kind === "unknown") {
         systemNote = `unknown command ${cmd.raw}. try /help.`;

@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { Domain, ViewKey } from "./vault.ts";
+import { readWebAccess } from "./config.ts";
 
 const OPERATING_MANUAL_FILE = "AGENTS-operating.md";
 let operatingManualCache: { vaultPath: string; content: string | null } | null = null;
@@ -141,11 +142,28 @@ export interface ChatTurn {
   isFirst: boolean;
 }
 
+const WEB_DENY_NOTE = [
+  "<web-access>",
+  "The user has globally disabled web access for this cockpit session.",
+  "Do NOT use WebSearch, WebFetch, fetch(), curl, or any other tool that",
+  "makes outbound HTTP requests. Work only from the vault and local files.",
+  "If a question genuinely requires the web, say so plainly and stop —",
+  "do not silently proceed without web access.",
+  "</web-access>",
+].join("\n");
+
+function augmentManualWithWebGate(manual: string | null): string | null {
+  const mode = readWebAccess();
+  if (mode === "allow") return manual;
+  if (!manual) return WEB_DENY_NOTE;
+  return `${manual}\n\n${WEB_DENY_NOTE}`;
+}
+
 export async function runChatTurn({ prompt, cwd, cli, model, isFirst }: ChatTurn): Promise<string> {
   const m = model.trim();
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
-  const manual = findOperatingManual(vaultPath);
+  const manual = augmentManualWithWebGate(findOperatingManual(vaultPath));
 
   if (cli.kind === "claude") {
     const head = isFirst ? ["-p", prompt] : ["--continue", "-p", prompt];

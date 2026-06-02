@@ -6,6 +6,20 @@ import { homedir } from "node:os";
 export interface UserConfig {
   vaultPath: string;
   createdAt: string;
+  // Global toggle: when "deny", the AGENTS-operating preamble injected into
+  // every CLI launch explicitly forbids WebSearch / WebFetch / network tools.
+  // Default (when missing) is "allow" — so existing configs keep working.
+  webAccess?: "allow" | "deny";
+}
+
+export function readWebAccess(): "allow" | "deny" {
+  return readConfig()?.webAccess ?? "allow";
+}
+
+export function setWebAccess(mode: "allow" | "deny"): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  writeConfig({ ...cfg, webAccess: mode });
 }
 
 export function configDir(): string {

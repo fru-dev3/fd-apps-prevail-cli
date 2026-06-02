@@ -71,6 +71,7 @@ export type ChatCommand =
   | { kind: "discard-distill"; ts: number }
   | { kind: "search"; query: string }
   | { kind: "history"; limit?: number }
+  | { kind: "web"; mode: "allow" | "deny" | "status" }
   | { kind: "unknown"; raw: string };
 
 interface Props {
@@ -717,6 +718,7 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/distill", desc: "synthesize this conversation into a reusable SKILL.md", aliases: ["/skill"] },
   { cmd: "/search", arg: "<query>", desc: "FTS5 search across all past chats", aliases: ["/s"] },
   { cmd: "/history", arg: "[n]", desc: "show your past prompts for this domain (default 20)", aliases: ["/h", "/prompts"] },
+  { cmd: "/web", arg: "[on|off]", desc: "global web access — toggle or check status (default: allow)" },
   { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
   { cmd: "/codex", arg: "[model]", desc: "switch this chat to Codex" },
   { cmd: "/gemini", arg: "[model]", desc: "switch this chat to Gemini CLI" },
@@ -932,6 +934,12 @@ function parseSlashCommand(text: string): ChatCommand {
   if (cmd === "history" || cmd === "h" || cmd === "prompts") {
     const n = parseInt(arg, 10);
     return { kind: "history", limit: Number.isFinite(n) && n > 0 ? n : undefined };
+  }
+  if (cmd === "web") {
+    const a = arg.trim().toLowerCase();
+    if (a === "on" || a === "allow" || a === "enable") return { kind: "web", mode: "allow" };
+    if (a === "off" || a === "deny" || a === "disable") return { kind: "web", mode: "deny" };
+    return { kind: "web", mode: "status" };
   }
   return { kind: "unknown", raw: text };
 }
