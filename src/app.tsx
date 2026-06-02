@@ -844,17 +844,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           return mdl ? `${c.label}·${mdl}` : c.label;
         })
         .join(" · ");
+      const introMsgs = [userMsg, {
+        role: "system" as const,
+        content: `convening council: ${panelLabel}`,
+        ts: introTs,
+      }];
+      if (skipped.length > 0) {
+        introMsgs.push({
+          role: "system" as const,
+          content: `skipped (failed launch probe): ${skipped.map((c) => c.label).join(", ")}`,
+          ts: introTs + 1,
+        });
+      }
       return new Map(m).set(key, {
         ...cur,
-        messages: [
-          ...cur.messages,
-          userMsg,
-          {
-            role: "system" as const,
-            content: `convening council: ${panelLabel}`,
-            ts: introTs,
-          },
-        ],
+        messages: [...cur.messages, ...introMsgs],
         pending: true,
       });
     });
@@ -867,14 +871,41 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     type Collected = { cli: AvailableCli; model: string; response: string; ok: boolean };
     const collected: Collected[] = [];
 
+    // Hard per-call timeout so a hanging CLI (codex on a broken auth, gemini
+    // blocked on a missing hook script, network stall) can never block the
+    // synthesis. 120s is long enough for slow models to finish but short
+    // enough that the user gets a verdict from the rest of the panel.
+    const PANELIST_TIMEOUT_MS = 120_000;
+    function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${ms / 1000}s — skipped`));
+        }, ms);
+        p.then(
+          (v) => {
+            clearTimeout(timer);
+            resolve(v);
+          },
+          (e) => {
+            clearTimeout(timer);
+            reject(e);
+          },
+        );
+      });
+    }
+
     const calls = panel.map((cli) =>
-      runChatTurn({
-        prompt: promptForCli,
-        cwd: session.hostDomain.path,
-        cli,
-        model: models[cli.kind] ?? "",
-        isFirst: true,
-      })
+      withTimeout(
+        runChatTurn({
+          prompt: promptForCli,
+          cwd: session.hostDomain.path,
+          cli,
+          model: models[cli.kind] ?? "",
+          isFirst: true,
+        }),
+        PANELIST_TIMEOUT_MS,
+        cli.label,
+      )
         .then((response) => {
           const ts = Date.now();
           const mdl = models[cli.kind] ?? "";
