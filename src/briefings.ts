@@ -5,6 +5,7 @@ import { detectClis, runChatTurn } from "./cli-bridge.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
 import { isCronDue } from "./schedule.ts";
+import { tryAcquireLock } from "./file-lock.ts";
 
 // A briefing = a scheduled question routed to one specific life domain. It
 // runs on the same cron primitives as ad-hoc schedules but the result path
@@ -183,23 +184,32 @@ export async function tickBriefings(
   now: Date = new Date(),
   signal?: AbortSignal,
 ): Promise<BriefingResult[]> {
-  const briefings = loadBriefings(vaultPath);
-  const minuteStart = Math.floor(now.getTime() / 60000) * 60000;
-  const due = briefings.filter(
-    (b) =>
-      b.enabled &&
-      (!b.last_run || b.last_run < minuteStart) &&
-      isCronDue(b.cron, now),
-  );
-  const results: BriefingResult[] = [];
-  for (const b of due) {
-    if (signal?.aborted) break;
-    const r = await runBriefing(b, vaultPath, deliverTelegram, signal);
-    results.push(r);
-    b.last_run = now.getTime();
+  // Cross-process lock — same pattern as schedule.tickAndRunDue. Without
+  // this, running `prevail daemon --telegram` alongside the TUI would
+  // double-fire briefings the moment both happen to tick the same minute.
+  const lock = tryAcquireLock(briefingsFilePath(vaultPath) + ".lock");
+  if (!lock) return [];
+  try {
+    const briefings = loadBriefings(vaultPath);
+    const minuteStart = Math.floor(now.getTime() / 60000) * 60000;
+    const due = briefings.filter(
+      (b) =>
+        b.enabled &&
+        (!b.last_run || b.last_run < minuteStart) &&
+        isCronDue(b.cron, now),
+    );
+    const results: BriefingResult[] = [];
+    for (const b of due) {
+      if (signal?.aborted) break;
+      const r = await runBriefing(b, vaultPath, deliverTelegram, signal);
+      results.push(r);
+      b.last_run = now.getTime();
+    }
+    if (due.length > 0) saveBriefings(vaultPath, briefings);
+    return results;
+  } finally {
+    lock.release();
   }
-  if (due.length > 0) saveBriefings(vaultPath, briefings);
-  return results;
 }
 
 export function findDomain(vaultPath: string, name: string): Domain | null {

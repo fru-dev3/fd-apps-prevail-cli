@@ -7,6 +7,40 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.4.0] — 2026-06-02 · auth, locks, paths
+
+Hardening + the OAuth runner that makes the YouTube-Analytics example actually work end-to-end. Two days after v0.3.0, all three deferred items from the audit close-out are now shipped:
+
+### Added — OAuth 2.0 + PKCE runner
+- **`prevail connectors oauth <id>`** (and `/connectors oauth <id>` in the TUI) walks the full authorization-code-with-PKCE flow:
+  - Spins up a loopback HTTP server bound to `127.0.0.1` only (never `0.0.0.0`)
+  - Opens the user's browser to the provider's consent screen
+  - Catches the redirect with `state` parameter verification (CSRF protection)
+  - Exchanges code for tokens with PKCE verifier
+  - Saves the refresh token at `~/.prevail/connectors/<id>/auth/refresh.token` (chmod 0600)
+  - 5-minute hard timeout so a stuck browser never wedges the daemon
+- **`refreshAccessToken(connectorId)`** — exchange the saved refresh token for a fresh access token. Used by the probe layer + any connector skill that needs Bearer auth.
+- Generic over provider: works for Google services (YouTube Analytics, Calendar, Drive, Gmail), GitHub Apps, Notion, Linear — anything that speaks OAuth 2.0 + PKCE. Provider specifics (auth/token URLs, scopes, extra query params like Google's `access_type=offline`) live in the manifest's `oauth` block.
+- YouTube Analytics example manifest now has a full `oauth` block so the flow works the moment the user sets `PREVAIL_GOOGLE_CLIENT_ID` + `PREVAIL_GOOGLE_CLIENT_SECRET`.
+
+### Added — Cross-process file lock for schedule + briefing ticks
+- New `src/file-lock.ts` provides `tryAcquireLock()` / `withLock()` based on atomic `O_EXCL` file creation. Used by `schedule.tickAndRunDue` and `briefings.tickBriefings`. Without this, running `prevail daemon --telegram` alongside the TUI could double-fire any cron entry that hit during the same minute on both processes — closing audit finding #10.
+- Stale-lock recovery via PID liveness check (`kill -0`) + a 5-minute mtime floor, so a crashed daemon recovers cleanly on restart.
+
+### Added — Vault path validation
+- New `src/path-safety.ts` enforces "we never read or write outside the vault" as an invariant, not an emergent property:
+  - `validateVaultPath()` rejects empty/relative/system paths (`/`, `/etc`, `/var`, `/System`, `/dev`, ...) and null-byte paths
+  - `isSafeEntryName()` rejects domain/app entry names with control chars, null bytes, `..`, leading dots, or excessive length
+  - `resolveSafeChild()` rejects symlinks that escape the vault root after `realpath` resolution
+- `scanVault()` now applies all three at scan time so a misconfigured vault (or a symlink farm dropped into one) can't trick prevAIl into walking system directories.
+
+### Added — Connectors CLI subcommand
+- `prevail connectors list` — every detected connector with auth type + id
+- `prevail connectors test <id>` — run the manifest's `auth_check` probe (same probe the UI runs on Test Connection)
+- `prevail connectors oauth <id>` — kick off the OAuth flow
+
+---
+
 ## [Unreleased]
 
 ### Security — adversarial sweep

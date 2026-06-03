@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
 
 export type ViewKey = "state" | "loops" | "quickstart" | "prompts" | "skills";
 
@@ -110,6 +111,12 @@ export function resolveDefaultVaultPath(): string {
 }
 
 export function scanVault(vaultPath: string): Domain[] {
+  // SECURITY: refuse to scan if the configured vault path is catastrophic
+  // (/, /etc, /System, ...) — better to surface an empty domain list than
+  // start traversing system dirs. Caller can show "vault path looks wrong"
+  // when this returns [] for an existsSync path.
+  const v = validateVaultPath(vaultPath);
+  if (!v.ok) return [];
   if (!existsSync(vaultPath)) return [];
   const entries = readdirSync(vaultPath, { withFileTypes: true });
   const lifePath = resolve(vaultPath, "..");
@@ -118,6 +125,16 @@ export function scanVault(vaultPath: string): Domain[] {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     if (NON_DOMAIN_DIRS.has(entry.name)) continue;
+    // SECURITY: belt-and-suspenders entry-name guard (rejects null bytes,
+    // control chars, "..", leading-dot hidden dirs, anything over 200
+    // chars). readdirSync at the OS level already strips path separators,
+    // but explicit validation makes "we never read outside the vault" an
+    // enforceable invariant instead of an emergent one.
+    if (!isSafeEntryName(entry.name)) continue;
+    // SECURITY: confirm the resolved child actually lives under the vault
+    // root after symlink resolution. A symlink that escapes the vault
+    // (e.g. wealth -> ../../etc) is silently skipped instead of followed.
+    if (!resolveSafeChild(vaultPath, entry.name)) continue;
 
     const domainPath = join(vaultPath, entry.name);
     const statePath = join(domainPath, "state.md");
@@ -412,6 +429,10 @@ export interface AppSkill {
   // connector's auth. Read by connector-probe.ts. Opaque object here so
   // we don't have to import the probe module from vault.ts.
   authCheck?: unknown;
+  // Raw oauth block from manifest.json — defines the OAuth flow when
+  // integration === "oauth". Read by oauth-flow.ts. Opaque here for the
+  // same dep-isolation reason.
+  oauth?: unknown;
 }
 
 export type ConnectorStatus = "connected" | "not-configured" | "expired" | "error";
@@ -433,13 +454,25 @@ export interface CommunityAppManifest {
 
 function communityAppsDirs(): string[] {
   const dirs: string[] = [];
+  // User-installed connectors live here. Anything they add takes precedence.
   dirs.push(join(homedir(), ".prevail", "apps"));
+  // Also accept the explicit PREVAIL_APPS_DIR override (useful for
+  // development and CI). Keeps the connector discovery hermetic when set.
+  if (process.env.PREVAIL_APPS_DIR) dirs.push(process.env.PREVAIL_APPS_DIR);
+  // For the compiled binary: execPath is `dist/prevail`, so the bundled
+  // community apps live at `dist/../apps/community`. Check both adjacency
+  // (dev: running source under bun run) and parent-adjacency (release:
+  // running compiled binary out of dist/).
   try {
-    dirs.push(resolve(dirname(process.execPath), "apps", "community"));
+    const execDir = dirname(process.execPath);
+    dirs.push(resolve(execDir, "apps", "community"));
+    dirs.push(resolve(execDir, "..", "apps", "community"));
   } catch {}
   if (process.argv[1]) {
     try {
-      dirs.push(resolve(dirname(process.argv[1]), "apps", "community"));
+      const argvDir = dirname(process.argv[1]);
+      dirs.push(resolve(argvDir, "apps", "community"));
+      dirs.push(resolve(argvDir, "..", "apps", "community"));
     } catch {}
   }
   try {
@@ -468,6 +501,7 @@ interface CoercedManifest {
   integration: "api" | "oauth" | "browser" | "mcp" | "manual";
   connection?: string;
   authCheck?: unknown;
+  oauth?: unknown;
 }
 
 function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManifest {
@@ -502,6 +536,7 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     // through opaquely here — coercion in the probe layer is safer because
     // it can validate each kind's specific subfields.
     authCheck: typeof o.auth_check === "object" && o.auth_check !== null ? o.auth_check : undefined,
+    oauth: typeof o.oauth === "object" && o.oauth !== null ? o.oauth : undefined,
   };
 }
 
@@ -557,6 +592,7 @@ export function scanCommunityApps(): AppSkill[] {
         lastError: conn.lastError,
         configured: conn.configured,
         authCheck: m.authCheck,
+        oauth: m.oauth,
       });
     }
   }

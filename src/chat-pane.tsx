@@ -113,6 +113,8 @@ export type ChatCommand =
   | { kind: "telegram"; sub: string; arg: string }
   | { kind: "briefing"; sub: string; arg: string }
   | { kind: "connectors" }
+  | { kind: "connector-oauth"; id: string }
+  | { kind: "connector-test"; id: string }
   | { kind: "unknown"; raw: string };
 
 interface Props {
@@ -1558,7 +1560,7 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/framework", arg: "[id|list|none]", desc: "set response framework (bluf · win · scqa · sbar · ooda · proscons · steelman)", aliases: ["/fw"] },
   { cmd: "/telegram", arg: "[status|setup|add|remove|launch]", desc: "manage the Telegram bot bridge from inside the cockpit", aliases: ["/tg"] },
   { cmd: "/briefing", arg: "[list|add|run|remove]", desc: "manage scheduled domain briefings", aliases: ["/brief", "/briefings"] },
-  { cmd: "/connectors", desc: "show connection status for every app (auth type · status · last sync)", aliases: ["/conn", "/connect"] },
+  { cmd: "/connectors", arg: "[oauth <id>|test <id>]", desc: "list connectors · run OAuth flow · test connection", aliases: ["/conn", "/connect", "/connector"] },
   { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
   { cmd: "/codex", arg: "[model]", desc: "switch this chat to Codex" },
   { cmd: "/gemini", arg: "[model]", desc: "switch this chat to Gemini CLI" },
@@ -1872,6 +1874,23 @@ function parseSlashCommand(text: string): ChatCommand {
     return { kind: "briefing", sub: (parts[0] ?? "list").toLowerCase(), arg: parts.slice(1).join(" ").trim() };
   }
   if (cmd === "connectors" || cmd === "conn" || cmd === "connect") {
+    const parts = arg.trim().split(/\s+/).filter(Boolean);
+    if (parts[0] === "oauth" && parts[1]) {
+      return { kind: "connector-oauth", id: parts[1] };
+    }
+    if (parts[0] === "test" && parts[1]) {
+      return { kind: "connector-test", id: parts[1] };
+    }
+    return { kind: "connectors" };
+  }
+  if (cmd === "connector") {
+    const parts = arg.trim().split(/\s+/).filter(Boolean);
+    if (parts[0] === "oauth" && parts[1]) {
+      return { kind: "connector-oauth", id: parts[1] };
+    }
+    if (parts[0] === "test" && parts[1]) {
+      return { kind: "connector-test", id: parts[1] };
+    }
     return { kind: "connectors" };
   }
   if (cmd === "council" || cmd === "c" || cmd === "panel") {

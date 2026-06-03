@@ -799,6 +799,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         systemNote = handleBriefingCommand(cmd.sub, cmd.arg, vaultPath, apps, domains);
       } else if (cmd.kind === "connectors") {
         systemNote = renderConnectorOverview(apps);
+      } else if (cmd.kind === "connector-oauth") {
+        // Fire OAuth flow asynchronously — spawns a 127.0.0.1 server,
+        // opens the browser, writes the refresh token. We surface a
+        // "starting" note immediately and the result message arrives as
+        // a follow-up system note when the flow resolves.
+        systemNote = startConnectorOAuth(key, cmd.id, apps);
+      } else if (cmd.kind === "connector-test") {
+        systemNote = `running connector test for ${cmd.id}…`;
+        startConnectorTest(key, cmd.id, apps);
       } else if (cmd.kind === "unknown") {
         systemNote = `unknown command ${cmd.raw}. try /help.`;
       }
@@ -1449,6 +1458,68 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       ctl.abort();
     } catch {}
     return true;
+  }
+
+  // Append a system-note message to the chat session — used by async
+  // connector flows (OAuth, test connection) to surface their result
+  // when it lands, since the kick-off note returned synchronously isn't
+  // enough.
+  function appendSystemNote(key: string, content: string): void {
+    setChats((m) => {
+      const cur = m.get(key);
+      if (!cur) return m;
+      return new Map(m).set(key, {
+        ...cur,
+        messages: [...cur.messages, { role: "system", content, ts: Date.now() }],
+      });
+    });
+  }
+
+  function startConnectorOAuth(key: string, id: string, list: AppSkill[]): string {
+    const app = list.find((a) => a.id === id);
+    if (!app) return `no connector with id "${id}". try /connectors to list.`;
+    if (!app.oauth) {
+      return `connector "${id}" has no oauth block in its manifest. only OAuth-style connectors can run this flow.`;
+    }
+    // Fire async — surface the kick-off note synchronously, then queue
+    // the result.
+    void (async () => {
+      try {
+        const { runOAuthFlow } = await import("./oauth-flow.ts");
+        const result = await runOAuthFlow(
+          id,
+          app.oauth as Parameters<typeof runOAuthFlow>[1],
+          { logger: (line) => appendSystemNote(key, `[oauth] ${line}`) },
+        );
+        appendSystemNote(key, result.ok ? `✓ ${result.message}` : `✗ ${result.message}`);
+      } catch (err) {
+        appendSystemNote(key, `oauth flow crashed: ${(err as Error).message}`);
+      }
+    })();
+    return `starting OAuth flow for ${app.title}…\n\nyour browser should open to the consent screen. once you approve, the callback lands at http://127.0.0.1:${(app.oauth as { redirect_port?: number }).redirect_port ?? "<port>"} and the refresh token is saved to ~/.prevail/connectors/${id}/auth/refresh.token.\n\nflow times out after 5 minutes.`;
+  }
+
+  function startConnectorTest(key: string, id: string, list: AppSkill[]): void {
+    const app = list.find((a) => a.id === id);
+    if (!app) {
+      appendSystemNote(key, `no connector with id "${id}". try /connectors.`);
+      return;
+    }
+    void (async () => {
+      try {
+        const { probeConnector } = await import("./connector-probe.ts");
+        const r = await probeConnector(app, (app.authCheck as Parameters<typeof probeConnector>[1]) ?? null);
+        const lines = [
+          `${app.title}: ${r.ok ? "✓ " : "✗ "}${r.status}`,
+          `  ${r.message}`,
+        ];
+        if (r.fixHint) lines.push(`  fix: ${r.fixHint}`);
+        if (r.missing && r.missing.length > 0) lines.push(`  missing: ${r.missing.join(", ")}`);
+        appendSystemNote(key, lines.join("\n"));
+      } catch (err) {
+        appendSystemNote(key, `probe crashed: ${(err as Error).message}`);
+      }
+    })();
   }
 
   function doEdit() {

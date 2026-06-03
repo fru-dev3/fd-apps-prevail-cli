@@ -23,6 +23,8 @@ interface Args {
   telegramArgs: string[];
   briefing: boolean;
   briefingArgs: string[];
+  connectors: boolean;
+  connectorsArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -40,6 +42,8 @@ function parseArgs(argv: string[]): Args {
   let telegramArgs: string[] = [];
   let briefing = false;
   let briefingArgs: string[] = [];
+  let connectors = false;
+  let connectorsArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -62,6 +66,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "briefing" || a === "briefings") {
       briefing = true;
       briefingArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "connectors" || a === "connector") {
+      connectors = true;
+      connectorsArgs = argv.slice(i + 1);
       break;
     } else if (a === "--vault" || a === "-d") {
       const next = argv[i + 1];
@@ -88,6 +96,8 @@ function parseArgs(argv: string[]): Args {
     telegramArgs,
     briefing,
     briefingArgs,
+    connectors,
+    connectorsArgs,
   };
 }
 
@@ -102,6 +112,7 @@ USAGE
   prevail schedule [...]      manage embedded cron-style schedules
   prevail telegram [...]      configure the Telegram bot bridge
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
+  prevail connectors [...]    list connectors / run OAuth flows / test connections
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
   prevail --vault <path>      override vault path for one session
 
@@ -540,6 +551,84 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
   process.exit(1);
 }
 
+async function connectorsCommand(args: string[]): Promise<void> {
+  const { scanCommunityApps } = await import("./vault.ts");
+  const { probeConnector } = await import("./connector-probe.ts");
+  const { runOAuthFlow } = await import("./oauth-flow.ts");
+  const apps = scanCommunityApps();
+  const sub = args[0];
+  if (!sub || sub === "list" || sub === "ls") {
+    if (apps.length === 0) {
+      console.log("no connectors found. drop a manifest.json into ~/.prevail/apps/<id>/");
+      return;
+    }
+    console.log(`${apps.length} connector${apps.length === 1 ? "" : "s"}:\n`);
+    for (const a of apps) {
+      const integ = (a.integration ?? "manual").padEnd(8);
+      console.log(`  ${integ}  ${a.id.padEnd(20)}  ${a.title}`);
+    }
+    return;
+  }
+  if (sub === "test" || sub === "probe") {
+    const id = args[1];
+    if (!id) {
+      console.error("usage: prevail connectors test <id>");
+      process.exit(1);
+    }
+    const app = apps.find((a) => a.id === id);
+    if (!app) {
+      console.error(`no connector with id "${id}"`);
+      process.exit(1);
+    }
+    const r = await probeConnector(app, (app.authCheck as Parameters<typeof probeConnector>[1]) ?? null);
+    console.log(`${app.title}: ${r.status}`);
+    console.log(`  ${r.message}`);
+    if (r.fixHint) console.log(`  fix: ${r.fixHint}`);
+    if (r.missing && r.missing.length > 0) console.log(`  missing: ${r.missing.join(", ")}`);
+    process.exit(r.ok ? 0 : 2);
+  }
+  if (sub === "oauth") {
+    const id = args[1];
+    if (!id) {
+      console.error("usage: prevail connectors oauth <id>");
+      console.error("");
+      console.error("walks through the OAuth 2.0 + PKCE flow for the connector,");
+      console.error("opens your browser, catches the redirect on 127.0.0.1, and");
+      console.error("saves the refresh token to ~/.prevail/connectors/<id>/auth/.");
+      process.exit(1);
+    }
+    const app = apps.find((a) => a.id === id);
+    if (!app) {
+      console.error(`no connector with id "${id}"`);
+      process.exit(1);
+    }
+    if (!app.oauth) {
+      console.error(`connector "${id}" has no oauth block in its manifest`);
+      process.exit(1);
+    }
+    console.log(`starting OAuth flow for ${app.title}…`);
+    const result = await runOAuthFlow(
+      id,
+      app.oauth as Parameters<typeof runOAuthFlow>[1],
+      { logger: (line) => console.log(`  ${line}`) },
+    );
+    if (result.ok) {
+      console.log(`\n✓ ${result.message}`);
+      console.log(`\ntest the connection with: prevail connectors test ${id}`);
+    } else {
+      console.error(`\n✗ ${result.message}`);
+      process.exit(1);
+    }
+    return;
+  }
+  console.error(`unknown connectors subcommand: ${sub}\n`);
+  console.error("usage:");
+  console.error("  prevail connectors list");
+  console.error("  prevail connectors test <id>");
+  console.error("  prevail connectors oauth <id>");
+  process.exit(1);
+}
+
 async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const wantTelegram = args.includes("--telegram") || args.includes("-t");
   if (!wantTelegram) {
@@ -599,7 +688,7 @@ async function main() {
     return;
   }
   if (args.version) {
-    console.log("prevail 0.3.0");
+    console.log("prevail 0.4.0");
     return;
   }
   if (args.doctor) {
@@ -616,6 +705,10 @@ async function main() {
   }
   if (args.briefing) {
     await briefingCommand(args.briefingArgs, args.vaultPath);
+    return;
+  }
+  if (args.connectors) {
+    await connectorsCommand(args.connectorsArgs);
     return;
   }
   if (args.daemon) {

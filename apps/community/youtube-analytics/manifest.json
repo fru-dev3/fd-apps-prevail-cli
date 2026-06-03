@@ -5,10 +5,26 @@
   "description": "Pull channel performance from the YouTube Analytics API: views, watch time, subscribers, retention. Used by the content domain to track which videos earned their reach.",
   "domains": ["content", "brand"],
   "integration": "oauth",
-  "connection": "OAuth 2.0 flow with Google. The refresh token lives at ~/.prevail/connectors/youtube-analytics/auth/refresh.token (chmod 600). When that file is missing or the refresh fails, run `prevail connectors youtube-analytics oauth` to walk through the consent flow in your browser.",
+  "connection": "OAuth 2.0 + PKCE with Google. The refresh token lives at ~/.prevail/connectors/youtube-analytics/auth/refresh.token (chmod 600). To set up: register an OAuth client in https://console.cloud.google.com (type: Desktop or Web), add http://127.0.0.1:53782/callback as an authorized redirect URI, set PREVAIL_GOOGLE_CLIENT_ID + PREVAIL_GOOGLE_CLIENT_SECRET, then run `prevail connectors oauth youtube-analytics`.",
   "auth_check": {
     "kind": "file-exists",
     "files": ["~/.prevail/connectors/youtube-analytics/auth/refresh.token"]
+  },
+  "oauth": {
+    "provider": "google",
+    "client_id_env": "PREVAIL_GOOGLE_CLIENT_ID",
+    "client_secret_env": "PREVAIL_GOOGLE_CLIENT_SECRET",
+    "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "scopes": [
+      "https://www.googleapis.com/auth/youtube.readonly",
+      "https://www.googleapis.com/auth/yt-analytics.readonly"
+    ],
+    "redirect_port": 53782,
+    "auth_extra_params": {
+      "access_type": "offline",
+      "prompt": "consent"
+    }
   },
   "homepage": "https://developers.google.com/youtube/analytics",
   "license": "MIT",

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tryAcquireLock } from "./file-lock.ts";
 
 export interface ScheduleEntry {
   id: string;
@@ -136,22 +137,31 @@ export function runSchedule(entry: ScheduleEntry, vaultPath: string): Promise<Ru
 }
 
 export function tickAndRunDue(vaultPath: string, now: Date = new Date()): ScheduleEntry[] {
-  const schedules = loadSchedules(vaultPath);
-  const fired: ScheduleEntry[] = [];
-  let mutated = false;
-  for (const s of schedules) {
-    if (!s.enabled) continue;
-    // de-dupe per-minute: if last_run is within this minute, skip
-    const minuteStart = Math.floor(now.getTime() / 60000) * 60000;
-    if (s.last_run && s.last_run >= minuteStart) continue;
-    if (!isCronDue(s.cron, now)) continue;
-    fired.push(s);
-    s.last_run = now.getTime();
-    mutated = true;
-    void runSchedule(s, vaultPath);
+  // SECURITY/CORRECTNESS: cross-process lock so the TUI's tick loop and the
+  // daemon's tick loop can't both fire the same schedule in the same minute.
+  // The lock file lives next to .schedule.json so it's per-vault — multiple
+  // vaults can be running side-by-side without contention.
+  const lock = tryAcquireLock(scheduleFilePath(vaultPath) + ".lock");
+  if (!lock) return [];
+  try {
+    const schedules = loadSchedules(vaultPath);
+    const fired: ScheduleEntry[] = [];
+    let mutated = false;
+    for (const s of schedules) {
+      if (!s.enabled) continue;
+      const minuteStart = Math.floor(now.getTime() / 60000) * 60000;
+      if (s.last_run && s.last_run >= minuteStart) continue;
+      if (!isCronDue(s.cron, now)) continue;
+      fired.push(s);
+      s.last_run = now.getTime();
+      mutated = true;
+      void runSchedule(s, vaultPath);
+    }
+    if (mutated) saveSchedules(vaultPath, schedules);
+    return fired;
+  } finally {
+    lock.release();
   }
-  if (mutated) saveSchedules(vaultPath, schedules);
-  return fired;
 }
 
 export function describeCron(cron: string): string {
