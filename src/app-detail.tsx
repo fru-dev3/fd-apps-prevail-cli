@@ -13,6 +13,8 @@ import {
 import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { probeConnector, type AuthCheckSpec, type ProbeResult } from "./connector-probe.ts";
 import { loadSkillsForConnector, runSkill, logSkillRun, type SkillSpec, type SkillRunResult } from "./connector-skills.ts";
+import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
+import { useRef } from "react";
 
 interface Props {
   app: AppSkill;
@@ -26,14 +28,19 @@ interface Props {
 // prompts/skills) is for DOMAINS; connectors get their own internal tab
 // row because the model is fundamentally different — a connector is a
 // thing you authenticate to + run skills against + chat with the data of.
-type ConnectorTab = "overview" | "auth" | "sync" | "skills" | "data" | "chat";
+//
+// The "Chat" tab was REMOVED — chat is now embedded directly into the
+// Overview tab, alongside the connection summary, so opening any app
+// lands you on a working chat surface with all the connector context
+// visible above it. The other four tabs (Auth/Sync/Skills/Data) remain
+// as dedicated deep-dives.
+type ConnectorTab = "overview" | "auth" | "sync" | "skills" | "data";
 const CONNECTOR_TABS: { id: ConnectorTab; label: string }[] = [
-  { id: "overview", label: "Overview" },
+  { id: "overview", label: "Overview + Chat" },
   { id: "auth", label: "Auth" },
   { id: "sync", label: "Sync" },
   { id: "skills", label: "Skills" },
   { id: "data", label: "Data" },
-  { id: "chat", label: "Chat" },
 ];
 
 export function AppDetail({ app, view, skillIdx, onPickSkill, topBar }: Props) {
@@ -64,16 +71,21 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar }: Props) {
     >
       {topBar}
       <ConnectorTabRow active={tab} onPick={setTab} skillCount={skills.length} />
-      <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-        <scrollbox flexGrow={1} scrollY>
-          {tab === "overview" && <ConnectorOverview app={app} skillsCount={skills.length} />}
-          {tab === "auth" && <ConnectorAuthPanel app={app} />}
-          {tab === "sync" && <ConnectorSyncPanel app={app} skills={skills} />}
-          {tab === "skills" && <ConnectorSkillsPanel app={app} skills={skills} />}
-          {tab === "data" && <ConnectorDataPanel app={app} />}
-          {tab === "chat" && <ConnectorChatPanel app={app} />}
-        </scrollbox>
-      </box>
+      {tab === "overview" ? (
+        // Overview tab gets a special split layout: compact connection
+        // summary on top, working chat on the bottom. Both flex within the
+        // same panel — no scroll, no extra click to reach chat.
+        <ConnectorOverviewWithChat app={app} skillsCount={skills.length} />
+      ) : (
+        <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+          <scrollbox flexGrow={1} scrollY>
+            {tab === "auth" && <ConnectorAuthPanel app={app} />}
+            {tab === "sync" && <ConnectorSyncPanel app={app} skills={skills} />}
+            {tab === "skills" && <ConnectorSkillsPanel app={app} skills={skills} />}
+            {tab === "data" && <ConnectorDataPanel app={app} />}
+          </scrollbox>
+        </box>
+      )}
     </box>
   );
 }
@@ -231,6 +243,315 @@ function scaffoldManifest(app: AppSkill): { ok: boolean; message: string; path?:
     try { mkdirSync(skillsDir); } catch { /* best-effort */ }
   }
   return { ok: true, message: `manifest scaffolded`, path: target };
+}
+
+// New split-layout Overview: compact connection card on top (~ 12 lines),
+// embedded chat on the bottom (rest of the pane). The chat is scoped to
+// the connector's data — the LLM gets a system prompt explaining the
+// connector context, sees data/ files, and answers questions about
+// THIS app's data specifically.
+function ConnectorOverviewWithChat({ app, skillsCount }: { app: AppSkill; skillsCount: number }) {
+  return (
+    <box flexDirection="column" flexGrow={1}>
+      {/* Top card — compact connection summary */}
+      <box paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={0}>
+        <ConnectorCompactSummary app={app} skillsCount={skillsCount} />
+      </box>
+      {/* Visual separator between summary and chat */}
+      <box paddingLeft={2} paddingRight={2}>
+        <text fg={theme.border}>{"─".repeat(80)}</text>
+      </box>
+      {/* Chat fills the rest */}
+      <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingBottom={1}>
+        <ConnectorChat app={app} />
+      </box>
+    </box>
+  );
+}
+
+// Compact connection card — keeps the original ConnectorOverview's content
+// but in a denser, single-screen-worth layout so the chat below has room.
+function ConnectorCompactSummary({ app, skillsCount }: { app: AppSkill; skillsCount: number }) {
+  const integrationLabel: Record<string, string> = {
+    api: "REST API · stored key",
+    oauth: "OAuth · token refresh",
+    browser: "browser automation · Playwright",
+    mcp: "MCP server · wrapped tool",
+    a2a: "A2A · remote agent",
+    manual: "manual · drop files in folder",
+  };
+  const integration = app.integration ?? "manual";
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
+  const [probing, setProbing] = useState(false);
+  const runProbe = () => {
+    setProbing(true);
+    probeConnector(app, (app.authCheck as AuthCheckSpec | undefined) ?? null)
+      .then((r) => setProbe(r))
+      .finally(() => setProbing(false));
+  };
+  useEffect(() => {
+    let cancelled = false;
+    setProbe(null);
+    setProbing(true);
+    probeConnector(app, (app.authCheck as AuthCheckSpec | undefined) ?? null)
+      .then((r) => {
+        if (!cancelled) setProbe(r);
+      })
+      .finally(() => {
+        if (!cancelled) setProbing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [app.id]);
+
+  const manifest = hasManifest(app);
+  const [scaffoldNote, setScaffoldNote] = useState<string | null>(null);
+  const onScaffold = () => {
+    const r = scaffoldManifest(app);
+    setScaffoldNote(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+  };
+  const effectiveStatus = probe?.status ?? app.status;
+  const statusGlyph =
+    effectiveStatus === "connected" ? "☑ connected" :
+    effectiveStatus === "error" ? "☒ error" :
+    effectiveStatus === "expired" ? "☒ auth expired" :
+    "☐ not configured";
+  const statusFg =
+    effectiveStatus === "connected" ? theme.ok :
+    effectiveStatus === "error" || effectiveStatus === "expired" ? theme.warn :
+    theme.fgDim;
+
+  return (
+    <box flexDirection="column">
+      {!manifest && (
+        <box flexDirection="row" paddingLeft={1} paddingRight={1}>
+          <text fg={theme.warn}>⚠ no manifest yet</text>
+          <text fg={theme.fgFaint}>  ·  </text>
+          <box
+            paddingLeft={1}
+            paddingRight={1}
+            border={["left", "right"]}
+            borderColor={theme.aiAccent}
+            onMouseDown={onScaffold}
+          >
+            <text fg={theme.aiAccent} attributes={1}>{" ⊕ Scaffold "}</text>
+          </box>
+          {scaffoldNote && <text fg={scaffoldNote.startsWith("✓") ? theme.ok : theme.warn}>{"  " + scaffoldNote}</text>}
+        </box>
+      )}
+      <box flexDirection="row" height={1}>
+        <text fg={theme.gold} attributes={1}>{app.title}</text>
+        <text fg={theme.fgDim}>{`  ·  ${integrationLabel[integration] ?? integration}`}</text>
+      </box>
+      <box flexDirection="row" height={1}>
+        <text fg={statusFg}>{probing ? "⠋ probing…" : statusGlyph}</text>
+        <text fg={theme.fgFaint}>{probe?.message ? `  ·  ${probe.message}` : ""}</text>
+      </box>
+      <box flexDirection="row" height={1} paddingTop={0}>
+        <box
+          paddingLeft={1}
+          paddingRight={1}
+          border={["left", "right"]}
+          borderColor={theme.aiAccent}
+          onMouseDown={runProbe}
+        >
+          <text fg={theme.aiAccent} attributes={1}>{probing ? " ⠋ … " : " ⟳ Test "}</text>
+        </box>
+        <text fg={theme.fgFaint}>{`     ${skillsCount} skill${skillsCount === 1 ? "" : "s"} (Skills tab to run)  ·  domains: ${app.domains.length === 0 ? "(none)" : app.domains.join(", ")}`}</text>
+      </box>
+    </box>
+  );
+}
+
+// Embedded chat scoped to the connector's data. Lightweight — has its own
+// message history (lost on app switch, like the connector workspace tab
+// state), spawns runChatTurn with a system prompt explaining the connector
+// context, streams the reply as it arrives.
+function ConnectorChat({ app }: { app: AppSkill }) {
+  type ChatLine = { role: "user" | "assistant"; content: string; ts: number };
+  const [history, setHistory] = useState<ChatLine[]>([]);
+  const [input, setInput] = useState("");
+  const [pending, setPending] = useState(false);
+  const [streamBuf, setStreamBuf] = useState("");
+  const [cli, setCli] = useState<AvailableCli | null>(null);
+  const inputRef = useRef<any>(null);
+
+  // Reset history when switching connectors.
+  useEffect(() => {
+    setHistory([]);
+    setInput("");
+    setPending(false);
+    setStreamBuf("");
+  }, [app.id]);
+
+  // Detect available CLIs once.
+  useEffect(() => {
+    let cancelled = false;
+    detectClis().then((list) => {
+      if (cancelled) return;
+      if (list.length === 0) return;
+      const claude = list.find((c) => c.kind === "claude");
+      setCli(claude ?? list[0]!);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const send = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || pending) return;
+    if (!cli) {
+      setHistory((h) => [...h, { role: "assistant", content: "(no CLI detected — can't chat)", ts: Date.now() }]);
+      return;
+    }
+    setHistory((h) => [...h, { role: "user", content: trimmed, ts: Date.now() }]);
+    setInput("");
+    inputRef.current?.setText?.("");
+    setPending(true);
+    setStreamBuf("");
+    const prompt = buildConnectorChatPrompt(app, trimmed);
+    runChatTurn({
+      prompt,
+      cwd: app.path,
+      cli,
+      model: "",
+      isFirst: true,
+      bare: true,
+      onChunk: (delta) => setStreamBuf((s) => s + delta),
+    })
+      .then((reply) => {
+        setHistory((h) => [...h, { role: "assistant", content: reply, ts: Date.now() }]);
+      })
+      .catch((err: Error) => {
+        setHistory((h) => [...h, { role: "assistant", content: `(error: ${err.message})`, ts: Date.now() }]);
+      })
+      .finally(() => {
+        setPending(false);
+        setStreamBuf("");
+      });
+  };
+
+  const cliLabel = cli ? cli.label : "no engine";
+  return (
+    <box flexDirection="column" flexGrow={1}>
+      <box flexDirection="row" height={1}>
+        <text fg={theme.aiAccent} attributes={1}>💬 Chat with {app.title}</text>
+        <text fg={theme.fgFaint}>{`   ·   ${cliLabel}   ·   scope: this connector's manifest + data/`}</text>
+      </box>
+      <scrollbox flexGrow={1} scrollY>
+        {history.length === 0 && !pending && (
+          <text fg={theme.fgFaint}>
+            {"  ask anything about " + app.title + ". try:"}
+          </text>
+        )}
+        {history.length === 0 && !pending && (
+          <>
+            {connectorChatSuggestions(app).map((s, i) => (
+              <text key={i} fg={theme.fgDim}>{`    › ${s}`}</text>
+            ))}
+          </>
+        )}
+        {history.map((m, i) => (
+          <box key={i} flexDirection="column" paddingTop={1}>
+            <text fg={m.role === "user" ? theme.gold : theme.fgDim}>
+              {m.role === "user" ? "  › " : "  ▸ "}
+              <span fg={theme.fg}>{m.content}</span>
+            </text>
+          </box>
+        ))}
+        {pending && (
+          <box flexDirection="column" paddingTop={1}>
+            <text fg={theme.fgDim}>{"  ▸ "}<span fg={theme.fg}>{streamBuf || "…"}</span></text>
+          </box>
+        )}
+      </scrollbox>
+      <box
+        flexDirection="row"
+        height={3}
+        borderColor={theme.aiAccent}
+        border
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        <text fg={pending ? theme.fgFaint : theme.aiAccent}>{`› `}</text>
+        <input
+          ref={inputRef}
+          flexGrow={1}
+          placeholder={pending ? "thinking…" : `ask about ${app.title}'s data…`}
+          backgroundColor={theme.bgPanel}
+          textColor={theme.fg}
+          onInput={((next: string) => setInput(next)) as any}
+          onSubmit={((next: string) => send(next)) as any}
+        />
+      </box>
+    </box>
+  );
+}
+
+// Suggest 3 starter prompts so users see what kinds of questions THIS
+// connector can answer. Tailored to integration type when we can.
+function connectorChatSuggestions(app: AppSkill): string[] {
+  const i = app.integration ?? "manual";
+  if (app.id === "github") return [
+    "which PR has been open longest?",
+    "list my open notifications",
+    "what's the star trend of my top repo?",
+  ];
+  if (app.id === "plaid") return [
+    "what was my biggest spend last month?",
+    "list every linked institution",
+    "what did I spend on groceries in the last 30 days?",
+  ];
+  if (app.id === "youtube-analytics") return [
+    "what was my best-performing video last quarter?",
+    "show me yesterday's channel metrics",
+    "which day this week got the most views?",
+  ];
+  if (app.id === "linkedin") return [
+    "how many profile views this week?",
+    "which post had the highest engagement?",
+    "any new connection requests pending?",
+  ];
+  if (app.id === "google-calendar") return [
+    "what's on my calendar today?",
+    "when do I have a free hour this week?",
+    "any conflicts on Friday?",
+  ];
+  if (i === "api" || i === "oauth") return [
+    `what data is available from ${app.title}?`,
+    `what was the most recent change in ${app.title}?`,
+    `summarize what's in data/`,
+  ];
+  return [
+    `what does ${app.title} do?`,
+    `walk me through how to set this up`,
+    `what skills are available?`,
+  ];
+}
+
+// Build the system+user prompt for connector-scoped chat. The LLM is told
+// the scope (THIS connector only, not the whole vault), given the path to
+// data/ + manifest + skills, and asked to answer using that context.
+function buildConnectorChatPrompt(app: AppSkill, userQuestion: string): string {
+  return [
+    `You are answering questions about ONE specific app/connector in a personal-AI cockpit called prevAIl.`,
+    ``,
+    `Connector: ${app.title} (id: ${app.id})`,
+    `Integration type: ${app.integration ?? "manual"}`,
+    `Connector folder: ${app.path}`,
+    `Linked life domains: ${app.domains.join(", ") || "(none)"}`,
+    ``,
+    `The connector folder has these subdirs you can read with your tools:`,
+    `  ${app.path}/manifest.json   — auth config, integration type, etc.`,
+    `  ${app.path}/SKILL.md         — human-readable overview of the connector`,
+    `  ${app.path}/skills/          — runnable skill definitions (YAML+markdown)`,
+    `  ${app.path}/data/            — pulled data (JSONL/JSON/markdown files)`,
+    `  ${app.path}/_log/            — record of skill runs`,
+    ``,
+    `Use ONLY this connector's data to answer. Do not read other connectors or domains.`,
+    ``,
+    `User question: ${userQuestion}`,
+  ].join("\n");
 }
 
 function ConnectorOverview({ app, skillsCount }: { app: AppSkill; skillsCount?: number }) {
