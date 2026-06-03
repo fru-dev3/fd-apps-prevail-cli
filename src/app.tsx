@@ -132,6 +132,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // Council shares one controller across all panelists + the synthesis call
   // so a single Escape kills the whole batch.
   const cancelControllersRef = useRef<Map<string, AbortController>>(new Map());
+  // Per-session "gut take" captured via /gut <text> before /council. Cleared
+  // after the next council turn fires (consumed once). Lives outside chats
+  // map so it doesn't bloat persisted state — it's transient input to the
+  // calibration write, not part of the conversation transcript.
+  const pendingGutRef = useRef<Map<string, string>>(new Map());
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
@@ -793,6 +798,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         } else {
           systemNote = `unknown framework "${arg}". try /framework list.`;
         }
+      } else if (cmd.kind === "gut") {
+        if (!cmd.text) {
+          systemNote = "usage: /gut <one-line take> — captures your gut answer before /council. consumed on the next council turn.";
+        } else {
+          pendingGutRef.current.set(key, cmd.text);
+          systemNote = `gut recorded: "${cmd.text}". the next /council in this chat will log it next to the verdict.`;
+        }
+      } else if (cmd.kind === "calibration") {
+        systemNote = handleCalibrationCommand(cmd.sub, cmd.arg, cur.hostDomain.path);
       } else if (cmd.kind === "telegram") {
         systemNote = handleTelegramCommand(cmd.sub, cmd.arg);
       } else if (cmd.kind === "briefing") {
@@ -929,7 +943,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     return { panelists };
   }
 
-  function runCouncil(key: string, prompt: string) {
+  async function runCouncil(key: string, prompt: string) {
     const session = chats.get(key);
     if (!session) return;
     if (clis.length === 0) {
@@ -1050,7 +1064,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     // that as a conversation transcript so each panelist sees what was said
     // before. Without this they answer the follow-up as if it were a totally
     // fresh question.
-    const promptForCli = buildCouncilTurnPrompt(
+    const basePromptForCli = buildCouncilTurnPrompt(
       { ...session, messages: [...session.messages, userMsg] },
       text,
     );
@@ -1058,6 +1072,25 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     // panelist and the synthesis call in one shot.
     const controller = new AbortController();
     cancelControllersRef.current.set(key, controller);
+    // Memory recall — best-effort. When Ollama is reachable + nomic-embed-text
+    // is pulled, retrieve the top-3 semantically-similar prior decisions
+    // from the vault and prepend as a <context> block so every panelist
+    // sees what you decided before on similar questions. Silent fallback
+    // to no-context when no embedder is available.
+    let promptForCli = basePromptForCli;
+    try {
+      const { recall, formatRecallContext } = await import("./memory.ts");
+      const hits = await recall({
+        vaultPath,
+        query: text,
+        k: 3,
+        signal: controller.signal,
+      });
+      const ctx = formatRecallContext(hits);
+      if (ctx) promptForCli = `${ctx}\n\n${basePromptForCli}`;
+    } catch {
+      /* embedder unavailable — no recall this turn */
+    }
     // Collect successful responses in a closure so we can synthesize them
     // into a verdict after all panel members return.
     type Collected = { cli: AvailableCli; model: string; response: string; ok: boolean };
@@ -1268,6 +1301,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           // Self-curating vault: log the verdict (not the individual panel
           // responses — those are kept in the session log but the verdict is
           // what the user actually took away).
+          // Consume the per-session gut take, if /gut was used since the
+          // last council turn. Once consumed it's gone — a second
+          // council turn won't re-use the stale gut.
+          const gut = pendingGutRef.current.get(key);
+          if (gut) pendingGutRef.current.delete(key);
           writeTurnSummary({
             domainPath: session.hostDomain.path,
             userPrompt: text,
@@ -1275,6 +1313,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             cliLabel: `Council ⚖ ${synthCli.label}`,
             ts,
             kind: "council-verdict",
+            gut,
           });
           // Replace the synthesizing placeholder with the verdict, AND flip
           // pending=false in the same setChats so the spinner stops the
@@ -2006,6 +2045,60 @@ function renderConnectorOverview(apps: AppSkill[]): string {
   lines.push("");
   lines.push("click an app in the sidebar to see auth method + skills + 'Test connection'.");
   return lines.join("\n");
+}
+
+// /calibration — surface pending retrospectives + the running scoreboard
+// for the active domain. All reads/writes hit _log/*.md frontmatter and
+// _calibration.md — no DB.
+function handleCalibrationCommand(sub: string, arg: string, domainPath: string): string {
+  const cal = require("./calibration.ts") as typeof import("./calibration.ts");
+  if (sub === "status" || sub === "show") {
+    const stats = cal.computeCalibration(domainPath);
+    cal.writeCalibrationReport(domainPath);
+    if (stats.total === 0 && stats.pending === 0) {
+      return [
+        `no calibration data yet for this domain.`,
+        ``,
+        `to start: type /gut <your take> before /council, and your gut + council verdict will both be logged.`,
+        `90 days later, /calibration pending will surface them so you can record the actual outcome.`,
+      ].join("\n");
+    }
+    return [
+      `Calibration · ${domainPath.split("/").pop()}`,
+      ``,
+      `decisions with outcome:  ${stats.total}`,
+      `gut agreed with council: ${stats.agreed} / ${stats.total}`,
+      `right when agreed:       ${stats.rightOnAgreement} / ${stats.agreed || 0}`,
+      `right when disagreed:    ${stats.rightOnDisagreement} / ${Math.max(0, stats.total - stats.agreed)}`,
+      `pending retrospectives:  ${stats.pending}`,
+      ``,
+      `full scoreboard: ${domainPath.split("/").pop()}/_calibration.md`,
+    ].join("\n");
+  }
+  if (sub === "pending") {
+    const pending = cal.listPendingRetrospectives(domainPath);
+    if (pending.length === 0) return `no retrospectives owed for this domain.`;
+    const lines = [`${pending.length} retrospective${pending.length === 1 ? "" : "s"} owed:`, ``];
+    for (const p of pending.slice(0, 10)) {
+      lines.push(`  ${p.id}  ·  due ${p.retroDue}`);
+      if (p.gut) lines.push(`    gut:     ${p.gut.slice(0, 100)}`);
+      if (p.verdict) lines.push(`    verdict: ${p.verdict.slice(0, 100)}`);
+    }
+    lines.push(``);
+    lines.push(`record an outcome with: /calibration outcome <id> <right|wrong|partial|freeform>`);
+    return lines.join("\n");
+  }
+  if (sub === "outcome") {
+    const parts = arg.split(/\s+/);
+    const id = parts[0] ?? "";
+    const outcome = parts.slice(1).join(" ").trim();
+    if (!id || !outcome) return `usage: /calibration outcome <id> <right|wrong|partial|freeform>`;
+    const ok = cal.recordOutcome(domainPath, id, outcome);
+    if (!ok) return `no log entry with id ${id} in this domain`;
+    cal.writeCalibrationReport(domainPath);
+    return `✓ recorded outcome for ${id}. scoreboard updated.`;
+  }
+  return `unknown /calibration subcommand: ${sub}\ntry /calibration status`;
 }
 
 function summarize(domains: Domain[], apps: AppSkill[]) {

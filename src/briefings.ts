@@ -123,6 +123,7 @@ export async function runBriefing(
         cwd: domain.path,
         panelists: panel,
         signal,
+        vaultPath,
       });
       output = result.verdict;
       cliLabel = `Council ⚖ ${result.chairLabel} (briefing)`;

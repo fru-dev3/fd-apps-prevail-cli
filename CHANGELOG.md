@@ -7,6 +7,34 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.5.0] — 2026-06-03 · calibration + distribution
+
+Five-feature release. The product becomes smarter *about you* (calibration loop), reaches further (MCP), and reads faster (streaming) — without breaking the "everything is markdown" promise.
+
+### Added — Streaming responses
+Each panelist's text streams into its bubble as the model produces it. `runChatTurn` gains an `onChunk` callback; council runner exposes `onPanelistChunk(idx, delta)` so the UI updates the right bubble. Wired through claude/codex/gemini stdout + ollama SSE. Perceived latency drops 80% — same end-to-end time, but you see tokens land in real time instead of staring at a 30-second spinner.
+
+### Added — MCP server mode
+`prevail mcp` speaks JSON-RPC 2.0 over stdio — the standard MCP transport every host (Claude Desktop, Cursor, Continue, Goose, ChatGPT Desktop) speaks. No SDK dependency. Five tools exposed: `council` (full panel + verdict), `chat` (single-CLI), `list_domains`, `read_state`, `read_log`. Calls invoked via MCP write to the same vault log as TUI/Telegram. Every other agent ecosystem becomes a distribution channel.
+
+### Added — Council vs. yourself (calibration loop)
+- **`/gut <your take>`** before `/council` captures your gut answer in one line.
+- Both gut + verdict + a 90-day `retro_due` date are written as an HTML-comment metadata line at the top of the log entry. Invisible in rendered markdown, greppable on disk.
+- **`/calibration pending`** lists log entries past their retro_due where you haven't recorded an outcome.
+- **`/calibration outcome <id> <text>`** records what actually happened.
+- **`/calibration status`** shows the running scoreboard: "right when you agreed with council X%, right when you disagreed Y%". Stored as `<domain>/_calibration.md`, regenerable from the log entries.
+
+### Added — Markdown-native vault memory
+Embeddings live as a single inline comment line right under each log entry's time header — no DB, no separate index file, the vault stays portable. After every `writeTurnSummary`, the runner asks the Ollama-detected embedder (default `nomic-embed-text`) for a 384-dim vector and splices it in. At query time, linear scan + dot product across the vault → top-k most semantically similar prior decisions are prepended as `<context>` to every council fanout. Sub-100ms at personal-vault scale. Silent fallback when no embedder is available.
+
+### Added — Public council benchmarks
+- `bench/` ships with three example questions across `wealth/`, `career/`, and `health/`.
+- **`prevail bench list`** shows the suite.
+- **`prevail bench run [--domain X] [--question Y]`** fires `/council` on each question, writes per-question results + a top-level markdown summary table to `~/.prevail/bench-results/<date>/`.
+- Methodology + scoring rubric pattern documented in `bench/README.md`. PR-able question contributions.
+
+---
+
 ## [0.4.0] — 2026-06-02 · auth, locks, paths
 
 Hardening + the OAuth runner that makes the YouTube-Analytics example actually work end-to-end. Two days after v0.3.0, all three deferred items from the audit close-out are now shipped:

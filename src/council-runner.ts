@@ -4,6 +4,7 @@ import {
   type CliHealth,
 } from "./cli-bridge.ts";
 import { readCouncilConfig } from "./config.ts";
+import { formatRecallContext, recall, type MemoryHit } from "./memory.ts";
 
 export interface CouncilPanelist {
   cli: AvailableCli;
@@ -84,6 +85,12 @@ export async function runCouncilOneShot(args: {
   // MCP) can update the right bubble. Chair synthesis chunks come back
   // with panelistIdx === -1.
   onPanelistChunk?: (panelistIdx: number, delta: string) => void;
+  // Vault root for memory recall. When set AND an embedder is available,
+  // the top-k semantically-similar prior decisions are prepended to the
+  // panelist prompt as a <context> block. Disabled (or no embedder) = no
+  // recall, identical behavior to v0.4.
+  vaultPath?: string;
+  recallK?: number;
 }): Promise<CouncilResult> {
   // Drop unhealthy panelists if health was passed.
   const healthy = args.cliHealth
@@ -102,6 +109,27 @@ export async function runCouncilOneShot(args: {
     };
   }
 
+  // Memory recall — best-effort, silent on failure. When Ollama isn't up
+  // (no embedder), recall() returns [] and we proceed without context.
+  // When it does hit, we prepend the top-k prior decisions so each
+  // panelist sees what you decided before on similar questions.
+  let recallContext = "";
+  let recallHits: MemoryHit[] = [];
+  if (args.vaultPath) {
+    try {
+      recallHits = await recall({
+        vaultPath: args.vaultPath,
+        query: args.prompt,
+        k: args.recallK ?? 3,
+        signal: args.signal,
+      });
+      recallContext = formatRecallContext(recallHits);
+    } catch {
+      /* embedder unavailable — fall through with no recall */
+    }
+  }
+  const enriched = recallContext ? `${recallContext}\n\n${args.prompt}` : args.prompt;
+
   // Fan out in parallel. Each panelist runs in a separate runChatTurn —
   // shared abort signal means a single cancel kills the whole batch.
   const panel: PanelResult[] = await Promise.all(
@@ -110,7 +138,7 @@ export async function runCouncilOneShot(args: {
       try {
         const reply = await withTimeout(
           runChatTurn({
-            prompt: args.prompt,
+            prompt: enriched,
             cwd: args.cwd,
             cli: p.cli,
             model: p.model,

@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseVerdict } from "./verdict-parser.ts";
+import { encodeMeta, defaultRetroDue } from "./calibration.ts";
+import { indexEntry } from "./memory.ts";
 
 // Per-domain self-curating log. After every chat turn (and every council
 // verdict), append a one-paragraph snapshot to <domain>/_log/YYYY-MM-DD.md.
@@ -22,23 +24,42 @@ export interface TurnSummaryArgs {
   cliLabel: string; // "Claude", "Codex·gpt-5", "Council ⚖", etc
   ts: number;
   kind: "chat" | "council-verdict";
+  // Optional gut take captured BEFORE the council fanout. When present,
+  // the log entry gets a prevail-meta block embedding gut + retro_due,
+  // so calibration.ts can later compute "how often does my gut match
+  // the council, and when it doesn't, who's right?"
+  gut?: string;
 }
 
 // Write a chat-turn summary to today's log file. Creates _log/ if missing.
 // Never throws — file-system / permission errors are swallowed so a writeback
 // failure can't break the user's chat session.
 export function writeTurnSummary(args: TurnSummaryArgs): void {
+  let file = "";
+  let headerLine = "";
   try {
     const logDir = join(args.domainPath, "_log");
     if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
-    const file = join(logDir, dayKey(args.ts) + ".md");
+    file = join(logDir, dayKey(args.ts) + ".md");
     if (!existsSync(file)) {
-      // First write today — drop a header so the file is grep-friendly.
       appendFileSync(file, `# ${dayKey(args.ts)}\n`);
     }
-    appendFileSync(file, renderEntry(args));
+    const entry = renderEntry(args);
+    appendFileSync(file, entry);
+    headerLine = entry.split("\n").find((l) => l.startsWith("## ")) ?? "";
   } catch {
-    // intentionally silent — see comment above
+    return;
+  }
+  // Memory layer: after the entry is on disk, ask the embedder for a vector
+  // and splice it in next to the prevail-meta line. Async + best-effort —
+  // a failure here (Ollama down, model not pulled) is silent. The log entry
+  // still exists and is greppable; just no semantic recall on this one.
+  if (file && headerLine) {
+    void indexEntry({
+      filePath: file,
+      text: `${args.userPrompt}\n\n${args.assistantReply}`.slice(0, 4000),
+      headerLine,
+    }).catch(() => {});
   }
 }
 
@@ -70,22 +91,39 @@ function renderEntry(args: TurnSummaryArgs): string {
   }
   const a = heuristicSummarize(assistantSnippet, 400);
   const tag = args.kind === "council-verdict" ? "⚖ council" : args.cliLabel;
-  // SECURITY: the Q + A blocks contain LLM-generated text that downstream
-  // agents (Paperclip, OpenClaw morning-brief, future briefing prompts)
-  // may re-ingest as context. Prefix every line with "> " so the embedded
-  // content is a markdown blockquote — semantically "user-quoted text,
-  // not instructions for you" — and cannot persist a prompt-injection
-  // backdoor across sessions. The blockquote stays human-readable and
-  // searchable, but a re-reading model treats it as data, not commands.
+  // Calibration metadata — invisible in rendered markdown but greppable
+  // and machine-readable. Only written when there's something to track
+  // (a gut take captured before the council, plus a retro_due date so
+  // the daemon knows when to ask "how did this go?").
+  const metaLine =
+    args.gut && args.kind === "council-verdict"
+      ? encodeMeta({
+          id: entryId(args.ts),
+          gut: args.gut,
+          verdict: args.assistantReply.split("\n").find((l) => /^verdict\s*:/i.test(l.trim()))?.replace(/^[^a-z]*verdict\s*:\s*/i, "") ?? a,
+          retroDue: defaultRetroDue(args.ts),
+        })
+      : null;
   return [
     "",
     `## ${timeKey(args.ts)}  ·  ${tag}${divergenceFlag}`,
+    ...(metaLine ? [metaLine] : []),
     "",
     `**Q:** ${quoteShield(q)}`,
     "",
     `**A:** ${quoteShield(a)}`,
     "",
   ].join("\n");
+}
+
+function entryId(ts: number): string {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${y}${mo}${da}-${hh}${mm}`;
 }
 
 function quoteShield(s: string): string {

@@ -216,7 +216,7 @@ async function tCouncil(args: Record<string, unknown>, vaultPath: string): Promi
   if (clis.length === 0) throw new Error("no CLIs detected on the daemon host");
   const panel = buildCouncilPanel(clis);
   if (panel.length === 0) throw new Error("council panel empty (check /council config)");
-  const r = await runCouncilOneShot({ prompt, cwd: domain.path, panelists: panel });
+  const r = await runCouncilOneShot({ prompt, cwd: domain.path, panelists: panel, vaultPath });
   // Write to the vault's self-curating log so the MCP-invoked council
   // call is indistinguishable from a TUI/Telegram one when the user
   // greps their history later.

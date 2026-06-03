@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { App } from "./app.tsx";
@@ -26,6 +26,8 @@ interface Args {
   connectors: boolean;
   connectorsArgs: string[];
   mcp: boolean;
+  bench: boolean;
+  benchArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -46,6 +48,8 @@ function parseArgs(argv: string[]): Args {
   let connectors = false;
   let connectorsArgs: string[] = [];
   let mcp = false;
+  let bench = false;
+  let benchArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -76,6 +80,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "mcp") {
       mcp = true;
       break;
+    } else if (a === "bench") {
+      bench = true;
+      benchArgs = argv.slice(i + 1);
+      break;
     } else if (a === "--vault" || a === "-d") {
       const next = argv[i + 1];
       if (next) {
@@ -104,6 +112,8 @@ function parseArgs(argv: string[]): Args {
     connectors,
     connectorsArgs,
     mcp,
+    bench,
+    benchArgs,
   };
 }
 
@@ -120,6 +130,7 @@ USAGE
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
+  prevail bench [...]         run the public council benchmark suite
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
   prevail --vault <path>      override vault path for one session
 
@@ -558,6 +569,79 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
   process.exit(1);
 }
 
+async function benchCommand(args: string[], vaultOverride: string | null): Promise<void> {
+  const { loadQuestions, runBenchOne, writeBenchResult, writeBenchSummary, defaultResultsDir } =
+    await import("./bench.ts");
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  const sub = args[0];
+
+  if (!sub || sub === "list" || sub === "ls") {
+    const questions = loadQuestions();
+    if (questions.length === 0) {
+      console.log("no bench questions found. drop them under bench/questions/<domain>/<id>.md");
+      return;
+    }
+    console.log(`${questions.length} bench question${questions.length === 1 ? "" : "s"}:`);
+    for (const q of questions) {
+      console.log(`  ${q.id.padEnd(36)}  ${q.domain.padEnd(10)} ${q.stakes.padEnd(6)} ${q.verifiable ? "✓" : " "}  ${q.prompt.slice(0, 80)}`);
+    }
+    return;
+  }
+
+  if (sub === "run") {
+    const questions = loadQuestions();
+    if (questions.length === 0) {
+      console.error("no bench questions found");
+      process.exit(1);
+    }
+    let filtered = questions;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      const v = args[i + 1];
+      if (a === "--domain" && v) {
+        filtered = filtered.filter((q) => q.domain === v);
+        i++;
+      } else if (a === "--question" && v) {
+        filtered = filtered.filter((q) => q.id === v);
+        i++;
+      }
+    }
+    if (filtered.length === 0) {
+      console.error("no questions matched the filter");
+      process.exit(1);
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const outputDir = join(defaultResultsDir(), today);
+    console.log(`running ${filtered.length} question${filtered.length === 1 ? "" : "s"} against the council…`);
+    const results = [];
+    for (const q of filtered) {
+      process.stdout.write(`  ${q.id}…`);
+      const t0 = Date.now();
+      try {
+        const r = await runBenchOne(q, vault);
+        results.push(r);
+        writeBenchResult(r, outputDir);
+        const dt = ((Date.now() - t0) / 1000).toFixed(1);
+        console.log(` ${r.successfulPanelists}/${r.panelCount} panelists · ${r.divergenceFlagged ? "🔀 split" : "consensus"} · ${dt}s`);
+      } catch (err) {
+        console.log(` ✗ ${(err as Error).message}`);
+      }
+    }
+    const summary = writeBenchSummary(results, outputDir, today);
+    console.log(``);
+    console.log(`✓ ${results.length} result${results.length === 1 ? "" : "s"} written to ${outputDir}`);
+    console.log(`  summary: ${summary}`);
+    return;
+  }
+
+  console.error(`unknown bench subcommand: ${sub}\n`);
+  console.error("usage:");
+  console.error("  prevail bench list");
+  console.error("  prevail bench run [--domain <name>] [--question <id>]");
+  process.exit(1);
+}
+
 async function connectorsCommand(args: string[]): Promise<void> {
   const { scanCommunityApps } = await import("./vault.ts");
   const { probeConnector } = await import("./connector-probe.ts");
@@ -695,7 +779,7 @@ async function main() {
     return;
   }
   if (args.version) {
-    console.log("prevail 0.4.0");
+    console.log("prevail 0.5.0");
     return;
   }
   if (args.doctor) {
@@ -723,6 +807,10 @@ async function main() {
     const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
     const { runMcpServer } = await import("./mcp-server.ts");
     await runMcpServer(vault);
+    return;
+  }
+  if (args.bench) {
+    await benchCommand(args.benchArgs, args.vaultPath);
     return;
   }
   if (args.daemon) {

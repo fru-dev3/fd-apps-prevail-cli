@@ -248,6 +248,7 @@ async function handleUpdate(
       cwd: state.domain.path,
       panelists: panel,
       signal,
+      vaultPath,
     });
     await sendCouncilResult(cfg.botToken, chatId, result.panel, result.verdict, result.chairLabel, result.degraded);
     // Self-curating vault: log the verdict, same hook the TUI uses.

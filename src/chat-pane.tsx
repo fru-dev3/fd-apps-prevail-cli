@@ -114,6 +114,8 @@ export type ChatCommand =
   | { kind: "heatmap"; days?: number }
   | { kind: "watch"; limit?: number }
   | { kind: "framework"; id: string }
+  | { kind: "gut"; text: string }
+  | { kind: "calibration"; sub: string; arg: string }
   | { kind: "telegram"; sub: string; arg: string }
   | { kind: "briefing"; sub: string; arg: string }
   | { kind: "connectors" }
@@ -1605,6 +1607,8 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/history", arg: "[n]", desc: "show your past prompts for this domain (default 20)", aliases: ["/h", "/prompts"] },
   { cmd: "/web", arg: "[on|off]", desc: "global web access — toggle or check status (default: allow)" },
   { cmd: "/council", arg: "<prompt>", desc: "ask the configured panel in parallel  ·  /council config to see panel, /council use ..., /council model ...", aliases: ["/c", "/panel"] },
+  { cmd: "/gut", arg: "<one-line take>", desc: "record your gut answer BEFORE running /council — fuels the calibration loop", aliases: [] },
+  { cmd: "/calibration", arg: "[status|pending|outcome <id> <text>]", desc: "review pending retrospectives + your gut-vs-council scoreboard", aliases: ["/cal"] },
   { cmd: "/heatmap", arg: "[days]", desc: "domain activity heatmap (default 30 days)", aliases: ["/heat", "/activity"] },
   { cmd: "/watch", arg: "[n]", desc: "show recent background-watcher observations (default 20)", aliases: ["/watcher", "/obs"] },
   { cmd: "/framework", arg: "[id|list|none]", desc: "set response framework (bluf · win · scqa · sbar · ooda · proscons · steelman)", aliases: ["/fw"] },
@@ -1914,6 +1918,13 @@ function parseSlashCommand(text: string): ChatCommand {
   }
   if (cmd === "framework" || cmd === "fw") {
     return { kind: "framework", id: arg.trim().toLowerCase() };
+  }
+  if (cmd === "gut") {
+    return { kind: "gut", text: arg.trim() };
+  }
+  if (cmd === "calibration" || cmd === "cal") {
+    const parts = arg.trim().split(/\s+/).filter(Boolean);
+    return { kind: "calibration", sub: (parts[0] ?? "status").toLowerCase(), arg: parts.slice(1).join(" ").trim() };
   }
   if (cmd === "telegram" || cmd === "tg") {
     const parts = arg.trim().split(/\s+/).filter(Boolean);
