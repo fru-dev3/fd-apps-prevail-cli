@@ -1,205 +1,136 @@
-# prevail
+<h1 align="center">prev<span style="color:#3CD8FF">AI</span>l</h1>
 
-> prevAIl — a terminal cockpit for your life domains
+<p align="center">
+  <b>A terminal cockpit for the rest of your life.</b><br/>
+  Ask Claude, Codex, Gemini, and your local Ollama the same question in parallel. Let the council vote.
+</p>
 
-### Council mode in action
+<p align="center">
+  <a href="https://github.com/fru-dev3/prevail/releases"><img src="https://img.shields.io/github/v/release/fru-dev3/prevail?color=C4A35A&label=release" alt="release"/></a>
+  <a href="#install"><img src="https://img.shields.io/badge/install-curl%20%7C%20bash-3CD8FF" alt="install"/></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-C4A35A" alt="MIT"/></a>
+</p>
+
+---
+
+**One question. Four engines. One verdict.** Every part of your life — wealth, health, tax, career — is a folder of markdown. Open one, ask, and prevAIl fans the question out to your installed CLIs in parallel. A chair model reads all three replies and writes one decisive answer, surfacing the *disagreement* — which is the point. Works from your terminal or your phone (Telegram bridge). Single 95 MB binary. No daemon, no Docker, no API keys.
 
 ```
-┌─ chief ──────────────────────────────────────────────────────────────────┐
-│ › /council should I prepay the mortgage or invest the cash?              │
+┌─ wealth ─────────────────────────────────────────────────────────────────┐
+│ › /council should I prepay the mortgage or invest the cash?             │
 │                                                                          │
-│   ⚖ convening council: claude · codex · gemini                          │
+│   ⚖ convening · claude · codex · gemini · ollama                       │
 │                                                                          │
-│   ◇ claude · opus-4-7                                                   │
-│   At your effective tax rate, the deductible interest cuts your real    │
-│   mortgage cost to ~4.1%. A diversified index portfolio has cleared 7%  │
-│   long-run after tax. Math says invest. But if losing the cash flow if  │
-│   markets crash would force you to sell, prepay buys you peace.         │
+│   ◇ Claude   At your tax rate the effective mortgage cost is ~4.1%.    │
+│             A diversified index has cleared 7% long-run. Math: invest.  │
+│   ◇ Codex   Spread = (after-tax return − rate) × principal × years.   │
+│             Positive → invest. Keep 6 months liquidity floor.           │
+│   ◇ Gemini  Behavioral: guaranteed return on a known liability vs.    │
+│             probabilistic return you must ride out. Pick what sticks.   │
+│   ◇ Ollama  Local-only check: same conclusion as the cloud panel.     │
 │                                                                          │
-│   ◇ codex · gpt-5.4                                                     │
-│   Run the spread: (expected_after_tax_return - effective_mortgage_rate) │
-│   × principal × years remaining. Positive → invest. Add a liquidity     │
-│   floor of 6 months expenses before either move.                         │
+│  ┌─ 🔀 Where panelists disagreed ─────────────────────────────────┐    │
+│  │ Liquidity floor: Codex says 6mo, Gemini says 12mo (risk-off). │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
 │                                                                          │
-│   ◇ gemini · 2.5-pro                                                    │
-│   Behavioral factor: prepaying is a guaranteed return on a known        │
-│   liability; investing is a probabilistic return on volatility you      │
-│   have to ride out. Pick the one you'll actually stick with under       │
-│   stress. For most people that's the guarantee.                          │
+│  ┌─ ⚖ Verdict · synthesized by Claude ───────────────────────────┐    │
+│  │ Invest IF (a) ≥6mo liquidity, (b) you'll hold through −30%,  │    │
+│  │ (c) spread > 2%. Else prepay. Liquidity is the binding test. │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
 │                                                                          │
-│   ⚖ council verdict · synthesized by claude                            │
-│   Invest if (a) you have 6+ months liquidity, (b) you can stomach a    │
-│   30% drawdown without selling, and (c) the rate spread is > 2%. Else  │
-│   prepay. Run the spread calc with your actual numbers and check (b)   │
-│   honestly — that's the binding constraint, not the math.              │
-│                                                                          │
-│ ready · type your next question              4 calls · 3k↑ 1.4k↓ · ~$0.03│
+│  ready · 4 calls · 3k↑ 1.4k↓ · ~$0.03            ◆ BLUF  ⚖ Council ON │
 └──────────────────────────────────────────────────────────────────────────┘
-```
-
-A single-binary TUI that turns every part of your life — wealth, health, tax,
-career, content, real estate, … — into a chat-driven cockpit. Each domain is
-just a folder of markdown. Each chat talks to Claude Code, Codex, or Gemini.
-All conversations run in parallel.
-
-```
-   ╲ │ ╱     █▀█ █▀▄ █▀▀ █ █ ▄▀█ █ █              │   SUNDAY · JUN 1 · 2026
-   ─ ◈ ─     █▀▀ █▀▄ ██▄  █  █▀█ █ █▄▄            │   15:47  ·  live since 2026
-   ╱ │ ╲     prev · AI · l  —  your AI cockpit    │
-                                                  │   vault   ~/.ai/vault
-  EST 2026   19 domains · 41 apps · 65 open       │   cli     claude · codex · gemini
-                                                  │   chat    ●● 2 chats active
 ```
 
 ## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fru-dev3/prevail/main/scripts/install.sh | bash
+prevail
 ```
 
-or from source:
+First launch runs a 30-second wizard. Pick the bundled demo vault (synthetic, safe to explore) or point at your own folder. macOS + Linux. Windows via WSL.
+
+## Why prevAIl
+
+| | |
+|---|---|
+| **🪶 Council, not a single voice** | Four models in parallel, one chair synthesizes. Disagreement gets its own panel — that's where the value is. |
+| **📁 Domain = folder** | `wealth/`, `health/`, `tax/`. Plain markdown. Edit anywhere. Sync with git, iCloud, Tailscale. No database. |
+| **🔌 Uses CLIs you already pay for** | Spawns `claude`, `codex`, `gemini` — inherits every login, MCP server, and skill. No API keys to manage. |
+| **🏠 Local-private when it matters** | Ollama auto-detected at `localhost:11434`. Run health or wealth on a local-only council. |
+| **📱 Off-the-keyboard** | `prevail daemon --telegram` exposes the cockpit on your phone. Same engines, same council. Chat-ID allowlist enforced. |
+| **🔔 Scheduled briefings** | `prevail briefing add --cron "0 7 * * *" --domain wealth --prompt "what's new this week?"`. Verdict lands in your phone at 7am. |
+| **🧠 Self-curating vault** | Every chat writes a one-line summary to `<domain>/_log/YYYY-MM-DD.md`. The vault writes its own decision log. |
+| **🔐 Hardened by default** | Vault-shell off by default, env-scrubbed subprocess, file-locked schedules, OAuth refresh tokens chmod 0600. [Audit notes →](./CHANGELOG.md#security--adversarial-sweep) |
+
+## 30 seconds in
 
 ```bash
-git clone https://github.com/fru-dev3/prevail
-cd prevail
-bun install
-bun start
+# Boot the cockpit
+prevail demo                    # safe synthetic vault — explore first
+prevail                         # use your own vault
+
+# Inside, type:
+/council should I sell or rent? # fans to all engines, gives one verdict
+/framework bluf                 # Bottom Line Up Front structure
+/distill                        # turn this conversation into a reusable skill
 ```
 
-First launch shows a wizard. Pick the bundled demo (synthetic Alex Rivera vault,
-safe to explore) or point at your own `~/.ai/vault` if you already have one.
+## On your phone
 
-## What's a vault?
-
-A vault is a folder. Inside it, each subfolder is a life domain:
-
-```
-vault/
-├── wealth/
-│   ├── state.md          ← what you currently know about this domain
-│   ├── open-loops.md     ← what's pending
-│   ├── QUICKSTART.md     ← 60-second tour
-│   ├── PROMPTS.md        ← curated prompts for the agent
-│   └── skills/           ← agent skills (optional)
-├── health/
-├── tax/
-└── ...
+```bash
+prevail telegram setup <bot-token>     # token from @BotFather
+prevail telegram add-user <chat-id>    # mandatory allowlist
+prevail daemon --telegram              # poll Telegram + tick briefings
 ```
 
-No database, no proprietary format. Edit any file in any editor. Sync with
-git, Dropbox, Syncthing, whatever. Bring your own backups.
+Now `/council`, `/domain wealth`, `/framework bluf` — from anywhere.
 
-## What's the cockpit?
+## Connectors
 
-Arrow up/down through your domains. Each one auto-opens a chat. Above the chat
-you see a live preview of that domain's `state.md` + the unchecked items in
-`Open Items`. Below it, a clickable strip of every skill that domain ships.
+Every app declares how it authenticates: `api`, `oauth`, `browser`, `mcp`, or `manual`. Click a connector in the sidebar to see live auth status, what's missing, and **Test Connection**. The OAuth runner handles PKCE + loopback callback + token refresh:
 
-Click `Claude Code · Codex · Gemini CLI` to swap the model. Type `/model opus`
-or `/model gpt-5` to pass any model name straight through. Each domain
-remembers its own CLI + model independently, so `wealth` can run on Opus while
-`content` runs on Gemini 2.5 Pro — both at the same time, with live spinners
-in the sidebar showing which ones are thinking.
+```bash
+prevail connectors list
+prevail connectors test plaid
+prevail connectors oauth youtube-analytics
+```
 
-## Council mode — why ask one AI when you can convene three
-
-Single-model output is fine for routine questions. For **high-stakes decisions**
-— "should I prepay this mortgage or invest the cash?", "is this contract clause
-a deal-breaker?", "rewrite my resume for a Principal SA at Anthropic" —
-one model's answer is a single point of view shaped by one company's training
-data, one RLHF bias, and one set of blind spots. You don't actually know what
-you're missing.
-
-Council fixes that. Type `/council <your question>` (or toggle `▣ Council ON`
-in the tab strip) and prevAIl **fans the question out to Claude, Codex, and
-Gemini in parallel**, collects their answers, then has a **synthesizer** (the
-chair) read all three and produce a single verdict. You see three panelist
-bubbles, then a `⚖ council verdict` bubble distilling them.
-
-Why this beats just asking one model:
-
-- **Triangulation, not averaging.** When Claude, Codex, and Gemini agree, your
-  confidence in the call goes up — three different models trained on different
-  data corpora converging is real signal. When they *disagree*, that's even
-  more valuable: the disagreement itself surfaces the trade-off you needed to
-  think about, which a single model would have just papered over.
-- **Cancels per-model quirks.** Claude tends to hedge, Codex is conservative
-  on non-coding questions, Gemini is verbose. The synthesizer reads all three
-  and writes one direct answer — you get the substance without inheriting any
-  single model's stylistic baggage.
-- **Compare model versions side-by-side.** Council can run multiple variants
-  of the *same* CLI in the same panel. Want to see if Opus 4.7 still beats 4.6
-  on financial reasoning? Add both to the claude row in the config and they
-  show up as two separate panelists. The chair synthesizes across all of them.
-- **Pick your chair.** The chair is the model that writes the verdict from
-  the panel responses. Pin Claude if you trust its synthesis voice, pin Codex
-  if you want a terse engineer-style summary, pin Gemini if you want it
-  exhaustive. Set it once in the council config; or leave it `auto` and the
-  first panelist to reply takes the chair role.
-- **Follow-up context is preserved.** Council remembers the prior turns of
-  the conversation. Ask a follow-up and all three panelists see the previous
-  question + the prior verdict, so they're answering the next move, not
-  starting fresh.
-- **Escape cancels everything.** A council fan-out is three concurrent CLI
-  child processes. Hit Escape and prevAIl SIGTERMs all of them in one shot,
-  drops a `(cancelled)` bubble, and the chat goes idle. No waiting for slow
-  models to finish a turn you don't care about anymore.
-
-You can also run a degraded council — `claude` + `codex` only, no `gemini`
-(or any subset) — if you're out of quota on one provider or you want to save
-tokens on a less critical question. Configure who participates in the
-`⚙ configure` panel.
+Ships with examples for each auth type: Plaid (api), LinkedIn (browser), YouTube Analytics (oauth), GitHub (http+key), Google Calendar (mcp).
 
 ## Commands
 
-```bash
-prevail                    boot the cockpit (uses your saved vault)
-prevail init               run the first-run wizard
-prevail demo               ignore config, always boot the synthetic vault
-prevail doctor             check vault + installed AI CLIs
-prevail --vault <path>     override vault path for this run
+```
+prevail                          boot the cockpit
+prevail init                     first-run wizard
+prevail demo                     use the synthetic vault
+prevail doctor                   check vault + CLIs
+prevail council ...              council ops from the shell
+prevail briefing ...             scheduled domain briefings
+prevail telegram ...             configure the Telegram bridge
+prevail connectors ...           list / test / oauth
+prevail daemon --telegram        headless mode (bot + ticker)
 ```
 
-## Keys
-
-| Key | Action |
-|---|---|
-| `↑` / `↓` | move between domains or apps |
-| `s` | toggle focus between Life Domains / Life Apps |
-| `n` | scaffold a new domain |
-| `e` | inline-edit the active markdown tab |
-| `r` | reload vault from disk |
-| `q` / `ctrl-c` | quit |
-
-Inside any chat:
-
-| Slash command | Effect |
-|---|---|
-| `/claude [model]` | switch to Claude Code, optionally with a specific model |
-| `/codex [model]` | switch to Codex |
-| `/gemini [model]` | switch to Gemini CLI |
-| `/model <name>` | set the model on the current CLI (any string the CLI accepts) |
-| `/clear` | reset the conversation, keep the CLI/model config |
-| `/help` | list slash commands |
-| `/exit` | back to cockpit (same as esc) |
+Inside the TUI: `↑ ↓` between domains, `s` swap to apps, `e` edit the active markdown tab, `q` quit. `/help` lists every slash command.
 
 ## Requirements
 
-- At least one of: [Claude Code](https://claude.com/code), [Codex](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli). The TUI works without any of them — you just can't chat.
-- Terminal with UTF-8 + true-color support.
-- macOS, Linux (Windows via WSL).
+- One or more of: [Claude Code](https://claude.com/code) · [Codex](https://github.com/openai/codex) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Ollama](https://ollama.com)
+- Terminal with UTF-8 + true-color
+- macOS / Linux (Windows via WSL)
 
 ## Built with
 
-[OpenTUI](https://opentui.com) (Zig core, TypeScript bindings, React reconciler) + [Bun](https://bun.sh).
+[OpenTUI](https://opentui.com) (Zig core + React reconciler) on [Bun](https://bun.sh). Single binary via `bun --compile`. No runtime dependencies.
 
-## Changelog
+## Docs · changelog · roadmap
 
-See [CHANGELOG.md](./CHANGELOG.md) for what's shipped in each tag. Latest releases on [GitHub](https://github.com/fru-dev3/prevail/releases).
+- [**CHANGELOG**](./CHANGELOG.md) — what shipped in each tag
+- [**Releases**](https://github.com/fru-dev3/prevail/releases) — pre-built binaries
+- [**Demo vault**](./vault-demo) — synthetic "Alex Rivera" persona
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
-
-The bundled `vault-demo/` content (Alex Rivera persona) is synthetic and
-included for illustrative purposes only. No real personal data.
+MIT. The bundled demo vault contains no real personal data.

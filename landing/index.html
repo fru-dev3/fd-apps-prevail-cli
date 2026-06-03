@@ -142,11 +142,12 @@
         <span class="mascot">◈</span>
         <span class="wordmark"><span class="prev">prev</span><span class="ai">AI</span><span class="l">l</span></span>
       </div>
-      <p class="tagline">your AI life cockpit · single-binary terminal app · bring-your-own CLI</p>
+      <p class="tagline">your AI life cockpit · single binary · runs from your terminal or your phone</p>
       <p class="pitch">
-        For high-stakes calls, asking <em>one</em> AI is asking <em>one</em>
-        opinion. prevAIl fans your question out to Claude, Codex, and Gemini
-        in parallel — then a chair synthesizes a verdict from the panel.
+        For high-stakes calls, one AI is one opinion. prevAIl fans the
+        question out to Claude, Codex, Gemini, <em>and</em> your local
+        Ollama in parallel — a chair model synthesizes a verdict and the
+        UI surfaces where the panel <em>disagreed</em>. That's the point.
       </p>
       <div class="cta-row">
         <a class="cta cta-mono" href="#install">curl -fsSL prevail.ai/install | bash</a>
@@ -161,7 +162,7 @@
       <div class="demo">
 <span class="user-prompt">› /council should I prepay the mortgage or invest the cash?</span>
 
-  ⚖ convening council: claude · codex · gemini
+  ⚖ convening council: claude · codex · gemini · ollama
 
 <span class="panelist-head">◇ claude · opus-4-7</span>
   At your effective tax rate, the deductible interest cuts your real
@@ -214,11 +215,35 @@
       </div>
     </section>
 
+    <section>
+      <h2>The <span class="ai-inline">cockpit</span> reaches out</h2>
+      <p>Boot the daemon and prevAIl follows you off the keyboard. Telegram bridge, scheduled briefings, self-curating vault — same engines, same council, same framework setting.</p>
+
+      <div class="why">
+        <div class="why-card">
+          <h3>📱 Telegram bridge</h3>
+          <p><code>prevail daemon --telegram</code> exposes the cockpit on your phone. Chat-ID allowlist enforced, private chats only, in-flight aborts on Ctrl-C.</p>
+        </div>
+        <div class="why-card">
+          <h3>🔔 Scheduled briefings</h3>
+          <p><code>prevail briefing add --cron "0 7 * * *" --domain wealth …</code>. At 7am the panel debates. At 7:01 your phone has the verdict.</p>
+        </div>
+        <div class="why-card">
+          <h3>🧠 Self-curating vault</h3>
+          <p>Every chat appends to <code>&lt;domain&gt;/_log/YYYY-MM-DD.md</code>. Quote-shielded so prompt-injected content can't persist as instructions.</p>
+        </div>
+        <div class="why-card">
+          <h3>🔌 Connectors with auth probes</h3>
+          <p>Each app declares <code>api / oauth / browser / mcp / manual</code>. OAuth 2.0 + PKCE runner included — try it: <code>prevail connectors oauth youtube-analytics</code>.</p>
+        </div>
+      </div>
+    </section>
+
     <section id="install">
       <h2>Install</h2>
       <p class="dim">macOS (Apple Silicon, Intel) and Linux (x64, arm64) — single self-contained binary, no Node or Bun required at runtime.</p>
-      <p><code>curl -fsSL prevail.ai/install | bash</code></p>
-      <p class="dim">or from source: <code>git clone https://github.com/fru-dev3/prevail && cd prevail && bun install && bun run start</code></p>
+      <p><code>curl -fsSL https://raw.githubusercontent.com/fru-dev3/prevail/main/scripts/install.sh | bash</code></p>
+      <p class="dim">or from source: <code>git clone https://github.com/fru-dev3/prevail && cd prevail && bun install && bun start</code></p>
       <p class="dim">First boot opens a wizard: pick a vault (bring your own, point at <code>~/.ai/vault</code>, or accept the bundled synthetic demo). Then arrow up/down through your domains and start a chat.</p>
     </section>
 
