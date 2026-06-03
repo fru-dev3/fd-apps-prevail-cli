@@ -79,6 +79,11 @@ export async function runCouncilOneShot(args: {
   panelists: CouncilPanelist[];
   cliHealth?: Map<string, CliHealth | null>;
   signal?: AbortSignal;
+  // Per-panelist streaming. When set, each chunk from any panelist is
+  // forwarded with (panelistIdx, delta) so the caller (TUI / Telegram /
+  // MCP) can update the right bubble. Chair synthesis chunks come back
+  // with panelistIdx === -1.
+  onPanelistChunk?: (panelistIdx: number, delta: string) => void;
 }): Promise<CouncilResult> {
   // Drop unhealthy panelists if health was passed.
   const healthy = args.cliHealth
@@ -100,7 +105,7 @@ export async function runCouncilOneShot(args: {
   // Fan out in parallel. Each panelist runs in a separate runChatTurn —
   // shared abort signal means a single cancel kills the whole batch.
   const panel: PanelResult[] = await Promise.all(
-    healthy.map(async (p) => {
+    healthy.map(async (p, idx) => {
       const start = Date.now();
       try {
         const reply = await withTimeout(
@@ -112,6 +117,9 @@ export async function runCouncilOneShot(args: {
             isFirst: true,
             bare: true,
             signal: args.signal,
+            onChunk: args.onPanelistChunk
+              ? (delta) => args.onPanelistChunk!(idx, delta)
+              : undefined,
           }),
           PANELIST_TIMEOUT_MS,
           `${p.cli.label}${p.model ? `·${p.model}` : ""}`,
@@ -217,6 +225,9 @@ export async function runCouncilOneShot(args: {
         isFirst: true,
         bare: true,
         signal: args.signal,
+        // Chair chunks use panelistIdx === -1 so the UI can render the
+        // verdict bubble in real time as the chair synthesizes.
+        onChunk: args.onPanelistChunk ? (delta) => args.onPanelistChunk!(-1, delta) : undefined,
       }),
       PANELIST_TIMEOUT_MS,
       `${chairCli.label} (synthesis)`,

@@ -64,7 +64,11 @@ export interface ChatMsg {
     | "council-pending"
     | "council-response"
     | "council-synthesizing"
-    | "council-verdict";
+    | "council-verdict"
+    // Live-updating assistant bubble during streaming. Replaced with a
+    // normal "assistant" message when the stream finishes. Used by the
+    // single-CLI chat path; council uses its own panelist-streaming flow.
+    | "streaming";
   cli?: CliKind; // for council-response bubbles
   model?: string;
 }
@@ -603,9 +607,16 @@ function Transcript({
           council mode the per-panelist CouncilPendingBubble and the
           CouncilSynthesizingBubble already convey the same info, so suppress
           this one to avoid a redundant 4th spinner. */}
+      {/* Suppress the generic ThinkingBubble when:
+            - council UI is up (its own pending/synth bubbles cover it)
+            - a streaming placeholder is in flight (the streaming bubble
+              itself shows the spinner + live content) */}
       {session.pending &&
         !messages.some(
-          (m) => m.kind === "council-pending" || m.kind === "council-synthesizing",
+          (m) =>
+            m.kind === "council-pending" ||
+            m.kind === "council-synthesizing" ||
+            m.kind === "streaming",
         ) && <ThinkingBubble tick={tick} cliLabel={session.cli.label} />}
     </scrollbox>
   );
@@ -775,6 +786,9 @@ function MessageBubble({
   if (msg.kind === "council-verdict") {
     return <CouncilVerdictBubble msg={msg} />;
   }
+  if (msg.kind === "streaming") {
+    return <StreamingAssistantBubble msg={msg} tick={tick} />;
+  }
   if (msg.role === "system") {
     return (
       <box flexDirection="column" paddingTop={1} paddingBottom={1}>
@@ -856,6 +870,42 @@ function DistillDraftBubble({
         >
           <text fg={theme.fgDim}>✗ discard</text>
         </box>
+      </box>
+    </box>
+  );
+}
+
+// Live-updating assistant bubble. While the CLI streams text, this is what
+// the user sees — same border + title as a finished assistant message, but
+// with a spinner where the cursor would be while we wait for more tokens.
+// Empty content (model hasn't emitted yet) shows a "thinking" line; once
+// chunks arrive, the content fills in real time.
+function StreamingAssistantBubble({ msg, tick }: { msg: ChatMsg; tick: number }) {
+  const char = spinnerChar(tick);
+  const content = msg.content;
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <box
+        flexDirection="column"
+        border
+        borderColor={theme.bubbleAssistant}
+        backgroundColor={theme.bg}
+        title=" assistant "
+        titleAlignment="left"
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        {content.length === 0 ? (
+          <box flexDirection="row">
+            <text fg={theme.gold}>{char}</text>
+            <text fg={theme.fgDim}>  receiving…</text>
+          </box>
+        ) : (
+          <>
+            <text fg={theme.fg}>{content}</text>
+            <text fg={theme.fgFaint}>{char} streaming…</text>
+          </>
+        )}
       </box>
     </box>
   );

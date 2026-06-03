@@ -1371,6 +1371,33 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     });
     const controller = new AbortController();
     cancelControllersRef.current.set(key, controller);
+    // Drop a "streaming" placeholder bubble that we mutate on each chunk.
+    // Identified by its ts so we never confuse it with another in-flight
+    // turn — every appendStream call updates the SAME ts.
+    const streamTs = Date.now();
+    setChats((m) => {
+      const cur = m.get(key);
+      if (!cur) return m;
+      return new Map(m).set(key, {
+        ...cur,
+        messages: [
+          ...cur.messages,
+          { role: "assistant", content: "", ts: streamTs, kind: "streaming" },
+        ],
+      });
+    });
+    const appendStream = (delta: string) => {
+      setChats((m) => {
+        const cur = m.get(key);
+        if (!cur) return m;
+        const messages = cur.messages.map((msg) =>
+          msg.ts === streamTs && msg.kind === "streaming"
+            ? { ...msg, content: msg.content + delta }
+            : msg,
+        );
+        return new Map(m).set(key, { ...cur, messages });
+      });
+    };
     runChatTurn({
       prompt: promptForCli,
       cwd: session.hostDomain.path,
@@ -1378,6 +1405,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       model: session.model,
       isFirst: !session.hasFirstTurn,
       signal: controller.signal,
+      onChunk: appendStream,
     })
       .then((response) => {
         const ts = Date.now();
@@ -1404,12 +1432,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         setChats((m) => {
           const cur = m.get(key);
           if (!cur) return m;
+          // Replace the live streaming placeholder with the canonical
+          // assistant message — same ts so the bubble doesn't reorder.
+          const messages = cur.messages.map((msg) =>
+            msg.ts === streamTs && msg.kind === "streaming"
+              ? { role: "assistant" as const, content: response, ts }
+              : msg,
+          );
+          // If for some reason the placeholder wasn't found (rare race),
+          // fall back to append so we never silently drop the reply.
+          const hadPlaceholder = messages.some((msg) => msg.ts === ts);
           return new Map(m).set(key, {
             ...cur,
-            messages: [
-              ...cur.messages,
-              { role: "assistant", content: response, ts },
-            ],
+            messages: hadPlaceholder
+              ? messages
+              : [...messages, { role: "assistant", content: response, ts }],
             pending: false,
             hasFirstTurn: true,
             usage: {
@@ -1424,10 +1461,14 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         setChats((m) => {
           const cur = m.get(key);
           if (!cur) return m;
+          // Drop the streaming placeholder and append an error bubble.
+          const cleaned = cur.messages.filter(
+            (msg) => !(msg.ts === streamTs && msg.kind === "streaming"),
+          );
           return new Map(m).set(key, {
             ...cur,
             messages: [
-              ...cur.messages,
+              ...cleaned,
               { role: "assistant", content: `(error: ${err.message})`, ts: Date.now() },
             ],
             pending: false,

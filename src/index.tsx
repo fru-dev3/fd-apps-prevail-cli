@@ -25,6 +25,7 @@ interface Args {
   briefingArgs: string[];
   connectors: boolean;
   connectorsArgs: string[];
+  mcp: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -44,6 +45,7 @@ function parseArgs(argv: string[]): Args {
   let briefingArgs: string[] = [];
   let connectors = false;
   let connectorsArgs: string[] = [];
+  let mcp = false;
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -70,6 +72,9 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "connectors" || a === "connector") {
       connectors = true;
       connectorsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "mcp") {
+      mcp = true;
       break;
     } else if (a === "--vault" || a === "-d") {
       const next = argv[i + 1];
@@ -98,6 +103,7 @@ function parseArgs(argv: string[]): Args {
     briefingArgs,
     connectors,
     connectorsArgs,
+    mcp,
   };
 }
 
@@ -113,6 +119,7 @@ USAGE
   prevail telegram [...]      configure the Telegram bot bridge
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
+  prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
   prevail --vault <path>      override vault path for one session
 
@@ -709,6 +716,13 @@ async function main() {
   }
   if (args.connectors) {
     await connectorsCommand(args.connectorsArgs);
+    return;
+  }
+  if (args.mcp) {
+    const cfg = readConfig();
+    const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+    const { runMcpServer } = await import("./mcp-server.ts");
+    await runMcpServer(vault);
     return;
   }
   if (args.daemon) {

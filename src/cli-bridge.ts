@@ -529,6 +529,14 @@ export interface ChatTurn {
   // Escape in the cockpit can drop an in-flight prompt without waiting for
   // the model to finish. runCapture resolves with "(cancelled)" on abort.
   signal?: AbortSignal;
+  // Optional incremental-output callback. When set, the runner emits
+  // partial text as it arrives from the CLI (chunks streamed from claude
+  // --output-format stream-json, codex stdout, gemini stdout, ollama SSE).
+  // The final return value is still the complete reply — onChunk just
+  // gives the UI something to render while the model is still talking.
+  // Each call receives a string delta (NOT the cumulative buffer); the
+  // caller does its own accumulation if needed.
+  onChunk?: (delta: string) => void;
 }
 
 const WEB_DENY_NOTE = [
@@ -548,7 +556,7 @@ function augmentManualWithWebGate(manual: string | null): string | null {
   return `${manual}\n\n${WEB_DENY_NOTE}`;
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, signal }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, signal, onChunk }: ChatTurn): Promise<string> {
   const m = model.trim();
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
@@ -576,7 +584,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     // --append-system-prompt is only meaningful on the first turn; --continue inherits it
     if (manualForClaude && isFirst) args.push("--append-system-prompt", manualForClaude);
     args.push(...head);
-    return runCapture(cli.bin, args, cwd, signal);
+    return runCapture(cli.bin, args, cwd, signal, onChunk);
   }
   if (cli.kind === "codex") {
     // --skip-git-repo-check: vault dirs aren't git repos; without this codex
@@ -593,30 +601,24 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
       ? `(This is a general advisory question — not a software/coding task. Engage with it directly and give your real opinion.)\n\n${framedPrompt}`
       : framedPrompt;
     const args = m ? [...base, "-m", m, codexPrompt] : [...base, codexPrompt];
-    const raw = await runCapture(cli.bin, args, cwd, signal);
+    const raw = await runCapture(cli.bin, args, cwd, signal, onChunk);
     return extractCodexReply(raw);
   }
   if (cli.kind === "gemini") {
-    // --skip-trust: vault dirs aren't on gemini's trusted-folders list;
-    // without this gemini refuses to run with a 'not running in a trusted
-    // directory' error.
     const base = ["--skip-trust"];
     const args = m
       ? [...base, "-m", m, "-p", framedPrompt]
       : [...base, "-p", framedPrompt];
-    const raw = await runCapture(cli.bin, args, cwd, signal);
+    const raw = await runCapture(cli.bin, args, cwd, signal, onChunk);
     return extractGeminiReply(raw);
   }
   if (cli.kind === "ollama") {
-    // OpenAI-compatible /chat/completions. cli.bin holds the base URL
-    // (e.g. http://localhost:11434) — not a binary path. No operating
-    // manual, no envelope, just a one-shot completion. Local models are
-    // private by design, so the web-access gate doesn't apply.
     return runOllamaChat({
       baseUrl: cli.bin,
       model: m || OLLAMA_DEFAULT_MODEL,
       prompt: framedPrompt,
       signal,
+      onChunk,
     });
   }
   return `(no handler for ${cli.kind})`;
@@ -627,20 +629,23 @@ interface OllamaChatArgs {
   model: string;
   prompt: string;
   signal?: AbortSignal;
+  onChunk?: (delta: string) => void;
 }
 
 // One-shot chat completion against an OpenAI-compatible endpoint (Ollama,
 // LM Studio, llama.cpp server, vLLM — all speak the same /v1/chat/completions
-// schema). Non-streaming so the caller gets the full text or an error in one
-// shot, matching how runCapture works for the subprocess CLIs. Errors are
-// returned as the reply string (prefixed `(ollama: ...)`) instead of thrown,
-// so a single panelist failure doesn't blow up the whole council fanout.
+// schema). When onChunk is set, uses SSE streaming so the UI can render
+// tokens as they arrive; otherwise falls back to the simpler non-stream
+// path. Errors are returned as the reply string (prefixed `(ollama: ...)`)
+// instead of thrown, so a single panelist failure doesn't blow up the
+// whole council fanout.
 export async function runOllamaChat(args: OllamaChatArgs): Promise<string> {
-  const { baseUrl, model, prompt, signal } = args;
+  const { baseUrl, model, prompt, signal, onChunk } = args;
   const url = `${baseUrl.replace(/\/+$/, "")}/v1/chat/completions`;
+  const stream = !!onChunk;
   const body = {
     model,
-    stream: false,
+    stream,
     messages: [{ role: "user", content: prompt }],
   };
   try {
@@ -654,14 +659,55 @@ export async function runOllamaChat(args: OllamaChatArgs): Promise<string> {
       const text = await res.text().catch(() => "");
       return `(ollama: HTTP ${res.status} — ${truncate(text, 200)})`;
     }
-    const data = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      error?: { message?: string };
-    };
-    if (data.error?.message) return `(ollama: ${data.error.message})`;
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) return "(ollama: empty reply)";
-    return content.trim();
+    if (!stream) {
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        error?: { message?: string };
+      };
+      if (data.error?.message) return `(ollama: ${data.error.message})`;
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) return "(ollama: empty reply)";
+      return content.trim();
+    }
+    // SSE stream — each event is `data: { ... }\n\n`, terminated by
+    // `data: [DONE]`. Concatenate every choices[0].delta.content into the
+    // full reply, emitting each delta as it arrives.
+    if (!res.body) return "(ollama: response had no body)";
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // Process complete SSE events (delimited by \n\n).
+      let idx: number;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const event = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        for (const line of event.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") continue;
+          try {
+            const j = JSON.parse(payload) as {
+              choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
+              error?: { message?: string };
+            };
+            if (j.error?.message) return `(ollama: ${j.error.message})`;
+            const delta = j.choices?.[0]?.delta?.content;
+            if (delta) {
+              full += delta;
+              onChunk!(delta);
+            }
+          } catch {
+            /* malformed event — skip */
+          }
+        }
+      }
+    }
+    return full.trim() || "(ollama: empty reply)";
   } catch (err) {
     const e = err as { name?: string; message?: string };
     if (e?.name === "AbortError") return "(cancelled)";
@@ -850,19 +896,17 @@ function runCapture(
   args: string[],
   cwd: string,
   signal?: AbortSignal,
+  onChunk?: (delta: string) => void,
 ): Promise<string> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let child;
-    // Pre-aborted signal — don't even spawn.
     if (signal?.aborted) {
       resolve("(cancelled)");
       return;
     }
     try {
-      // stdin: "ignore" — same reason as probeCli. Without this, codex exec
-      // hangs indefinitely from inside a spawn (no TTY, pipe never closes).
       child = spawn(bin, args, {
         cwd,
         env: scrubbedEnv(),
@@ -872,11 +916,6 @@ function runCapture(
       resolve(`(error spawning ${bin}: ${(err as Error).message})`);
       return;
     }
-    // SIGTERM the child when the user hits Escape mid-turn. The "close"
-    // handler below still fires once the process actually exits, but we set
-    // `cancelled` first so it resolves with a clean "(cancelled)" instead of
-    // surfacing whatever partial stderr the CLI happened to emit on the way
-    // out. Listener is removed on close so we don't leak in long sessions.
     let cancelled = false;
     const onAbort = () => {
       cancelled = true;
@@ -886,7 +925,15 @@ function runCapture(
     };
     signal?.addEventListener("abort", onAbort);
     child.stdout.on("data", (b) => {
-      stdout += b.toString();
+      const chunk = b.toString();
+      stdout += chunk;
+      // Streaming: emit raw stdout chunks to the caller. Per-CLI parsers
+      // (extractCodexReply, extractGeminiReply, claude stream-json) still
+      // run on the FINAL aggregate — that's how we strip envelopes /
+      // stack traces from the returned reply. The streamed bubble shows
+      // the same text the user would have seen in a terminal, which is
+      // good enough for the "feels live" UX.
+      if (onChunk) onChunk(chunk);
     });
     child.stderr.on("data", (b) => {
       stderr += b.toString();
