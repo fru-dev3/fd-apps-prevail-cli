@@ -1,5 +1,7 @@
 import type React from "react";
 import { useEffect, useState } from "react";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { theme } from "./theme.ts";
 import {
   formatRelativeTime,
@@ -10,6 +12,7 @@ import {
 } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { probeConnector, type AuthCheckSpec, type ProbeResult } from "./connector-probe.ts";
+import { loadSkillsForConnector, runSkill, logSkillRun, type SkillSpec, type SkillRunResult } from "./connector-skills.ts";
 
 interface Props {
   app: AppSkill;
@@ -19,11 +22,33 @@ interface Props {
   topBar?: React.ReactNode;
 }
 
+// Connector workspace tabs. The global tab strip (state/loops/quickstart/
+// prompts/skills) is for DOMAINS; connectors get their own internal tab
+// row because the model is fundamentally different — a connector is a
+// thing you authenticate to + run skills against + chat with the data of.
+type ConnectorTab = "overview" | "auth" | "sync" | "skills" | "data" | "chat";
+const CONNECTOR_TABS: { id: ConnectorTab; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "auth", label: "Auth" },
+  { id: "sync", label: "Sync" },
+  { id: "skills", label: "Skills" },
+  { id: "data", label: "Data" },
+  { id: "chat", label: "Chat" },
+];
+
 export function AppDetail({ app, view, skillIdx, onPickSkill, topBar }: Props) {
   const updated = formatRelativeTime(app.stateMtime);
   const domainsLabel =
     app.domains.length > 0 ? `used in ${app.domains.join(", ")}` : "no linked domains";
   const communityMark = app.community ? "★ community  ·  " : "";
+
+  const [tab, setTab] = useState<ConnectorTab>("overview");
+  // Re-derive skills + auth probe whenever the app changes.
+  const [skills, setSkills] = useState<SkillSpec[]>(() => loadSkillsForConnector(app));
+  useEffect(() => {
+    setSkills(loadSkillsForConnector(app));
+    setTab("overview");
+  }, [app.id]);
 
   return (
     <box
@@ -34,36 +59,59 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar }: Props) {
       backgroundColor={theme.bg}
       title={` ${app.id}  ·  ${app.title} `}
       titleAlignment="left"
-      bottomTitle={` ${communityMark}${domainsLabel}  ·  updated ${updated}  ·  skills ${app.skills.length} `}
+      bottomTitle={` ${communityMark}${domainsLabel}  ·  updated ${updated}  ·  ${skills.length} skill${skills.length === 1 ? "" : "s"} `}
       bottomTitleAlignment="left"
     >
       {topBar}
+      <ConnectorTabRow active={tab} onPick={setTab} skillCount={skills.length} />
       <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-        {view === "skills" ? (
-          <SkillsList
-            skills={app.skills}
-            selectedIdx={skillIdx}
-            onPick={onPickSkill}
-            appId={app.id}
-          />
-        ) : view === "state" ? (
-          // For the state tab, render the connector overview: connection
-          // method + health, available skills count, linked domains, plus
-          // whatever vault state/skill content the app already has. This
-          // is the "show me the connection + skills + domains in one
-          // glance" view from the architecture refactor.
-          <scrollbox flexGrow={1} scrollY>
-            <ConnectorOverview app={app} />
-            {app.community && !app.hasState
-              ? renderMarkdownLines(readAppSkill(app))
-              : renderMarkdownLines(readAppView(app, view))}
-          </scrollbox>
-        ) : (
-          <scrollbox flexGrow={1} scrollY>
-            {renderMarkdownLines(readAppView(app, view))}
-          </scrollbox>
-        )}
+        <scrollbox flexGrow={1} scrollY>
+          {tab === "overview" && <ConnectorOverview app={app} skillsCount={skills.length} />}
+          {tab === "auth" && <ConnectorAuthPanel app={app} />}
+          {tab === "sync" && <ConnectorSyncPanel app={app} skills={skills} />}
+          {tab === "skills" && <ConnectorSkillsPanel app={app} skills={skills} />}
+          {tab === "data" && <ConnectorDataPanel app={app} />}
+          {tab === "chat" && <ConnectorChatPanel app={app} />}
+        </scrollbox>
       </box>
+    </box>
+  );
+}
+
+function ConnectorTabRow({
+  active,
+  onPick,
+  skillCount,
+}: {
+  active: ConnectorTab;
+  onPick: (t: ConnectorTab) => void;
+  skillCount: number;
+}) {
+  return (
+    <box
+      flexDirection="row"
+      height={1}
+      backgroundColor={theme.bgPanel}
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      {CONNECTOR_TABS.map((t, i) => {
+        const isActive = t.id === active;
+        const fg = isActive ? theme.aiAccent : theme.fgDim;
+        const suffix = t.id === "skills" && skillCount > 0 ? ` (${skillCount})` : "";
+        return (
+          <text
+            key={t.id}
+            fg={fg}
+            attributes={isActive ? 1 : 0}
+            onMouseDown={() => onPick(t.id)}
+          >
+            {i === 0 ? "" : "  "}
+            {isActive ? `▸ ${t.label}` : `  ${t.label}`}
+            {suffix}
+          </text>
+        );
+      })}
     </box>
   );
 }
@@ -117,7 +165,7 @@ function SkillsList({
 // Domains, Chat hint) that surface the metadata up front before the body
 // content. This is the "click on US Bank, see how it connects + what
 // skills it exposes + which domains consume it" view.
-function ConnectorOverview({ app }: { app: AppSkill }) {
+function ConnectorOverview({ app, skillsCount }: { app: AppSkill; skillsCount?: number }) {
   const integrationLabel: Record<string, string> = {
     api: "REST/GraphQL API · stored key",
     oauth: "OAuth · token refresh",
@@ -210,19 +258,8 @@ function ConnectorOverview({ app }: { app: AppSkill }) {
         </>
       )}
       <text> </text>
-      <text fg={theme.gold} attributes={1}>▸ Skills  ({app.skills.length})</text>
-      {app.skills.length === 0 ? (
-        <text fg={theme.fgFaint}>{"  no skills defined for this connector yet"}</text>
-      ) : (
-        app.skills.slice(0, 5).map((s) => (
-          <text key={s.id} fg={theme.fgDim}>
-            {"  · "}<span fg={theme.fg}>{s.id}</span>{"  ·  "}<span fg={theme.fgFaint}>{s.title}</span>
-          </text>
-        ))
-      )}
-      {app.skills.length > 5 && (
-        <text fg={theme.fgFaint}>{`  · +${app.skills.length - 5} more — see Skills tab`}</text>
-      )}
+      <text fg={theme.gold} attributes={1}>▸ Skills  ({skillsCount ?? app.skills.length} runnable)</text>
+      <text fg={theme.fgFaint}>{"  click Skills tab to list + run them, or press 's'"}</text>
       <text> </text>
       <text fg={theme.gold} attributes={1}>▸ Linked domains  ({app.domains.length})</text>
       {app.domains.length === 0 ? (
@@ -231,11 +268,256 @@ function ConnectorOverview({ app }: { app: AppSkill }) {
         <text fg={theme.fg}>{"  " + app.domains.join("  ·  ")}</text>
       )}
       <text> </text>
-      <text fg={theme.gold} attributes={1}>▸ Chat with this connector</text>
-      <text fg={theme.fgFaint}>{"  press enter (or c) to open a chat scoped to this connector"}</text>
+      <text fg={theme.gold} attributes={1}>▸ Quick actions</text>
+      <text fg={theme.fgFaint}>{"  Skills tab → ▶ to run a skill"}</text>
+      <text fg={theme.fgFaint}>{"  Data tab → browse pulled data"}</text>
+      <text fg={theme.fgFaint}>{"  Chat tab → ask questions scoped to this connector's data"}</text>
       <text> </text>
       <text fg={theme.border}>{"─".repeat(60)}</text>
       <text> </text>
     </box>
   );
+}
+
+// Auth tab — environment vars + files the connector needs, with check marks.
+function ConnectorAuthPanel({ app }: { app: AppSkill }) {
+  const spec = app.authCheck as AuthCheckSpec | undefined;
+  return (
+    <box flexDirection="column">
+      <text fg={theme.gold} attributes={1}>▸ Authentication</text>
+      <text> </text>
+      <text fg={theme.fgDim}>{"  integration: "}<span fg={theme.fg}>{app.integration ?? "manual"}</span></text>
+      {!spec && (
+        <text fg={theme.fgFaint}>{"  no auth_check declared in manifest — see docs/connector-architecture.md"}</text>
+      )}
+      {spec?.kind === "env-keys" && (
+        <>
+          <text> </text>
+          <text fg={theme.fgDim} attributes={1}>required env vars:</text>
+          {(spec.env_keys ?? []).map((k) => (
+            <text key={k} fg={theme.fgDim}>
+              {"  "}
+              <span fg={process.env[k] ? theme.ok : theme.warn}>{process.env[k] ? "☑" : "☐"}</span>
+              {"  "}
+              <span fg={theme.fg}>{k}</span>
+              <span fg={theme.fgFaint}>{process.env[k] ? "  (set)" : "  (missing)"}</span>
+            </text>
+          ))}
+        </>
+      )}
+      {spec?.kind === "file-exists" && (
+        <>
+          <text> </text>
+          <text fg={theme.fgDim} attributes={1}>required files:</text>
+          {(spec.files ?? []).map((f) => {
+            const expanded = f.replace("~", process.env.HOME ?? "~");
+            const ok = existsSync(expanded);
+            return (
+              <text key={f} fg={theme.fgDim}>
+                {"  "}
+                <span fg={ok ? theme.ok : theme.warn}>{ok ? "☑" : "☐"}</span>
+                {"  "}
+                <span fg={theme.fg}>{f}</span>
+              </text>
+            );
+          })}
+        </>
+      )}
+      {spec?.kind === "http" && (
+        <>
+          <text> </text>
+          <text fg={theme.fgDim}>{"  url:        "}<span fg={theme.fg}>{spec.url}</span></text>
+          {spec.auth_header_env && (
+            <text fg={theme.fgDim}>{"  auth env:   "}<span fg={theme.fg}>{spec.auth_header_env}</span></text>
+          )}
+        </>
+      )}
+      {spec?.kind === "command" && (
+        <text fg={theme.fgDim}>{"  command:    "}<span fg={theme.fg}>{spec.command}</span></text>
+      )}
+      {spec?.kind === "mcp" && (
+        <text fg={theme.fgDim}>{"  mcp:        "}<span fg={theme.fg}>{spec.mcp_command ?? spec.mcp_url ?? "(unset)"}</span></text>
+      )}
+      <text> </text>
+      <text fg={theme.fgFaint}>{"  Overview tab has ⟳ Test Connection — runs the auth_check live."}</text>
+    </box>
+  );
+}
+
+// Sync tab — list every skill that has a cron trigger, show its schedule.
+// (Actual scheduling lands in v0.6 phase 5; this is the surface for it.)
+function ConnectorSyncPanel({ app, skills }: { app: AppSkill; skills: SkillSpec[] }) {
+  const cronSkills = skills.filter((s) => s.trigger?.startsWith("cron("));
+  return (
+    <box flexDirection="column">
+      <text fg={theme.gold} attributes={1}>▸ Scheduled syncs</text>
+      <text> </text>
+      {cronSkills.length === 0 ? (
+        <text fg={theme.fgFaint}>{"  no cron-triggered skills declared for this connector."}</text>
+      ) : (
+        cronSkills.map((s) => (
+          <text key={s.id} fg={theme.fgDim}>
+            {"  · "}<span fg={theme.fg}>{s.id}</span>
+            {"   "}<span fg={theme.fgFaint}>{s.trigger}</span>
+          </text>
+        ))
+      )}
+      <text> </text>
+      <text fg={theme.fgFaint}>{"  scheduled execution arrives in v0.6 phase 5. for now, Skills tab → ▶ to fire manually."}</text>
+    </box>
+  );
+}
+
+// Skills tab — runnable list with [▶ Run] button and last result inline.
+function ConnectorSkillsPanel({ app, skills }: { app: AppSkill; skills: SkillSpec[] }) {
+  const [results, setResults] = useState<Map<string, SkillRunResult | "running">>(new Map());
+  if (skills.length === 0) {
+    return (
+      <box flexDirection="column">
+        <text fg={theme.fgDim}>No runnable skills under {app.path}/skills/.</text>
+        <text> </text>
+        <text fg={theme.fgFaint}>Drop a skills/&lt;id&gt;.md file with YAML frontmatter to add one.</text>
+        <text fg={theme.fgFaint}>See docs/connector-architecture.md for the format.</text>
+      </box>
+    );
+  }
+  const run = (s: SkillSpec) => {
+    setResults((m) => new Map(m).set(s.id, "running"));
+    void runSkill(s, {}).then((r) => {
+      logSkillRun(s, r);
+      setResults((m) => new Map(m).set(s.id, r));
+    });
+  };
+  return (
+    <box flexDirection="column">
+      <text fg={theme.gold} attributes={1}>▸ Runnable skills ({skills.length})</text>
+      <text> </text>
+      {skills.map((s) => {
+        const r = results.get(s.id);
+        return (
+          <box key={s.id} flexDirection="column" paddingBottom={1}>
+            <box flexDirection="row" height={1}>
+              <text fg={theme.fg}>  ● {s.id}</text>
+              <text fg={theme.fgFaint}>  ·  runner={s.runner}</text>
+              <text fg={theme.fgFaint}>  ·  trigger={s.trigger ?? "on-demand"}</text>
+            </box>
+            <box
+              flexDirection="row"
+              paddingLeft={1}
+              paddingRight={1}
+              border={["left", "right"]}
+              borderColor={theme.aiAccent}
+              onMouseDown={() => run(s)}
+            >
+              <text fg={theme.aiAccent} attributes={1}>{r === "running" ? " ⠋ running… " : " ▶ Run "}</text>
+            </box>
+            {r && r !== "running" && (
+              <text fg={r.ok ? theme.ok : theme.warn}>
+                {"    "}{r.ok ? "✓" : "✗"} {r.message}
+                {r.outputsWritten.length > 0 && ` (${r.outputsWritten.length} output${r.outputsWritten.length === 1 ? "" : "s"})`}
+                {" · "}{(r.durationMs / 1000).toFixed(1)}s
+              </text>
+            )}
+          </box>
+        );
+      })}
+    </box>
+  );
+}
+
+// Data tab — show what's under <connector>/data/ in a flat list.
+function ConnectorDataPanel({ app }: { app: AppSkill }) {
+  const dataDir = join(app.path, "data");
+  if (!existsSync(dataDir)) {
+    return (
+      <box flexDirection="column">
+        <text fg={theme.fgDim}>No data pulled yet.</text>
+        <text> </text>
+        <text fg={theme.fgFaint}>Run a skill (Skills tab → ▶) to populate this.</text>
+      </box>
+    );
+  }
+  const entries = walkDataDir(dataDir, 50);
+  const totalBytes = entries.reduce((s, e) => s + e.size, 0);
+  return (
+    <box flexDirection="column">
+      <text fg={theme.gold} attributes={1}>▸ Data store ({entries.length} files · {formatBytes(totalBytes)})</text>
+      <text fg={theme.fgFaint}>{`  rooted at ${dataDir.replace(process.env.HOME ?? "", "~")}`}</text>
+      <text> </text>
+      {entries.length === 0 ? (
+        <text fg={theme.fgFaint}>data/ exists but is empty.</text>
+      ) : (
+        entries.slice(0, 40).map((e) => (
+          <text key={e.path} fg={theme.fgDim}>
+            {"  "}{e.rel.padEnd(50).slice(0, 50)}{"  "}<span fg={theme.fgFaint}>{formatBytes(e.size).padStart(8)}{"  "}{formatRelativeTime(e.mtime)}</span>
+          </text>
+        ))
+      )}
+      {entries.length > 40 && <text fg={theme.fgFaint}>{`  … +${entries.length - 40} more`}</text>}
+    </box>
+  );
+}
+
+// Chat tab — placeholder for the connector-scoped chat surface. Wired in
+// v0.6 phase 4; for now it points the user at the global chat.
+function ConnectorChatPanel({ app }: { app: AppSkill }) {
+  return (
+    <box flexDirection="column">
+      <text fg={theme.gold} attributes={1}>▸ Chat with {app.title}'s data</text>
+      <text> </text>
+      <text fg={theme.fg}>{"  Connector-scoped chat is coming in v0.6 (phase 4 of the redesign)."}</text>
+      <text> </text>
+      <text fg={theme.fgDim}>{"  The LLM will see ONLY this connector's data/ + SKILL.md as context,"}</text>
+      <text fg={theme.fgDim}>{"  so you can ask focused questions like:"}</text>
+      <text> </text>
+      <text fg={theme.fgFaint}>{`     "what was my biggest spend last month?"        (Plaid)`}</text>
+      <text fg={theme.fgFaint}>{`     "which PR has been open longest?"               (GitHub)`}</text>
+      <text fg={theme.fgFaint}>{`     "show me my best-performing video last quarter" (YouTube)`}</text>
+      <text> </text>
+      <text fg={theme.fgFaint}>{"  For now, run skills in the Skills tab and the outputs land in data/."}</text>
+      <text fg={theme.fgFaint}>{"  Use the domain chat (e.g. /domain wealth → ask) to query across connectors."}</text>
+    </box>
+  );
+}
+
+function walkDataDir(root: string, maxDepth: number): { path: string; rel: string; size: number; mtime: number }[] {
+  const out: { path: string; rel: string; size: number; mtime: number }[] = [];
+  const stack: { dir: string; depth: number }[] = [{ dir: root, depth: 0 }];
+  while (stack.length > 0) {
+    const { dir, depth } = stack.pop()!;
+    if (depth > maxDepth) continue;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        stack.push({ dir: full, depth: depth + 1 });
+      } else if (e.isFile()) {
+        try {
+          const st = statSync(full);
+          out.push({
+            path: full,
+            rel: full.replace(root + "/", ""),
+            size: st.size,
+            mtime: st.mtimeMs,
+          });
+        } catch {
+          /* skip */
+        }
+      }
+    }
+  }
+  out.sort((a, b) => b.mtime - a.mtime);
+  return out;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

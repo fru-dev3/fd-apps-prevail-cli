@@ -678,6 +678,67 @@ async function connectorsCommand(args: string[]): Promise<void> {
     if (r.missing && r.missing.length > 0) console.log(`  missing: ${r.missing.join(", ")}`);
     process.exit(r.ok ? 0 : 2);
   }
+  if (sub === "skills") {
+    const id = args[1];
+    if (!id) {
+      console.error("usage: prevail connectors skills <connector-id>");
+      process.exit(1);
+    }
+    const app = apps.find((a) => a.id === id);
+    if (!app) {
+      console.error(`no connector with id "${id}"`);
+      process.exit(1);
+    }
+    const { loadSkillsForConnector } = await import("./connector-skills.ts");
+    const skills = loadSkillsForConnector(app);
+    if (skills.length === 0) {
+      console.log(`${app.title} has no skill files under ${app.path}/skills/`);
+      return;
+    }
+    console.log(`${app.title} · ${skills.length} skill${skills.length === 1 ? "" : "s"}:`);
+    for (const s of skills) {
+      console.log(`  ${s.id.padEnd(28)}  runner=${s.runner.padEnd(8)} trigger=${s.trigger ?? "on-demand"}`);
+    }
+    return;
+  }
+  if (sub === "run") {
+    const id = args[1];
+    const skillId = args[2];
+    if (!id || !skillId) {
+      console.error("usage: prevail connectors run <connector-id> <skill-id> [--input key=value ...]");
+      process.exit(1);
+    }
+    const app = apps.find((a) => a.id === id);
+    if (!app) {
+      console.error(`no connector with id "${id}"`);
+      process.exit(1);
+    }
+    const { loadSkillsForConnector, runSkill, logSkillRun } = await import("./connector-skills.ts");
+    const skill = loadSkillsForConnector(app).find((s) => s.id === skillId);
+    if (!skill) {
+      console.error(`no skill "${skillId}" for connector ${id}`);
+      process.exit(1);
+    }
+    const inputs: Record<string, unknown> = {};
+    for (let i = 3; i < args.length; i++) {
+      if (args[i] === "--input" && args[i + 1]) {
+        const kv = args[i + 1]!.split("=");
+        if (kv.length >= 2) inputs[kv[0]!] = kv.slice(1).join("=");
+        i++;
+      }
+    }
+    console.log(`running ${id}/${skillId} (runner=${skill.runner})…`);
+    const result = await runSkill(skill, inputs);
+    logSkillRun(skill, result);
+    if (result.ok) {
+      console.log(`✓ ${result.message}`);
+      for (const p of result.outputsWritten) console.log(`  → ${p}`);
+    } else {
+      console.error(`✗ ${result.message}`);
+      process.exit(1);
+    }
+    return;
+  }
   if (sub === "oauth") {
     const id = args[1];
     if (!id) {
@@ -717,6 +778,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
   console.error("  prevail connectors list");
   console.error("  prevail connectors test <id>");
   console.error("  prevail connectors oauth <id>");
+  console.error("  prevail connectors skills <id>                       — list runnable skills");
+  console.error("  prevail connectors run <id> <skill> [--input k=v]   — execute a skill");
   process.exit(1);
 }
 
