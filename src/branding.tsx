@@ -143,8 +143,12 @@ const G: Record<string, Glyph> = {
   ],
 };
 
-const LETTER_GAP = " ";       // within a group ("PREV" → P-R-E-V)
-const GROUP_GAP = "   ";      // between PREV / AI / L
+// Single gap value, applied between every letter — within PREV, within AI,
+// and across the group boundaries. The wordmark reads as ONE word
+// (PREVAIL) with mathematically equal spacing throughout. The AI block
+// still pops because of its cyan color, not because of extra whitespace.
+const LETTER_GAP = " ";
+const GROUP_GAP = LETTER_GAP;
 
 // Compose a group from its letters with single-cell gaps. Returns 5 rows.
 function compose(letters: readonly string[]): readonly string[] {
@@ -183,9 +187,9 @@ function BrandColumn() {
           </text>
         ))}
         <text fg={theme.goldDim}>
-          {"        p r e v   ·   "}
+          {"  p r e v "}
           <span fg={theme.aiAccent}>A I</span>
-          {"   ·   l   —   your AI life cockpit"}
+          {" l   —   your AI life cockpit"}
         </text>
       </box>
     </box>
