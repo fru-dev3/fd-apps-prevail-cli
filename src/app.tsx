@@ -1673,10 +1673,18 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           onPickDomain={(i) => {
             setDomainIdx(i);
             setFocus("domains");
+            // Drop out of any active chat so the user lands directly on
+            // the domain's content instead of seeing whatever chat
+            // session was still open from before.
+            if (mode === "chat") setMode("idle");
           }}
           onPickApp={(i) => {
             setAppIdx(i);
             setFocus("apps");
+            // Same — clicking on an app exits any active chat so the
+            // connector workspace (Overview + Chat) renders immediately
+            // without an extra Escape press.
+            if (mode === "chat") setMode("idle");
           }}
           onNewDomain={() => {
             setFocus("domains");
