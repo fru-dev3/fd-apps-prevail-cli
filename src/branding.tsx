@@ -78,23 +78,30 @@ export function Branding({
 // letters, so each block stays as legible as the original wordmark while
 // the AI section still reads as the distinct visual center.
 // Logo groups, padded to consistent per-group width so the column
-// positions don't jiggle row-to-row. Previously the rows had varying
-// trailing whitespace (V's last row ends earlier than V's top row, etc),
-// which made the AI block visually drift left/right when reading down the
-// wordmark. Now every row of each group is the same width — the spacing
-// between groups is purely GROUP_GAP, evenly applied.
-const PREV_W = 33;
-const AI_W = 11;
-const L_W = 8;
-const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - visibleLen(s)));
+// positions don't jiggle row-to-row.
+//
+// Optical-spacing notes (why we don't just use equal mathematical gaps):
+//   - V's right edge tapers from "██╗" (top) to "═══╝" (bottom). The TOP
+//     visually leaves more whitespace on the right side than the bottom,
+//     so a fixed gap reads as too-tight at the bottom and too-loose at top.
+//   - A's left edge starts with a leading space on the top row, then
+//     fills the full width on subsequent rows — opposite of V.
+//   - I is a narrow letter (3 cells wide) sitting next to L which starts
+//     wide ("██╗") at the top.
+//
+// We compensate by:
+//   1. Padding each group's right edge with trailing whitespace so the
+//      starting column of the NEXT group is always the same.
+//   2. Using a generous GROUP_GAP (3 spaces) so any row-to-row variance
+//      inside a letter is dominated by the inter-group whitespace, which
+//      is what the eye actually uses to judge spacing.
+//   3. Adding a single leading space inside the AI group so the optical
+//      left edge of "A" aligns with the right edge of V's widest column.
 
-// Cheap visible-length count — chars only (ANSI Shadow blocks are all
-// single-cell in monospace), so we don't need full grapheme handling.
-function visibleLen(s: string): number {
-  // Strip nothing; the strings have no ANSI escapes. length is sufficient.
-  return s.length;
-}
+const pad = (s: string, w: number) =>
+  s + " ".repeat(Math.max(0, w - s.length));
 
+// PREV — pad to the width of the WIDEST row so the right edge is flush.
 const LOGO_PREV_RAW = [
   "██████╗ ██████╗ ███████╗██╗   ██╗",
   "██╔══██╗██╔══██╗██╔════╝██║   ██║",
@@ -103,29 +110,39 @@ const LOGO_PREV_RAW = [
   "██║     ██║  ██║███████╗ ╚████╔╝",
   "╚═╝     ╚═╝  ╚═╝╚══════╝  ╚═══╝",
 ] as const;
+const PREV_W = Math.max(...LOGO_PREV_RAW.map((r) => r.length));
+
+// AI — leading space gives optical centering between V (whose right edge
+// is widest at the top) and the A's left edge (which is widest in the
+// middle). Pad right edge to the widest row.
 const LOGO_AI_RAW = [
-  " █████╗ ██╗",
-  "██╔══██╗██║",
-  "███████║██║",
-  "██╔══██║██║",
-  "██║  ██║██║",
-  "╚═╝  ╚═╝╚═╝",
+  "  █████╗ ██╗",
+  " ██╔══██╗██║",
+  " ███████║██║",
+  " ██╔══██║██║",
+  " ██║  ██║██║",
+  " ╚═╝  ╚═╝╚═╝",
 ] as const;
+const AI_W = Math.max(...LOGO_AI_RAW.map((r) => r.length));
+
+// L — keep narrow; the user reads "L" cleanly regardless of trailing.
 const LOGO_L_RAW = [
-  "██╗",
-  "██║",
-  "██║",
-  "██║",
+  "██╗     ",
+  "██║     ",
+  "██║     ",
+  "██║     ",
   "███████╗",
   "╚══════╝",
 ] as const;
+const L_W = Math.max(...LOGO_L_RAW.map((r) => r.length));
+
 const LOGO_PREV = LOGO_PREV_RAW.map((r) => pad(r, PREV_W));
 const LOGO_AI = LOGO_AI_RAW.map((r) => pad(r, AI_W));
 const LOGO_L = LOGO_L_RAW.map((r) => pad(r, L_W));
-// Even gap between the three groups. With each group now consistently
-// padded, this becomes the ONLY horizontal whitespace between letters,
-// so PREV→AI and AI→L are visually identical.
-const GROUP_GAP = "  ";
+
+// 3-space gap between groups. Big enough that letter-shape variance
+// within a group never bleeds visually into the next group.
+const GROUP_GAP = "   ";
 
 function BrandColumn() {
   // Render each row as three spans: PREV (gold) — gap — AI (cyan) — gap —
