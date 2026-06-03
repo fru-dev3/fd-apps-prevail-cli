@@ -312,12 +312,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     }
 
     if (mode === "chat") {
+      // Up/Down in chat mode previously just changed the index but KEPT
+      // the chat pane visible — so users navigating to a new app from
+      // chat had to press Escape before seeing the app workspace. Now
+      // arrow nav drops out of chat so the user lands directly on the
+      // new selection's content. Explicit chat re-entry is one click (or
+      // enter) — much less friction than the constant escape-loop.
       if (name === "up") {
+        setMode("idle");
         if (focus === "apps") setAppIdx((s) => Math.max(0, s - 1));
         else setDomainIdx((s) => Math.max(0, s - 1));
         return;
       }
       if (name === "down") {
+        setMode("idle");
         if (focus === "apps") setAppIdx((s) => Math.min(apps.length - 1, s + 1));
         else setDomainIdx((s) => Math.min(domains.length - 1, s + 1));
         return;

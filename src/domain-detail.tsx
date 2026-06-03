@@ -1,4 +1,5 @@
 import type React from "react";
+import { useEffect, useRef, useState } from "react";
 import { theme } from "./theme.ts";
 import {
   formatRelativeTime,
@@ -9,6 +10,7 @@ import {
   type ViewKey,
 } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
+import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 
 interface Props {
   domain: Domain | null;
@@ -51,8 +53,12 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
       bottomTitleAlignment="left"
     >
       {topBar}
-      <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-        {view === "skills" ? (
+      {/* Skills tab keeps its dedicated list. State / loops / quickstart /
+          prompts all get the split layout: content on top, embedded chat
+          below — so users land on the domain ready to ask questions
+          without navigating anywhere else. */}
+      {view === "skills" ? (
+        <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
           <SkillsList
             skills={domain.skills}
             selectedIdx={skillIdx}
@@ -60,11 +66,123 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
             apps={apps}
             domainName={domain.name}
           />
-        ) : (
-          <scrollbox flexGrow={1} scrollY>
-            {renderMarkdownLines(readDomainView(domain, view))}
-          </scrollbox>
+        </box>
+      ) : (
+        <box flexDirection="column" flexGrow={1}>
+          {/* Top: markdown content from the active view */}
+          <box paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={0} flexBasis={12}>
+            <scrollbox flexGrow={1} scrollY>
+              {renderMarkdownLines(readDomainView(domain, view))}
+            </scrollbox>
+          </box>
+          <box paddingLeft={2} paddingRight={2}>
+            <text fg={theme.border}>{"─".repeat(80)}</text>
+          </box>
+          <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingBottom={1}>
+            <DomainChat domain={domain} />
+          </box>
+        </box>
+      )}
+    </box>
+  );
+}
+
+// Embedded chat scoped to this life domain. Same pattern as the connector
+// workspace's ConnectorChat — owns its own message history, spawns a
+// runChatTurn streaming reply, and tells the LLM to use ONLY this domain's
+// folder as context.
+function DomainChat({ domain }: { domain: Domain }) {
+  type ChatLine = { role: "user" | "assistant"; content: string; ts: number };
+  const [history, setHistory] = useState<ChatLine[]>([]);
+  const [pending, setPending] = useState(false);
+  const [streamBuf, setStreamBuf] = useState("");
+  const [cli, setCli] = useState<AvailableCli | null>(null);
+  const inputRef = useRef<any>(null);
+
+  useEffect(() => {
+    setHistory([]);
+    setPending(false);
+    setStreamBuf("");
+  }, [domain.name]);
+
+  useEffect(() => {
+    let cancelled = false;
+    detectClis().then((list) => {
+      if (cancelled || list.length === 0) return;
+      const claude = list.find((c) => c.kind === "claude");
+      setCli(claude ?? list[0]!);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const send = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || pending) return;
+    if (!cli) {
+      setHistory((h) => [...h, { role: "assistant", content: "(no CLI detected)", ts: Date.now() }]);
+      return;
+    }
+    setHistory((h) => [...h, { role: "user", content: trimmed, ts: Date.now() }]);
+    inputRef.current?.setText?.("");
+    setPending(true);
+    setStreamBuf("");
+    const prompt = `You are helping with the "${domain.name}" life domain in a personal-AI cockpit called prevAIl. The vault domain folder is ${domain.path}. Start by reading state.md if you need context. Use ONLY this domain's folder — do not read other domains or connectors.\n\nUser question: ${trimmed}`;
+    runChatTurn({
+      prompt,
+      cwd: domain.path,
+      cli,
+      model: "",
+      isFirst: true,
+      bare: true,
+      onChunk: (delta) => setStreamBuf((s) => s + delta),
+    })
+      .then((reply) => setHistory((h) => [...h, { role: "assistant", content: reply, ts: Date.now() }]))
+      .catch((err: Error) => setHistory((h) => [...h, { role: "assistant", content: `(error: ${err.message})`, ts: Date.now() }]))
+      .finally(() => {
+        setPending(false);
+        setStreamBuf("");
+      });
+  };
+
+  return (
+    <box flexDirection="column" flexGrow={1}>
+      <box flexDirection="row" height={1}>
+        <text fg={theme.aiAccent} attributes={1}>💬 Chat with {domain.name}</text>
+        <text fg={theme.fgFaint}>{`   ·   ${cli?.label ?? "no engine"}   ·   scope: this domain's vault folder`}</text>
+      </box>
+      <scrollbox flexGrow={1} scrollY>
+        {history.length === 0 && !pending && (
+          <>
+            <text fg={theme.fgFaint}>{`  ask anything about ${domain.name}. try:`}</text>
+            <text fg={theme.fgDim}>{`    › what should I work on first?`}</text>
+            <text fg={theme.fgDim}>{`    › what's changed in state.md recently?`}</text>
+            <text fg={theme.fgDim}>{`    › walk me through the open loops`}</text>
+          </>
         )}
+        {history.map((m, i) => (
+          <box key={i} flexDirection="column" paddingTop={1}>
+            <text fg={m.role === "user" ? theme.gold : theme.fgDim}>
+              {m.role === "user" ? "  › " : "  ▸ "}
+              <span fg={theme.fg}>{m.content}</span>
+            </text>
+          </box>
+        ))}
+        {pending && (
+          <box flexDirection="column" paddingTop={1}>
+            <text fg={theme.fgDim}>{"  ▸ "}<span fg={theme.fg}>{streamBuf || "…"}</span></text>
+          </box>
+        )}
+      </scrollbox>
+      <box flexDirection="row" height={3} border borderColor={theme.aiAccent} paddingLeft={1} paddingRight={1}>
+        <text fg={pending ? theme.fgFaint : theme.aiAccent}>{`› `}</text>
+        <input
+          ref={inputRef}
+          flexGrow={1}
+          placeholder={pending ? "thinking…" : `ask about ${domain.name}…`}
+          backgroundColor={theme.bgPanel}
+          textColor={theme.fg}
+          onSubmit={((next: string) => send(next)) as any}
+        />
       </box>
     </box>
   );

@@ -38,7 +38,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={7}
+      height={9}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -87,60 +87,69 @@ export function Branding({
 // minimum 2-cell strokes so the cyan AI block carries weight against
 // PREV+L in gold.
 
-type Glyph = readonly [string, string, string, string, string];
+type Glyph = readonly [string, string, string, string, string, string];
 
-// 5-wide × 5-tall block letters, uniform per-character. Each row is
-// exactly 5 cells. Whitespace cells stay as " " so the bounding box is
-// preserved.
+// 8-wide × 6-tall uniform block letters. The previous 5×5 grid felt
+// small relative to the banner's horizontal space — the user wanted the
+// wordmark to actually USE the top of the screen, not float in it. Each
+// letter still occupies an identical bounding box so spacing remains
+// mathematically perfect, just at a more substantial scale.
 const G: Record<string, Glyph> = {
   P: [
-    "████ ",
-    "█  █ ",
-    "████ ",
-    "█    ",
-    "█    ",
+    "███████ ",
+    "███  ██ ",
+    "███  ██ ",
+    "███████ ",
+    "███     ",
+    "███     ",
   ],
   R: [
-    "████ ",
-    "█  █ ",
-    "████ ",
-    "█ █  ",
-    "█  █ ",
+    "███████ ",
+    "███  ██ ",
+    "███  ██ ",
+    "███████ ",
+    "███ ██  ",
+    "███  ██ ",
   ],
   E: [
-    "█████",
-    "█    ",
-    "████ ",
-    "█    ",
-    "█████",
+    "████████",
+    "███     ",
+    "█████   ",
+    "█████   ",
+    "███     ",
+    "████████",
   ],
   V: [
-    "█   █",
-    "█   █",
-    "█   █",
-    " █ █ ",
-    "  █  ",
+    "██    ██",
+    "██    ██",
+    "██    ██",
+    "██    ██",
+    " ██  ██ ",
+    "  ████  ",
   ],
   A: [
-    "  █  ",
-    " █ █ ",
-    "█████",
-    "█   █",
-    "█   █",
+    "  ████  ",
+    " ██  ██ ",
+    "██    ██",
+    "████████",
+    "██    ██",
+    "██    ██",
   ],
   I: [
-    "█████",
-    "  █  ",
-    "  █  ",
-    "  █  ",
-    "█████",
+    "████████",
+    "  ████  ",
+    "  ████  ",
+    "  ████  ",
+    "  ████  ",
+    "████████",
   ],
   L: [
-    "█    ",
-    "█    ",
-    "█    ",
-    "█    ",
-    "█████",
+    "███     ",
+    "███     ",
+    "███     ",
+    "███     ",
+    "███     ",
+    "████████",
   ],
 };
 
@@ -151,12 +160,12 @@ const G: Record<string, Glyph> = {
 const LETTER_GAP = " ";
 const GROUP_GAP = LETTER_GAP;
 
-// Compose a group from its letters with single-cell gaps. Returns 5 rows.
+// Compose a group from its letters with single-cell gaps. Returns 6 rows.
 function compose(letters: readonly string[]): readonly string[] {
-  const rows: string[] = ["", "", "", "", ""];
+  const rows: string[] = ["", "", "", "", "", ""];
   for (let i = 0; i < letters.length; i++) {
     const g = G[letters[i]!]!;
-    for (let r = 0; r < 5; r++) {
+    for (let r = 0; r < 6; r++) {
       rows[r] += g[r];
       if (i < letters.length - 1) rows[r] += LETTER_GAP;
     }

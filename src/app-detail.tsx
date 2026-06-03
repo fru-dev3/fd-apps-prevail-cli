@@ -322,6 +322,24 @@ function ConnectorCompactSummary({ app, skillsCount }: { app: AppSkill; skillsCo
     effectiveStatus === "error" || effectiveStatus === "expired" ? theme.warn :
     theme.fgDim;
 
+  // Pull the auth_check kind for the "how do we connect" line — uses
+  // whichever the manifest declared (env-keys, http, command, mcp, file-
+  // exists, manual). When no auth_check is present we say so explicitly.
+  const authSpec = app.authCheck as AuthCheckSpec | undefined;
+  const authMechanism = authSpec
+    ? authMechanismLabel(authSpec)
+    : "no auth_check declared in manifest";
+  // "Working" = the live probe says OK. We distinguish "configured but
+  // not tested" (status comes from connection-status.json) from "tested
+  // and live" (status comes from this session's probe).
+  const isLive = probe?.status === "connected";
+  const workingLabel = isLive ? "yes (live probe)"
+    : probe?.status === "expired" ? "no — auth expired"
+    : probe?.status === "error" ? `no — ${probe.message ?? "error"}`
+    : probe?.status === "not-configured" ? "no — not configured"
+    : probing ? "checking…"
+    : "unknown";
+
   return (
     <box flexDirection="column">
       {!manifest && (
@@ -340,15 +358,31 @@ function ConnectorCompactSummary({ app, skillsCount }: { app: AppSkill; skillsCo
           {scaffoldNote && <text fg={scaffoldNote.startsWith("✓") ? theme.ok : theme.warn}>{"  " + scaffoldNote}</text>}
         </box>
       )}
+      {/* Title row */}
       <box flexDirection="row" height={1}>
         <text fg={theme.gold} attributes={1}>{app.title}</text>
-        <text fg={theme.fgDim}>{`  ·  ${integrationLabel[integration] ?? integration}`}</text>
+        <text fg={theme.fgFaint}>{`   id: ${app.id}`}</text>
       </box>
+      <text> </text>
+      {/* The key questions the user asked to see. Each is its own labeled
+          row so they scan at a glance. Labels are right-aligned to 14
+          chars so the values line up vertically. */}
+      <ConnRow label="kind"        value={integrationLabel[integration] ?? integration} valueFg={theme.fg} />
+      <ConnRow label="how"         value={authMechanism}                                  valueFg={theme.fgDim} />
+      <ConnRow label="status"      value={probing ? "⠋ probing…" : statusGlyph}            valueFg={statusFg} />
+      <ConnRow label="working"     value={workingLabel}                                   valueFg={isLive ? theme.ok : theme.fgDim} />
+      <ConnRow label="last probe"  value={probe?.ts ? formatRelativeTime(probe.ts) : "never"} valueFg={theme.fgFaint} />
+      {probe?.message && (
+        <ConnRow label="detail" value={probe.message} valueFg={probe.ok ? theme.fgDim : theme.warn} />
+      )}
+      {probe?.fixHint && (
+        <ConnRow label="fix" value={probe.fixHint} valueFg={theme.aiAccent} />
+      )}
+      <ConnRow label="skills"      value={`${skillsCount} runnable${skillsCount > 0 ? "  ·  Skills tab to run" : ""}`} valueFg={theme.fg} />
+      <ConnRow label="domains"     value={app.domains.length === 0 ? "(none)" : app.domains.join(", ")} valueFg={theme.fg} />
+      <text> </text>
+      {/* Action row */}
       <box flexDirection="row" height={1}>
-        <text fg={statusFg}>{probing ? "⠋ probing…" : statusGlyph}</text>
-        <text fg={theme.fgFaint}>{probe?.message ? `  ·  ${probe.message}` : ""}</text>
-      </box>
-      <box flexDirection="row" height={1} paddingTop={0}>
         <box
           paddingLeft={1}
           paddingRight={1}
@@ -356,12 +390,69 @@ function ConnectorCompactSummary({ app, skillsCount }: { app: AppSkill; skillsCo
           borderColor={theme.aiAccent}
           onMouseDown={runProbe}
         >
-          <text fg={theme.aiAccent} attributes={1}>{probing ? " ⠋ … " : " ⟳ Test "}</text>
+          <text fg={theme.aiAccent} attributes={1}>{probing ? " ⠋ testing… " : " ⟳ Test Connection "}</text>
         </box>
-        <text fg={theme.fgFaint}>{`     ${skillsCount} skill${skillsCount === 1 ? "" : "s"} (Skills tab to run)  ·  domains: ${app.domains.length === 0 ? "(none)" : app.domains.join(", ")}`}</text>
       </box>
     </box>
   );
+}
+
+// Labeled key/value row — keeps every connection field aligned for fast
+// scanning. Label is dim, value uses whatever fg the caller passed.
+function ConnRow({
+  label,
+  value,
+  valueFg,
+}: {
+  label: string;
+  value: string;
+  valueFg: string;
+}) {
+  return (
+    <box flexDirection="row" height={1}>
+      <text fg={theme.fgFaint}>{`  ${label.padEnd(12)}`}</text>
+      <text fg={valueFg}>{value}</text>
+    </box>
+  );
+}
+
+// Plain-language description of HOW the connector authenticates, derived
+// from the auth_check block. The Auth tab has the deep explanation; this
+// shows up on the Overview as a single-line summary so the user sees
+// "Bearer token from GH_TOKEN env var" at a glance.
+function authMechanismLabel(spec: AuthCheckSpec): string {
+  switch (spec.kind) {
+    case "env-keys": {
+      const keys = spec.env_keys ?? [];
+      if (keys.length === 0) return "env vars (none declared)";
+      const present = keys.filter((k) => process.env[k]);
+      return `env vars: ${keys.join(", ")}  (${present.length}/${keys.length} set)`;
+    }
+    case "file-exists": {
+      const files = spec.files ?? [];
+      if (files.length === 0) return "file present (none declared)";
+      const home = process.env.HOME ?? "~";
+      return `file: ${files[0]!.replace(home, "~")}${files.length > 1 ? ` +${files.length - 1}` : ""}`;
+    }
+    case "http": {
+      const scheme = spec.auth_header_scheme ?? "Bearer";
+      return spec.auth_header_env
+        ? `${scheme} token from ${spec.auth_header_env}`
+        : `HTTP GET ${spec.url}`;
+    }
+    case "command":
+      return `spawn ${spec.command}${spec.command_args?.length ? " " + spec.command_args.join(" ") : ""}`;
+    case "mcp":
+      return spec.mcp_command
+        ? `MCP server: ${spec.mcp_command}`
+        : `MCP over HTTP: ${spec.mcp_url ?? "(unset)"}`;
+    case "manual":
+      return spec.freshness_file
+        ? `manual · watch ${spec.freshness_file}`
+        : "manual setup (see Auth tab for steps)";
+    default:
+      return "(unknown auth kind)";
+  }
 }
 
 // Embedded chat scoped to the connector's data. Lightweight — has its own
