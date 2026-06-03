@@ -385,18 +385,24 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     } else if (name === "left" || name === "h") {
       if (focus === "domains") setViewIdx((v) => (v - 1 + VIEW_ORDER.length) % VIEW_ORDER.length);
     } else if (name === "return" || name === "enter") {
-      if (focus === "apps" && app) openChatForApp(app);
-      else if (onSkillsTab && skills.length > 0) {
+      // Enter no longer auto-opens a separate chat pane for apps/domains —
+      // the connector workspace (and domain detail) both have embedded
+      // chat in their layout, so opening a second chat pane left the
+      // user staring at it and needing Escape to see the workspace they
+      // were trying to reach. Enter on a skill still opens its dedicated
+      // chat because skills don't have the embedded-chat workspace.
+      if (onSkillsTab && skills.length > 0) {
         const sk = skills[skillIdx];
         if (sk) openChatForSkill(sk);
-      } else if (focus === "domains" && domain) openChatForDomain(domain);
+      }
     } else if (name === "r") {
       doRefresh();
     } else if (name === "n") {
       setMode("new-domain");
     } else if (name === "c") {
-      if (focus === "apps" && app) openChatForApp(app);
-      else if (domain) openChatForDomain(domain);
+      // 'c' previously force-opened a separate full-pane chat. With the
+      // embedded chat now in every workspace, this just bounces the user
+      // into a redundant view. No-op — the chat input is already onscreen.
     } else if (name === "e") {
       doEdit();
     } else if (name >= "1" && name <= "5") {
