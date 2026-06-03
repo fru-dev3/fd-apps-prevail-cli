@@ -1,6 +1,6 @@
 import type React from "react";
 import { useEffect, useState } from "react";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { theme } from "./theme.ts";
 import {
@@ -165,6 +165,74 @@ function SkillsList({
 // Domains, Chat hint) that surface the metadata up front before the body
 // content. This is the "click on US Bank, see how it connects + what
 // skills it exposes + which domains consume it" view.
+// Detect whether this app has a real manifest.json. Vault apps (the ones
+// the user authored over time as ~/.ai/vault/apps/*) typically don't —
+// they predate the connector redesign. We use this to gate the tabs so
+// they show helpful guidance instead of empty panels.
+function hasManifest(app: AppSkill): boolean {
+  return !!app.manifestPath && existsSync(app.manifestPath);
+}
+
+// Human-language explanation of what each integration type actually means.
+// Shown in the Auth tab so the user understands WHAT THE CONNECTION IS
+// before they're asked to set it up.
+function integrationExplain(kind: string): string {
+  switch (kind) {
+    case "api":
+      return "    REST or GraphQL API. prevAIl reads stored API keys from env vars (e.g. PLAID_SECRET) and calls the service directly. Best for services with first-party developer APIs.";
+    case "oauth":
+      return "    OAuth 2.0 (usually with PKCE). prevAIl runs the consent flow once, stores a refresh token at ~/.prevail/connectors/<id>/auth/refresh.token, then mints access tokens as needed. Best for Google services, GitHub Apps, Notion, Linear.";
+    case "browser":
+      return "    Browser automation via Playwright against your logged-in session. No API key — prevAIl uses Chrome cookies. Best for services WITHOUT public APIs (LinkedIn, most bank portals, AppFolio, real-estate sites).";
+    case "mcp":
+      return "    Wrapped via a local MCP server binary on your PATH. prevAIl spawns the server and calls its tools. Best for services with an existing MCP wrapper (Google Calendar, Filesystem, Slack).";
+    case "a2a":
+      return "    Agent-to-agent — another prevAIl-compatible agent on your network (Paperclip on Mac mini, Khoj instance). Uses MCP over HTTP/WS. Allowlisted by fingerprint.";
+    case "manual":
+      return "    Manual integration. You drop files into a watched folder, or paste data into a state.md. prevAIl reads them. Best when no programmatic integration exists yet.";
+    default:
+      return "    Unknown integration type.";
+  }
+}
+
+// Action: write a starter manifest.json into the app's folder. Idempotent —
+// won't overwrite an existing one. Inferred fields use safe defaults the
+// user can edit immediately.
+function scaffoldManifest(app: AppSkill): { ok: boolean; message: string; path?: string } {
+  const target = join(app.path, "manifest.json");
+  if (existsSync(target)) {
+    return { ok: false, message: "manifest.json already exists — not overwriting", path: target };
+  }
+  const skeleton = {
+    id: app.id,
+    name: app.title || app.id,
+    description: app.description || "",
+    domains: app.domains.length > 0 ? app.domains : [],
+    integration: "manual",
+    connection:
+      "Describe how this app connects in one paragraph. Examples: REST API + stored key, OAuth + refresh token, Playwright session against a logged-in browser, MCP server binary, A2A endpoint on another machine.",
+    auth_check: {
+      kind: "manual",
+      manual_steps: [
+        "1. Document the exact setup steps here so future-you can re-link.",
+        "2. If env vars are needed, list them.",
+        "3. If a session file is involved, note its path.",
+      ],
+    },
+  };
+  try {
+    writeFileSync(target, JSON.stringify(skeleton, null, 2));
+  } catch (err) {
+    return { ok: false, message: `write failed: ${(err as Error).message}` };
+  }
+  // Also scaffold the skills/ dir so the Skills tab has somewhere to look.
+  const skillsDir = join(app.path, "skills");
+  if (!existsSync(skillsDir)) {
+    try { mkdirSync(skillsDir); } catch { /* best-effort */ }
+  }
+  return { ok: true, message: `manifest scaffolded`, path: target };
+}
+
 function ConnectorOverview({ app, skillsCount }: { app: AppSkill; skillsCount?: number }) {
   const integrationLabel: Record<string, string> = {
     api: "REST/GraphQL API · stored key",
@@ -222,8 +290,50 @@ function ConnectorOverview({ app, skillsCount }: { app: AppSkill; skillsCount?: 
     : app.lastSuccessTs
       ? formatRelativeTime(app.lastSuccessTs)
       : "never";
+  const manifest = hasManifest(app);
+  const [scaffoldNote, setScaffoldNote] = useState<string | null>(null);
+  const onScaffold = () => {
+    const r = scaffoldManifest(app);
+    setScaffoldNote(r.ok ? `✓ ${r.message} → ${r.path}` : `✗ ${r.message}`);
+  };
   return (
     <box flexDirection="column">
+      {!manifest && (
+        <>
+          <box
+            flexDirection="column"
+            border
+            borderColor={theme.warn}
+            paddingLeft={1}
+            paddingRight={1}
+            paddingTop={0}
+            paddingBottom={0}
+          >
+            <text fg={theme.warn} attributes={1}>⚠ No manifest.json yet</text>
+            <text fg={theme.fgDim}>
+              {`  This app hasn't been redesigned for the v0.6 connector workspace.`}
+            </text>
+            <text fg={theme.fgDim}>
+              {`  Without a manifest, prevAIl can't probe auth, run skills, or sync data.`}
+            </text>
+            <text> </text>
+            <box
+              flexDirection="row"
+              paddingLeft={1}
+              paddingRight={1}
+              border={["left", "right"]}
+              borderColor={theme.aiAccent}
+              onMouseDown={onScaffold}
+            >
+              <text fg={theme.aiAccent} attributes={1}>{" ⊕ Scaffold manifest.json "}</text>
+            </box>
+            {scaffoldNote && (
+              <text fg={scaffoldNote.startsWith("✓") ? theme.ok : theme.warn}>{"  " + scaffoldNote}</text>
+            )}
+          </box>
+          <text> </text>
+        </>
+      )}
       <text fg={theme.gold} attributes={1}>▸ Connection</text>
       <text fg={theme.fgDim}>{"  type:   "}<span fg={theme.fg}>{integrationLabel[integration]}</span></text>
       <text fg={theme.fgDim}>
@@ -280,15 +390,29 @@ function ConnectorOverview({ app, skillsCount }: { app: AppSkill; skillsCount?: 
 }
 
 // Auth tab — environment vars + files the connector needs, with check marks.
+// Honest about what's missing when no auth_check is declared.
 function ConnectorAuthPanel({ app }: { app: AppSkill }) {
   const spec = app.authCheck as AuthCheckSpec | undefined;
+  const manifest = hasManifest(app);
   return (
     <box flexDirection="column">
-      <text fg={theme.gold} attributes={1}>▸ Authentication</text>
+      <text fg={theme.gold} attributes={1}>▸ How does {app.title} connect?</text>
       <text> </text>
-      <text fg={theme.fgDim}>{"  integration: "}<span fg={theme.fg}>{app.integration ?? "manual"}</span></text>
-      {!spec && (
-        <text fg={theme.fgFaint}>{"  no auth_check declared in manifest — see docs/connector-architecture.md"}</text>
+      <text fg={theme.fgDim}>{"  integration type: "}<span fg={theme.fg}>{app.integration ?? "(undeclared)"}</span></text>
+      <text> </text>
+      <text fg={theme.fgDim}>{"  What that means:"}</text>
+      <text fg={theme.fgFaint}>{integrationExplain(app.integration ?? "manual")}</text>
+      <text> </text>
+      {!manifest && (
+        <text fg={theme.warn}>{"  ⚠ no manifest.json — scaffold one on the Overview tab to enable auth + skills"}</text>
+      )}
+      {manifest && !spec && (
+        <>
+          <text fg={theme.warn}>{"  ⚠ manifest exists but no auth_check declared"}</text>
+          <text fg={theme.fgFaint}>{"  Edit manifest.json and add an auth_check block. See examples in:"}</text>
+          <text fg={theme.fgFaint}>{"    apps/community/{plaid,github,linkedin,youtube-analytics,google-calendar}/manifest.json"}</text>
+          <text fg={theme.fgFaint}>{"  Full spec at docs/connector-architecture.md"}</text>
+        </>
       )}
       {spec?.kind === "env-keys" && (
         <>

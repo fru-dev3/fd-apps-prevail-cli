@@ -77,15 +77,33 @@ export function Branding({
 // word. We only add space BETWEEN the groups, not between individual
 // letters, so each block stays as legible as the original wordmark while
 // the AI section still reads as the distinct visual center.
-const LOGO_PREV = [
+// Logo groups, padded to consistent per-group width so the column
+// positions don't jiggle row-to-row. Previously the rows had varying
+// trailing whitespace (V's last row ends earlier than V's top row, etc),
+// which made the AI block visually drift left/right when reading down the
+// wordmark. Now every row of each group is the same width — the spacing
+// between groups is purely GROUP_GAP, evenly applied.
+const PREV_W = 33;
+const AI_W = 11;
+const L_W = 8;
+const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - visibleLen(s)));
+
+// Cheap visible-length count — chars only (ANSI Shadow blocks are all
+// single-cell in monospace), so we don't need full grapheme handling.
+function visibleLen(s: string): number {
+  // Strip nothing; the strings have no ANSI escapes. length is sufficient.
+  return s.length;
+}
+
+const LOGO_PREV_RAW = [
   "██████╗ ██████╗ ███████╗██╗   ██╗",
   "██╔══██╗██╔══██╗██╔════╝██║   ██║",
   "██████╔╝██████╔╝█████╗  ██║   ██║",
   "██╔═══╝ ██╔══██╗██╔══╝  ╚██╗ ██╔╝",
-  "██║     ██║  ██║███████╗ ╚████╔╝ ",
-  "╚═╝     ╚═╝  ╚═╝╚══════╝  ╚═══╝  ",
+  "██║     ██║  ██║███████╗ ╚████╔╝",
+  "╚═╝     ╚═╝  ╚═╝╚══════╝  ╚═══╝",
 ] as const;
-const LOGO_AI = [
+const LOGO_AI_RAW = [
   " █████╗ ██╗",
   "██╔══██╗██║",
   "███████║██║",
@@ -93,17 +111,21 @@ const LOGO_AI = [
   "██║  ██║██║",
   "╚═╝  ╚═╝╚═╝",
 ] as const;
-const LOGO_L = [
-  "██╗     ",
-  "██║     ",
-  "██║     ",
-  "██║     ",
+const LOGO_L_RAW = [
+  "██╗",
+  "██║",
+  "██║",
+  "██║",
   "███████╗",
   "╚══════╝",
 ] as const;
-// Gap between groups. Three spaces is enough to make AI read as a distinct
-// visual center without breaking the wordmark into floating fragments.
-const GROUP_GAP = "   ";
+const LOGO_PREV = LOGO_PREV_RAW.map((r) => pad(r, PREV_W));
+const LOGO_AI = LOGO_AI_RAW.map((r) => pad(r, AI_W));
+const LOGO_L = LOGO_L_RAW.map((r) => pad(r, L_W));
+// Even gap between the three groups. With each group now consistently
+// padded, this becomes the ONLY horizontal whitespace between letters,
+// so PREV→AI and AI→L are visually identical.
+const GROUP_GAP = "  ";
 
 function BrandColumn() {
   // Render each row as three spans: PREV (gold) — gap — AI (cyan) — gap —
