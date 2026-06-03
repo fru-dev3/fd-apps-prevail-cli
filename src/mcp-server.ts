@@ -4,6 +4,7 @@ import { detectClis, runChatTurn } from "./cli-bridge.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
+import { VERSION } from "./version.ts";
 
 // Minimal MCP server (Model Context Protocol). Speaks JSON-RPC 2.0 over
 // stdio — the standard transport every MCP client (Claude Desktop, Cursor,
@@ -41,9 +42,7 @@ interface McpTool {
 
 const SERVER_INFO = {
   name: "prevail",
-  // Tracks the binary version. We don't auto-import package.json here so
-  // the MCP server stays light; bump manually when prevAIl ships a major.
-  version: "0.5.0",
+  version: VERSION,
 };
 
 const PROTOCOL_VERSION = "2024-11-05";

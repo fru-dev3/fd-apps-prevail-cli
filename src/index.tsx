@@ -842,7 +842,8 @@ async function main() {
     return;
   }
   if (args.version) {
-    console.log("prevail 0.6.0");
+    const { VERSION } = await import("./version.ts");
+    console.log(`prevail ${VERSION}`);
     return;
   }
   if (args.doctor) {

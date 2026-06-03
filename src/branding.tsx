@@ -1,4 +1,5 @@
 import { theme } from "./theme.ts";
+import { VERSION } from "./version.ts";
 
 interface Props {
   domainCount: number;
@@ -273,7 +274,7 @@ function StatusColumn({
         </text>
       </box>
       <text fg={theme.fgDim}>
-        {timeLabel}  ·  prevail  ·  opentui · zig core
+        {`${timeLabel}  ·  prevail v${VERSION}  ·  opentui`}
       </text>
       <text> </text>
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
