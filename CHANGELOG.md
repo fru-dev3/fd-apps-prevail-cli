@@ -7,6 +7,59 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.6.0] — 2026-06-03 · connectors are workspaces, not manifests
+
+Apps stop being passive manifest viewers and become **live workspaces**. Clicking any connector now lands you on a `Overview + Chat` page: connection status at the top, a working chat with the connector's data right below. No more "click Skills to find anything."
+
+### Added — Tabbed connector workspace
+Every app now has its own 5-tab workspace:
+- **`Overview + Chat`** — compact connection card on top, live chat scoped to this connector below. Per-app starter prompts ("what was my biggest spend last month?" for Plaid, "which PR has been open longest?" for GitHub). Streaming responses.
+- **`Auth`** — env vars / files with ☑/☐ live check marks + a plain-language explanation of what each integration type (`api`/`oauth`/`browser`/`mcp`/`a2a`/`manual`) actually means.
+- **`Sync`** — scheduled skills with their cron expressions.
+- **`Skills`** — runnable skills with `▶ Run` buttons + inline streaming results.
+- **`Data`** — file tree under `<connector>/data/` with sizes + mtimes.
+
+Connector workspace replaces the domain-style `state | loops | quickstart | prompts | skills` tabs when viewing an app — apps are connectors, not life domains, so the navigation now matches the mental model.
+
+### Added — Skill execution layer (`src/connector-skills.ts`)
+Each skill is one markdown file under `<connector>/skills/<id>.md` with YAML frontmatter declaring runner type, trigger, auth requirements, inputs, and outputs.
+
+**LLM runner** (the leveraged 80% case): spawns a panelist CLI with the skill description + scoped env + inputs. Most flexible runner type — covers everything from "list institutions" to "monthly receipts" without writing imperative HTTP/browser/MCP code.
+
+Security guards:
+- Output paths confined to `<connector>/data/` (no `../` escape)
+- `buildSkillEnv()` starts from `scrubbedEnv()`, adds back **only** the auth keys the skill explicitly declared
+- `${input.x}` / `${env.X}` substitution is strict — unknown vars throw
+- chmod 0600 on every written output
+- Per-skill log under `<connector>/_log/`
+
+### Added — Skills shipped per connector
+| Connector | Skills | Runner |
+|---|---|---|
+| github | `pr-queue`, `repo-stars-trend` | ✅ llm (runnable today) |
+| plaid | `list-institutions`, `recent-transactions` | ✅ llm (runnable today) |
+| youtube-analytics | `channel-metrics` | ✅ llm (runnable after OAuth) |
+| linkedin | `profile-views` | ⚠ stub — browser runner ships in v0.6.x |
+| google-calendar | `today-events` | ⚠ stub — MCP runner ships in v0.6.x |
+
+### Added — Connector CLI commands
+```bash
+prevail connectors skills <id>                   # list runnable skills
+prevail connectors run <id> <skill> --input k=v  # execute a skill
+```
+
+### Added — Manifest scaffolding for vault apps
+Vault apps (the ones authored before this redesign, no `manifest.json`) now show a yellow `⚠ No manifest yet` panel with a `⊕ Scaffold` button. One click writes a starter `manifest.json` + empty `skills/` dir into the app folder, idempotently.
+
+### Added — Architecture doc
+`docs/connector-architecture.md` lays out the full 7-phase plan: skill schema + LLM runner (this release), API runner, tabbed workspace (this release), connector-scoped chat (this release), sync orchestration, browser runner, A2A as MCP-over-network.
+
+### Fixed
+- **Wordmark spacing** — every row of PREV / AI / L is now padded to the widest row in its group, leading space added inside AI to compensate for V's tapered right edge, GROUP_GAP bumped to 3 spaces. AI no longer looks clumped against PREV.
+- **Connector workspace was nested inside the Skills tab** — apps now own the entire pane; domain-style tabs (`state | loops | quickstart`) are no longer shown for apps.
+
+---
+
 ## [0.5.0] — 2026-06-03 · calibration + distribution
 
 Five-feature release. The product becomes smarter *about you* (calibration loop), reaches further (MCP), and reads faster (streaming) — without breaking the "everything is markdown" promise.

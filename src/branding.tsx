@@ -37,7 +37,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={8}
+      height={7}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -67,82 +67,101 @@ export function Branding({
   );
 }
 
-// PREVAIL logo, rendered as three side-by-side blocks so the "AI" stays
-// visually emphasized in aiAccent (electric cyan) while "PREV" and "L"
-// sit in plain gold. High-contrast pairing — the AI is the unmistakable
-// heart of the cockpit, not just a slightly-brighter shade of the same
-// color it sits next to.
-// Three logo groups (PREV / AI / L) — each one preserves the original
-// ANSI-Shadow letter shapes that were designed to interlock as a readable
-// word. We only add space BETWEEN the groups, not between individual
-// letters, so each block stays as legible as the original wordmark while
-// the AI section still reads as the distinct visual center.
-// Logo groups, padded to consistent per-group width so the column
-// positions don't jiggle row-to-row.
+// Custom uniform-width wordmark.
 //
-// Optical-spacing notes (why we don't just use equal mathematical gaps):
-//   - V's right edge tapers from "██╗" (top) to "═══╝" (bottom). The TOP
-//     visually leaves more whitespace on the right side than the bottom,
-//     so a fixed gap reads as too-tight at the bottom and too-loose at top.
-//   - A's left edge starts with a leading space on the top row, then
-//     fills the full width on subsequent rows — opposite of V.
-//   - I is a narrow letter (3 cells wide) sitting next to L which starts
-//     wide ("██╗") at the top.
+// The ANSI Shadow font we used before had organic letter widths — V tapers
+// from wide-top to thin-bottom, A leads with a single space row, I is
+// narrower than L, P's tail is thin. NO amount of mathematical padding
+// fixes geometry that varies per row. Three rebuilds later, the user was
+// still right: the spacing read uneven.
 //
-// We compensate by:
-//   1. Padding each group's right edge with trailing whitespace so the
-//      starting column of the NEXT group is always the same.
-//   2. Using a generous GROUP_GAP (3 spaces) so any row-to-row variance
-//      inside a letter is dominated by the inter-group whitespace, which
-//      is what the eye actually uses to judge spacing.
-//   3. Adding a single leading space inside the AI group so the optical
-//      left edge of "A" aligns with the right edge of V's widest column.
+// New approach: every letter is a 5×5 block in its own identical bounding
+// box. Spacing between letters is then mathematical certainty — each
+// occupies exactly 5 cells, with a 1-cell gap between within a group and
+// a 3-cell gap between groups. Whitespace inside a letter doesn't bleed
+// into inter-letter space because every letter starts at the same column
+// and ends at the same column on every row.
+//
+// Letters are tuned to read at terminal scale: bold strokes, no tapering,
+// minimum 2-cell strokes so the cyan AI block carries weight against
+// PREV+L in gold.
 
-const pad = (s: string, w: number) =>
-  s + " ".repeat(Math.max(0, w - s.length));
+type Glyph = readonly [string, string, string, string, string];
 
-// PREV — pad to the width of the WIDEST row so the right edge is flush.
-const LOGO_PREV_RAW = [
-  "██████╗ ██████╗ ███████╗██╗   ██╗",
-  "██╔══██╗██╔══██╗██╔════╝██║   ██║",
-  "██████╔╝██████╔╝█████╗  ██║   ██║",
-  "██╔═══╝ ██╔══██╗██╔══╝  ╚██╗ ██╔╝",
-  "██║     ██║  ██║███████╗ ╚████╔╝",
-  "╚═╝     ╚═╝  ╚═╝╚══════╝  ╚═══╝",
-] as const;
-const PREV_W = Math.max(...LOGO_PREV_RAW.map((r) => r.length));
+// 5-wide × 5-tall block letters, uniform per-character. Each row is
+// exactly 5 cells. Whitespace cells stay as " " so the bounding box is
+// preserved.
+const G: Record<string, Glyph> = {
+  P: [
+    "████ ",
+    "█  █ ",
+    "████ ",
+    "█    ",
+    "█    ",
+  ],
+  R: [
+    "████ ",
+    "█  █ ",
+    "████ ",
+    "█ █  ",
+    "█  █ ",
+  ],
+  E: [
+    "█████",
+    "█    ",
+    "████ ",
+    "█    ",
+    "█████",
+  ],
+  V: [
+    "█   █",
+    "█   █",
+    "█   █",
+    " █ █ ",
+    "  █  ",
+  ],
+  A: [
+    "  █  ",
+    " █ █ ",
+    "█████",
+    "█   █",
+    "█   █",
+  ],
+  I: [
+    "█████",
+    "  █  ",
+    "  █  ",
+    "  █  ",
+    "█████",
+  ],
+  L: [
+    "█    ",
+    "█    ",
+    "█    ",
+    "█    ",
+    "█████",
+  ],
+};
 
-// AI — leading space gives optical centering between V (whose right edge
-// is widest at the top) and the A's left edge (which is widest in the
-// middle). Pad right edge to the widest row.
-const LOGO_AI_RAW = [
-  "  █████╗ ██╗",
-  " ██╔══██╗██║",
-  " ███████║██║",
-  " ██╔══██║██║",
-  " ██║  ██║██║",
-  " ╚═╝  ╚═╝╚═╝",
-] as const;
-const AI_W = Math.max(...LOGO_AI_RAW.map((r) => r.length));
+const LETTER_GAP = " ";       // within a group ("PREV" → P-R-E-V)
+const GROUP_GAP = "   ";      // between PREV / AI / L
 
-// L — keep narrow; the user reads "L" cleanly regardless of trailing.
-const LOGO_L_RAW = [
-  "██╗     ",
-  "██║     ",
-  "██║     ",
-  "██║     ",
-  "███████╗",
-  "╚══════╝",
-] as const;
-const L_W = Math.max(...LOGO_L_RAW.map((r) => r.length));
+// Compose a group from its letters with single-cell gaps. Returns 5 rows.
+function compose(letters: readonly string[]): readonly string[] {
+  const rows: string[] = ["", "", "", "", ""];
+  for (let i = 0; i < letters.length; i++) {
+    const g = G[letters[i]!]!;
+    for (let r = 0; r < 5; r++) {
+      rows[r] += g[r];
+      if (i < letters.length - 1) rows[r] += LETTER_GAP;
+    }
+  }
+  return rows;
+}
 
-const LOGO_PREV = LOGO_PREV_RAW.map((r) => pad(r, PREV_W));
-const LOGO_AI = LOGO_AI_RAW.map((r) => pad(r, AI_W));
-const LOGO_L = LOGO_L_RAW.map((r) => pad(r, L_W));
-
-// 3-space gap between groups. Big enough that letter-shape variance
-// within a group never bleeds visually into the next group.
-const GROUP_GAP = "   ";
+const LOGO_PREV = compose(["P", "R", "E", "V"]);
+const LOGO_AI = compose(["A", "I"]);
+const LOGO_L = compose(["L"]);
 
 function BrandColumn() {
   // Render each row as three spans: PREV (gold) — gap — AI (cyan) — gap —
