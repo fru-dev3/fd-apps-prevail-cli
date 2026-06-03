@@ -1776,6 +1776,13 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               );
             }
             if (focus === "apps" && app) {
+              // SECURITY/UX: apps own their tab strip (Overview/Auth/Sync/
+              // Skills/Data/Chat) — they're connectors, not life domains.
+              // Passing the domain-style global tabBar (state/loops/
+              // quickstart/prompts/skills) here was nesting the connector
+              // workspace UNDER the Skills tab, so users had to click
+              // through to see auth/skills/data. Pass undefined so the
+              // ConnectorTabRow is the only navigation for the app pane.
               return (
                 <AppDetail
                   app={app}
@@ -1786,7 +1793,6 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                     const sk = app.skills[i];
                     if (sk) openChatForSkill(sk);
                   }}
-                  topBar={tabBar}
                 />
               );
             }
