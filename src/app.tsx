@@ -380,6 +380,19 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
 
     if (mode === "new-domain" || mode === "new-app" || mode === "edit") return;
 
+    // When an overlay is open (Tools panel, Council config), the overlay
+    // owns the keyboard. Without this, scrolling the overlay with arrow
+    // keys also moved the left sidebar selection — the user reported it
+    // was happening on the Tools panel: scroll down to read more →
+    // sidebar jumps to a different app.
+    if (toolsOpen || councilConfigOpen) {
+      if (evt.ctrl && name === "c") {
+        renderer?.destroy?.();
+        process.exit(0);
+      }
+      return;
+    }
+
     // SECURITY/UX: when the user is typing in an embedded chat input
     // (Connector/Domain workspace), only ctrl+c (quit) propagates to the
     // global handler. Every other key — letters, arrows, escape — flows
