@@ -88,22 +88,33 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbedde
         frameworkTick={frameworkTick}
         onFrameworkChange={onFrameworkChange}
       />
-      <ConnectorTabRow active={tab} onPick={setTab} skillCount={skills.length} />
-      {tab === "overview" ? (
-        // Overview tab gets a special split layout: compact connection
-        // summary on top, working chat on the bottom. Both flex within the
-        // same panel — no scroll, no extra click to reach chat.
-        <ConnectorOverviewWithChat app={app} skillsCount={skills.length} setEmbeddedInputActive={setEmbeddedInputActive} />
-      ) : (
-        <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-          <scrollbox flexGrow={1} scrollY>
-            {tab === "auth" && <ConnectorAuthPanel app={app} />}
-            {tab === "sync" && <ConnectorSyncPanel app={app} skills={skills} />}
-            {tab === "skills" && <ConnectorSkillsPanel app={app} skills={skills} />}
-            {tab === "data" && <ConnectorDataPanel app={app} />}
-          </scrollbox>
-        </box>
-      )}
+      {/* Same shape as DomainDetail: a single scrollable view, no
+          nested tab strip. The connector content is stacked top to
+          bottom — overview / auth / sync / skills / data — so the user
+          sees everything at a glance and scrolls for the rest. Chat
+          is reached by clicking the chat tab in the global TabStrip
+          (it opens ChatPane just like a domain chat). */}
+      <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+        <scrollbox flexGrow={1} scrollY>
+          <ConnectorCompactSummary app={app} skillsCount={skills.length} />
+          <text> </text>
+          <text fg={theme.border}>{"─".repeat(80)}</text>
+          <text fg={theme.gold} attributes={1}>▸ Authentication</text>
+          <ConnectorAuthPanel app={app} />
+          <text> </text>
+          <text fg={theme.border}>{"─".repeat(80)}</text>
+          <text fg={theme.gold} attributes={1}>{`▸ Scheduled syncs`}</text>
+          <ConnectorSyncPanel app={app} skills={skills} />
+          <text> </text>
+          <text fg={theme.border}>{"─".repeat(80)}</text>
+          <text fg={theme.gold} attributes={1}>{`▸ Skills (${skills.length})`}</text>
+          <ConnectorSkillsPanel app={app} skills={skills} />
+          <text> </text>
+          <text fg={theme.border}>{"─".repeat(80)}</text>
+          <text fg={theme.gold} attributes={1}>▸ Data</text>
+          <ConnectorDataPanel app={app} />
+        </scrollbox>
+      </box>
     </box>
   );
 }
