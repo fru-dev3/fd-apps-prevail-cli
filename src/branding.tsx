@@ -56,7 +56,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={11}
+      height={12}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -341,7 +341,8 @@ function StatusColumn({
           into the panel, choose a chair, etc). The little health
           row below shows ✓/⚠/⠋ per panelist so the user knows BEFORE
           firing /council which engines are ready. */}
-      <box flexDirection="row" height={1} paddingTop={1}>
+      <text> </text>
+      <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"defaults"}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
           <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>
