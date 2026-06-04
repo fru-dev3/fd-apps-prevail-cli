@@ -1850,31 +1850,73 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                     if (mode === "chat") setMode("idle");
                     doEdit();
                   }}
-                  cli={
-                    inChat && activeSession
-                      ? {
-                          clis,
-                          currentCli: activeSession.cli.kind,
-                          model: activeSession.model,
-                          councilMode: councilModeFor(activeSession.key),
-                          cliHealth,
-                          onSwitchCli: (k) =>
-                            handleChatCommand(activeSession.key, {
-                              kind: "switch-cli",
-                              cli: k,
-                              model: undefined,
-                            }),
-                          onPickModel: (mdl) =>
-                            handleChatCommand(activeSession.key, {
-                              kind: "switch-model",
-                              model: mdl,
-                            }),
-                          onToggleCouncilMode: () =>
-                            toggleCouncilModeFor(activeSession.key),
-                          onOpenCouncilConfig: () => setCouncilConfigOpen(true),
-                        }
-                      : undefined
-                  }
+                  cli={(() => {
+                    // CLI chips + council toggle + ⚙ are now ALWAYS on
+                    // the tab strip — same controls regardless of mode
+                    // (in chat / on state / on skills / etc). When
+                    // there's an active chat session, the chips drive
+                    // that session. When there isn't, clicking a CLI
+                    // chip opens chat with that engine, council toggle
+                    // flips the global default, ⚙ opens the config
+                    // panel. One consistent menu bar across modes.
+                    if (inChat && activeSession) {
+                      return {
+                        clis,
+                        currentCli: activeSession.cli.kind,
+                        model: activeSession.model,
+                        councilMode: councilModeFor(activeSession.key),
+                        cliHealth,
+                        onSwitchCli: (k) =>
+                          handleChatCommand(activeSession.key, {
+                            kind: "switch-cli",
+                            cli: k,
+                            model: undefined,
+                          }),
+                        onPickModel: (mdl) =>
+                          handleChatCommand(activeSession.key, {
+                            kind: "switch-model",
+                            model: mdl,
+                          }),
+                        onToggleCouncilMode: () =>
+                          toggleCouncilModeFor(activeSession.key),
+                        onOpenCouncilConfig: () => setCouncilConfigOpen(true),
+                      };
+                    }
+                    // Not in chat — same chips, but they open chat /
+                    // flip global default when clicked.
+                    const defaultCli =
+                      (clis.find((c) => c.kind === "claude") ?? clis[0])?.kind ?? "claude";
+                    return {
+                      clis,
+                      currentCli: defaultCli,
+                      model: "",
+                      councilMode: readGlobalCouncilDefault(),
+                      cliHealth,
+                      onSwitchCli: (k) => {
+                        // Open chat with the picked CLI for the
+                        // currently-focused domain/app.
+                        const target = focus === "apps" ? app : domain;
+                        if (!target) return;
+                        const cliObj = clis.find((c) => c.kind === k);
+                        if (!cliObj) return;
+                        if (focus === "apps" && app) openChatForApp(app);
+                        else if (domain) openChatForDomain(domain);
+                        // After opening, the session will already be in
+                        // the requested CLI iff that's the default. If
+                        // not, the user can re-click in the now-open
+                        // chat. Keeps the no-session-mode behavior
+                        // light.
+                      },
+                      onPickModel: () => {
+                        /* no-op without an active session */
+                      },
+                      onToggleCouncilMode: () => {
+                        setGlobalCouncilDefault(!readGlobalCouncilDefault());
+                        bumpFrameworkTick();
+                      },
+                      onOpenCouncilConfig: () => setCouncilConfigOpen(true),
+                    };
+                  })()}
                 />
               ) : undefined;
 

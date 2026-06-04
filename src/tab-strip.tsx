@@ -76,7 +76,7 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
           </box>
         );
       })}
-      {cli && inChat && (
+      {cli && (
         <>
           <text fg={theme.fgFaint}>{"   "}</text>
           <CliChips
@@ -93,7 +93,10 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
           <text fg={theme.goldDim}>✎ edit</text>
         </box>
       )}
-      {cli && inChat && (
+      {cli && (
+        // Council toggle + ⚙ configure are now always visible on the
+        // tab strip — same consistent controls regardless of mode (in
+        // chat or on state/skills/etc).
         <>
           <box
             flexDirection="row"
