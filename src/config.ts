@@ -6,12 +6,37 @@ import { homedir } from "node:os";
 import type { FrameworkId } from "./framework.ts";
 import type { LensSelection } from "./lens.ts";
 
-export type CliKind = "claude" | "codex" | "gemini" | "ollama";
+// CliKind is defined in src/cli-bridge.ts so the engine list and the
+// config layer can't drift. Re-exported here so callers that read
+// councilClis / councilModels / councilChair from this module don't
+// need to import from two places.
+export type CliKind = "claude" | "codex" | "antigravity" | "ollama";
 
-export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "gemini", "ollama"];
+export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "antigravity", "ollama"];
 
 export function isCliKind(s: string): s is CliKind {
-  return s === "claude" || s === "codex" || s === "gemini" || s === "ollama";
+  return s === "claude" || s === "codex" || s === "antigravity" || s === "ollama";
+}
+
+// 2026-06-04: Google replaced `gemini` with `agy` (Antigravity).
+// Existing configs that still say `"gemini"` get silently normalized to
+// `"antigravity"` whenever a council-config field is read. This lives
+// here (not in cli-bridge) so every consumer who calls readCouncilConfig
+// gets the migration for free without having to know it happened.
+function migrateLegacyCliKind(s: string): CliKind | null {
+  if (s === "gemini") return "antigravity";
+  if (isCliKind(s)) return s;
+  return null;
+}
+
+function migrateLegacyCliKindList(list: readonly string[] | null | undefined): CliKind[] | null {
+  if (!list) return null;
+  const out: CliKind[] = [];
+  for (const s of list) {
+    const k = migrateLegacyCliKind(s);
+    if (k && !out.includes(k)) out.push(k);
+  }
+  return out;
 }
 
 export interface UserConfig {
@@ -131,17 +156,22 @@ export interface CouncilConfig {
 }
 
 function normalizeModels(
-  raw: Partial<Record<CliKind, string[] | string>> | undefined,
+  raw: Partial<Record<string, string[] | string>> | undefined,
 ): Partial<Record<CliKind, string[]>> {
   if (!raw) return {};
   const out: Partial<Record<CliKind, string[]>> = {};
-  for (const k of Object.keys(raw) as CliKind[]) {
-    const v = raw[k];
+  for (const rawKey of Object.keys(raw)) {
+    // Legacy migration: "gemini" entries get folded under "antigravity".
+    // If both somehow appear in the same config (e.g. partial manual
+    // edit), the antigravity entry wins and gemini is dropped.
+    const k = migrateLegacyCliKind(rawKey);
+    if (!k) continue;
+    const v = raw[rawKey];
     if (!v) continue;
     if (typeof v === "string") {
-      out[k] = [v];
+      if (!out[k]) out[k] = [v];
     } else if (Array.isArray(v) && v.length > 0) {
-      out[k] = v;
+      if (!out[k]) out[k] = v;
     }
   }
   return out;
@@ -149,10 +179,18 @@ function normalizeModels(
 
 export function readCouncilConfig(): CouncilConfig {
   const c = readConfig();
+  // Migrate clis array, models map, and chair pin. All three may carry
+  // the legacy "gemini" id from configs written before v1.0.2.
+  const migratedClis = migrateLegacyCliKindList(c?.councilClis);
+  let chair = c?.councilChair ?? null;
+  if (chair) {
+    const k = migrateLegacyCliKind(chair.cli as string);
+    chair = k ? { ...chair, cli: k } : null;
+  }
   return {
-    clis: c?.councilClis ?? null,
+    clis: migratedClis,
     models: normalizeModels(c?.councilModels),
-    chair: c?.councilChair ?? null,
+    chair,
   };
 }
 

@@ -20,7 +20,7 @@ import { buildCliArgs, detectSubprocessClis, type AvailableCli } from "./cli-bri
 
 const SHOULD_RUN = process.env.INTEGRATION_TESTS === "1";
 
-function findCli(kind: "claude" | "codex" | "gemini"): AvailableCli | null {
+function findCli(kind: "claude" | "codex" | "antigravity"): AvailableCli | null {
   return detectSubprocessClis().find((c) => c.kind === kind) ?? null;
 }
 
@@ -76,8 +76,8 @@ describe.if(SHOULD_RUN)("cli-bridge integration", () => {
     );
   });
 
-  describe("gemini", () => {
-    const cli = findCli("gemini");
+  describe("antigravity", () => {
+    const cli = findCli("antigravity");
     test.if(cli !== null)(
       "does not hit 'not running in a trusted directory'",
       () => {
@@ -85,7 +85,7 @@ describe.if(SHOULD_RUN)("cli-bridge integration", () => {
         const dir = makeFakeVaultDir();
         try {
           const args = buildCliArgs({
-            cli: "gemini",
+            cli: "antigravity",
             prompt: "Reply with exactly the word: pong",
             model: "",
             isFirst: true,

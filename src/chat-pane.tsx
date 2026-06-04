@@ -805,7 +805,7 @@ const SLASH_COMMANDS: SlashCommandSpec[] = [
   { cmd: "/connectors", arg: "[oauth <id>|test <id>]", desc: "list connectors · run OAuth flow · test connection", aliases: ["/conn", "/connect", "/connector"] },
   { cmd: "/claude", arg: "[model]", desc: "switch this chat to Claude Code" },
   { cmd: "/codex", arg: "[model]", desc: "switch this chat to Codex" },
-  { cmd: "/gemini", arg: "[model]", desc: "switch this chat to Gemini CLI" },
+  { cmd: "/antigravity", arg: "[model]", desc: "switch this chat to Antigravity (agy, formerly Gemini CLI)" },
   { cmd: "/ollama", arg: "[model]", desc: "switch this chat to local Ollama (or any OpenAI-compatible endpoint)" },
   { cmd: "/model", arg: "<name>", desc: "set model on the current CLI · /model default clears it", aliases: ["/m"] },
   { cmd: "/clear", desc: "clear conversation messages (keeps session config)", aliases: ["/reset"] },
@@ -1089,7 +1089,14 @@ function parseSlashCommand(text: string): ChatCommand {
   }
   if (cmd === "claude") return { kind: "switch-cli", cli: "claude", model: arg || undefined };
   if (cmd === "codex") return { kind: "switch-cli", cli: "codex", model: arg || undefined };
-  if (cmd === "gemini") return { kind: "switch-cli", cli: "gemini", model: arg || undefined };
+  // /antigravity and /agy are the canonical commands. /gemini still works
+  // as a backward-compat alias during the 2026-06-18 transition; it
+  // routes to the same antigravity panelist (the binary detector
+  // prefers `agy` and falls back to legacy `gemini` if that's all
+  // the user has installed).
+  if (cmd === "antigravity" || cmd === "agy" || cmd === "gemini") {
+    return { kind: "switch-cli", cli: "antigravity", model: arg || undefined };
+  }
   if (cmd === "ollama") return { kind: "switch-cli", cli: "ollama", model: arg || undefined };
   if (cmd === "model" || cmd === "m") return { kind: "switch-model", model: arg };
   if (cmd === "distill" || cmd === "skill") return { kind: "distill" };
@@ -1180,7 +1187,7 @@ function parseSlashCommand(text: string): ChatCommand {
 export const SLASH_HELP = [
   "/claude [model]   switch this chat to Claude Code (model arg optional)",
   "/codex [model]    switch this chat to Codex",
-  "/gemini [model]   switch this chat to Gemini CLI",
+  "/antigravity [model]   switch this chat to Antigravity (agy)",
   "/model <name>     set model on the current CLI · /model default clears it",
   "/distill          synthesize this conversation into a reusable SKILL.md (alias: /skill)",
   "/search <query>   FTS5 search across all past chats in any domain (alias: /s)",

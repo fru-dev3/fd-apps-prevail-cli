@@ -104,10 +104,10 @@ describe("buildCliArgs", () => {
     });
   });
 
-  describe("gemini", () => {
+  describe("antigravity", () => {
     test("includes --skip-trust so vault dirs work", () => {
       const args = buildCliArgs({
-        cli: "gemini",
+        cli: "antigravity",
         prompt: PROMPT,
         model: "",
         isFirst: true,
@@ -118,7 +118,7 @@ describe("buildCliArgs", () => {
 
     test("passes -m model when set, then -p prompt", () => {
       const args = buildCliArgs({
-        cli: "gemini",
+        cli: "antigravity",
         prompt: PROMPT,
         model: "gemini-2.5-pro",
         isFirst: true,
@@ -134,7 +134,7 @@ describe("buildCliArgs", () => {
 
     test("default model uses just -p prompt", () => {
       const args = buildCliArgs({
-        cli: "gemini",
+        cli: "antigravity",
         prompt: PROMPT,
         model: "",
         isFirst: true,
@@ -237,7 +237,7 @@ describe("detectClis", () => {
     const clis = await detectClis();
     expect(Array.isArray(clis)).toBe(true);
     for (const c of clis) {
-      expect(["claude", "codex", "gemini", "ollama"]).toContain(c.kind);
+      expect(["claude", "codex", "antigravity", "ollama"]).toContain(c.kind);
       // ollama's bin is a URL (http://...) — the others are file paths.
       if (c.kind === "ollama") expect(c.bin).toMatch(/^https?:\/\//);
       else expect(c.bin).toMatch(/\//);

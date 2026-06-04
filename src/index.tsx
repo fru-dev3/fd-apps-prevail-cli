@@ -190,7 +190,7 @@ KEYS (inside the cockpit)
   q / ctrl-c                   quit
 
 CHAT (right pane, always live)
-  click [Claude]/[Codex]/[Gemini]   switch CLI in current chat
+  click [Claude]/[Codex]/[Antigravity]   switch CLI in current chat
   click model chips                 switch model
   /claude /codex /gemini [model]    same, via slash command
   /model <name>                     custom model name pass-through

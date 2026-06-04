@@ -97,7 +97,7 @@ export async function runMcpServer(
     {
       name: "council",
       description:
-        "Run a council across Claude, Codex, Gemini, and local Ollama in parallel for a high-stakes question. Returns a synthesized verdict that explicitly surfaces where the panel disagreed. Use for decisions where one model's answer would be a single point of view (financial, medical, career, contract review).",
+        "Run a council across Claude, Codex, Antigravity, and local Ollama in parallel for a high-stakes question. Returns a synthesized verdict that explicitly surfaces where the panel disagreed. Use for decisions where one model's answer would be a single point of view (financial, medical, career, contract review).",
       inputSchema: {
         type: "object",
         properties: {

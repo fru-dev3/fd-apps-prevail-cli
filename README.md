@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>A terminal cockpit for the rest of your life.</b><br/>
-  Ask Claude, Codex, Gemini, and your local Ollama the same question in parallel. Let the council vote.
+  Ask Claude, Codex, Antigravity (Google's `agy`), and your local Ollama the same question in parallel. Let the council vote.
 </p>
 
 <p align="center">
@@ -43,12 +43,12 @@
 │              A diversified index has cleared 7% long-run. Math: invest. │
 │   ◇ Codex     Spread = (after-tax return − rate) × principal × years.  │
 │              Positive → invest. Keep 6 months liquidity floor.          │
-│   ◇ Gemini    Behavioral: a guaranteed return on a known liability vs. │
+│   ◇ Antigravity Behavioral: a guaranteed return on a known liability vs. │
 │              a probabilistic one. Pick the path you'll actually hold.   │
 │   ◇ Ollama    Local-only check: same conclusion as the cloud panel.    │
 │                                                                          │
 │  ┌─ ▸ Where panelists disagreed ──────────────────────────────────┐    │
-│  │ Liquidity floor: Codex says 6mo, Gemini says 12mo (risk-off).  │    │
+│  │ Liquidity floor: Codex says 6mo, Antigravity says 12mo (risk-off).  │    │
 │  └────────────────────────────────────────────────────────────────┘    │
 │                                                                          │
 │  ┌─ ◆ Verdict · synthesized by Claude ────────────────────────────┐    │
@@ -174,7 +174,7 @@ A terminal with UTF-8 + true-color is required. Tested on iTerm2, kitty, alacrit
 
 ## Requirements
 
-- One or more of: [Claude Code](https://claude.com/code) · [Codex](https://github.com/openai/codex) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Ollama](https://ollama.com)
+- One or more of: [Claude Code](https://claude.com/code) · [Codex](https://github.com/openai/codex) · [Antigravity CLI / `agy`](https://github.com/google/antigravity-cli) · [Ollama](https://ollama.com)
 - Terminal with UTF-8 + true color
 - macOS / Linux (Windows via WSL — see [Platform](#platform))
 

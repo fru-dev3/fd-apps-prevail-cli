@@ -7,6 +7,26 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.1.0] — 2026-06-04 · Antigravity (`agy`) replaces Gemini CLI
+
+Google [announced](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/) the transition from Gemini CLI to Antigravity CLI (`agy`) on 2026-05-19, with a hard shutdown of the legacy `gemini` binary on **2026-06-18**. prevAIl now ships `antigravity` as the canonical id for Google's panelist.
+
+### Changed — CliKind, labels, slash command
+- `CliKind` enum: `"gemini"` → `"antigravity"`. UI labels: "Gemini" → "Antigravity" everywhere visible.
+- Slash command: `/antigravity` (or `/agy`) is canonical. `/gemini` still routes through as a backward-compat alias during the transition.
+- Council bubble color (green) and per-CLI hint text follow the rename.
+
+### Added — Binary detection fallback
+Detection prefers `agy`. If the user hasn't migrated yet and only has the legacy `gemini` binary, it's picked up as a fallback. Both invoke the same args (`--skip-trust -m <model> -p <prompt>`) since Antigravity preserved Gemini CLI's flag surface. **Drop the `gemini` fallback after 2026-06-18 when Google shuts the legacy CLI down.**
+
+### Added — Config migration
+Old configs that say `councilClis: ["gemini"]`, `councilModels: {gemini: [...]}`, or `councilChair: {cli: "gemini"}` get silently normalized to `"antigravity"` on first read. No user action required.
+
+### Unchanged — Model IDs
+Antigravity uses the same Gemini model names underneath (`gemini-2.5-pro`, `gemini-2.5-flash`, etc.), so prevAIl's model lists, pins, and benchmark records keep working unchanged.
+
+---
+
 ## [1.0.1] — 2026-06-04 · First-run UX fixes
 
 Two small but irritating bugs caught on first use.

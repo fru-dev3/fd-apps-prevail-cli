@@ -47,7 +47,21 @@ export function refreshOperatingManualCache(): void {
 // server, vLLM, anything that speaks OpenAI's /chat/completions schema.
 // Treated as a 4th "engine" alongside the three subprocess CLIs so the
 // rest of the code can fan out to it through the same runChatTurn path.
-export type CliKind = "claude" | "codex" | "gemini" | "ollama";
+// CliKind — the canonical id for each AI engine prevAIl talks to.
+//
+// 2026-06-04: Google replaced their `gemini` CLI with `agy` (Antigravity).
+// Gemini CLI shuts down on 2026-06-18, so prevAIl now ships with
+// "antigravity" as the canonical kind. The `agy` binary is preferred at
+// detection time; the legacy `gemini` binary still works as a fallback
+// during the transition window. Old configs that still say `"gemini"`
+// are silently migrated to `"antigravity"` on first read (see
+// migrateLegacyCliKind in src/config.ts).
+export type CliKind = "claude" | "codex" | "antigravity" | "ollama";
+
+// Legacy CliKind values from earlier versions of prevAIl. Listed here as
+// a string union (NOT part of the live CliKind type) so config-migration
+// code can spell them without losing type-safety on the consumer side.
+export type LegacyCliKind = "gemini";
 
 // SECURITY: env vars that look like provider/operator secrets are stripped
 // when spawning subprocess CLIs. The CLIs read their own auth files
@@ -91,7 +105,12 @@ export interface AvailableCli {
 const CANDIDATES: { kind: CliKind; bins: string[]; label: string }[] = [
   { kind: "claude", bins: ["claude"], label: "Claude" },
   { kind: "codex", bins: ["codex"], label: "Codex" },
-  { kind: "gemini", bins: ["gemini"], label: "Gemini" },
+  // The first detected binary wins. `agy` (Antigravity, Google's
+  // 2026-05-19 successor to Gemini CLI) is preferred; `gemini` is kept
+  // as a fallback during the transition window (Google shuts the
+  // legacy CLI down 2026-06-18). Drop `gemini` from this list after
+  // that date.
+  { kind: "antigravity", bins: ["agy", "gemini"], label: "Antigravity" },
 ];
 
 // Ollama / OpenAI-compatible local-model endpoint. Override via env var.
@@ -103,7 +122,7 @@ export const CLI_MODEL_HINT: Record<CliKind, string> = {
   claude: "e.g. opus, sonnet, haiku, or full id like claude-opus-4-7",
   codex: "e.g. gpt-5, gpt-5.4, o3 (whatever your codex install accepts)",
   ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
-  gemini: "e.g. gemini-2.5-pro, gemini-2.0-flash",
+  antigravity: "e.g. gemini-2.5-pro, gemini-2.0-flash (Antigravity uses the same Gemini model names)",
 };
 
 // Quick-pick chips shown in the council config bubble. Two tiers:
@@ -130,7 +149,10 @@ const CLAUDE_VERSIONS = [
   "claude-haiku-4-5",
 ];
 const CODEX_VERSIONS = ["gpt-5.4", "gpt-5", "gpt-5-codex", "o3"];
-const GEMINI_VERSIONS = [
+// Antigravity uses the same underlying Gemini models as the legacy
+// gemini CLI did — the model names didn't change, only the launcher
+// binary (`gemini` → `agy`). When that changes, update this list.
+const ANTIGRAVITY_VERSIONS = [
   "gemini-2.5-pro",
   "gemini-2.5-flash",
   "gemini-2.0-pro",
@@ -152,7 +174,7 @@ const OLLAMA_VERSIONS = ["llama3.1", "llama3.2", "mistral", "qwen2.5", "phi3", "
 const CLI_DEFAULT_MODELS: Record<CliKind, string> = {
   claude: CLAUDE_VERSIONS[0]!,
   codex: CODEX_VERSIONS[0]!,
-  gemini: GEMINI_VERSIONS[0]!,
+  antigravity: ANTIGRAVITY_VERSIONS[0]!,
   ollama: OLLAMA_DEFAULT_MODEL,
 };
 
@@ -170,7 +192,7 @@ export function defaultModelFor(kind: CliKind): string {
 export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
   claude: [...CLAUDE_VERSIONS, ...CLAUDE_ALIASES],
   codex: CODEX_VERSIONS,
-  gemini: GEMINI_VERSIONS,
+  antigravity: ANTIGRAVITY_VERSIONS,
   ollama: OLLAMA_VERSIONS,
 };
 
@@ -234,7 +256,7 @@ function looksLikeModel(kind: CliKind, t: string): boolean {
   if (kind === "codex") {
     return /^(gpt|o\d|chatgpt)/.test(low);
   }
-  if (kind === "gemini") {
+  if (kind === "antigravity") {
     return low.startsWith("gemini") || low.startsWith("gemma");
   }
   if (kind === "ollama") {
@@ -277,15 +299,19 @@ function classifyProbeError(cli: CliKind, output: string): string | undefined {
       return "codex hit a rate limit or quota cap on your account.";
     }
   }
-  if (cli === "gemini") {
+  if (cli === "antigravity") {
+    // Antigravity inherits a lot of Gemini's CLI surface — hook errors,
+    // trust gates, quota errors all look similar. Some legacy strings
+    // still mention `gemini` because Antigravity's error text shows
+    // through unchanged on certain code paths.
     if (o.includes("agent execution blocked") || o.includes("hook(s)") || o.includes("hook execution")) {
-      return "gemini's BeforeAgent/AfterAgent hooks are blocking execution. Check ~/.gemini/settings.json and either fix the hook script path or remove the broken `hooks` entries.";
+      return "Antigravity's BeforeAgent/AfterAgent hooks are blocking execution. Check ~/.gemini/settings.json (or wherever agy stores its hooks) and either fix the hook script path or remove the broken `hooks` entries.";
     }
     if (o.includes("not running in a trusted") || o.includes("trusted")) {
-      return "gemini blocked an untrusted folder. The wrapper passes `--skip-trust`; if you still see this, the workspace sandbox in ~/.gemini/settings.json may be restricting reach.";
+      return "Antigravity blocked an untrusted folder. The wrapper passes `--skip-trust`; if you still see this, the workspace sandbox in agy's settings may be restricting reach.";
     }
     if (o.includes("quota") || o.includes("rate")) {
-      return "gemini hit a quota or rate limit.";
+      return "Antigravity hit a quota or rate limit.";
     }
   }
   return undefined;
@@ -637,7 +663,12 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractCodexReply(raw);
   }
-  if (cli.kind === "gemini") {
+  if (cli.kind === "antigravity") {
+    // Antigravity (`agy`) inherits Gemini CLI's flag surface: `--skip-trust`,
+    // `-m`, and `-p` all work the same way. The legacy `gemini` binary
+    // (still picked up as a fallback during the 2026-06-18 transition)
+    // accepts the same args, so one path handles both. The reply parser
+    // is unchanged because both produce the same stdout format.
     const base = ["--skip-trust"];
     const args = m
       ? [...base, "-m", m, "-p", framedPrompt]
@@ -933,7 +964,7 @@ export function buildCliArgs({
     const base = ["exec", "--skip-git-repo-check"];
     return m ? [...base, "-m", m, prompt] : [...base, prompt];
   }
-  if (cli === "gemini") {
+  if (cli === "antigravity") {
     const base = ["--skip-trust"];
     return m ? [...base, "-m", m, "-p", prompt] : [...base, "-p", prompt];
   }

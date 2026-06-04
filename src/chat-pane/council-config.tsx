@@ -18,7 +18,7 @@ import {
 } from "../config.ts";
 import { FRAMEWORKS, getFramework, type FrameworkId } from "../framework.ts";
 
-const COUNCIL_KINDS: ConfigCliKind[] = ["claude", "codex", "gemini", "ollama"];
+const COUNCIL_KINDS: ConfigCliKind[] = ["claude", "codex", "antigravity", "ollama"];
 
 function CouncilConfigBubble({
   availableClis,
