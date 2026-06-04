@@ -56,7 +56,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={11}
+      height={10}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -231,15 +231,6 @@ function BrandColumn() {
             <span fg={theme.gold} attributes={1}>{LOGO_L[i]}</span>
           </text>
         ))}
-        {/* Tiny tagline positioned under the L (the last letter). PREV is
-            43 cells wide, then 1 gap, then AI is 21, then 1 gap, so the
-            L starts at column 66 of the wordmark text. We offset the
-            tagline by that many spaces so it sits directly beneath. The
-            "p r e v A I l" lowercase echo was repetitive — the wordmark
-            already spells it. */}
-        <text fg={theme.goldDim}>
-          {" ".repeat(66) + "live council"}
-        </text>
       </box>
     </box>
   );
