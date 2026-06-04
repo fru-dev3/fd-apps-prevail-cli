@@ -395,39 +395,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     }
 
     if (mode === "chat") {
-      // Arrow nav in chat mode:
-      //   For DOMAINS — switch the chat to the new domain (user stays
-      //     in chat). The user is "always ready to chat", so navigating
-      //     between domains shouldn't drop them into the state view.
-      //   For APPS — exit chat to the workspace. Apps are configuration
-      //     surfaces (Overview / Auth / Sync / Skills / Data), not
-      //     conversational, so arrow nav here means "go look at that app".
-      if (name === "up") {
-        if (focus === "apps") {
-          setMode("idle");
-          setActiveKey(null);
-          setAppIdx((s) => Math.max(0, s - 1));
-        } else {
-          const next = Math.max(0, domainIdx - 1);
-          setDomainIdx(next);
-          const d = domains[next];
-          if (d) openChatForDomain(d);
-        }
-        return;
-      }
-      if (name === "down") {
-        if (focus === "apps") {
-          setMode("idle");
-          setActiveKey(null);
-          setAppIdx((s) => Math.min(apps.length - 1, s + 1));
-        } else {
-          const next = Math.min(domains.length - 1, domainIdx + 1);
-          setDomainIdx(next);
-          const d = domains[next];
-          if (d) openChatForDomain(d);
-        }
-        return;
-      }
+      // In chat, the InputBox owns the keyboard. Up/Down recall the
+      // user's prior prompts from history (cross-session FTS5 walk);
+      // letters type into the input. The global handler stands aside
+      // and only handles ctrl+c for kill. Sidebar nav while in chat
+      // is via mouse click on the sidebar — keyboard arrows belong
+      // to the chat history.
       if (evt.ctrl && name === "c") {
         renderer?.destroy?.();
         process.exit(0);
