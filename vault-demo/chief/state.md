@@ -10,7 +10,8 @@
 2. **Stripe phone screen prep** — system design review, tomorrow April 8
 3. **LDL follow-up** — schedule PCP appointment re: cholesterol discussion
 
-## Domain Alerts
+## Domain Alerts11
+
 
 | Domain | Alert | Priority |
 |--------|-------|---------|
