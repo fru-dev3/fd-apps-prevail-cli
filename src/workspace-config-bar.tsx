@@ -180,7 +180,7 @@ export function WorkspaceConfigBar({
         onMouseDown={onToggleCouncil}
       >
         <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{"⚖ Council:"}</text>
-        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{councilOn ? " ON" : " off"}</text>
+        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{councilOn ? " ON" : " OFF"}</text>
       </box>
       {sep}
       <box
@@ -208,7 +208,7 @@ export function WorkspaceConfigBar({
         onMouseDown={cycleWeb}
       >
         <text fg={webFg} attributes={webAllow ? 1 : 0}>{"⬡ Web:"}</text>
-        <text fg={webFg} attributes={webAllow ? 1 : 0}>{webAllow ? " on" : " off"}</text>
+        <text fg={webFg} attributes={webAllow ? 1 : 0}>{webAllow ? " ON" : " OFF"}</text>
       </box>
       <box
         flexDirection="row"
@@ -217,7 +217,7 @@ export function WorkspaceConfigBar({
         onMouseDown={toggleCheckpoint}
       >
         <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{"▣ Save:"}</text>
-        <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{checkpointOn ? " on" : " off"}</text>
+        <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{checkpointOn ? " ON" : " OFF"}</text>
       </box>
       <box
         flexDirection="row"
@@ -226,7 +226,7 @@ export function WorkspaceConfigBar({
         onMouseDown={toggleSerendipity}
       >
         <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{"◉ Serendipity:"}</text>
-        <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{serendipityOn ? " on" : " off"}</text>
+        <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{serendipityOn ? " ON" : " OFF"}</text>
       </box>
       <box
         flexDirection="row"
@@ -235,7 +235,7 @@ export function WorkspaceConfigBar({
         onMouseDown={cycleAuto}
       >
         <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{"◐ Auto:"}</text>
-        <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{` ${autoMode}`}</text>
+        <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{` ${autoMode.toUpperCase()}`}</text>
       </box>
       <box flexGrow={1} />
       <box

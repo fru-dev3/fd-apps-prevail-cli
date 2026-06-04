@@ -370,7 +370,7 @@ function StatusColumn({
         <text fg={theme.fgFaint}>{"defaults"}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
           <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{"⚖ Council:"}</text>
-          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{globalCouncilOn ? " ON" : " off"}</text>
+          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{globalCouncilOn ? " ON" : " OFF"}</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
           <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>{"◆ Framework:"}</text>
@@ -385,7 +385,7 @@ function StatusColumn({
         <text fg={theme.fgFaint}>{"        "}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onCycleWeb}>
           <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{"⬡ Web:"}</text>
-          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{webAllow ? " on" : " off"}</text>
+          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{webAllow ? " ON" : " OFF"}</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
           <text fg={theme.aiAccent}>◇ configure</text>
