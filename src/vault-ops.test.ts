@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -14,7 +15,9 @@ import {
   parseDuration,
   pruneLog,
   restoreVault,
+  verifyVault,
 } from "./vault-ops.ts";
+import { entryId, writeTurnSummary } from "./auto-summary.ts";
 
 // ─────────────────────────────────────────────────────────────────────────
 // parseDuration
@@ -303,3 +306,134 @@ function walk(dir: string, acc: string[] = []): string[] {
   }
   return acc;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// verifyVault — tamper-evident log sidecar (.shasum)
+// ─────────────────────────────────────────────────────────────────────────
+
+function makeVaultWithDomain(): { root: string; domainPath: string } {
+  const root = mkdtempSync(join(tmpdir(), "prevail-verify-"));
+  const domainPath = join(root, "wealth");
+  mkdirSync(domainPath, { recursive: true });
+  return { root, domainPath };
+}
+
+describe("verifyVault", () => {
+  test("writeTurnSummary records a .shasum line with the right id and a valid sha256", () => {
+    const { root, domainPath } = makeVaultWithDomain();
+    const ts = new Date(2026, 5, 4, 10, 37).getTime(); // 2026-06-04 10:37
+    writeTurnSummary({
+      domainPath,
+      userPrompt: "what's my net worth?",
+      assistantReply: "About $X. Pulled from latest brokerage sync.",
+      cliLabel: "Claude",
+      ts,
+      kind: "chat",
+    });
+    const shasumPath = join(domainPath, "_log", ".shasum");
+    expect(existsSync(shasumPath)).toBe(true);
+    const lines = readFileSync(shasumPath, "utf8").trim().split("\n");
+    expect(lines.length).toBe(1);
+    const parts = lines[0]!.split(/\s+/);
+    expect(parts[0]).toBe(entryId(ts));
+    expect(parts[1]).toMatch(/^[a-f0-9]{64}$/);
+    // Clean log → verify returns ok=true.
+    const results = verifyVault(root);
+    expect(results.length).toBe(1);
+    expect(results[0]!.ok).toBe(true);
+    expect(results[0]!.status).toBe("ok");
+    expect(results[0]!.entryId).toBe(entryId(ts));
+  });
+
+  test("verifyVault returns ok=true for an untouched log across multiple entries", () => {
+    const { root, domainPath } = makeVaultWithDomain();
+    const ts1 = new Date(2026, 5, 4, 9, 0).getTime();
+    const ts2 = new Date(2026, 5, 4, 9, 30).getTime();
+    const ts3 = new Date(2026, 5, 4, 14, 15).getTime();
+    for (const [ts, q, a] of [
+      [ts1, "first question", "first answer"],
+      [ts2, "second question", "second answer"],
+      [ts3, "third question", "third answer"],
+    ] as const) {
+      writeTurnSummary({
+        domainPath,
+        userPrompt: q,
+        assistantReply: a,
+        cliLabel: "Claude",
+        ts,
+        kind: "chat",
+      });
+    }
+    const results = verifyVault(root);
+    expect(results.length).toBe(3);
+    for (const r of results) {
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe("ok");
+    }
+  });
+
+  test("editing a Q line in the log → verifyVault returns ok=false with expected vs actual", () => {
+    const { root, domainPath } = makeVaultWithDomain();
+    const ts = new Date(2026, 5, 4, 11, 0).getTime();
+    writeTurnSummary({
+      domainPath,
+      userPrompt: "original question",
+      assistantReply: "original answer",
+      cliLabel: "Claude",
+      ts,
+      kind: "chat",
+    });
+    const mdPath = join(domainPath, "_log", "2026-06-04.md");
+    const raw = readFileSync(mdPath, "utf8");
+    // Rewrite the Q line — must change the byte content so the sha shifts.
+    const tampered = raw.replace(
+      "**Q:** original question",
+      "**Q:** tampered question",
+    );
+    expect(tampered).not.toBe(raw);
+    writeFileSync(mdPath, tampered);
+    const results = verifyVault(root);
+    expect(results.length).toBe(1);
+    expect(results[0]!.ok).toBe(false);
+    expect(results[0]!.status).toBe("mismatch");
+    expect(results[0]!.expected).toMatch(/^[a-f0-9]{64}$/);
+    expect(results[0]!.actual).toMatch(/^[a-f0-9]{64}$/);
+    expect(results[0]!.actual).not.toBe(results[0]!.expected);
+  });
+
+  test("removing an entry section entirely → verifyVault reports 'entry not found'", () => {
+    const { root, domainPath } = makeVaultWithDomain();
+    const ts1 = new Date(2026, 5, 4, 8, 0).getTime();
+    const ts2 = new Date(2026, 5, 4, 12, 0).getTime();
+    writeTurnSummary({
+      domainPath,
+      userPrompt: "first",
+      assistantReply: "first reply",
+      cliLabel: "Claude",
+      ts: ts1,
+      kind: "chat",
+    });
+    writeTurnSummary({
+      domainPath,
+      userPrompt: "second",
+      assistantReply: "second reply",
+      cliLabel: "Claude",
+      ts: ts2,
+      kind: "chat",
+    });
+    // Delete the second entry from the .md but leave the .shasum untouched.
+    const mdPath = join(domainPath, "_log", "2026-06-04.md");
+    const raw = readFileSync(mdPath, "utf8");
+    // Cut everything from "\n## 12:00" through EOF.
+    const cutAt = raw.indexOf("\n## 12:00");
+    expect(cutAt).toBeGreaterThan(0);
+    writeFileSync(mdPath, raw.slice(0, cutAt));
+    const results = verifyVault(root);
+    expect(results.length).toBe(2);
+    const first = results.find((r) => r.entryId === entryId(ts1))!;
+    const second = results.find((r) => r.entryId === entryId(ts2))!;
+    expect(first.status).toBe("ok");
+    expect(second.status).toBe("missing");
+    expect(second.ok).toBe(false);
+  });
+});

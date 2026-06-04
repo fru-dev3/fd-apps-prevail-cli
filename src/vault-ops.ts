@@ -15,11 +15,13 @@
 import {
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -330,6 +332,186 @@ export function formatBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-// Used as an inert "verify" placeholder until #41 lands.
-export const VERIFY_PLACEHOLDER_MESSAGE =
-  "vault verify will be implemented as part of the tamper-evident log work (#41). For now, no-op.";
+// ─────────────────────────────────────────────────────────────────────────
+// verifyVault — walk every <vault>/<domain>/_log/.shasum sidecar and
+// re-hash each referenced entry against the .md log. Flags both tampered
+// entries (sha mismatch) and missing entries (id in .shasum but no
+// matching ## section in the .md).
+//
+// The .shasum format is one line per turn:   <entry-id> <hex-sha256>
+// where <entry-id> is YYYYMMDD-HHMM, written at writeTurnSummary time.
+//
+// Each entry in the .md file begins with a leading "\n" + "## HH:MM …"
+// section header. We split the file on the "\n## " boundary, prepend the
+// "\n" back to each entry chunk, and that's the exact text that was
+// hashed at write time. Matching entries to ids is done by the HH:MM in
+// the section header + the YYYY-MM-DD encoded in the .md filename.
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface VerifyEntry {
+  domain: string;
+  file: string; // absolute path to the .md log
+  entryId: string;
+  ok: boolean;
+  expected: string;
+  actual?: string;
+  // "mismatch" — entry exists but sha doesn't match.
+  // "missing"  — entry-id in .shasum but no matching ## section in .md.
+  // "ok"       — clean.
+  status: "ok" | "mismatch" | "missing";
+}
+
+export function verifyVault(vaultPath: string): VerifyEntry[] {
+  const vault = resolve(vaultPath);
+  const out: VerifyEntry[] = [];
+  if (!existsSync(vault)) return out;
+  for (const domain of safeReaddir(vault)) {
+    const domainPath = join(vault, domain);
+    if (!isDir(domainPath)) continue;
+    const logDir = join(domainPath, "_log");
+    if (!isDir(logDir)) continue;
+    const shasumPath = join(logDir, ".shasum");
+    if (!existsSync(shasumPath)) continue;
+    let shasumRaw: string;
+    try {
+      shasumRaw = readFileSync(shasumPath, "utf8");
+    } catch {
+      continue;
+    }
+    // Pre-parse every .md log in this _log/ into {id → entryText}.
+    // Cheap: one log file per day, only loaded when its directory has a
+    // .shasum to verify against.
+    const fileCache = new Map<string, Map<string, string>>(); // filename → id→text
+    for (const rawLine of shasumRaw.split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const parts = line.split(/\s+/);
+      if (parts.length < 2) continue;
+      const id = parts[0]!;
+      const expected = parts[1]!;
+      const dateKey = entryIdToDateKey(id);
+      if (!dateKey) {
+        out.push({
+          domain,
+          file: shasumPath,
+          entryId: id,
+          ok: false,
+          expected,
+          status: "missing",
+        });
+        continue;
+      }
+      const mdName = `${dateKey}.md`;
+      const mdPath = join(logDir, mdName);
+      if (!existsSync(mdPath)) {
+        out.push({
+          domain,
+          file: mdPath,
+          entryId: id,
+          ok: false,
+          expected,
+          status: "missing",
+        });
+        continue;
+      }
+      let entries = fileCache.get(mdName);
+      if (!entries) {
+        let raw: string;
+        try {
+          raw = readFileSync(mdPath, "utf8");
+        } catch {
+          out.push({
+            domain,
+            file: mdPath,
+            entryId: id,
+            ok: false,
+            expected,
+            status: "missing",
+          });
+          continue;
+        }
+        entries = parseLogEntries(raw, dateKey);
+        fileCache.set(mdName, entries);
+      }
+      const text = entries.get(id);
+      if (text === undefined) {
+        out.push({
+          domain,
+          file: mdPath,
+          entryId: id,
+          ok: false,
+          expected,
+          status: "missing",
+        });
+        continue;
+      }
+      const actual = createHash("sha256").update(text).digest("hex");
+      if (actual === expected) {
+        out.push({
+          domain,
+          file: mdPath,
+          entryId: id,
+          ok: true,
+          expected,
+          actual,
+          status: "ok",
+        });
+      } else {
+        out.push({
+          domain,
+          file: mdPath,
+          entryId: id,
+          ok: false,
+          expected,
+          actual,
+          status: "mismatch",
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// Parse a .md log into a map of entryId → exact entry text (matching what
+// writeTurnSummary fed to sha256). Each entry begins with the leading
+// newline + "## HH:MM" header. We use the YYYY-MM-DD dateKey (from the
+// filename) + HH:MM from the header to reconstruct YYYYMMDD-HHMM ids.
+function parseLogEntries(raw: string, dateKey: string): Map<string, string> {
+  const out = new Map<string, string>();
+  // dateKey is "YYYY-MM-DD" — strip dashes for the id prefix.
+  const ymd = dateKey.replace(/-/g, "");
+  // Find every "\n## " boundary. Each entry text is "\n## …\n" through
+  // (but not including) the next "\n## " or EOF — i.e. the exact string
+  // that was appended to the file (renderEntry output).
+  const boundary = "\n## ";
+  const indices: number[] = [];
+  let i = raw.indexOf(boundary);
+  while (i !== -1) {
+    indices.push(i);
+    i = raw.indexOf(boundary, i + 1);
+  }
+  for (let k = 0; k < indices.length; k++) {
+    const start = indices[k]!;
+    const end = k + 1 < indices.length ? indices[k + 1]! : raw.length;
+    const entryText = raw.slice(start, end);
+    // Header line lives right after the leading "\n". Pull HH:MM out of it.
+    // Format: "\n## HH:MM  ·  <tag>…"
+    const headerMatch = entryText.match(/^\n## (\d{2}):(\d{2})\b/);
+    if (!headerMatch) continue;
+    const hh = headerMatch[1]!;
+    const mm = headerMatch[2]!;
+    const id = `${ymd}-${hh}${mm}`;
+    // First occurrence wins — if two turns landed in the same minute, we
+    // only verify the first. Acceptable: entry ids collide on minute
+    // granularity by design (entryId() returns YYYYMMDD-HHMM).
+    if (!out.has(id)) out.set(id, entryText);
+  }
+  return out;
+}
+
+// "20260604-1037" → "2026-06-04" (or null if malformed).
+function entryIdToDateKey(id: string): string | null {
+  const m = id.match(/^(\d{4})(\d{2})(\d{2})-\d{4}$/);
+  if (!m) return null;
+  return `${m[1]}-${m[2]}-${m[3]}`;
+}

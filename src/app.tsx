@@ -25,6 +25,7 @@ import {
   ALL_CLI_KINDS,
   isCliKind,
   readCouncilConfig,
+  readCouncilMaxCallsPerTurn,
   readResponseFramework,
   readAutoCouncil,
   readCheckpoint,
@@ -45,6 +46,7 @@ import {
 } from "./config.ts";
 import { FRAMEWORKS, getFramework, isFrameworkId } from "./framework.ts";
 import { buildLensPreamble, expandLensSelection, getLens, type Lens } from "./lens.ts";
+import { estimateCouncilCost, formatCostLine } from "./council-cost.ts";
 import { buildDomainHeatmap, renderHeatmapText } from "./heatmap.ts";
 import {
   readRecentObservations,
@@ -1211,6 +1213,48 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         : panelists.flatMap((p) =>
             lensList.map((l) => ({ ...p, lens: l as Lens | null })),
           );
+    // Cost guard — refuse to fan out if jobs.length + chair exceeds the
+    // user-configured cap. Default cap (16) covers a typical heavy turn
+    // (4 CLIs × 4 lenses); a full 4 × 8 fanout needs the user to raise
+    // it explicitly. The refusal path appends a system message and
+    // returns early — the session was never flipped to pending so chat
+    // input remains usable. We also defensively clear pending in case a
+    // caller (auto-council) had set it.
+    const maxCallsPerTurn = readCouncilMaxCallsPerTurn();
+    const projectedTotalCalls = jobs.length + 1; // +1 for chair synthesis
+    if (projectedTotalCalls > maxCallsPerTurn) {
+      const refusalTs = Date.now();
+      setChats((m) => {
+        const cur = m.get(key);
+        if (!cur) return m;
+        return new Map(m).set(key, {
+          ...cur,
+          messages: [
+            ...cur.messages,
+            {
+              role: "system" as const,
+              content:
+                `council fanout (${projectedTotalCalls} calls) exceeds ` +
+                `councilMaxCallsPerTurn (${maxCallsPerTurn}) — narrow your ` +
+                `lens selection or raise the cap with ` +
+                "`prevail config set councilMaxCallsPerTurn N`",
+              ts: refusalTs,
+            },
+          ],
+          pending: false,
+        });
+      });
+      return;
+    }
+    // Cost estimate — shown as a one-line system message right before
+    // the "convening council" line so the user sees the rough spend
+    // before the panel fires. Numbers are deliberately coarse; the
+    // label says "rough" so nobody mistakes them for a real bill.
+    const costEstimate = estimateCouncilCost({
+      panelists: panelists.map((p) => ({ cliKind: p.cli.kind, model: p.model })),
+      lensCount: lensList.length === 0 ? 1 : lensList.length,
+      promptChars: text.length,
+    });
     // One ts per JOB so multiple jobs sharing a CLI (multiple model
     // variants, or multiple lenses) each get their own pending bubble.
     const pendingTsByIdx = jobs.map((_, i) => userTs + 100 + i);
@@ -1227,17 +1271,25 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         .join(" · ");
       const introMsgs: ChatSession["messages"] = [
         userMsg,
+        // Cost estimate first — gives the user a one-glance "you're
+        // about to spend ~$X" right before the "convening council" line.
+        // Rough heuristic, labeled as such in formatCostLine().
+        {
+          role: "system" as const,
+          content: formatCostLine(costEstimate),
+          ts: introTs,
+        },
         {
           role: "system" as const,
           content: `convening council: ${panelLabel}`,
-          ts: introTs,
+          ts: introTs + 1,
         },
       ];
       if (skippedLabels.length > 0) {
         introMsgs.push({
           role: "system" as const,
           content: `skipped (failed launch probe): ${skippedLabels.join(", ")}`,
-          ts: introTs + 1,
+          ts: introTs + 2,
         });
       }
       // Drop a "thinking" placeholder bubble per job immediately so the

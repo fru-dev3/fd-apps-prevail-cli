@@ -27,6 +27,7 @@ interface Args {
   connectors: boolean;
   connectorsArgs: string[];
   mcp: boolean;
+  mcpUnsafeDetach: boolean;
   bench: boolean;
   benchArgs: string[];
   vault: boolean;
@@ -52,6 +53,7 @@ function parseArgs(argv: string[]): Args {
   let connectors = false;
   let connectorsArgs: string[] = [];
   let mcp = false;
+  let mcpUnsafeDetach = false;
   let bench = false;
   let benchArgs: string[] = [];
   let vault = false;
@@ -86,6 +88,14 @@ function parseArgs(argv: string[]): Args {
       break;
     } else if (a === "mcp") {
       mcp = true;
+      // Consume any remaining mcp-specific flags (e.g. --unsafe-detach)
+      // without falling back to the generic flag parser — same shape as
+      // schedule/daemon/telegram, but mcp has no positional sub-commands
+      // so a small inline loop is enough.
+      for (let j = i + 1; j < argv.length; j++) {
+        const f = argv[j];
+        if (f === "--unsafe-detach") mcpUnsafeDetach = true;
+      }
       break;
     } else if (a === "bench") {
       bench = true;
@@ -124,6 +134,7 @@ function parseArgs(argv: string[]): Args {
     connectors,
     connectorsArgs,
     mcp,
+    mcpUnsafeDetach,
     bench,
     benchArgs,
     vault,
@@ -145,6 +156,8 @@ USAGE
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
+                              auth: clients must send Authorization: prevail-<token> from ~/.prevail/mcp.json
+                              parent-check: refuses non-TTY / unknown parents — bypass with --unsafe-detach
   prevail bench [...]         run the public council benchmark suite
   prevail vault [...]         prune old logs, snapshot/restore the vault
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
@@ -1028,7 +1041,7 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     restoreVault,
     defaultBackupPath,
     formatBytes,
-    VERIFY_PLACEHOLDER_MESSAGE,
+    verifyVault,
   } = await import("./vault-ops.ts");
   const cfg = readConfig();
   const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
@@ -1142,7 +1155,44 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   }
 
   if (sub === "verify") {
-    console.log(VERIFY_PLACEHOLDER_MESSAGE);
+    const verbose = args.includes("--verbose") || args.includes("-v");
+    if (!existsSync(vault)) {
+      console.error(`vault path not found: ${vault}`);
+      process.exit(1);
+    }
+    const results = verifyVault(vault);
+    // ANSI escapes — small enough to inline, no helper needed.
+    const RED = "\x1b[31m";
+    const YEL = "\x1b[33m";
+    const GRN = "\x1b[32m";
+    const DIM = "\x1b[2m";
+    const RST = "\x1b[0m";
+    let mismatches = 0;
+    let missing = 0;
+    const domains = new Set<string>();
+    for (const r of results) {
+      domains.add(r.domain);
+      // Print path relative to the vault when possible — keeps output tight.
+      const rel = r.file.startsWith(vault) ? r.file.slice(vault.length + 1) : r.file;
+      if (r.status === "mismatch") {
+        mismatches++;
+        const exp = r.expected.slice(0, 8);
+        const act = (r.actual ?? "").slice(0, 8);
+        console.log(`${RED}! ${rel} @ ${r.entryId} — sha mismatch (stored ${exp}..., computed ${act}...)${RST}`);
+      } else if (r.status === "missing") {
+        missing++;
+        console.log(`${YEL}? ${rel} @ ${r.entryId} — entry not found (was the file edited?)${RST}`);
+      } else if (verbose) {
+        console.log(`${DIM}✓ ${rel} @ ${r.entryId}${RST}`);
+      }
+    }
+    const issues = mismatches + missing;
+    if (issues === 0) {
+      console.log(`${GRN}verified ${results.length} entries across ${domains.size} domain${domains.size === 1 ? "" : "s"}. 0 mismatches${RST}`);
+    } else {
+      console.log(`${RED}FOUND ${issues} issue${issues === 1 ? "" : "s"}${RST} (${mismatches} mismatch${mismatches === 1 ? "" : "es"}, ${missing} missing) across ${domains.size} domain${domains.size === 1 ? "" : "s"}`);
+      process.exit(1);
+    }
     return;
   }
 
@@ -1157,7 +1207,7 @@ function printVaultHelp(): void {
   console.error("                                          dry-run by default; --force to delete");
   console.error("  prevail vault backup [--output <path>]  default: ~/prevail-backup-<date>.tar.gz");
   console.error("  prevail vault restore <archive>         interactive confirm prompt");
-  console.error("  prevail vault verify                    placeholder (#41)");
+  console.error("  prevail vault verify [--verbose]        re-hash logged entries against _log/.shasum");
 }
 
 async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
@@ -1259,7 +1309,7 @@ async function main() {
     const cfg = readConfig();
     const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
     const { runMcpServer } = await import("./mcp-server.ts");
-    await runMcpServer(vault);
+    await runMcpServer(vault, { unsafeDetach: args.mcpUnsafeDetach });
     return;
   }
   if (args.bench) {

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { parseVerdict } from "./verdict-parser.ts";
 import { encodeMeta, defaultRetroDue } from "./calibration.ts";
 import { indexEntry } from "./memory.ts";
@@ -67,6 +68,19 @@ export function writeTurnSummary(args: TurnSummaryArgs): void {
     const entry = renderEntry(args);
     appendFileSync(file, entry);
     headerLine = entry.split("\n").find((l) => l.startsWith("## ")) ?? "";
+    // Tamper-evident sidecar: alongside the .md log, append one line to
+    // _log/.shasum recording <entry-id> <sha256-of-entry>. The verify
+    // subcommand later walks these to flag mismatches. Best-effort —
+    // a failure here must never crash the chat path, so wrap in try/catch
+    // and swallow.
+    try {
+      const sha = createHash("sha256").update(entry).digest("hex");
+      const id = entryId(args.ts);
+      const shasumFile = join(logDir, ".shasum");
+      appendFileSync(shasumFile, `${id} ${sha}\n`);
+    } catch {
+      // best-effort — never break the user's chat
+    }
   } catch {
     return;
   }
@@ -161,7 +175,7 @@ function renderEntry(args: TurnSummaryArgs): string {
   ].join("\n");
 }
 
-function entryId(ts: number): string {
+export function entryId(ts: number): string {
   const d = new Date(ts);
   const y = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, "0");

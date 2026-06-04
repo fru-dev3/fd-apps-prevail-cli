@@ -75,6 +75,41 @@ export interface UserConfig {
   // to silently routing through runCouncil instead. "off" disables.
   autoCouncil?: "off" | "suggest" | "auto";
   domainAutoCouncil?: Record<string, "off" | "suggest" | "auto">;
+  // Hard cap on the number of CLI calls a single /council turn can fire.
+  // panelists × lens fanout count must be <= this number, or the turn
+  // refuses with a friendly error. Default 16 — covers 4 CLIs × 4 lenses,
+  // a typical heavy turn. Set higher if you want full 4 × 8 = 32 lens
+  // fanouts. Set to 1 to effectively disable council fanout.
+  councilMaxCallsPerTurn?: number;
+}
+
+// Default hard cap on /council calls per turn. Lives at the top so the
+// readCouncilMaxCallsPerTurn helper and any callers that want to label
+// the default (UI hints, error messages) read from one constant.
+export const DEFAULT_COUNCIL_MAX_CALLS_PER_TURN = 16;
+
+export function readCouncilMaxCallsPerTurn(): number {
+  const cfg = readConfig();
+  const raw = cfg?.councilMaxCallsPerTurn;
+  // Guard against junk values in the JSON (negative, zero, NaN, non-int).
+  // Anything invalid falls back to the default rather than silently
+  // disabling the cap or producing an off-by-one.
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 1) {
+    return DEFAULT_COUNCIL_MAX_CALLS_PER_TURN;
+  }
+  return Math.floor(raw);
+}
+
+export function setCouncilMaxCallsPerTurn(n: number): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (!Number.isFinite(n) || n < 1) {
+    delete next.councilMaxCallsPerTurn;
+  } else {
+    next.councilMaxCallsPerTurn = Math.floor(n);
+  }
+  writeConfig(next);
 }
 
 export function readGlobalCouncilDefault(): boolean {

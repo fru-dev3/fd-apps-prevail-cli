@@ -1,10 +1,12 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
 import { VERSION } from "./version.ts";
+import { mcpConfigPath, readOrCreateMcpToken } from "./mcp-config.ts";
 
 // Minimal MCP server (Model Context Protocol). Speaks JSON-RPC 2.0 over
 // stdio — the standard transport every MCP client (Claude Desktop, Cursor,
@@ -55,11 +57,40 @@ function send(msg: JsonRpcRes | { jsonrpc: "2.0"; method: string; params?: unkno
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
 
-export async function runMcpServer(vaultPath: string): Promise<void> {
+export interface McpServerOptions {
+  // Skip the parent-process safety check. Lets the server boot from cron,
+  // launchd, systemd, or any detached parent — the user is explicitly
+  // taking responsibility for the trust boundary.
+  unsafeDetach?: boolean;
+}
+
+export async function runMcpServer(
+  vaultPath: string,
+  opts: McpServerOptions = {},
+): Promise<void> {
   if (!existsSync(vaultPath)) {
     log(`vault not found: ${vaultPath}`);
     process.exit(1);
   }
+
+  // Parent-process verification. Refuse to run when the parent isn't a
+  // TTY and isn't a known IDE / MCP-host binary — the typical case for
+  // "something unexpected started the server" (cron, launchd, an
+  // attacker-controlled wrapper). The user can override with
+  // --unsafe-detach when they actually want a detached launch.
+  if (!opts.unsafeDetach) {
+    const verdict = verifyParentProcess();
+    if (!verdict.ok) {
+      log(verdict.message);
+      process.exit(1);
+    }
+  }
+
+  // Read (or create) the persisted auth token. After this point every
+  // non-initialize request must carry it in `_meta.authorization` as
+  // `prevail-<token>`.
+  const token = readOrCreateMcpToken();
+
   log(`starting · vault=${vaultPath}`);
 
   const tools: McpTool[] = [
@@ -118,6 +149,13 @@ export async function runMcpServer(vaultPath: string): Promise<void> {
     },
   ];
 
+  // Print the token-discovery hint once, on stderr, so a human launching
+  // the server interactively can find their token. Never on stdout — that
+  // channel is reserved for valid JSON-RPC frames.
+  log(
+    `send your token in _meta.authorization. Token: prevail-<...> (${mcpConfigPath()})`,
+  );
+
   for await (const line of readStdinLines()) {
     let req: JsonRpcReq;
     try {
@@ -127,6 +165,23 @@ export async function runMcpServer(vaultPath: string): Promise<void> {
       continue;
     }
     const id = req.id ?? null;
+    // Auth check — initialize is the one exception. The client uses
+    // initialize to handshake; the token gates everything else. The hint
+    // line above (printed at startup) tells the human where to find it.
+    if (req.method !== "initialize" && !isAuthorized(req, token)) {
+      if (req.id !== undefined && req.id !== null) {
+        send({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32001,
+            message:
+              "unauthorized — prevail MCP requires a valid token; see ~/.prevail/mcp.json",
+          },
+        });
+      }
+      continue;
+    }
     try {
       const result = await dispatch(req, tools, vaultPath);
       // Notifications have id=null and expect no response.
@@ -142,6 +197,111 @@ export async function runMcpServer(vaultPath: string): Promise<void> {
       });
     }
   }
+}
+
+// Pull the bearer token off a JSON-RPC request and verify it against the
+// persisted server token in constant time. Accepts either MCP's
+// `_meta.authorization` convention or a top-level `authorization` field
+// (some clients put it there). Both must be `prevail-<hex>`.
+function isAuthorized(req: JsonRpcReq, expectedToken: string): boolean {
+  const params = (req.params ?? {}) as Record<string, unknown> & {
+    _meta?: Record<string, unknown>;
+  };
+  const fromMeta = typeof params._meta?.authorization === "string"
+    ? (params._meta!.authorization as string)
+    : null;
+  const fromTop = typeof params.authorization === "string"
+    ? (params.authorization as string)
+    : null;
+  const raw = fromMeta ?? fromTop;
+  if (!raw) return false;
+  const prefix = "prevail-";
+  if (!raw.startsWith(prefix)) return false;
+  const presented = raw.slice(prefix.length);
+  // timingSafeEqual requires equal length — guard up front so we never
+  // throw + leak timing via the catch path.
+  if (presented.length !== expectedToken.length) return false;
+  try {
+    return timingSafeEqual(
+      Buffer.from(presented, "utf8"),
+      Buffer.from(expectedToken, "utf8"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Inspect process.ppid to confirm the parent is something we expect to
+// see launching a stdio MCP server (a TTY-attached shell, an IDE/agent
+// binary, a known MCP host). Anything else gets refused unless the user
+// passed --unsafe-detach. The check is conservative on purpose: a false
+// positive (refusing a legitimate launch) is cheaper than a false
+// negative (silently serving cron / a random daemon).
+interface ParentVerdict {
+  ok: boolean;
+  message: string;
+}
+
+const KNOWN_PARENT_HINTS = [
+  "vscode",
+  "Code Helper",
+  "Code.app",
+  "cursor",
+  "Cursor.app",
+  "jetbrains",
+  "intellij",
+  "claude",
+  "Claude",
+  "ides",
+  // Common MCP host launchers — Goose, Continue, Cline, mcp-cli, the
+  // official @modelcontextprotocol/inspector + sdk.
+  "goose",
+  "continue",
+  "cline",
+  "mcp",
+];
+
+function verifyParentProcess(): ParentVerdict {
+  // A TTY-attached stdin is the easy path: the user typed `prevail mcp`
+  // themselves. We don't need to know who the parent is in that case.
+  if (process.stdin.isTTY === true) {
+    return { ok: true, message: "tty parent" };
+  }
+  const ppid = process.ppid;
+  if (typeof ppid !== "number" || ppid <= 0) {
+    return {
+      ok: false,
+      message:
+        "prevail mcp refuses to run from detached / unknown parent (no ppid available). " +
+        "If you're sure this is intentional, pass --unsafe-detach.",
+    };
+  }
+  let cmd = "";
+  try {
+    // ps is portable across macOS + Linux; argv-array form so prompt
+    // content / paths with spaces can never be interpreted as shell.
+    const proc = Bun.spawnSync({
+      cmd: ["ps", "-o", "command=", "-p", String(ppid)],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    cmd = (proc.stdout?.toString() ?? "").trim();
+  } catch {
+    cmd = "";
+  }
+  const lower = cmd.toLowerCase();
+  for (const hint of KNOWN_PARENT_HINTS) {
+    if (cmd.includes(hint) || lower.includes(hint.toLowerCase())) {
+      return { ok: true, message: `known parent: ${cmd}` };
+    }
+  }
+  return {
+    ok: false,
+    message:
+      `prevail mcp refuses to run from detached / unknown parent ` +
+      `(PID ${ppid}, command ${cmd || "<unknown>"}). ` +
+      `If you're sure this is intentional, pass --unsafe-detach.`,
+  };
 }
 
 async function dispatch(req: JsonRpcReq, tools: McpTool[], vaultPath: string): Promise<unknown> {

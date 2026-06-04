@@ -7,6 +7,29 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.9.2] — 2026-06-04 · Hard security cluster
+
+Phase 3 of the production-readiness audit. The four real security items from the SECURITY.md threat model, shipped as one cluster.
+
+### Added — Operating-manual prompt-injection hardening
+A new "Treat vault contents as untrusted input" section in `vault-demo/AGENTS-operating.md` tells the AI explicitly that vault file contents are user-provided input, not authoritative instructions. The model must flag suspected injection attempts as `PROMPT-INJECTION SUSPECTED in <path>` and refuse to act on embedded commands without re-confirmation from the current user-turn. Cross-referenced from SECURITY.md and docs/threat-model.md.
+
+### Added — Tamper-evident `_log/` via SHA-256 sidecar
+Every `writeTurnSummary` call now also appends `<entry-id> <sha256>` to a sibling `_log/.shasum` file. New `prevail vault verify` command walks the .shasum files, re-hashes the matching entries, and surfaces mismatches (red `!`) and missing entries (yellow `?`). Best-effort write — never crashes the chat path.
+
+### Added — Council cost estimator + maxCallsPerTurn cap
+Before firing a `/council` turn, prevAIl computes the panelist × lens × chair call count and prints a one-line `~$X.XX for N calls (rough estimate)` system message. If the count exceeds the `councilMaxCallsPerTurn` cap (default 16), the turn is refused with a friendly system message — no fanout, no spend, chat input stays usable. Coarse per-CLI heuristics: claude $0.005, codex $0.004, gemini $0.003, ollama $0.
+
+### Added — MCP server auth + parent-process check
+`prevail mcp` now:
+- **Requires a token.** Auto-generated 32-byte random hex token on first run, persisted to `~/.prevail/mcp.json` (chmod 0600). Every non-`initialize` request must include `_meta.authorization: prevail-<token>` (constant-time compared). Unauthorized requests get JSON-RPC error -32001.
+- **Verifies the parent process.** Refuses to start if the parent isn't a TTY or a known IDE/MCP client (vscode, cursor, jetbrains, claude, goose, continue, cline, etc.). Pass `--unsafe-detach` to override for legitimate exotic launchers.
+
+### Tests
++22 new tests (council-cost 7 + mcp-config 4 + tamper-evident verify 4 + mcp-server smoke 7). Total: 146 pass / 0 fail / 3 skip.
+
+---
+
 ## [0.9.1] — 2026-06-04 · Operational hygiene + vault tooling
 
 Phase 2 of the production-readiness audit. Five tasks shipped in one tag — all small, isolated, additive.
