@@ -7,6 +7,28 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.1.2] — 2026-06-04 · `prevail upgrade` actually works
+
+User report: "I ran `prevail upgrade` and it didn't seem to work. Are you sure it works?" — they were right. It didn't.
+
+Root cause: the release workflow uploads platform builds as **tarballs** named `prevail-v1.1.1-darwin-arm64.tar.gz`, but `prevail upgrade` was looking for **raw binaries** named `prevail-darwin-arm64` with an exact-string match. No asset ever matched, so `checkForUpdate` returned `binaryUrl: null` and the command bailed silently.
+
+Three fixes:
+
+### Matcher: substring instead of exact equality
+`platformSlug()` returns just `darwin-arm64` / `linux-x64`. The asset finder picks any asset whose name **contains** the slug and is not a `.sha256` sidecar. Tarballs preferred, raw binaries as fallback. Forward-compatible with future workflow changes.
+
+### Extraction: handle `.tar.gz` assets
+New `extractIfArchive(path)` helper. When the staged download ends in `.tar.gz` / `.tgz`, spawns `tar -xzf` (argv array, no `shell: true`) into a fresh tmpdir, walks the result for a binary named `prevail` (or `prevail-<slug>` as a fallback), returns its path. Raw binary assets bypass extraction unchanged.
+
+### Staged-file extension preserved
+The staged download path used to be `.prevail.upgrade.<pid>.<ts>` with no extension — even if we'd added extraction earlier, `tar` would have had nothing to dispatch on. Stage path now ends in `.tar.gz` when the asset does.
+
+### Verified end-to-end
+Pulled the actual `prevail-v1.1.1-darwin-arm64.tar.gz` (26 MB) from GitHub, ran `extractIfArchive` against it, confirmed it returns a 72 MB `prevail` binary at a tmpdir path. Backwards-compatible `platformBinaryName()` kept for any v1.0.x caller still on the old API.
+
+---
+
 ## [1.1.1] — 2026-06-04 · Antigravity flag surface + model names corrected
 
 Live-tested v1.1.0 against the actual `agy` binary and found three real differences from the legacy Gemini CLI surface that prevAIl was passing the wrong flags for:

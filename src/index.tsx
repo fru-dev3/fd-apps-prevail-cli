@@ -1292,7 +1292,8 @@ async function upgradeCommand(args: string[]): Promise<void> {
     downloadBinary,
     applyUpgrade,
     currentBinaryPath,
-    platformBinaryName,
+    extractIfArchive,
+    platformSlug,
   } = await import("./upgrade.ts");
   let checkOnly = false;
   let force = false;
@@ -1322,7 +1323,7 @@ async function upgradeCommand(args: string[]): Promise<void> {
   }
   if (!info.binaryUrl) {
     console.error(
-      `release v${info.latest} has no asset named ${platformBinaryName()}. Download it manually from ${info.releaseUrl}.`,
+      `release v${info.latest} has no asset matching '${platformSlug()}'. Download it manually from ${info.releaseUrl}.`,
     );
     process.exit(1);
   }
@@ -1340,7 +1341,19 @@ async function upgradeCommand(args: string[]): Promise<void> {
   const { join: joinPath, dirname: _dirname } = await import("node:path");
   const current = currentBinaryPath();
   const stageDir = _dirname(current);
-  const stageName = `.prevail.upgrade.${process.pid}.${Date.now()}`;
+  // Preserve the asset's extension on the staged file so extractIfArchive
+  // can tell what to do. The bug was that downloads ended in `.upgrade.<pid>`
+  // with no extension; tar would never get invoked even when the asset was
+  // a tarball, and applyUpgrade tried to rename a .tar.gz over the live
+  // binary — bricking the install on success and silently failing on the
+  // download side.
+  const downloadName = info.binaryUrl.split("/").pop() ?? "prevail.bin";
+  const ext = downloadName.endsWith(".tar.gz")
+    ? ".tar.gz"
+    : downloadName.endsWith(".tgz")
+      ? ".tgz"
+      : "";
+  const stageName = `.prevail.upgrade.${process.pid}.${Date.now()}${ext}`;
   let stagePath = joinPath(stageDir, stageName);
   // If the binary's directory isn't writable we'll catch that in applyUpgrade,
   // but we should also avoid leaving cruft there — fall back to tmpdir for
@@ -1359,8 +1372,17 @@ async function upgradeCommand(args: string[]): Promise<void> {
     console.error(`download failed: ${(err as Error).message}`);
     process.exit(1);
   }
+  // If the asset was a tarball, extract and apply the binary inside it.
+  // For raw binaries this is a no-op (returns the input path unchanged).
+  let binaryToApply: string;
   try {
-    await applyUpgrade(stagePath, current);
+    binaryToApply = extractIfArchive(stagePath);
+  } catch (err) {
+    console.error(`extract failed: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  try {
+    await applyUpgrade(binaryToApply, current);
   } catch (err) {
     console.error((err as Error).message);
     process.exit(1);

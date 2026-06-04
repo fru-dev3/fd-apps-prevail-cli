@@ -15,17 +15,22 @@
 // In that case we tell the user to `brew upgrade prevail` instead — silently
 // failing or asking for sudo would be worse than punting.
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   accessSync,
   constants as fsConstants,
   createWriteStream,
   existsSync,
+  mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
+  statSync,
   unlinkSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { VERSION } from "./version.ts";
@@ -57,10 +62,17 @@ interface GitHubRelease {
 }
 
 /**
- * Returns the platform-specific binary name we publish in the GitHub release.
- * Matches package.json's `build:<platform>-<arch>` outputs.
+ * Returns the `<platform>-<arch>` slug we use to identify the right release
+ * asset for the current host. Examples: "darwin-arm64", "linux-x64".
+ *
+ * Until v1.1.1 this returned a full binary name like "prevail-darwin-arm64"
+ * and the asset matcher did an exact-string equality. That broke when the
+ * release workflow shipped tarballs as "prevail-v1.1.1-darwin-arm64.tar.gz"
+ * — no exact match, upgrade silently said "no binary for this platform"
+ * and exited. The slug-only form lets the matcher accept any asset whose
+ * name contains the platform+arch substring (raw binary, tarball, zip).
  */
-export function platformBinaryName(
+export function platformSlug(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
 ): string {
@@ -71,11 +83,22 @@ export function platformBinaryName(
       `unsupported architecture: ${arch}. prevail ships binaries for x64 and arm64 only.`,
     );
   }
-  if (platform === "darwin") return `prevail-darwin-${mappedArch}`;
-  if (platform === "linux") return `prevail-linux-${mappedArch}`;
+  if (platform === "darwin") return `darwin-${mappedArch}`;
+  if (platform === "linux") return `linux-${mappedArch}`;
   throw new Error(
     `unsupported platform: ${platform}. prevail ships binaries for darwin and linux only.`,
   );
+}
+
+/**
+ * Backwards-compatible name kept for any caller still on the v1.0.x API.
+ * New code should prefer platformSlug + the substring-match asset finder.
+ */
+export function platformBinaryName(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  return `prevail-${platformSlug(platform, arch)}`;
 }
 
 /**
@@ -171,9 +194,23 @@ export async function checkForUpdate(
   const release = await findLatestRelease(opts);
   const latest = normalizeVersion(release.tag_name);
   const assets = release.assets ?? [];
-  const wantedName = platformBinaryName();
-  const binary = assets.find((a) => a.name === wantedName);
-  const checksum = assets.find((a) => a.name === `${wantedName}.sha256`);
+  const slug = platformSlug();
+  // Substring match — accepts the current "prevail-v1.1.1-darwin-arm64.tar.gz"
+  // tarball convention AND raw-binary names like "prevail-darwin-arm64" if
+  // we ever go back to that. The first asset that contains the slug and is
+  // NOT a checksum sidecar wins. Preference: tarballs first (current
+  // convention), raw binaries as a fallback.
+  const matching = assets.filter(
+    (a) => a.name.includes(slug) && !a.name.endsWith(".sha256"),
+  );
+  const tarball = matching.find((a) => a.name.endsWith(".tar.gz"));
+  const rawBinary = matching.find(
+    (a) => !a.name.endsWith(".tar.gz") && !a.name.endsWith(".zip"),
+  );
+  const binary = tarball ?? rawBinary ?? null;
+  const checksum = binary
+    ? assets.find((a) => a.name === `${binary.name}.sha256`)
+    : undefined;
   return {
     current: VERSION,
     latest,
@@ -182,6 +219,60 @@ export async function checkForUpdate(
     releaseUrl: release.html_url,
     isNewer: isNewer(latest, VERSION),
   };
+}
+
+/**
+ * If the downloaded artifact is a tarball, extract it to a fresh tmpdir and
+ * return the path to the `prevail` binary inside. Otherwise (raw binary),
+ * return the input path unchanged.
+ *
+ * The tarballs built by `.github/workflows/release.yml` contain a single
+ * file named exactly `prevail` (the bun --compile output). We tolerate
+ * a couple of layouts: top-level `prevail`, top-level `prevail-<slug>`,
+ * or a single directory containing one of those.
+ */
+export function extractIfArchive(downloadedPath: string): string {
+  if (!downloadedPath.endsWith(".tar.gz") && !downloadedPath.endsWith(".tgz")) {
+    return downloadedPath;
+  }
+  const extractDir = mkdtempSync(join(tmpdir(), "prevail-upgrade-"));
+  // Pass arg array, not shell:true — we control both the binary name (tar)
+  // and the args. No user-provided content can land here as a shell token.
+  const result = spawnSync("tar", ["-xzf", downloadedPath, "-C", extractDir], {
+    stdio: "inherit",
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `failed to extract tarball ${downloadedPath} (tar exited ${result.status})`,
+    );
+  }
+  // Walk one level deep looking for the binary. Accept: prevail, or anything
+  // matching prevail-<platform>-<arch>. Skip directories.
+  const candidates: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    if (depth > 2) return;
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        walk(full, depth + 1);
+        continue;
+      }
+      if (entry === "prevail" || /^prevail(-[a-z0-9-]+)?$/.test(entry)) {
+        candidates.push(full);
+      }
+    }
+  };
+  walk(extractDir, 0);
+  if (candidates.length === 0) {
+    throw new Error(
+      `extracted tarball did not contain a recognizable 'prevail' binary (looked under ${extractDir})`,
+    );
+  }
+  // Prefer the literal "prevail" name; fall back to the first slug-suffixed
+  // binary if the tarball was built with the per-platform naming.
+  const literal = candidates.find((p) => /\/prevail$/.test(p));
+  return literal ?? candidates[0]!;
 }
 
 /**

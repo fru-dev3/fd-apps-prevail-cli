@@ -8,4 +8,4 @@
 // Keep this in lockstep with package.json. A drift between them won't
 // break anything functionally, but the user will see two different
 // numbers and not trust either.
-export const VERSION = "1.1.1";
+export const VERSION = "1.1.2";
