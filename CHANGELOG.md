@@ -7,6 +7,45 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.2.0] — 2026-06-04 · Canonical benchmark starter pack
+
+Honest gap exposed: the `prevail bench` tooling shipped in v0.8.0 was machinery without content. A fresh install had `bench seed / bench run / bench score / bench leaderboard` all wired up — but no canonical questions, so `bench run --canonical` returned "no canonical questions found under ..." and the whole flow felt empty. The user asked. This release fixes it.
+
+### Added — 10 canonical starter questions in `vault-demo/benchmark/questions/`
+
+Each one is written against the bundled Alex Rivera demo persona with a clear ground-truth verdict and 5 verdict keywords:
+
+| Domain | Question |
+|---|---|
+| `wealth` | Prepay 6% mortgage or invest $60k? |
+| `tax` | Roth conversion this year, and how much? |
+| `real-estate` | Buy a $850k house at 7.1% or keep renting? |
+| `career` | Leave a stable senior role for a Series B equity offer? |
+| `health` | Strength or cardio with 4 hr/wk? |
+| `estate` | $1M whole life at $9.8k/yr or $1M term at $850/yr? |
+| `business` | Hire a $180k full-timer or keep a $200/hr contractor? |
+| `insurance` | Buy a $2M umbrella policy at $400/yr? |
+| `vision` | Stay in a profitable firm or partial-transition to a SaaS idea? |
+| `social` | Have the hard conversation with a 15-year friend or let it fade? |
+
+Each question file's `## Notes` section spells out the real-world reasoning so the LLM-as-judge can grade alignment against actual decision logic, not just keyword presence.
+
+### Added — `vault-demo/benchmark/README.md`
+
+Explains how the scoring works (mechanical + LLM judge) and how to replace any question with the user's own — either by editing the file directly, scaffolding a new one (`prevail bench seed --domain <name>`), or importing from history (`prevail bench seed --from-log <name>`). Makes it explicit this is a starter pack, not a fixed test.
+
+### How to use
+
+```
+prevail bench run --canonical --cli claude
+prevail bench score
+prevail bench leaderboard
+```
+
+The starter pack works against any newly-installed prevAIl with a council CLI configured. Once you've replaced or augmented questions with your own real verdicts, future model releases get a real test against your life rather than against a generic suite.
+
+---
+
 ## [1.1.2] — 2026-06-04 · `prevail upgrade` actually works
 
 User report: "I ran `prevail upgrade` and it didn't seem to work. Are you sure it works?" — they were right. It didn't.
