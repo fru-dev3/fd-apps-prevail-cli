@@ -29,12 +29,20 @@ export interface TurnSummaryArgs {
   // so calibration.ts can later compute "how often does my gut match
   // the council, and when it doesn't, who's right?"
   gut?: string;
-  // Optional response-shaping metadata that was ACTIVE at send time.
-  // Surfaced in the daily log as a `> meta:` blockquote line so the
-  // domain learns over time which lens/framework combos shaped which
-  // decisions. Display labels (e.g. "BLUF", "CONTRARIAN"), not ids.
+  // Response-shaping + cockpit-state snapshot at SEND TIME. All of
+  // these are surfaced together in the daily log's `> meta:` line so a
+  // future read of the log can fully reconstruct which toggles were
+  // ON when this turn fired — not just framework/lens, but web access,
+  // serendipity, council mode, and the exact model id. The user
+  // explicitly asked: "when logging the questions and answers in
+  // _log you must include all the configs like model, date time,
+  // serendipity, web, lens, etc."
   framework?: string;
   lens?: string;
+  model?: string; // exact model id (or "default" / "" when not pinned)
+  webAccess?: "allow" | "deny";
+  serendipity?: boolean;
+  councilOn?: boolean;
   // When true, the FULL user prompt + FULL assistant reply are written
   // verbatim (just whitespace-normalized) — no heuristicSummarize
   // truncation. This is "checkpoint" mode: every interaction lands on
@@ -121,20 +129,24 @@ function renderEntry(args: TurnSummaryArgs): string {
           retroDue: defaultRetroDue(args.ts),
         })
       : null;
-  // Response-shaping metadata: emit a blockquote line under the Q/A pair
-  // when the turn carried a framework or a lens. Blockquote form keeps
-  // the existing format intact (every renderer / recall pass already
-  // skips quoted prose), while leaving a greppable trail of which
-  // lens-of-attack + structure shaped this decision. Skipped entirely
-  // when neither is set — old entries render exactly as before.
+  // Response-shaping + cockpit-state snapshot. Emitted as a blockquote
+  // so renderers and recall passes that ignore quoted prose see it as
+  // metadata, but the line stays greppable. The user explicitly asked
+  // for the FULL config: model, framework, lens, web, serendipity,
+  // council mode. We always emit cli/time/date implicitly (date comes
+  // from the file path, time from the `## HH:MM` header) — the meta
+  // line carries everything ELSE that was active at send time.
   const shapeBits: string[] = [];
   shapeBits.push(args.cliLabel);
+  if (args.model && args.model.trim()) shapeBits.push(`model=${args.model.trim()}`);
   if (args.framework) shapeBits.push(`framework=${args.framework}`);
+  else shapeBits.push("framework=none");
   if (args.lens) shapeBits.push(`lens=${args.lens}`);
-  const shapeLine =
-    args.framework || args.lens
-      ? `> meta: ${shapeBits.join(" · ")}`
-      : null;
+  else shapeBits.push("lens=none");
+  if (args.webAccess) shapeBits.push(`web=${args.webAccess === "allow" ? "on" : "off"}`);
+  if (args.serendipity !== undefined) shapeBits.push(`serendipity=${args.serendipity ? "on" : "off"}`);
+  if (args.councilOn !== undefined) shapeBits.push(`council=${args.councilOn ? "on" : "off"}`);
+  const shapeLine = `> meta: ${shapeBits.join(" · ")}`;
   return [
     "",
     `## ${timeKey(args.ts)}  ·  ${tag}${divergenceFlag}`,
@@ -143,7 +155,8 @@ function renderEntry(args: TurnSummaryArgs): string {
     `**Q:** ${quoteShield(q)}`,
     "",
     `**A:** ${quoteShield(a)}`,
-    ...(shapeLine ? ["", shapeLine] : []),
+    "",
+    shapeLine,
     "",
   ].join("\n");
 }

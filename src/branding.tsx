@@ -370,22 +370,22 @@ function StatusColumn({
         <text fg={theme.fgFaint}>{"defaults"}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
           <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{"⚖ Council:"}</text>
-          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{globalCouncilOn ? " ON" : " off"}</text>
+          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{globalCouncilOn ? " ON" : " off"}</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
           <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>{"◆ Framework:"}</text>
-          <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>{` ${fwLabel}`}</text>
+          <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>{` ${` ${fwLabel}`}`}</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleLens}>
           <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>{"◇ Lens:"}</text>
-          <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>{` ${lensLabel}`}</text>
+          <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>{` ${` ${lensLabel}`}`}</text>
         </box>
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"        "}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onCycleWeb}>
           <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{"⬡ Web:"}</text>
-          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{webAllow ? " on" : " off"}</text>
+          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{webAllow ? " on" : " off"}</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
           <text fg={theme.aiAccent}>◇ configure</text>

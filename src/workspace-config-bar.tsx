@@ -164,13 +164,15 @@ export function WorkspaceConfigBar({
 
   return (
     <box flexDirection="row" height={1} paddingLeft={1} paddingRight={1}>
-      {/* Spacing note: opentui strips TRAILING whitespace inside a
-          <text> cell. We were ending each label with "⚖ Council " or
-          "◆ Framework: " and the trailing space got trimmed, producing
-          "Counciloff" / "Framework:WIN". Fix: move the space to the
-          START of the value text. Opentui preserves leading whitespace
-          inside an explicit {" foo"} curly child. Also normalized
-          Council to use the same "Label: value" shape as the rest. */}
+      {/* Spacing note: opentui strips BOTH trailing AND leading
+          whitespace inside text cells, so neither "Foo: " nor " bar"
+          produces a visible gap when the cells are adjacent. Fix: use
+          a non-breaking space (U+00A0,  ) — terminals render it
+          as a space, opentui treats it as a normal glyph and
+          preserves it. NBSP is the leading character on every value
+          cell below.
+          Also normalized Council to use the same "Label: value" shape
+          as the rest. */}
       <box
         flexDirection="row"
         paddingLeft={1}
@@ -178,7 +180,7 @@ export function WorkspaceConfigBar({
         onMouseDown={onToggleCouncil}
       >
         <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{"⚖ Council:"}</text>
-        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{councilOn ? " ON" : " off"}</text>
+        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{councilOn ? " ON" : " off"}</text>
       </box>
       {sep}
       <box
@@ -188,7 +190,7 @@ export function WorkspaceConfigBar({
         onMouseDown={cycleFramework}
       >
         <text fg={fwFg} attributes={currentFw ? 1 : 0}>{"◆ Framework:"}</text>
-        <text fg={fwFg} attributes={currentFw ? 1 : 0}>{` ${fwLabel}`}</text>
+        <text fg={fwFg} attributes={currentFw ? 1 : 0}>{` ${fwLabel}`}</text>
       </box>
       <box
         flexDirection="row"
@@ -197,7 +199,7 @@ export function WorkspaceConfigBar({
         onMouseDown={cycleLens}
       >
         <text fg={lensFg} attributes={currentLens ? 1 : 0}>{"◇ Lens:"}</text>
-        <text fg={lensFg} attributes={currentLens ? 1 : 0}>{` ${lensLabel}`}</text>
+        <text fg={lensFg} attributes={currentLens ? 1 : 0}>{` ${lensLabel}`}</text>
       </box>
       <box
         flexDirection="row"
@@ -206,7 +208,7 @@ export function WorkspaceConfigBar({
         onMouseDown={cycleWeb}
       >
         <text fg={webFg} attributes={webAllow ? 1 : 0}>{"⬡ Web:"}</text>
-        <text fg={webFg} attributes={webAllow ? 1 : 0}>{webAllow ? " on" : " off"}</text>
+        <text fg={webFg} attributes={webAllow ? 1 : 0}>{webAllow ? " on" : " off"}</text>
       </box>
       <box
         flexDirection="row"
@@ -215,7 +217,7 @@ export function WorkspaceConfigBar({
         onMouseDown={toggleCheckpoint}
       >
         <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{"▣ Save:"}</text>
-        <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{checkpointOn ? " on" : " off"}</text>
+        <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{checkpointOn ? " on" : " off"}</text>
       </box>
       <box
         flexDirection="row"
@@ -224,7 +226,7 @@ export function WorkspaceConfigBar({
         onMouseDown={toggleSerendipity}
       >
         <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{"◉ Serendipity:"}</text>
-        <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{serendipityOn ? " on" : " off"}</text>
+        <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{serendipityOn ? " on" : " off"}</text>
       </box>
       <box
         flexDirection="row"
@@ -233,7 +235,7 @@ export function WorkspaceConfigBar({
         onMouseDown={cycleAuto}
       >
         <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{"◐ Auto:"}</text>
-        <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{` ${autoMode}`}</text>
+        <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{` ${autoMode}`}</text>
       </box>
       <box flexGrow={1} />
       <box

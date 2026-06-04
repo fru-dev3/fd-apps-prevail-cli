@@ -13,3 +13,4 @@
 - 2026-06-04 15:03 · Dark chocolate flavanols linked to better endothelial function and slightly lower blood pressure.  · [src](../_log/2026-06-04.md)
 - 2026-06-04 15:03 · Milk chocolate at weekly frequency provides negligible flavanol benefit vs sugar/fat cost.  · [src](../_log/2026-06-04.md)
 - 2026-06-04 15:03 · Skip if tracking tight calorie/sugar goals or if caffeine sensitivity disrupts sleep.  · [src](../_log/2026-06-04.md)
+- 2026-06-04 15:13 · Stripe system design phone screen scheduled for April 8  · [src](../_log/2026-06-04.md)

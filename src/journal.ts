@@ -9,14 +9,14 @@ import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 // auto-summary.ts when checkpoint is on). It is high-volume and lossy in
 // the sense that it gives you everything and you have to grep.
 //
-// journal/ is the CURATED layer. After each turn we ask a small model
+// _journal/ is the CURATED layer. After each turn we ask a small model
 // to extract: (a) the decision the user implicitly or explicitly made,
 // and (b) any standalone facts the assistant surfaced that the user
 // would want indexed for later. Two files, both cumulative:
 //
-//   journal/decisions.md   ← "I will invest the cash rather than prepay
+//   _journal/decisions.md   ← "I will invest the cash rather than prepay
 //                            the mortgage" — line-level, appendable.
-//   journal/facts.md       ← "Effective mortgage rate is 4.1% at my tax
+//   _journal/facts.md       ← "Effective mortgage rate is 4.1% at my tax
 //                            bracket." — line-level, appendable.
 //
 // Each appended bullet carries a backlink to the source _log entry by
@@ -123,7 +123,11 @@ function timeKey(ts: number): string {
 }
 
 function ensureJournalDir(domainPath: string): string | null {
-  const dir = join(domainPath, "journal");
+  // Folder name is _journal (leading underscore) to match _log/'s
+  // naming convention and to keep curated AI output out of any vault
+  // tooling that lists "user-facing" subfolders. The user explicitly
+  // asked for _journal — for parity with the _log convention.
+  const dir = join(domainPath, "_journal");
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     return dir;
@@ -153,7 +157,7 @@ function appendBullet(
   }
 }
 
-// Distill one chat turn into journal/decisions.md + journal/facts.md.
+// Distill one chat turn into _journal/decisions.md + _journal/facts.md.
 // Returns void — never throws, never blocks the caller meaningfully.
 // Designed to be fire-and-forgotten with .catch(() => {}) from the
 // caller, just like the existing indexEntry() pattern in auto-summary.

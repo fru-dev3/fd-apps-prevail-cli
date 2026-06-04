@@ -1526,9 +1526,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             gut,
             framework: councilFwLabel,
             lens: councilLensLabel,
-            // Checkpoint mode persists the verdict verbatim instead of
-            // the 400-char heuristic snapshot. The user wants every
-            // council outcome saved in full for future reference.
+            // Full cockpit-state snapshot — user asked the _log meta
+            // line to carry model, web, serendipity, council mode, etc.
+            model: synthModel || synthCli.kind,
+            webAccess: readWebAccess(),
+            serendipity: readSerendipity(session.hostDomain.name),
+            councilOn: true,
             raw: readCheckpoint(session.hostDomain.name),
           });
           // Curated layer: distill the verdict into journal/decisions.md
@@ -1833,9 +1836,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           kind: "chat",
           framework: fwLabel,
           lens: lensLabel,
-          // Checkpoint mode persists the prompt + full reply verbatim.
-          // Default ON globally so the user has a complete transcript
-          // of every chat turn across every domain.
+          // Full cockpit-state snapshot on the single-chat path.
+          model: session.model || session.cli.kind,
+          webAccess: readWebAccess(),
+          serendipity: readSerendipity(session.hostDomain.name),
+          councilOn: councilModeFor(key),
           raw: readCheckpoint(session.hostDomain.name),
         });
         // Curated journal: distill into journal/decisions.md +
