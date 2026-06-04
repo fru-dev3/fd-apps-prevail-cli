@@ -490,11 +490,13 @@ function ConnectorChat({ app, setEmbeddedInputActive }: { app: AppSkill; setEmbe
     setStreamBuf("");
   }, [app.id]);
 
-  // Release embedded-input focus when this component unmounts (e.g. user
-  // navigates away). Belt-and-suspenders — the parent app.tsx already
-  // clears the flag on sidebar nav, but components rarely unmount any
-  // other way, so this is just hygiene.
+  // Claim the keyboard on mount AND release on unmount. Previously this
+  // was only set true on the first onInput, so the first character the
+  // user typed was already intercepted by the global handler as a nav
+  // shortcut. Now any letter typed while ConnectorChat is rendered
+  // flows straight into the input.
   useEffect(() => {
+    setEmbeddedInputActive?.(true);
     return () => setEmbeddedInputActive?.(false);
   }, []);
 

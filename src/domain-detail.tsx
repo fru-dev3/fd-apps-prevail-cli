@@ -173,6 +173,18 @@ function DomainChat({ domain, setEmbeddedInputActive, selectedSkills }: { domain
     return () => { cancelled = true; };
   }, []);
 
+  // CRITICAL: claim the keyboard the MOMENT this chat mounts, not after
+  // the first keystroke. Setting it on first onInput meant the first
+  // character the user typed went through the global handler instead of
+  // the input — single-letter keys like j/k/q/s/h/n/r/e navigated the
+  // sidebar before the input even saw the keypress. With this effect,
+  // any letter typed while the embedded chat is rendered goes straight
+  // to the input.
+  useEffect(() => {
+    setEmbeddedInputActive?.(true);
+    return () => setEmbeddedInputActive?.(false);
+  }, []);
+
   const send = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || pending) return;
