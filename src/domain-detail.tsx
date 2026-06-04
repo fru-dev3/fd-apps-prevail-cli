@@ -227,7 +227,7 @@ function DomainChat({ domain, setEmbeddedInputActive, selectedSkills }: { domain
   return (
     <box flexDirection="column" flexGrow={1}>
       <box flexDirection="row" height={1}>
-        <text fg={theme.aiAccent} attributes={1}>💬 Chat with {domain.name}</text>
+        <text fg={theme.aiAccent} attributes={1}>Chat with {domain.name}</text>
         <text fg={theme.fgFaint}>{`   ·   ${cli?.label ?? "no engine"}   ·   scope: this domain's vault folder`}</text>
       </box>
       <scrollbox flexGrow={1} scrollY>
@@ -352,7 +352,7 @@ function SkillsList({
                 // highlight) and keyboard-cursor (› pointer + bg).
                 const fg = isSelected ? theme.aiAccent : isCursor ? theme.selFg : theme.fg;
                 const bg = isCursor ? theme.selBg : theme.bg;
-                const checkbox = isSelected ? "☑" : "☐";
+                const checkbox = isSelected ? "✓" : "·";
                 const pointer = isCursor ? "›" : " ";
                 const titleFg = isCursor ? theme.selFg : isSelected ? theme.aiAccent : theme.fgDim;
                 return (

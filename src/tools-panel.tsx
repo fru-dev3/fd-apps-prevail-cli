@@ -35,7 +35,7 @@ export function ToolsPanel({ onClose }: Props) {
       border
       borderColor={theme.aiAccent}
       backgroundColor={theme.bg}
-      title=" 🔧 Tools & Integrations "
+      title=" Tools & Integrations "
       titleAlignment="left"
       bottomTitle=" Esc to close "
       bottomTitleAlignment="right"
@@ -48,7 +48,7 @@ export function ToolsPanel({ onClose }: Props) {
         {/* MCP — the big one. prevail BECOMES a tool that other agents
             (Claude Desktop, Cursor, Continue, Goose) can call. */}
         <Section
-          glyph="🛰"
+          glyph="◆"
           title="MCP server — use prevAIl in other apps"
           status="ready to wire"
           statusFg={theme.ok}
@@ -81,7 +81,7 @@ export function ToolsPanel({ onClose }: Props) {
 
         {/* Telegram bridge */}
         <Section
-          glyph="📱"
+          glyph="◆"
           title="Telegram bridge"
           status={tgConfigured ? `configured (${tgAllowCount} allowed)` : "not configured"}
           statusFg={tgConfigured ? theme.ok : theme.fgDim}
@@ -110,7 +110,7 @@ export function ToolsPanel({ onClose }: Props) {
 
         {/* Briefings */}
         <Section
-          glyph="🔔"
+          glyph="◆"
           title="Scheduled briefings"
           status="cron-driven"
           statusFg={theme.fgDim}
@@ -128,7 +128,7 @@ export function ToolsPanel({ onClose }: Props) {
 
         {/* Calibration */}
         <Section
-          glyph="🪞"
+          glyph="◆"
           title="Calibration — council vs yourself"
           status="learning-by-doing"
           statusFg={theme.fgDim}
@@ -147,7 +147,7 @@ export function ToolsPanel({ onClose }: Props) {
 
         {/* Benchmarks */}
         <Section
-          glyph="📊"
+          glyph="◆"
           title="prevail-bench"
           status="public benchmark suite"
           statusFg={theme.fgDim}
@@ -166,7 +166,7 @@ export function ToolsPanel({ onClose }: Props) {
 
         {/* Connectors / OAuth */}
         <Section
-          glyph="🔌"
+          glyph="◆"
           title="Connectors — apps + OAuth flows"
           status="click Apps in sidebar to see all"
           statusFg={theme.fgDim}
@@ -185,7 +185,7 @@ export function ToolsPanel({ onClose }: Props) {
 
         {/* Web access */}
         <Section
-          glyph="🌐"
+          glyph="◆"
           title="Web access (global gate)"
           status="see /web in chat"
           statusFg={theme.fgDim}
@@ -201,7 +201,7 @@ export function ToolsPanel({ onClose }: Props) {
 
         {/* Vault links */}
         <Section
-          glyph="📂"
+          glyph="◆"
           title="Vault + config locations"
           status="filesystem"
           statusFg={theme.fgDim}

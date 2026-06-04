@@ -224,7 +224,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
 
   // Self-healing health watch: every 60s, re-probe any CLI whose last probe
   // failed. If the user fixed it externally (codex login, removed a gemini
-  // hook, etc) the chip flips from ⚠ to ✓ without needing an app relaunch.
+  // hook, etc) the chip flips from ! to ✓ without needing an app relaunch.
   // Healthy CLIs aren't re-probed — they cost tokens and we trust them once
   // proven good for the session. A toggle to force a re-check would be a
   // future addition but background heal covers the common case.
@@ -1077,7 +1077,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     if (distinctClis.size < 2) {
       const sole = panelists[0]!.cli.label;
       setMessage(
-        `⚠ degraded council: only ${sole} will respond (no triangulation). check /council config or wait for the other providers to come back online.`,
+        `! degraded council: only ${sole} will respond (no triangulation). check /council config or wait for the other providers to come back online.`,
       );
     }
     const text = prompt.trim();
@@ -2185,7 +2185,7 @@ function handleBriefingCommand(sub: string, arg: string, vaultPath: string, _app
     br.saveBriefings(vaultPath, list);
     return `✓ added ${entry.id}\n  cron:    ${cron}  (${sched.describeCron(cron!)})\n  domain:  ${domainName}\n  mode:    ${mode}\n  deliver: ${deliver}` +
       (deliver !== "log"
-        ? "\n\n⚠ telegram delivery requires the daemon: prevail daemon --telegram"
+        ? "\n\n! telegram delivery requires the daemon: prevail daemon --telegram"
         : "");
   }
   if (sub === "remove" || sub === "rm") {
@@ -2249,7 +2249,7 @@ function renderConnectorOverview(apps: AppSkill[]): string {
   for (const a of apps) {
     const glyph =
       a.status === "connected" ? "✓ ok  "
-      : a.status === "expired" ? "⚠ exp "
+      : a.status === "expired" ? "! exp "
       : a.status === "error"   ? "✗ err "
       : "○ off ";
     const type = (integrationLabel[a.integration ?? "manual"] ?? "manual").padEnd(8);

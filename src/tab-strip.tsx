@@ -94,7 +94,7 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
         </box>
       )}
       {cli && (
-        // Council toggle + ⚙ configure are now always visible on the
+        // Council toggle + ◇ configure are now always visible on the
         // tab strip — same consistent controls regardless of mode (in
         // chat or on state/skills/etc).
         <>
@@ -109,7 +109,7 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
               fg={cli.councilMode ? theme.goldBright : theme.gold}
               attributes={cli.councilMode ? 1 : 0}
             >
-              {cli.councilMode ? "▣ Council ON" : "⚖ Council"}
+              {cli.councilMode ? "● Council ON" : "◆ Council"}
             </text>
           </box>
           <text fg={theme.fgFaint}> </text>
@@ -120,7 +120,7 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
             paddingRight={1}
             backgroundColor={theme.bgPanel}
           >
-            <text fg={theme.gold}>⚙ configure</text>
+            <text fg={theme.gold}>◇ configure</text>
           </box>
         </>
       )}

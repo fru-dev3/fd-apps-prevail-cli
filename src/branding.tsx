@@ -347,11 +347,11 @@ function StatusColumn({
         <text fg={theme.fgFaint}>{"defaults"}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
           <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>
-            ⚖ {globalCouncilOn ? "ON" : "off"}
+            ◆ Council: {globalCouncilOn ? "ON" : "off"}
           </text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
-          <text fg={theme.aiAccent}>⚙ configure</text>
+          <text fg={theme.aiAccent}>◇ configure</text>
         </box>
         <text fg={theme.border}>{" │ "}</text>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
@@ -361,7 +361,7 @@ function StatusColumn({
         </box>
         <text fg={theme.border}>{" │ "}</text>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>
-          <text fg={theme.aiAccent} attributes={1}>🔧 tools</text>
+          <text fg={theme.aiAccent} attributes={1}>▸ tools</text>
         </box>
       </box>
       {cliHealthSummary && cliHealthSummary.length > 0 && (
@@ -375,7 +375,7 @@ function StatusColumn({
           <text fg={theme.fgFaint}>{"cli"}</text>
           {cliHealthSummary.map((h) => {
             const glyph =
-              h.ok === true ? "✓" : h.ok === false ? "⚠" : "⠋";
+              h.ok === true ? "✓" : h.ok === false ? "!" : "·";
             const fgC =
               h.ok === true ? theme.ok : h.ok === false ? theme.warn : theme.fgDim;
             return (

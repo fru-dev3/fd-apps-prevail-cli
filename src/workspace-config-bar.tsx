@@ -22,7 +22,7 @@ interface Props {
 // Visible at the top of every domain and connector workspace. Surfaces
 // the three things users were having to use slash commands for:
 //   📂 Open Vault       → spawns Finder / Explorer / xdg-open at the path
-//   ⚖ Council: ON/OFF   → toggles council mode for this surface
+//   Council: ON/OFF   → toggles council mode for this surface
 //   ◆ Framework: <id>   → cycles through NONE → BLUF → WIN → SCQA → …
 //
 // Render order is left-aligned so the trio reads as one row.
@@ -55,7 +55,7 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={() => openInFinder(vaultPath)}
       >
-        <text fg={theme.aiAccent}>📂 </text>
+        <text fg={theme.aiAccent}>▸ </text>
         <text fg={theme.fgDim}>open vault  </text>
         <text fg={theme.fgFaint}>{shortenHome(vaultPath)}</text>
       </box>
@@ -67,7 +67,7 @@ export function WorkspaceConfigBar({
         onMouseDown={onToggleCouncil}
       >
         <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>
-          ⚖ Council: {councilOn ? "ON" : "OFF"}
+          Council: {councilOn ? "ON" : "OFF"}
         </text>
       </box>
       <text fg={theme.border}>{"   │   "}</text>

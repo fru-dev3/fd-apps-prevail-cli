@@ -328,10 +328,10 @@ function ConnectorCompactSummary({ app, skillsCount }: { app: AppSkill; skillsCo
   };
   const effectiveStatus = probe?.status ?? app.status;
   const statusGlyph =
-    effectiveStatus === "connected" ? "☑ connected" :
-    effectiveStatus === "error" ? "☒ error" :
-    effectiveStatus === "expired" ? "☒ auth expired" :
-    "☐ not configured";
+    effectiveStatus === "connected" ? "● connected" :
+    effectiveStatus === "error" ? "✗ error" :
+    effectiveStatus === "expired" ? "✗ auth expired" :
+    "○ not configured";
   const statusFg =
     effectiveStatus === "connected" ? theme.ok :
     effectiveStatus === "error" || effectiveStatus === "expired" ? theme.warn :
@@ -359,7 +359,7 @@ function ConnectorCompactSummary({ app, skillsCount }: { app: AppSkill; skillsCo
     <box flexDirection="column">
       {!manifest && (
         <box flexDirection="row" paddingLeft={1} paddingRight={1}>
-          <text fg={theme.warn}>⚠ no manifest yet</text>
+          <text fg={theme.warn}>! no manifest yet</text>
           <text fg={theme.fgFaint}>  ·  </text>
           <box
             paddingLeft={1}
@@ -368,19 +368,29 @@ function ConnectorCompactSummary({ app, skillsCount }: { app: AppSkill; skillsCo
             borderColor={theme.aiAccent}
             onMouseDown={onScaffold}
           >
-            <text fg={theme.aiAccent} attributes={1}>{" ⊕ Scaffold "}</text>
+            <text fg={theme.aiAccent} attributes={1}>{" + Scaffold "}</text>
           </box>
           {scaffoldNote && <text fg={scaffoldNote.startsWith("✓") ? theme.ok : theme.warn}>{"  " + scaffoldNote}</text>}
         </box>
       )}
-      {/* One-line title with status pill on the right — no waste of
-          vertical space. Everything else is condensed below. */}
+      {/* Each title-row element lives in its own box with paddingLeft.
+          Putting them all in one <text> sequence caused opentui to
+          collapse the trailing whitespace inside spans, so text
+          bled together ("1Passwordifemanual ··drop filesfinlfolder").
+          Boxes with explicit padding are layout cells — whitespace
+          inside them is preserved. */}
       <box flexDirection="row" height={1}>
-        <text fg={theme.gold} attributes={1}>{app.title}</text>
-        <text fg={theme.fgFaint}>{`   ${integrationLabel[integration] ?? integration}   `}</text>
-        <text fg={statusFg} attributes={1}>{probing ? "⠋ probing…" : statusGlyph}</text>
+        <box flexDirection="row"><text fg={theme.gold} attributes={1}>{app.title}</text></box>
+        <box flexDirection="row" paddingLeft={3}>
+          <text fg={theme.fgFaint}>{integrationLabel[integration] ?? integration}</text>
+        </box>
+        <box flexDirection="row" paddingLeft={3}>
+          <text fg={statusFg} attributes={1}>{probing ? "probing…" : statusGlyph}</text>
+        </box>
         {!probing && (
-          <text fg={theme.fgFaint}>{probe?.ts ? `   probed ${formatRelativeTime(probe.ts)}` : "   never tested"}</text>
+          <box flexDirection="row" paddingLeft={3}>
+            <text fg={theme.fgFaint}>{probe?.ts ? `probed ${formatRelativeTime(probe.ts)}` : "never tested"}</text>
+          </box>
         )}
       </box>
       <text> </text>
@@ -549,7 +559,7 @@ function ConnectorChat({ app, setEmbeddedInputActive }: { app: AppSkill; setEmbe
   return (
     <box flexDirection="column" flexGrow={1}>
       <box flexDirection="row" height={1}>
-        <text fg={theme.aiAccent} attributes={1}>💬 Chat with {app.title}</text>
+        <text fg={theme.aiAccent} attributes={1}>Chat with {app.title}</text>
         <text fg={theme.fgFaint}>{`   ·   ${cliLabel}   ·   scope: this connector's manifest + data/`}</text>
       </box>
       <scrollbox flexGrow={1} scrollY>
@@ -716,10 +726,10 @@ function ConnectorOverview({ app, skillsCount }: { app: AppSkill; skillsCount?: 
   // PLAID_SECRET" instantly, not a stale value from a side-channel file.
   const effectiveStatus = probe?.status ?? app.status;
   const statusGlyph =
-    effectiveStatus === "connected" ? "☑ connected" :
-    effectiveStatus === "error" ? "☒ error" :
-    effectiveStatus === "expired" ? "☒ auth expired" :
-    "☐ not configured";
+    effectiveStatus === "connected" ? "● connected" :
+    effectiveStatus === "error" ? "✗ error" :
+    effectiveStatus === "expired" ? "✗ auth expired" :
+    "○ not configured";
   const statusFg =
     effectiveStatus === "connected" ? theme.ok :
     effectiveStatus === "error" || effectiveStatus === "expired" ? theme.warn :
@@ -748,7 +758,7 @@ function ConnectorOverview({ app, skillsCount }: { app: AppSkill; skillsCount?: 
             paddingTop={0}
             paddingBottom={0}
           >
-            <text fg={theme.warn} attributes={1}>⚠ No manifest.json yet</text>
+            <text fg={theme.warn} attributes={1}>! No manifest.json yet</text>
             <text fg={theme.fgDim}>
               {`  This app hasn't been redesigned for the v0.6 connector workspace.`}
             </text>
@@ -764,7 +774,7 @@ function ConnectorOverview({ app, skillsCount }: { app: AppSkill; skillsCount?: 
               borderColor={theme.aiAccent}
               onMouseDown={onScaffold}
             >
-              <text fg={theme.aiAccent} attributes={1}>{" ⊕ Scaffold manifest.json "}</text>
+              <text fg={theme.aiAccent} attributes={1}>{" + Scaffold manifest.json "}</text>
             </box>
             {scaffoldNote && (
               <text fg={scaffoldNote.startsWith("✓") ? theme.ok : theme.warn}>{"  " + scaffoldNote}</text>
@@ -843,11 +853,11 @@ function ConnectorAuthPanel({ app }: { app: AppSkill }) {
       <text fg={theme.fgFaint}>{integrationExplain(app.integration ?? "manual")}</text>
       <text> </text>
       {!manifest && (
-        <text fg={theme.warn}>{"  ⚠ no manifest.json — scaffold one on the Overview tab to enable auth + skills"}</text>
+        <text fg={theme.warn}>{"  ! no manifest.json — scaffold one on the Overview tab to enable auth + skills"}</text>
       )}
       {manifest && !spec && (
         <>
-          <text fg={theme.warn}>{"  ⚠ manifest exists but no auth_check declared"}</text>
+          <text fg={theme.warn}>{"  ! manifest exists but no auth_check declared"}</text>
           <text fg={theme.fgFaint}>{"  Edit manifest.json and add an auth_check block. See examples in:"}</text>
           <text fg={theme.fgFaint}>{"    apps/community/{plaid,github,linkedin,youtube-analytics,google-calendar}/manifest.json"}</text>
           <text fg={theme.fgFaint}>{"  Full spec at docs/connector-architecture.md"}</text>
@@ -860,7 +870,7 @@ function ConnectorAuthPanel({ app }: { app: AppSkill }) {
           {(spec.env_keys ?? []).map((k) => (
             <text key={k} fg={theme.fgDim}>
               {"  "}
-              <span fg={process.env[k] ? theme.ok : theme.warn}>{process.env[k] ? "☑" : "☐"}</span>
+              <span fg={process.env[k] ? theme.ok : theme.warn}>{process.env[k] ? "✓" : "·"}</span>
               {"  "}
               <span fg={theme.fg}>{k}</span>
               <span fg={theme.fgFaint}>{process.env[k] ? "  (set)" : "  (missing)"}</span>
@@ -878,7 +888,7 @@ function ConnectorAuthPanel({ app }: { app: AppSkill }) {
             return (
               <text key={f} fg={theme.fgDim}>
                 {"  "}
-                <span fg={ok ? theme.ok : theme.warn}>{ok ? "☑" : "☐"}</span>
+                <span fg={ok ? theme.ok : theme.warn}>{ok ? "✓" : "·"}</span>
                 {"  "}
                 <span fg={theme.fg}>{f}</span>
               </text>

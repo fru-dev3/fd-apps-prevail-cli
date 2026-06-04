@@ -313,7 +313,7 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
           paddingRight={2}
           backgroundColor={theme.selBg}
         >
-          <text fg={theme.goldBright} attributes={1}>⚖ council mode ON</text>
+          <text fg={theme.goldBright} attributes={1}>● council mode ON</text>
           <text fg={theme.fgDim}>  · your next message fans out to the panel</text>
         </box>
       )}
@@ -424,7 +424,7 @@ function PickerBar({
         backgroundColor={theme.bg}
         onMouseDown={onOpenCouncilConfig}
       >
-        <text fg={theme.gold}>⚖ council</text>
+        <text fg={theme.gold}>◆ council</text>
       </box>
     </box>
   );
@@ -1020,7 +1020,7 @@ function CouncilConfigBubble({
         border
         borderColor={theme.gold}
         backgroundColor={theme.bg}
-        title=" ⚖ council panel · click to toggle "
+        title=" ◆ council panel · click to toggle "
         titleAlignment="left"
         bottomTitle=" persists to ~/.prevail/config.json "
         bottomTitleAlignment="left"
@@ -1442,7 +1442,7 @@ function CouncilVerdictBubble({ msg }: { msg: ChatMsg }) {
         border
         borderColor={theme.goldBright}
         backgroundColor={theme.bg}
-        title={` ⚖ council verdict${titleSuffix} `}
+        title={` ◆ council verdict${titleSuffix} `}
         titleAlignment="left"
         bottomTitle={` synthesized by ${labelParts.join(" · ")} `}
         bottomTitleAlignment="left"

@@ -16,7 +16,7 @@ const DOMAIN_ICON: Record<string, string> = {
   business: "◈",
   estate: "⌂",
   "real-estate": "⊓",
-  insurance: "⊕",
+  insurance: "+",
   benefits: "✚",
   brand: "※",
   content: "¶",
@@ -164,9 +164,9 @@ export function Sidebar({
           // This replaces the per-id app icon for connectors that have
           // explicit status; legacy apps without status info still get ☐.
           const connGlyph =
-            a.status === "connected" ? "☑" :
+            a.status === "connected" ? "✓" :
             a.status === "error" || a.status === "expired" ? "☒" :
-            "☐";
+            "·";
           const connFg = active
             ? theme.selFg
             : a.status === "connected" ? theme.ok
