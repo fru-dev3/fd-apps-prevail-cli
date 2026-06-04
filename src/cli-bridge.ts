@@ -141,6 +141,25 @@ const GEMINI_VERSIONS = [
 // Replaced at runtime by the real list from /api/tags when ollama is detected.
 const OLLAMA_VERSIONS = ["llama3.1", "llama3.2", "mistral", "qwen2.5", "phi3", "gemma2"];
 
+// Each CLI's default model — what the CLI runs when we DON'T pass an
+// explicit --model arg. We can't query the CLIs for this (none expose a
+// "what's your default" endpoint), so the list is hand-maintained from
+// the same first-entry rule as the version lists above. Used by the
+// per-bubble badge in the chat transcript so EVERY council panelist
+// shows a complete `<cli> · <model>` label — without this, panelists
+// running on default models showed just `claude` / `codex` and the
+// user reported "the rest don't tell me which model is responding."
+const CLI_DEFAULT_MODELS: Record<CliKind, string> = {
+  claude: CLAUDE_VERSIONS[0]!,
+  codex: CODEX_VERSIONS[0]!,
+  gemini: GEMINI_VERSIONS[0]!,
+  ollama: OLLAMA_DEFAULT_MODEL,
+};
+
+export function defaultModelFor(kind: CliKind): string {
+  return CLI_DEFAULT_MODELS[kind];
+}
+
 // Versioned IDs come FIRST so the picker always shows real version numbers
 // at a glance (claude-opus-4-7, not just "opus"). Naked aliases live at the
 // end as a fallback for users who don't care which generation runs — the

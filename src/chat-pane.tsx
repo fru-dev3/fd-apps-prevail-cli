@@ -6,6 +6,7 @@ import { theme, spinnerChar, thinkingWord } from "./theme.ts";
 import {
   MODEL_QUICKPICKS,
   buildChatPrompt,
+  defaultModelFor,
   formatModelBadge,
   type AvailableCli,
   type CliKind,
@@ -71,7 +72,20 @@ export function formatMetaBadge(
 ): string | null {
   const parts: string[] = [];
   if (msg.cli) parts.push(msg.cli);
-  if (msg.model && msg.model.trim()) parts.push(msg.model.trim());
+  // Model name is shown for EVERY panelist, even when not explicitly
+  // pinned. If the user didn't set a model on this CLI in council
+  // config, msg.model is "" and we resolve to the CLI's hand-maintained
+  // default (CLAUDE_VERSIONS[0] etc.) with a `(default)` suffix so the
+  // user knows it wasn't pinned. Without this, mixed configs (claude
+  // pinned to opus-4-7, codex/gemini on defaults) showed full info on
+  // the pinned panelist and a bare `codex` / `gemini` on the rest —
+  // user reported "the rest don't tell me which model is responding."
+  const explicit = msg.model && msg.model.trim();
+  if (explicit) {
+    parts.push(msg.model!.trim());
+  } else if (msg.cli) {
+    parts.push(`${defaultModelFor(msg.cli)} (default)`);
+  }
   if (msg.framework) parts.push(`◆ ${msg.framework}`);
   if (msg.lens) parts.push(`◇ ${msg.lens}`);
   if (parts.length === 0) return null;
@@ -1415,7 +1429,10 @@ function CouncilResponseBubble({ msg }: { msg: ChatMsg }) {
   const cli = msg.cli;
   const color = cli ? COUNCIL_CLI_COLORS[cli] : theme.bubbleAssistant;
   const labelParts = [cli ?? "unknown"];
-  if (msg.model) labelParts.push(msg.model);
+  // Same fallback as the badge below — show the CLI's default model when
+  // no model is pinned, so every panelist's title is uniformly informative.
+  if (msg.model && msg.model.trim()) labelParts.push(msg.model.trim());
+  else if (cli) labelParts.push(`${defaultModelFor(cli)} (default)`);
   const title = ` ⚖ ${labelParts.join(" · ")} `;
   const badge = formatMetaBadge(msg);
   return (
