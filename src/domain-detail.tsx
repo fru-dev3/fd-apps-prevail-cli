@@ -326,8 +326,13 @@ function SkillsList({
 
   return (
     <box flexDirection="column" flexGrow={1}>
+      {/* Build the header strings as single template literals before
+          rendering — multiple JSX expressions inside one <text> caused
+          opentui to interleave the two header lines into a garbled
+          "9 2kselected 0→liopen theschat tabctotuseethem…" mess on the
+          skills tab. One string = one render = no bleed. */}
       <text fg={theme.fgDim}>
-        {skills.length} skills  ·  {linkedApps.length} linked apps  ·  click to select/unselect  ·  selected ones go into chat context
+        {`${skills.length} skills  ·  ${linkedApps.length} linked apps  ·  click to select/unselect  ·  selected ones go into chat context`}
       </text>
       <text fg={theme.fgFaint}>
         {selectedSkillIds && selectedSkillIds.size > 0

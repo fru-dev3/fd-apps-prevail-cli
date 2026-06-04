@@ -238,6 +238,18 @@ function scanSkills(lifePath: string, vaultPath: string, domain: string): Domain
       const skillPath = join(skillsRoot, entry.name);
       const skillFile = join(skillPath, "SKILL.md");
       if (!existsSync(skillFile)) continue;
+      // Skip connector stubs (SKILL.md with `type: app` in frontmatter).
+      // The vault-demo bundles 1password / fidelity / m1-finance / etc.
+      // under domain skills folders so they can be discovered, but with
+      // apps collapsed out of the UI those entries shouldn't inflate the
+      // domain's skill count. Cheap inline scan — only the first ~10
+      // lines of SKILL.md matter for the type tag.
+      try {
+        const head = readFileSync(skillFile, "utf8").slice(0, 400);
+        if (/^\s*type:\s*app\s*$/m.test(head)) continue;
+      } catch {
+        /* unreadable — treat as a real skill, fall through */
+      }
       out.push({
         id: entry.name,
         title: extractSkillTitle(skillFile, entry.name),

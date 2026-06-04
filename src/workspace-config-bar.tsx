@@ -68,10 +68,10 @@ export function WorkspaceConfigBar({
   const fwLabel = currentFw
     ? FRAMEWORKS.find((f) => f.id === currentFw)?.label ?? currentFw
     : "none";
-  const fwScopeHint =
-    domainKey && fwScope === "domain"
-      ? " · domain"
-      : "";
+  // Scope hint removed — the user found "· domain" confusing
+  // ("why is the text domain here?"). The user already knows the scope
+  // by where they clicked: workspace bar = per-domain, top bar = global.
+  void fwScope;
 
   const { sel: currentLens, scope: lensScope } = resolveResponseLens(domainKey);
   const cycleLens = () => {
@@ -90,10 +90,7 @@ export function WorkspaceConfigBar({
     : currentLens === "all"
       ? "all (×5)"
       : LENSES.find((l) => l.id === currentLens)?.label ?? currentLens;
-  const lensScopeHint =
-    domainKey && lensScope === "domain"
-      ? " · domain"
-      : "";
+  void lensScope;
 
   const sep = (
     <text fg={theme.border}>{"   │   "}</text>
@@ -108,7 +105,7 @@ export function WorkspaceConfigBar({
         onMouseDown={onToggleCouncil}
       >
         <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>
-          {councilOn ? "● Council ON" : "◆ Council off"}
+          {councilOn ? "⚖ Council ON" : "⚖ Council off"}
         </text>
       </box>
       {sep}
@@ -121,9 +118,6 @@ export function WorkspaceConfigBar({
         <text fg={currentFw ? theme.aiAccent : theme.fgDim} attributes={currentFw ? 1 : 0}>
           ◆ Framework: {fwLabel}
         </text>
-        {fwScopeHint && (
-          <text fg={theme.gold}>{fwScopeHint}</text>
-        )}
       </box>
       <box
         flexDirection="row"
@@ -137,9 +131,6 @@ export function WorkspaceConfigBar({
         >
           ◇ Lens: {lensLabel}
         </text>
-        {lensScopeHint && (
-          <text fg={theme.gold}>{lensScopeHint}</text>
-        )}
       </box>
       <box flexGrow={1} />
       <box

@@ -311,15 +311,11 @@ function StatusColumn({
       : lensSel === "all"
         ? "all (×5)"
         : getLens(lensSel)?.label ?? "none";
-  const statusGlyph = pendingChats > 0 ? "⠋" : activeChats > 0 ? "●" : "○";
-  const statusColor =
-    pendingChats > 0 ? theme.gold : activeChats > 0 ? theme.ok : theme.fgDim;
-  const statusText =
-    pendingChats > 0
-      ? `${pendingChats} working · ${activeChats - pendingChats} idle`
-      : activeChats > 0
-        ? `${activeChats} chat${activeChats === 1 ? "" : "s"} ready · all idle`
-        : "no chats yet";
+  // statusGlyph/statusText/statusColor previously fed a "chat" StatRow
+  // that read "no chats yet" most of the time — the user asked to drop
+  // the row entirely. Active chat state is implied by the cli health
+  // row + per-domain spinners in the sidebar. Locals removed.
+  void activeChats; void pendingChats;
 
   return (
     <box flexDirection="column" flexGrow={1} paddingLeft={2}>
@@ -344,29 +340,27 @@ function StatusColumn({
         {`${timeLabel}  ·  prevail v${VERSION}  ·  opentui`}
       </text>
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
-      <StatRow label="chat" value={statusText} glyph={statusGlyph} valueColor={statusColor} />
-      {/* Two rows for the defaults block — the status column is too
-          narrow to fit Council + configure + Framework + Lens + tools
-          on a single line. Row 1: Council + configure + tools (surface
-          controls). Row 2: Framework + Lens (response shaping). */}
+      {/* "chat" line dropped — it was just "no chats yet" most of the
+          time and added noise. Active chat count moves elsewhere when
+          we need it. The chat status is also implied by the cli health
+          row below. */}
+      {/* Two-line defaults block.
+          Row 1: ⚖ Council · ◆ Framework · ◇ Lens — the three
+          per-question decisions ("how does this question get answered").
+          Row 2: ◇ configure · ▸ tools — globals + integrations.
+          Each chip uses a DISTINCT leading glyph (⚖ scales for the
+          deliberative council, ◆ filled diamond for the structural
+          framework, ◇ open diamond for the lens) so they don't read
+          as repeats — user reported "seems they all have same icons
+          right now." */}
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"defaults"}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
           <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>
-            ◆ Council: {globalCouncilOn ? "ON" : "off"}
+            ⚖ Council: {globalCouncilOn ? "ON" : "off"}
           </text>
         </box>
-        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
-          <text fg={theme.aiAccent}>◇ configure</text>
-        </box>
-        <text fg={theme.border}>{" │ "}</text>
-        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>
-          <text fg={theme.aiAccent} attributes={1}>▸ tools</text>
-        </box>
-      </box>
-      <box flexDirection="row" height={1}>
-        <text fg={theme.fgFaint}>{"        "}</text>
-        <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onCycleFramework}>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
           <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>
             ◆ Framework: {fwLabel}
           </text>
@@ -375,6 +369,15 @@ function StatusColumn({
           <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>
             ◇ Lens: {lensLabel}
           </text>
+        </box>
+      </box>
+      <box flexDirection="row" height={1}>
+        <text fg={theme.fgFaint}>{"        "}</text>
+        <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
+          <text fg={theme.aiAccent}>◇ configure</text>
+        </box>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>
+          <text fg={theme.aiAccent} attributes={1}>▸ tools</text>
         </box>
       </box>
       {cliHealthSummary && cliHealthSummary.length > 0 && (
