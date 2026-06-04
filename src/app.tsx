@@ -132,11 +132,17 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // Council shares one controller across all panelists + the synthesis call
   // so a single Escape kills the whole batch.
   const cancelControllersRef = useRef<Map<string, AbortController>>(new Map());
-  // Per-session "gut take" captured via /gut <text> before /council. Cleared
-  // after the next council turn fires (consumed once). Lives outside chats
-  // map so it doesn't bloat persisted state — it's transient input to the
-  // calibration write, not part of the conversation transcript.
   const pendingGutRef = useRef<Map<string, string>>(new Map());
+  // Tracks whether an embedded chat input (in ConnectorChat / DomainChat
+  // workspaces) currently has focus. Set to true on first keystroke into
+  // the embedded input; reset to false on sidebar navigation. The global
+  // useKeyboard handler returns early when this is true so single-letter
+  // shortcut keys (q, s, h, j, k, n, r, e, etc.) go into the input
+  // instead of triggering nav actions. ctrl+c still kills the process.
+  const embeddedInputActiveRef = useRef(false);
+  const setEmbeddedInputActive = (v: boolean) => {
+    embeddedInputActiveRef.current = v;
+  };
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
@@ -307,6 +313,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     if (!name) return;
 
     if (mode === "new-domain" || mode === "new-app" || mode === "edit") return;
+
+    // SECURITY/UX: when the user is typing in an embedded chat input
+    // (Connector/Domain workspace), only ctrl+c (quit) propagates to the
+    // global handler. Every other key — letters, arrows, escape — flows
+    // through to the input so the user can type freely. Without this,
+    // global shortcuts like 'q' (quit), 's' (swap focus), 'h/j/k/l'
+    // (nav), 'n' (new domain) intercept letters and the user can't type.
+    if (embeddedInputActiveRef.current) {
+      if (evt.ctrl && name === "c") {
+        renderer?.destroy?.();
+        process.exit(0);
+      }
+      return;
+    }
 
     // When the chat's slash-command popover is open, let the chat pane own
     // arrow/tab navigation — don't steal them for the sidebar.
@@ -1688,20 +1708,18 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           onPickDomain={(i) => {
             setDomainIdx(i);
             setFocus("domains");
-            // Belt-and-suspenders against the "needs Escape" bug:
-            // unconditionally force idle mode AND clear activeKey so even
-            // if some state leak leaves mode="chat" later in the render,
-            // inChat (= mode==="chat" && activeSession) becomes false
-            // because activeSession resolves to null. AppDetail /
-            // DomainDetail render guaranteed.
             setMode("idle");
             setActiveKey(null);
+            // Release embedded-input focus on navigation so the global
+            // keyboard handler comes back to life for the new selection.
+            embeddedInputActiveRef.current = false;
           }}
           onPickApp={(i) => {
             setAppIdx(i);
             setFocus("apps");
             setMode("idle");
             setActiveKey(null);
+            embeddedInputActiveRef.current = false;
           }}
           onNewDomain={() => {
             setFocus("domains");
@@ -1801,13 +1819,6 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               );
             }
             if (focus === "apps" && app) {
-              // SECURITY/UX: apps own their tab strip (Overview/Auth/Sync/
-              // Skills/Data/Chat) — they're connectors, not life domains.
-              // Passing the domain-style global tabBar (state/loops/
-              // quickstart/prompts/skills) here was nesting the connector
-              // workspace UNDER the Skills tab, so users had to click
-              // through to see auth/skills/data. Pass undefined so the
-              // ConnectorTabRow is the only navigation for the app pane.
               return (
                 <AppDetail
                   app={app}
@@ -1818,6 +1829,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                     const sk = app.skills[i];
                     if (sk) openChatForSkill(sk);
                   }}
+                  setEmbeddedInputActive={setEmbeddedInputActive}
                 />
               );
             }
@@ -1833,6 +1845,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   if (sk) openChatForSkill(sk);
                 }}
                 topBar={tabBar}
+                setEmbeddedInputActive={setEmbeddedInputActive}
               />
             );
           })()}

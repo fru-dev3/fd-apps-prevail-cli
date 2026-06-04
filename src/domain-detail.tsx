@@ -19,9 +19,10 @@ interface Props {
   apps: AppSkill[];
   onPickSkill: (i: number) => void;
   topBar?: React.ReactNode;
+  setEmbeddedInputActive?: (v: boolean) => void;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive }: Props) {
   if (!domain) {
     return (
       <box
@@ -69,17 +70,26 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
         </box>
       ) : (
         <box flexDirection="column" flexGrow={1}>
-          {/* Top: markdown content from the active view */}
-          <box paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={0} flexBasis={12}>
-            <scrollbox flexGrow={1} scrollY>
-              {renderMarkdownLines(readDomainView(domain, view))}
-            </scrollbox>
+          {/* Chat IS the domain. User wanted chat where the content used
+              to be — the primary thing you do with a domain is talk to
+              its panel. The state.md / loops / etc. content is shown as
+              a short reference strip BELOW the chat instead of taking
+              top-half real estate. Toggle the strip with the tab keys
+              (h/l) which are the existing view switcher. */}
+          <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={0}>
+            <DomainChat domain={domain} setEmbeddedInputActive={setEmbeddedInputActive} />
           </box>
           <box paddingLeft={2} paddingRight={2}>
             <text fg={theme.border}>{"─".repeat(80)}</text>
           </box>
-          <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingBottom={1}>
-            <DomainChat domain={domain} />
+          {/* Compact reference: max 6 lines of the active markdown view */}
+          <box flexBasis={7} paddingLeft={2} paddingRight={2} paddingBottom={1}>
+            <box flexDirection="column" flexGrow={1}>
+              <text fg={theme.fgFaint}>{`▸ ${view}.md  (reference)`}</text>
+              <scrollbox flexGrow={1} scrollY>
+                {renderMarkdownLines(readDomainView(domain, view))}
+              </scrollbox>
+            </box>
           </box>
         </box>
       )}
@@ -91,7 +101,7 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
 // workspace's ConnectorChat — owns its own message history, spawns a
 // runChatTurn streaming reply, and tells the LLM to use ONLY this domain's
 // folder as context.
-function DomainChat({ domain }: { domain: Domain }) {
+function DomainChat({ domain, setEmbeddedInputActive }: { domain: Domain; setEmbeddedInputActive?: (v: boolean) => void }) {
   type ChatLine = { role: "user" | "assistant"; content: string; ts: number };
   const [history, setHistory] = useState<ChatLine[]>([]);
   const [pending, setPending] = useState(false);
@@ -178,10 +188,15 @@ function DomainChat({ domain }: { domain: Domain }) {
         <input
           ref={inputRef}
           flexGrow={1}
+          focused
           placeholder={pending ? "thinking…" : `ask about ${domain.name}…`}
           backgroundColor={theme.bgPanel}
           textColor={theme.fg}
-          onSubmit={((next: string) => send(next)) as any}
+          onInput={(() => setEmbeddedInputActive?.(true)) as any}
+          onSubmit={((next: string) => {
+            setEmbeddedInputActive?.(false);
+            send(next);
+          }) as any}
         />
       </box>
     </box>

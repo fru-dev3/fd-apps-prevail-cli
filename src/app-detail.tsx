@@ -22,6 +22,10 @@ interface Props {
   skillIdx: number;
   onPickSkill: (i: number) => void;
   topBar?: React.ReactNode;
+  // Callback for the embedded chat to tell the parent app.tsx that its
+  // input is being typed in, so the global keyboard handler can stand
+  // down and let single-letter keys flow into the input.
+  setEmbeddedInputActive?: (v: boolean) => void;
 }
 
 // Connector workspace tabs. The global tab strip (state/loops/quickstart/
@@ -43,7 +47,7 @@ const CONNECTOR_TABS: { id: ConnectorTab; label: string }[] = [
   { id: "data", label: "Data" },
 ];
 
-export function AppDetail({ app, view, skillIdx, onPickSkill, topBar }: Props) {
+export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbeddedInputActive }: Props) {
   const updated = formatRelativeTime(app.stateMtime);
   const domainsLabel =
     app.domains.length > 0 ? `used in ${app.domains.join(", ")}` : "no linked domains";
@@ -75,7 +79,7 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar }: Props) {
         // Overview tab gets a special split layout: compact connection
         // summary on top, working chat on the bottom. Both flex within the
         // same panel — no scroll, no extra click to reach chat.
-        <ConnectorOverviewWithChat app={app} skillsCount={skills.length} />
+        <ConnectorOverviewWithChat app={app} skillsCount={skills.length} setEmbeddedInputActive={setEmbeddedInputActive} />
       ) : (
         <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
           <scrollbox flexGrow={1} scrollY>
@@ -250,20 +254,17 @@ function scaffoldManifest(app: AppSkill): { ok: boolean; message: string; path?:
 // the connector's data — the LLM gets a system prompt explaining the
 // connector context, sees data/ files, and answers questions about
 // THIS app's data specifically.
-function ConnectorOverviewWithChat({ app, skillsCount }: { app: AppSkill; skillsCount: number }) {
+function ConnectorOverviewWithChat({ app, skillsCount, setEmbeddedInputActive }: { app: AppSkill; skillsCount: number; setEmbeddedInputActive?: (v: boolean) => void }) {
   return (
     <box flexDirection="column" flexGrow={1}>
-      {/* Top card — compact connection summary */}
       <box paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={0}>
         <ConnectorCompactSummary app={app} skillsCount={skillsCount} />
       </box>
-      {/* Visual separator between summary and chat */}
       <box paddingLeft={2} paddingRight={2}>
         <text fg={theme.border}>{"─".repeat(80)}</text>
       </box>
-      {/* Chat fills the rest */}
       <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingBottom={1}>
-        <ConnectorChat app={app} />
+        <ConnectorChat app={app} setEmbeddedInputActive={setEmbeddedInputActive} />
       </box>
     </box>
   );
@@ -461,22 +462,27 @@ function authMechanismLabel(spec: AuthCheckSpec): string {
 // message history (lost on app switch, like the connector workspace tab
 // state), spawns runChatTurn with a system prompt explaining the connector
 // context, streams the reply as it arrives.
-function ConnectorChat({ app }: { app: AppSkill }) {
+function ConnectorChat({ app, setEmbeddedInputActive }: { app: AppSkill; setEmbeddedInputActive?: (v: boolean) => void }) {
   type ChatLine = { role: "user" | "assistant"; content: string; ts: number };
   const [history, setHistory] = useState<ChatLine[]>([]);
-  const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [streamBuf, setStreamBuf] = useState("");
   const [cli, setCli] = useState<AvailableCli | null>(null);
   const inputRef = useRef<any>(null);
 
-  // Reset history when switching connectors.
   useEffect(() => {
     setHistory([]);
-    setInput("");
     setPending(false);
     setStreamBuf("");
   }, [app.id]);
+
+  // Release embedded-input focus when this component unmounts (e.g. user
+  // navigates away). Belt-and-suspenders — the parent app.tsx already
+  // clears the flag on sidebar nav, but components rarely unmount any
+  // other way, so this is just hygiene.
+  useEffect(() => {
+    return () => setEmbeddedInputActive?.(false);
+  }, []);
 
   // Detect available CLIs once.
   useEffect(() => {
@@ -498,7 +504,6 @@ function ConnectorChat({ app }: { app: AppSkill }) {
       return;
     }
     setHistory((h) => [...h, { role: "user", content: trimmed, ts: Date.now() }]);
-    setInput("");
     inputRef.current?.setText?.("");
     setPending(true);
     setStreamBuf("");
@@ -570,11 +575,15 @@ function ConnectorChat({ app }: { app: AppSkill }) {
         <input
           ref={inputRef}
           flexGrow={1}
+          focused
           placeholder={pending ? "thinking…" : `ask about ${app.title}'s data…`}
           backgroundColor={theme.bgPanel}
           textColor={theme.fg}
-          onInput={((next: string) => setInput(next)) as any}
-          onSubmit={((next: string) => send(next)) as any}
+          onInput={(() => setEmbeddedInputActive?.(true)) as any}
+          onSubmit={((next: string) => {
+            setEmbeddedInputActive?.(false);
+            send(next);
+          }) as any}
         />
       </box>
     </box>
