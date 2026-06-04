@@ -56,12 +56,12 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={14}
+      height={11}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
       paddingTop={1}
-      paddingBottom={1}
+      paddingBottom={0}
     >
       <box
         flexDirection="row"
@@ -342,8 +342,8 @@ function StatusColumn({
           row below shows ✓/⚠/⠋ per panelist so the user knows BEFORE
           firing /council which engines are ready. */}
       <box flexDirection="row" height={1} paddingTop={1}>
-        <text fg={theme.fgFaint}>{"defaults ".padEnd(8)}</text>
-        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
+        <text fg={theme.fgFaint}>{"defaults"}</text>
+        <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
           <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>
             ⚖ {globalCouncilOn ? "ON" : "off"}
           </text>
@@ -359,19 +359,24 @@ function StatusColumn({
         </box>
       </box>
       {cliHealthSummary && cliHealthSummary.length > 0 && (
+        // Render each panelist health badge as its own <box> with
+        // padding so opentui treats them as separate layout cells —
+        // rendering ALL of them inside a single <text> caused the
+        // labels to bleed into each other when trailing whitespace got
+        // collapsed at render time ("panel" + "Claude" + "Codex" came
+        // out as "panellts ✓ Claude c✓nCodex …" in the cockpit).
         <box flexDirection="row" height={1}>
-          <text fg={theme.fgFaint}>{"panel    ".padEnd(8)}</text>
-          {cliHealthSummary.map((h, i) => {
+          <text fg={theme.fgFaint}>{"engines"}</text>
+          {cliHealthSummary.map((h) => {
             const glyph =
               h.ok === true ? "✓" : h.ok === false ? "⚠" : "⠋";
             const fgC =
               h.ok === true ? theme.ok : h.ok === false ? theme.warn : theme.fgDim;
             return (
-              <text key={h.kind} fg={theme.fgDim}>
-                {i > 0 ? "  " : " "}
-                <span fg={fgC}>{glyph}</span>
-                <span fg={theme.fg}>{` ${h.label}`}</span>
-              </text>
+              <box key={h.kind} flexDirection="row" paddingLeft={2}>
+                <text fg={fgC}>{glyph}</text>
+                <text fg={theme.fg}>{" " + h.label}</text>
+              </box>
             );
           })}
         </box>
