@@ -34,6 +34,12 @@ export interface UserConfig {
   // (BLUF, WIN, SCQA, etc). See src/framework.ts for the catalog.
   // Applies globally across all domains and both single-CLI + council mode.
   responseFramework?: FrameworkId;
+  // Per-domain framework overrides. When a key matches the active domain
+  // name, this wins over the global responseFramework. Keyed by the raw
+  // domain basename (same value as `Domain.name`). Cycling the chip on a
+  // domain workspace only mutates this map for that domain; cycling the
+  // chip on the top status column still mutates the global default.
+  domainFrameworks?: Record<string, FrameworkId>;
   // Global council default. When a chat session has no explicit per-key
   // setting, this is the fallback. Per-chat overrides still win when set.
   councilDefaultOn?: boolean;
@@ -167,18 +173,58 @@ export function setWebAccess(mode: "allow" | "deny"): void {
   writeConfig({ ...cfg, webAccess: mode });
 }
 
-export function readResponseFramework(): FrameworkId | null {
-  return readConfig()?.responseFramework ?? null;
+// Read the effective framework for a given scope.
+//   - readResponseFramework()              → global default
+//   - readResponseFramework("wealth")      → domain override if set, else
+//                                            falls through to the global
+//                                            default, else null
+export function readResponseFramework(domainKey?: string): FrameworkId | null {
+  const cfg = readConfig();
+  if (!cfg) return null;
+  if (domainKey) {
+    const override = cfg.domainFrameworks?.[domainKey];
+    if (override) return override;
+  }
+  return cfg.responseFramework ?? null;
 }
 
-// Set the active response framework. Pass null to clear (model picks its
-// own structure as before).
-export function setResponseFramework(id: FrameworkId | null): void {
+// Resolve the framework AND its scope so the UI can label the chip with
+// "global" / "domain" / "none". Resolution rules match readResponseFramework.
+export function resolveResponseFramework(
+  domainKey?: string,
+): { id: FrameworkId | null; scope: "domain" | "global" | "none" } {
+  const cfg = readConfig();
+  if (!cfg) return { id: null, scope: "none" };
+  if (domainKey) {
+    const override = cfg.domainFrameworks?.[domainKey];
+    if (override) return { id: override, scope: "domain" };
+  }
+  const g = cfg.responseFramework ?? null;
+  return g ? { id: g, scope: "global" } : { id: null, scope: "none" };
+}
+
+// Set the framework. Pass null to clear.
+//   - setResponseFramework(id)            → writes the global default
+//   - setResponseFramework(id, "wealth")  → writes/clears the domain override.
+//                                           Clearing (id === null) falls the
+//                                           domain back to the global default.
+export function setResponseFramework(
+  id: FrameworkId | null,
+  domainKey?: string,
+): void {
   const cfg = readConfig();
   if (!cfg) return;
   const next = { ...cfg };
-  if (id === null) delete next.responseFramework;
-  else next.responseFramework = id;
+  if (domainKey) {
+    const map = { ...(next.domainFrameworks ?? {}) };
+    if (id === null) delete map[domainKey];
+    else map[domainKey] = id;
+    if (Object.keys(map).length === 0) delete next.domainFrameworks;
+    else next.domainFrameworks = map;
+  } else {
+    if (id === null) delete next.responseFramework;
+    else next.responseFramework = id;
+  }
   writeConfig(next);
 }
 

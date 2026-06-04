@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { Domain, ViewKey } from "./vault.ts";
@@ -574,7 +574,13 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
   // a bracketed instruction so the model structures its answer in that
   // style. Applies to every CLI and to both single-chat + council. Short
   // enough that even codex (which would otherwise echo) renders cleanly.
-  const framework = getFramework(readResponseFramework());
+  //
+  // Resolution: cwd is <vault>/<domain>, so basename(cwd) is the domain
+  // key. The lookup checks for a per-domain override first and falls
+  // back to the global default. Per-domain overrides are set by the
+  // workspace bar chip on a domain workspace.
+  const domainKey = basename(cwd);
+  const framework = getFramework(readResponseFramework(domainKey));
   const framedPrompt = buildFrameworkPreamble(framework) + prompt;
 
   if (cli.kind === "claude") {

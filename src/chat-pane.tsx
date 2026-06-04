@@ -1561,7 +1561,10 @@ function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: numb
   // already shows the spinner + "X is thinking…" word. Rendering the same
   // here was a duplicate, so the status line stays silent during work and
   // only carries the idle ready-prompt.
-  const fw = getFramework(readResponseFramework());
+  // Display the framework that will actually be applied to this domain —
+  // per-domain override wins, falls through to global. Keeps the status
+  // line honest when the user has set an override on this domain only.
+  const fw = getFramework(readResponseFramework(session.hostDomain.name));
   return (
     <box
       flexDirection="row"

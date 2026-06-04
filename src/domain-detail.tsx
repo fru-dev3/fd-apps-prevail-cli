@@ -111,6 +111,7 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
         frameworkTick={frameworkTick}
         onFrameworkChange={onFrameworkChange}
         onOpenChat={onOpenChat}
+        domainKey={domain.name}
       />
       {/* Each tab renders DIFFERENT content (per user — they were
           clicking through tabs and seeing the same thing every time):
