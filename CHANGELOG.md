@@ -7,6 +7,37 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.0.0] — 2026-06-04 · 1.0
+
+prevAIl 1.0. The deliberation cockpit is feature-complete for its scope, production-hardened for its threat model, and OSS-ready for outside contribution.
+
+### What 1.0 means
+
+This release is the consolidation marker for the v0.9.x + v0.10.0 audit cluster. Nothing new ships in 1.0 itself — it's the version where:
+
+- **The threat model is documented.** SECURITY.md, docs/threat-model.md, and the operating manual cover what's defended and what isn't.
+- **The security defenses are real, not aspirational.** Prompt injection hardening, tamper-evident logs, MCP token auth, council cost caps, output truncation, secrets at chmod 0600 — all in code, all under test.
+- **The operational surface is complete.** Vault prune, backup, restore, verify. Debug log with rotation. Self-update.
+- **The OSS scaffolding is in place.** CODE_OF_CONDUCT, CONTRIBUTING, ISSUE_TEMPLATE/, PR template, docs/, pinned scope discussion, Homebrew formula.
+- **The codebase is maintainable by one person.** Biome lint in CI, `<Chip />` deduplication, `<ErrorBoundary />` defense in depth, void-silencer cleanup, two of the largest files refactored.
+- **The tests carry their weight.** 181 passing, 0 failing — coverage across the security primitives, the vault tooling, the upgrade flow, the chip rendering, the error recovery.
+
+### What 1.0 does NOT mean
+
+- **Not enterprise-grade.** prevAIl is single-user by design. See SECURITY.md and the pinned scope discussion.
+- **Not the final feature set.** Several follow-ups are tracked as GitHub issues (#2 app-scope overrides, #3 recall JOIN, #4 MCP/Telegram framework+lens). They'll ship as 1.x minor releases.
+- **Not a stability freeze.** Semver discipline starts now: breaking changes only on major bumps. Within 1.x, any keyboard shortcut / slash command / config key / vault file shape / persisted format is stable.
+
+### Going forward
+
+- v1.x minor releases: new lenses, new frameworks, new connectors, new docs.
+- v1.x patches: bug fixes, dependency bumps, perf tweaks.
+- v2.0.0 would be a deliberate design break — none on the roadmap.
+
+Thank you to everyone who chased a screenshot bug in the chips, found a typo in the threat model, or just used the cockpit. The deliberation was the point.
+
+---
+
 ## [0.10.0] — 2026-06-04 · Code quality + refactors + self-update
 
 Phases 5, 6, and 7 of the production-readiness audit. The codebase is now smaller, more maintainable, defensively wrapped, and can update itself.
