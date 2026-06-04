@@ -1808,15 +1808,13 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           onPickApp={(i) => {
             setAppIdx(i);
             setFocus("apps");
-            setMode("idle");
-            setActiveKey(null);
             embeddedInputActiveRef.current = false;
-            // Apps land DIRECTLY on the workspace (Overview / Auth /
-            // Sync / Skills / Data). No chat auto-open — the user
-            // wants to see the connection details, integration type,
-            // API status, etc. FIRST without pressing Escape. To chat
-            // with the app, the user clicks the chat tab in the global
-            // strip explicitly.
+            // Mirror domains exactly. Apps land in chat — same
+            // ChatPane, same menu bar, same flow. Press Escape (or
+            // click any non-chat tab) to see the connector workspace
+            // (Auth / Sync / Skills / Data). Consistent.
+            const a = apps[i];
+            if (a) openChatForApp(a);
           }}
           onNewDomain={() => {
             setFocus("domains");
