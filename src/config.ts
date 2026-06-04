@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 import type { FrameworkId } from "./framework.ts";
+import type { LensSelection } from "./lens.ts";
 
 export type CliKind = "claude" | "codex" | "gemini" | "ollama";
 
@@ -40,6 +41,15 @@ export interface UserConfig {
   // domain workspace only mutates this map for that domain; cycling the
   // chip on the top status column still mutates the global default.
   domainFrameworks?: Record<string, FrameworkId>;
+  // Optional cognitive lens. Same resolution rules as framework — global
+  // default + per-domain overrides — but the semantics are different:
+  // when set to "all", the council runner fans every panelist across
+  // every lens (4 CLIs × 5 lenses = 20 calls per question). Specific id
+  // applies just that lens to every panelist (no fanout). null = off.
+  // Lens only fires in council mode; single chat ignores it (would
+  // require a single-CLI fanout, which is a follow-up).
+  responseLens?: LensSelection;
+  domainLenses?: Record<string, LensSelection>;
   // Global council default. When a chat session has no explicit per-key
   // setting, this is the fallback. Per-chat overrides still win when set.
   councilDefaultOn?: boolean;
@@ -224,6 +234,51 @@ export function setResponseFramework(
   } else {
     if (id === null) delete next.responseFramework;
     else next.responseFramework = id;
+  }
+  writeConfig(next);
+}
+
+// Lens accessors — mirror the framework helpers above. Same resolution
+// order: per-domain override wins, global is fallback, null = off.
+export function readResponseLens(domainKey?: string): LensSelection {
+  const cfg = readConfig();
+  if (!cfg) return null;
+  if (domainKey) {
+    const override = cfg.domainLenses?.[domainKey];
+    if (override !== undefined) return override;
+  }
+  return cfg.responseLens ?? null;
+}
+
+export function resolveResponseLens(
+  domainKey?: string,
+): { sel: LensSelection; scope: "domain" | "global" | "none" } {
+  const cfg = readConfig();
+  if (!cfg) return { sel: null, scope: "none" };
+  if (domainKey) {
+    const override = cfg.domainLenses?.[domainKey];
+    if (override !== undefined) return { sel: override, scope: "domain" };
+  }
+  const g = cfg.responseLens ?? null;
+  return g ? { sel: g, scope: "global" } : { sel: null, scope: "none" };
+}
+
+export function setResponseLens(
+  sel: LensSelection,
+  domainKey?: string,
+): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (domainKey) {
+    const map = { ...(next.domainLenses ?? {}) };
+    if (sel === null) delete map[domainKey];
+    else map[domainKey] = sel;
+    if (Object.keys(map).length === 0) delete next.domainLenses;
+    else next.domainLenses = map;
+  } else {
+    if (sel === null) delete next.responseLens;
+    else next.responseLens = sel;
   }
   writeConfig(next);
 }

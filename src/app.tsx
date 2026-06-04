@@ -23,6 +23,7 @@ import {
   isCliKind,
   readCouncilConfig,
   readResponseFramework,
+  readResponseLens,
   readWebAccess,
   readGlobalCouncilDefault,
   setResponseFramework,
@@ -36,6 +37,7 @@ import {
   type CliKind,
 } from "./config.ts";
 import { FRAMEWORKS, getFramework, isFrameworkId } from "./framework.ts";
+import { buildLensPreamble, expandLensSelection, type Lens } from "./lens.ts";
 import { buildDomainHeatmap, renderHeatmapText } from "./heatmap.ts";
 import {
   readRecentObservations,
@@ -1113,17 +1115,32 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       cli: "council",
       model: "",
     });
-    // One ts per panelist (not per CLI) so we can have multiple panelists
-    // sharing a CLI — e.g. Claude opus-4-7 AND Claude opus-4-8 — and still
-    // replace the right placeholder when each lands.
-    const pendingTsByIdx = panelists.map((_, i) => userTs + 100 + i);
+    // Expand panel × lenses. When the domain (or global) has a lens
+    // selection of "all", every panelist runs once per lens — 4 CLIs ×
+    // 5 lenses = 20 jobs per question. Specific id = each panelist
+    // runs once with that lens prepended. null = today's behavior, one
+    // job per panelist with no lens directive.
+    const lensList = expandLensSelection(readResponseLens(session.hostDomain.name));
+    type Job = { cli: AvailableCli; model: string; lens: Lens | null };
+    const jobs: Job[] =
+      lensList.length === 0
+        ? panelists.map((p) => ({ ...p, lens: null as Lens | null }))
+        : panelists.flatMap((p) =>
+            lensList.map((l) => ({ ...p, lens: l as Lens | null })),
+          );
+    // One ts per JOB so multiple jobs sharing a CLI (multiple model
+    // variants, or multiple lenses) each get their own pending bubble.
+    const pendingTsByIdx = jobs.map((_, i) => userTs + 100 + i);
 
     setChats((m) => {
       const cur = m.get(key);
       if (!cur) return m;
       const introTs = userTs + 1;
-      const panelLabel = panelists
-        .map(({ cli, model }) => (model ? `${cli.label}·${model}` : cli.label))
+      const panelLabel = jobs
+        .map(({ cli, model, lens }) => {
+          const tag = model ? `${cli.label}·${model}` : cli.label;
+          return lens ? `${tag} [${lens.label}]` : tag;
+        })
         .join(" · ");
       const introMsgs: ChatSession["messages"] = [
         userMsg,
@@ -1140,10 +1157,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           ts: introTs + 1,
         });
       }
-      // Drop a "thinking" placeholder bubble per panelist immediately so
-      // the user sees all panelists working at once instead of waiting in
-      // silence for the first one to return.
-      panelists.forEach(({ cli, model }, i) => {
+      // Drop a "thinking" placeholder bubble per job immediately so the
+      // user sees all jobs working at once instead of waiting in silence
+      // for the first one to return. With lens=all this drops 20 bubbles.
+      jobs.forEach(({ cli, model }, i) => {
         introMsgs.push({
           role: "assistant" as const,
           content: "",
@@ -1195,8 +1212,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       /* embedder unavailable — no recall this turn */
     }
     // Collect successful responses in a closure so we can synthesize them
-    // into a verdict after all panel members return.
-    type Collected = { cli: AvailableCli; model: string; response: string; ok: boolean };
+    // into a verdict after all panel members return. lens is carried
+    // through so the chair can group by lens in synthesis when applicable.
+    type Collected = {
+      cli: AvailableCli;
+      model: string;
+      lens: Lens | null;
+      response: string;
+      ok: boolean;
+    };
     const collected: Collected[] = [];
 
     // Hard per-call timeout so a hanging CLI (codex on a broken auth, gemini
@@ -1222,10 +1246,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       });
     }
 
-    const calls = panelists.map(({ cli, model: mdl }, panelistIdx) =>
-      withTimeout(
+    const calls = jobs.map(({ cli, model: mdl, lens }, jobIdx) => {
+      // Lens preamble is prepended to the per-job prompt so each panelist
+      // sees its assigned lens directive as the last thing before the
+      // user's question (recall context + framework already in promptForCli).
+      const jobPrompt = lens ? `${buildLensPreamble(lens)}${promptForCli}` : promptForCli;
+      const callLabel = `${mdl ? `${cli.label}·${mdl}` : cli.label}${lens ? ` [${lens.label}]` : ""}`;
+      return withTimeout(
         runChatTurn({
-          prompt: promptForCli,
+          prompt: jobPrompt,
           cwd: session.hostDomain.path,
           cli,
           model: mdl,
@@ -1234,11 +1263,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           signal: controller.signal,
         }),
         PANELIST_TIMEOUT_MS,
-        mdl ? `${cli.label}·${mdl}` : cli.label,
+        callLabel,
       )
         .then((response) => {
           const ts = Date.now();
-          collected.push({ cli, model: mdl, response, ok: true });
+          collected.push({ cli, model: mdl, lens, response, ok: true });
           persistMessage({
             domain: session.hostDomain.name,
             session_id: session.sessionId,
@@ -1248,9 +1277,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             cli: cli.kind,
             model: mdl,
           });
-          // Replace the pending placeholder for THIS panelist (by ts —
-          // multiple panelists may share a CLI so kind alone isn't enough).
-          const pendingTs = pendingTsByIdx[panelistIdx]!;
+          // Replace the pending placeholder for THIS job (by ts — many
+          // jobs may share a CLI/model when lens fanout is active, so
+          // kind alone isn't enough).
+          const pendingTs = pendingTsByIdx[jobIdx]!;
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
@@ -1274,7 +1304,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               messages: nextMessages,
               usage: {
                 calls: cur.usage.calls + 1,
-                promptChars: cur.usage.promptChars + promptForCli.length,
+                promptChars: cur.usage.promptChars + jobPrompt.length,
                 replyChars: cur.usage.replyChars + response.length,
               },
             });
@@ -1282,8 +1312,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         })
         .catch((err: Error) => {
           const ts = Date.now();
-          collected.push({ cli, model: mdl, response: err.message, ok: false });
-          const pendingTs = pendingTsByIdx[panelistIdx]!;
+          collected.push({ cli, model: mdl, lens, response: err.message, ok: false });
+          const pendingTs = pendingTsByIdx[jobIdx]!;
           setChats((m) => {
             const cur = m.get(key);
             if (!cur) return m;
@@ -1304,8 +1334,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 : [...cur.messages, errMsg];
             return new Map(m).set(key, { ...cur, messages: nextMessages });
           });
-        }),
-    );
+        });
+    });
 
     Promise.allSettled(calls).then(async () => {
       const good = collected.filter((c) => c.ok);
@@ -1348,17 +1378,45 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             ],
           });
         });
+        const lensesActive = lensList.length > 0;
         const panelBlock = good
           .map((c) => {
             const tag = c.model ? `${c.cli.label}·${c.model}` : c.cli.label;
-            return `--- ${tag} ---\n${c.response.trim()}`;
+            const lensTag = c.lens ? ` [${c.lens.label}]` : "";
+            return `--- ${tag}${lensTag} ---\n${c.response.trim()}`;
           })
           .join("\n\n");
         const panelistList = good
-          .map((c) => (c.model ? `${c.cli.label}·${c.model}` : c.cli.label))
+          .map((c) => {
+            const tag = c.model ? `${c.cli.label}·${c.model}` : c.cli.label;
+            return c.lens ? `${tag} [${c.lens.label}]` : tag;
+          })
           .join(", ");
-        const synthPrompt =
-          `You are the chair of an AI council. ${good.length} independent panelists (${panelistList}) just answered the same user question. ` +
+        // Two synthesis prompts: lens-mode treats divergence between
+        // lenses as the SIGNAL (different angles are supposed to give
+        // different answers), while standard council mode treats it as
+        // factual disagreement and applies majority rule. Picking the
+        // wrong prompt either flattens the lenses into a vote (bad) or
+        // resolves a factual question by "respecting all perspectives"
+        // (also bad).
+        const synthPrompt = lensesActive
+          ? `You are the chair of an AI council that just ran a multi-lens analysis. ${good.length} responses came in: each panelist (${panelistList}) attacked the same question from a specific cognitive lens. The lenses are deliberately different framings — first-principles, outsider, contrarian, expansionist, executor. Divergence between lenses is the SIGNAL, not noise.\n\n` +
+            `USER QUESTION:\n${text}\n\n` +
+            `PANEL RESPONSES (grouped by panelist · lens):\n${panelBlock}\n\n` +
+            `Synthesis rules:\n` +
+            `- DO NOT treat lens divergence as factual disagreement. The lenses were SUPPOSED to produce different angles.\n` +
+            `- When the SAME lens (e.g. CONTRARIAN) was run by multiple CLIs, treat their replies as votes within that lens — if they converge, the lens has a stable position; if they diverge, name it.\n` +
+            `- The verdict must integrate ACROSS lenses, not pick one lens as the winner. A good verdict respects what each lens revealed.\n\n` +
+            `Output exactly these four sections, no preamble, no closing remarks:\n\n` +
+            `## What each lens revealed\n` +
+            `One bullet per LENS (not per panelist). Format: "**<LENS LABEL>**: <the lens's core insight in <=1 sentence> — <the most concrete thing it would have the user do or avoid>". Aggregate across CLIs that ran that lens.\n\n` +
+            `## Cross-lens consensus\n` +
+            `Bulleted list of points multiple lenses converged on, even via different reasoning. If lenses fundamentally disagreed about everything, write "None — see divergence."\n\n` +
+            `## Cross-lens divergence\n` +
+            `Bulleted list of points where the lenses produced genuinely incompatible recommendations (not just different emphases). For each bullet, name which lens took which side. This is where the user's hardest call lives.\n\n` +
+            `## Verdict\n` +
+            `Two lines. Line 1 starts with "VERDICT:" + one sentence giving the integrated call that respects what every lens revealed. Line 2 starts with "Why:" + one sentence naming which lenses most informed the call and what tradeoff you resolved.`
+          : `You are the chair of an AI council. ${good.length} independent panelists (${panelistList}) just answered the same user question. ` +
           `Your job: show what each panelist said and why, name the consensus, name the divergence, then deliver one decisive verdict with the reasoning tied back to the panelists. Do not hedge — pick a side.\n\n` +
           `USER QUESTION:\n${text}\n\n` +
           `PANEL RESPONSES:\n${panelBlock}\n\n` +

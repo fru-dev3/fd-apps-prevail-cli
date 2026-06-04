@@ -2,9 +2,12 @@ import { theme } from "./theme.ts";
 import { openInFinder, shortenHome } from "./system.ts";
 import {
   resolveResponseFramework,
+  resolveResponseLens,
   setResponseFramework,
+  setResponseLens,
 } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
+import { LENSES, type LensSelection } from "./lens.ts";
 
 interface Props {
   vaultPath: string;
@@ -12,27 +15,26 @@ interface Props {
   onToggleCouncil: () => void;
   frameworkTick?: number;
   onFrameworkChange?: () => void;
-  // Click handler for the "Chat" link — opens the full ChatPane for
-  // the current domain/app. Without this, the workspace had no visible
-  // entry point to chat (the chat tab in the strip is small and easy
-  // to miss).
   onOpenChat?: () => void;
-  // When set, the framework chip operates on the per-domain override
-  // for that key (falling back to the global default for display when
-  // no override exists). When unset, the chip mutates the global
-  // default — same as before. Apps currently pass undefined; that's
-  // intentional pending app-scope plumbing in cli-bridge/chat-pane.
+  // When set, the framework AND lens chips operate on per-domain overrides
+  // for that key (falling back to the global default for display when no
+  // override exists). When unset, the chips mutate the global default.
+  // Apps currently pass undefined; that's intentional pending app-scope
+  // plumbing in cli-bridge / council-runner.
   domainKey?: string;
 }
 
-// Visible at the top of every domain and connector workspace. Surfaces
-// the things users were having to use slash commands for:
-//   ▸ Chat           → open the full ChatPane for this domain/app
-//   ▸ open vault     → spawns Finder / Explorer / xdg-open at the path
-//   Council: ON/OFF  → toggles council mode for this surface
-//   ◆ Framework: id  → cycles through NONE → BLUF → WIN → SCQA → …
+// Visible at the top of every domain and connector workspace. One row,
+// left-to-right:
+//   ▸ Chat            → open the full ChatPane
+//   ▸ open vault      → spawn Finder / Explorer / xdg-open at the path
+//   Council: ON/OFF   → toggles council for this surface
+//   ◆ Framework: id   → cycles BLUF → WIN → SCQA → … (output shape)
+//   ◇ Lens: id        → cycles first-principles → … → all → off (angle of attack)
 //
-// Render order is left-aligned so the row reads as one.
+// Framework and Lens are independent axes — set both at once for the
+// most structured output. Lens only fires when Council is ON; it's still
+// shown when council is off so the user can pre-set it.
 export function WorkspaceConfigBar({
   vaultPath,
   councilOn,
@@ -41,14 +43,10 @@ export function WorkspaceConfigBar({
   onOpenChat,
   domainKey,
 }: Props) {
-  const { id: current, scope } = resolveResponseFramework(domainKey);
+  const { id: currentFw, scope: fwScope } = resolveResponseFramework(domainKey);
   const cycleFramework = () => {
-    // Cycle order: none → bluf → win → scqa → sbar → ooda → proscons →
-    // steelman → none. Wraps around. When `domainKey` is set, this
-    // mutates only that domain's override (so cycling to "none" clears
-    // the override and lets the domain fall back to the global default).
     const order = [null, ...FRAMEWORKS.map((f) => f.id)] as (string | null)[];
-    const idx = order.indexOf(current);
+    const idx = order.indexOf(currentFw);
     const next = order[(idx + 1) % order.length] ?? null;
     setResponseFramework(
       next as Parameters<typeof setResponseFramework>[0],
@@ -56,17 +54,40 @@ export function WorkspaceConfigBar({
     );
     onFrameworkChange?.();
   };
-  const fwLabel = current
-    ? FRAMEWORKS.find((f) => f.id === current)?.label ?? current
+  const fwLabel = currentFw
+    ? FRAMEWORKS.find((f) => f.id === currentFw)?.label ?? currentFw
     : "none";
-  // Tiny scope hint after the framework name so the user can tell at a
-  // glance whether they're seeing the global default or a domain-only
-  // override. `· domain` is the only non-default state worth shouting
-  // about; `· global` would be visual noise on the common case.
-  const scopeHint =
-    domainKey && scope === "domain"
+  const fwScopeHint =
+    domainKey && fwScope === "domain"
       ? " · domain"
-      : domainKey && scope === "global"
+      : domainKey && fwScope === "global"
+        ? " · global"
+        : "";
+
+  const { sel: currentLens, scope: lensScope } = resolveResponseLens(domainKey);
+  const cycleLens = () => {
+    // Cycle order: off → first-principles → outsider → contrarian →
+    // expansionist → executor → all → off. "all" is the fanout mode and
+    // sits at the end so the user has to deliberately land on it.
+    const order: LensSelection[] = [
+      null,
+      ...LENSES.map((l) => l.id as LensSelection),
+      "all",
+    ];
+    const idx = order.findIndex((s) => s === currentLens);
+    const next = order[(idx + 1) % order.length] ?? null;
+    setResponseLens(next, domainKey);
+    onFrameworkChange?.(); // re-uses the same redraw tick — both chips re-render
+  };
+  const lensLabel = currentLens === null
+    ? "off"
+    : currentLens === "all"
+      ? "all (×5)"
+      : LENSES.find((l) => l.id === currentLens)?.label ?? currentLens;
+  const lensScopeHint =
+    domainKey && lensScope === "domain"
+      ? " · domain"
+      : domainKey && lensScope === "global"
         ? " · global"
         : "";
 
@@ -113,13 +134,35 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleFramework}
       >
-        <text fg={current ? theme.aiAccent : theme.fgDim} attributes={current ? 1 : 0}>
+        <text fg={currentFw ? theme.aiAccent : theme.fgDim} attributes={currentFw ? 1 : 0}>
           ◆ Framework: {fwLabel}
         </text>
-        {scopeHint && (
-          <text fg={scope === "domain" ? theme.gold : theme.fgFaint}>
-            {scopeHint}
+        {fwScopeHint && (
+          <text fg={fwScope === "domain" ? theme.gold : theme.fgFaint}>
+            {fwScopeHint}
           </text>
+        )}
+      </box>
+      <text fg={theme.border}>{"   │   "}</text>
+      <box
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        onMouseDown={cycleLens}
+      >
+        <text
+          fg={currentLens ? theme.aiAccent : theme.fgDim}
+          attributes={currentLens ? 1 : 0}
+        >
+          ◇ Lens: {lensLabel}
+        </text>
+        {lensScopeHint && (
+          <text fg={lensScope === "domain" ? theme.gold : theme.fgFaint}>
+            {lensScopeHint}
+          </text>
+        )}
+        {currentLens && !councilOn && (
+          <text fg={theme.fgFaint}> · needs council</text>
         )}
       </box>
     </box>
