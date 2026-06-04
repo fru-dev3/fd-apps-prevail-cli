@@ -1991,6 +1991,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   onToggleCouncil={() => toggleCouncilModeFor(`app:${app.id}`)}
                   frameworkTick={frameworkTick}
                   onFrameworkChange={bumpFrameworkTick}
+                  onOpenChat={() => openChatForApp(app)}
                 />
               );
             }
@@ -2017,6 +2018,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 onFrameworkChange={bumpFrameworkTick}
                 selectedSkillIds={selectedSkillIds}
                 onToggleSkill={toggleSkillSelection}
+                onOpenChat={() => domain && openChatForDomain(domain)}
               />
             );
           })()}

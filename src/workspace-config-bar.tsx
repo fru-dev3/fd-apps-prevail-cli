@@ -7,16 +7,16 @@ import {
 import { FRAMEWORKS } from "./framework.ts";
 
 interface Props {
-  // Filesystem path to "open in Finder" — domain folder or connector folder.
   vaultPath: string;
-  // Council toggle: current state + a handler that flips it.
   councilOn: boolean;
   onToggleCouncil: () => void;
-  // Force re-render when the framework changes (we read it from disk on
-  // every render, but React doesn't know to re-render without a state
-  // bump — caller provides one via a tick or similar).
   frameworkTick?: number;
   onFrameworkChange?: () => void;
+  // Click handler for the "Chat" link — opens the full ChatPane for
+  // the current domain/app. Without this, the workspace had no visible
+  // entry point to chat (the chat tab in the strip is small and easy
+  // to miss).
+  onOpenChat?: () => void;
 }
 
 // Visible at the top of every domain and connector workspace. Surfaces
@@ -31,6 +31,7 @@ export function WorkspaceConfigBar({
   councilOn,
   onToggleCouncil,
   onFrameworkChange,
+  onOpenChat,
 }: Props) {
   const current = readResponseFramework();
   const cycleFramework = () => {
@@ -49,6 +50,19 @@ export function WorkspaceConfigBar({
 
   return (
     <box flexDirection="row" height={1} paddingLeft={1} paddingRight={1}>
+      {onOpenChat && (
+        <>
+          <box
+            flexDirection="row"
+            paddingLeft={1}
+            paddingRight={1}
+            onMouseDown={onOpenChat}
+          >
+            <text fg={theme.aiAccent} attributes={1}>▸ Chat</text>
+          </box>
+          <text fg={theme.border}>{"   │   "}</text>
+        </>
+      )}
       <box
         flexDirection="row"
         paddingLeft={1}

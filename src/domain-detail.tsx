@@ -67,9 +67,10 @@ interface Props {
   // tab clicks within a domain. Resets on domain change.
   selectedSkillIds?: Set<string>;
   onToggleSkill?: (skillId: string) => void;
+  onOpenChat?: () => void;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill, onOpenChat }: Props) {
   if (!domain) {
     return (
       <box
@@ -109,6 +110,7 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
         onToggleCouncil={onToggleCouncil ?? (() => {})}
         frameworkTick={frameworkTick}
         onFrameworkChange={onFrameworkChange}
+        onOpenChat={onOpenChat}
       />
       {/* Each tab renders DIFFERENT content (per user — they were
           clicking through tabs and seeing the same thing every time):

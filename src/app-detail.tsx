@@ -31,6 +31,9 @@ interface Props {
   onToggleCouncil?: () => void;
   frameworkTick?: number;
   onFrameworkChange?: () => void;
+  // Opens the full ChatPane for this app. Surfaced as the "▸ Chat"
+  // link at the top of the workspace.
+  onOpenChat?: () => void;
 }
 
 // Connector workspace tabs. The global tab strip (state/loops/quickstart/
@@ -52,7 +55,7 @@ const CONNECTOR_TABS: { id: ConnectorTab; label: string }[] = [
   { id: "data", label: "Data" },
 ];
 
-export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbeddedInputActive, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange }: Props) {
+export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbeddedInputActive, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, onOpenChat }: Props) {
   const updated = formatRelativeTime(app.stateMtime);
   const domainsLabel =
     app.domains.length > 0 ? `used in ${app.domains.join(", ")}` : "no linked domains";
@@ -87,6 +90,7 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbedde
         onToggleCouncil={onToggleCouncil ?? (() => {})}
         frameworkTick={frameworkTick}
         onFrameworkChange={onFrameworkChange}
+        onOpenChat={onOpenChat}
       />
       {/* Same shape as DomainDetail: a single scrollable view, no
           nested tab strip. The connector content is stacked top to
