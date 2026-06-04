@@ -7,6 +7,44 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.7.0] — 2026-06-04 · Council, lens, framework — the deliberation release
+
+The biggest jump since v0.6. prevAIl's pitch is now sharply about ONE thing — hard decisions across multiple models — and the cockpit, persistence, and ergonomics all aligned around that.
+
+### Added — Cognitive lenses
+- **8 lenses** that change HOW a panelist attacks a question (orthogonal to frameworks, which change how the answer is STRUCTURED): `FIRST PRINCIPLES`, `OUTSIDER`, `CONTRARIAN`, `EXPANSIONIST`, `EXECUTOR`, `ALIEN`, `MOM`, `DAD`.
+- **Lens = "all" fanout.** Every council panelist runs every lens (4 CLIs × 8 lenses = 32 panelist calls per question). The chair synthesizes ACROSS lenses with a different prompt — "divergence is the signal, not noise."
+- **Per-domain lens overrides** stored in `domainLenses`. Cycling the chip on a domain workspace mutates that domain only; cycling the global chip in the banner sets the fallback.
+
+### Added — Per-domain framework overrides
+- Same mechanic, `domainFrameworks` map. Workspace bar chip = domain override; banner chip = global fallback. `resolveResponseFramework` / `resolveResponseLens` centralize resolution so every consumer (council runner, CLI bridge, chat status line) agrees.
+
+### Added — Per-bubble metadata + decision log
+- **Every assistant bubble** renders a dim badge underneath: `claude · claude-opus-4-7 · ◆ BLUF · ◇ CONTRARIAN`. Captured at SEND TIME, not render time.
+- **Default-model fallback.** When a panelist runs on a CLI's default model, the badge shows `gpt-5.4 (default)` rather than blank. Every panelist reads uniformly informative.
+- **Per-domain decision log.** `writeTurnSummary` emits a `> meta: <cli> · framework=… · lens=…` blockquote in `<domain>/_log/YYYY-MM-DD.md`.
+- **SQLite persistence.** New `messages_ext` sidecar table (FTS5 won't ALTER) joins framework/lens onto message rowid.
+
+### Changed — UI architecture
+- **Unified ConfigBar.** `⚖ Council · ◆ Framework · ◇ Lens   ▸ vault   ✎ edit` — rendered at the BOTTOM of the content area in BOTH chat and workspace mode. Built once in `app.tsx`, passed as `bottomBar` to ChatPane and DomainDetail.
+- **TabStrip slimmed.** Council toggle and configure left the strip — they lived there AND on the workspace bar. Picking one removes the duplication.
+- **Banner compacted** to match the wordmark's 7-row height. Defaults block is two rows: `⚖ Council · ◆ Framework · ◇ Lens` / `◇ configure · ▸ tools`. Each chip gets a distinct glyph.
+
+### Changed — Apps collapsed
+- `SHOW_APPS = false` at the top of `src/app.tsx` hides the LIFE APPS sidebar section, the `s` swap-focus key, AppDetail, and the new-app flow. The connector architecture stays in the codebase. Flip the constant to re-enable when the connector → council grounding pipeline is wired.
+
+### Fixed
+- **Gemini ESC cancel.** The `gemini` wrapper script swallows SIGTERM. Spawn with `detached: true` and signal the whole pgroup with SIGKILL.
+- **Overlay keyboard leak.** Arrows inside Tools / Council Config were navigating the sidebar underneath. Overlays now own the keyboard; only ctrl+c propagates.
+- **Skills tab header bleed.** Switched to single template literals — multiple JSX expressions inside one `<text>` caused opentui to interleave lines.
+- **Branding chip clipping.** Split into two rows with distinct glyphs (⚖ ◆ ◇).
+- **"· domain" scope hint removed.** Scope is implicit in where the chip lives.
+
+### Skill count accuracy
+- Connector stubs (`type: app` in frontmatter) no longer counted toward domain skill totals.
+
+---
+
 ## [0.6.1] — 2026-06-03 · UX polish + visibility
 
 Iterative fixes to v0.6.0 based on real-use feedback. No new features so much as **making the existing ones findable**.
