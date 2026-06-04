@@ -312,20 +312,18 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     }
 
     if (mode === "chat") {
-      // Up/Down in chat mode previously just changed the index but KEPT
-      // the chat pane visible — so users navigating to a new app from
-      // chat had to press Escape before seeing the app workspace. Now
-      // arrow nav drops out of chat so the user lands directly on the
-      // new selection's content. Explicit chat re-entry is one click (or
-      // enter) — much less friction than the constant escape-loop.
+      // Arrow nav in chat mode → idle + null activeKey so the next render
+      // is GUARANTEED to land on the workspace, not a stale chat pane.
       if (name === "up") {
         setMode("idle");
+        setActiveKey(null);
         if (focus === "apps") setAppIdx((s) => Math.max(0, s - 1));
         else setDomainIdx((s) => Math.max(0, s - 1));
         return;
       }
       if (name === "down") {
         setMode("idle");
+        setActiveKey(null);
         if (focus === "apps") setAppIdx((s) => Math.min(apps.length - 1, s + 1));
         else setDomainIdx((s) => Math.min(domains.length - 1, s + 1));
         return;
@@ -1687,18 +1685,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           onPickDomain={(i) => {
             setDomainIdx(i);
             setFocus("domains");
-            // Drop out of any active chat so the user lands directly on
-            // the domain's content instead of seeing whatever chat
-            // session was still open from before.
-            if (mode === "chat") setMode("idle");
+            // Belt-and-suspenders against the "needs Escape" bug:
+            // unconditionally force idle mode AND clear activeKey so even
+            // if some state leak leaves mode="chat" later in the render,
+            // inChat (= mode==="chat" && activeSession) becomes false
+            // because activeSession resolves to null. AppDetail /
+            // DomainDetail render guaranteed.
+            setMode("idle");
+            setActiveKey(null);
           }}
           onPickApp={(i) => {
             setAppIdx(i);
             setFocus("apps");
-            // Same — clicking on an app exits any active chat so the
-            // connector workspace (Overview + Chat) renders immediately
-            // without an extra Escape press.
-            if (mode === "chat") setMode("idle");
+            setMode("idle");
+            setActiveKey(null);
           }}
           onNewDomain={() => {
             setFocus("domains");

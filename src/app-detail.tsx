@@ -358,30 +358,32 @@ function ConnectorCompactSummary({ app, skillsCount }: { app: AppSkill; skillsCo
           {scaffoldNote && <text fg={scaffoldNote.startsWith("✓") ? theme.ok : theme.warn}>{"  " + scaffoldNote}</text>}
         </box>
       )}
-      {/* Title row */}
+      {/* One-line title with status pill on the right — no waste of
+          vertical space. Everything else is condensed below. */}
       <box flexDirection="row" height={1}>
         <text fg={theme.gold} attributes={1}>{app.title}</text>
-        <text fg={theme.fgFaint}>{`   id: ${app.id}`}</text>
+        <text fg={theme.fgFaint}>{`   ${integrationLabel[integration] ?? integration}   `}</text>
+        <text fg={statusFg} attributes={1}>{probing ? "⠋ probing…" : statusGlyph}</text>
+        {!probing && (
+          <text fg={theme.fgFaint}>{probe?.ts ? `   probed ${formatRelativeTime(probe.ts)}` : "   never tested"}</text>
+        )}
       </box>
       <text> </text>
-      {/* The key questions the user asked to see. Each is its own labeled
-          row so they scan at a glance. Labels are right-aligned to 14
-          chars so the values line up vertically. */}
-      <ConnRow label="kind"        value={integrationLabel[integration] ?? integration} valueFg={theme.fg} />
-      <ConnRow label="how"         value={authMechanism}                                  valueFg={theme.fgDim} />
-      <ConnRow label="status"      value={probing ? "⠋ probing…" : statusGlyph}            valueFg={statusFg} />
-      <ConnRow label="working"     value={workingLabel}                                   valueFg={isLive ? theme.ok : theme.fgDim} />
-      <ConnRow label="last probe"  value={probe?.ts ? formatRelativeTime(probe.ts) : "never"} valueFg={theme.fgFaint} />
-      {probe?.message && (
-        <ConnRow label="detail" value={probe.message} valueFg={probe.ok ? theme.fgDim : theme.warn} />
+      {/* Compact 2-line connection block. "how" answers the user's
+          questions (MCP? API? OAuth? browser?) in one human-readable line.
+          "skills/domains" combines the two counts. Cluttered 8-row
+          version is gone — same info, half the lines. */}
+      <ConnRow label="how"     value={authMechanism}                                  valueFg={theme.fg} />
+      <ConnRow label="scope"   value={`${skillsCount} skill${skillsCount === 1 ? "" : "s"}  ·  ${app.domains.length === 0 ? "no domains" : "domains: " + app.domains.join(", ")}`} valueFg={theme.fgDim} />
+      {/* Error / fix surfaces only when something's wrong. No row when
+          the connection is healthy — keeps the panel quiet at green. */}
+      {!probe?.ok && probe?.message && (
+        <ConnRow label="issue" value={probe.message} valueFg={theme.warn} />
       )}
       {probe?.fixHint && (
         <ConnRow label="fix" value={probe.fixHint} valueFg={theme.aiAccent} />
       )}
-      <ConnRow label="skills"      value={`${skillsCount} runnable${skillsCount > 0 ? "  ·  Skills tab to run" : ""}`} valueFg={theme.fg} />
-      <ConnRow label="domains"     value={app.domains.length === 0 ? "(none)" : app.domains.join(", ")} valueFg={theme.fg} />
       <text> </text>
-      {/* Action row */}
       <box flexDirection="row" height={1}>
         <box
           paddingLeft={1}
