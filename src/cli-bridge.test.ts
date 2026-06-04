@@ -104,8 +104,8 @@ describe("buildCliArgs", () => {
     });
   });
 
-  describe("antigravity", () => {
-    test("includes --skip-trust so vault dirs work", () => {
+  describe("antigravity (agy)", () => {
+    test("includes --dangerously-skip-permissions so vault dirs work", () => {
       const args = buildCliArgs({
         cli: "antigravity",
         prompt: PROMPT,
@@ -113,21 +113,21 @@ describe("buildCliArgs", () => {
         isFirst: true,
         manual: null,
       });
-      expect(args).toContain("--skip-trust");
+      expect(args).toContain("--dangerously-skip-permissions");
     });
 
-    test("passes -m model when set, then -p prompt", () => {
+    test("passes --model when set, then -p prompt", () => {
       const args = buildCliArgs({
         cli: "antigravity",
         prompt: PROMPT,
-        model: "gemini-2.5-pro",
+        model: "Gemini 3.1 Pro (High)",
         isFirst: true,
         manual: null,
       });
-      const mIdx = args.indexOf("-m");
+      const mIdx = args.indexOf("--model");
       const pIdx = args.indexOf("-p");
       expect(mIdx).toBeGreaterThanOrEqual(0);
-      expect(args[mIdx + 1]).toBe("gemini-2.5-pro");
+      expect(args[mIdx + 1]).toBe("Gemini 3.1 Pro (High)");
       expect(pIdx).toBeGreaterThan(mIdx);
       expect(args[pIdx + 1]).toBe(PROMPT);
     });

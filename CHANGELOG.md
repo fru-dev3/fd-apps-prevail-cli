@@ -7,6 +7,29 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.1.1] — 2026-06-04 · Antigravity flag surface + model names corrected
+
+Live-tested v1.1.0 against the actual `agy` binary and found three real differences from the legacy Gemini CLI surface that prevAIl was passing the wrong flags for:
+
+| What we pass | Gemini CLI | Antigravity (`agy`) |
+|---|---|---|
+| Skip trust gate | `--skip-trust` | **`--dangerously-skip-permissions`** |
+| Model | `-m` | **`--model`** |
+| Prompt | `-p` | `-p` (unchanged) |
+
+`runChatTurn` now dispatches on the resolved binary basename — `/agy$/` gets the new flags; the legacy `gemini` binary (fallback during the 2026-06-18 transition) keeps the old flags. Both produce the same stdout format, so the reply parser is shared.
+
+Model names also changed shape. `agy models` shows display-style names with thinking-budget suffixes — `"Gemini 3.1 Pro (High)"`, `"Gemini 3.5 Flash (Medium)"`, etc. — and Antigravity also exposes other providers through the same launcher: `"Claude Sonnet 4.6 (Thinking)"`, `"Claude Opus 4.6 (Thinking)"`, `"GPT-OSS 120B (Medium)"`.
+
+Updated:
+- `ANTIGRAVITY_VERSIONS` list reflects what `agy models` actually returns.
+- `CLI_MODEL_HINT.antigravity` tells the user to run `agy models` for the live list.
+- Tests updated to assert the new flag names.
+
+Smoke-tested live: `detectClis()` picks up `/Users/dev/.local/bin/agy`, dispatches correctly, model replies. End-to-end works.
+
+---
+
 ## [1.1.0] — 2026-06-04 · Antigravity (`agy`) replaces Gemini CLI
 
 Google [announced](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/) the transition from Gemini CLI to Antigravity CLI (`agy`) on 2026-05-19, with a hard shutdown of the legacy `gemini` binary on **2026-06-18**. prevAIl now ships `antigravity` as the canonical id for Google's panelist.

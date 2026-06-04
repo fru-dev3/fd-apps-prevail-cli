@@ -122,7 +122,7 @@ export const CLI_MODEL_HINT: Record<CliKind, string> = {
   claude: "e.g. opus, sonnet, haiku, or full id like claude-opus-4-7",
   codex: "e.g. gpt-5, gpt-5.4, o3 (whatever your codex install accepts)",
   ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
-  antigravity: "e.g. gemini-2.5-pro, gemini-2.0-flash (Antigravity uses the same Gemini model names)",
+  antigravity: 'e.g. "Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Medium)" — run `agy models` for the full list (Antigravity now uses display names, not short ids)',
 };
 
 // Quick-pick chips shown in the council config bubble. Two tiers:
@@ -149,14 +149,21 @@ const CLAUDE_VERSIONS = [
   "claude-haiku-4-5",
 ];
 const CODEX_VERSIONS = ["gpt-5.4", "gpt-5", "gpt-5-codex", "o3"];
-// Antigravity uses the same underlying Gemini models as the legacy
-// gemini CLI did — the model names didn't change, only the launcher
-// binary (`gemini` → `agy`). When that changes, update this list.
+// Antigravity (`agy`) uses display-style model names that include
+// thinking-budget suffixes — verified via `agy models`. These are passed
+// to `--model` verbatim. The list will need updating as Google ships new
+// Gemini generations through Antigravity. To refresh against your local
+// install: `agy models`.
 const ANTIGRAVITY_VERSIONS = [
-  "gemini-2.5-pro",
-  "gemini-2.5-flash",
-  "gemini-2.0-pro",
-  "gemini-2.0-flash",
+  "Gemini 3.1 Pro (High)",
+  "Gemini 3.1 Pro (Low)",
+  "Gemini 3.5 Flash (High)",
+  "Gemini 3.5 Flash (Medium)",
+  "Gemini 3.5 Flash (Low)",
+  // Antigravity also exposes other providers through the same launcher:
+  "Claude Sonnet 4.6 (Thinking)",
+  "Claude Opus 4.6 (Thinking)",
+  "GPT-OSS 120B (Medium)",
 ];
 
 // Common Ollama tags — covers the models most users have already pulled.
@@ -664,15 +671,28 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     return extractCodexReply(raw);
   }
   if (cli.kind === "antigravity") {
-    // Antigravity (`agy`) inherits Gemini CLI's flag surface: `--skip-trust`,
-    // `-m`, and `-p` all work the same way. The legacy `gemini` binary
-    // (still picked up as a fallback during the 2026-06-18 transition)
-    // accepts the same args, so one path handles both. The reply parser
-    // is unchanged because both produce the same stdout format.
-    const base = ["--skip-trust"];
-    const args = m
-      ? [...base, "-m", m, "-p", framedPrompt]
-      : [...base, "-p", framedPrompt];
+    // Antigravity (`agy`) and the legacy Gemini CLI (`gemini`) have
+    // DIFFERENT flag surfaces, even though prevAIl exposes them as the
+    // same panelist:
+    //
+    //   agy:    --dangerously-skip-permissions    --model <name>   -p
+    //   gemini: --skip-trust                      -m <name>        -p
+    //
+    // Dispatch on the resolved binary basename so the args are right
+    // either way. Both invocations produce stdout in the same shape, so
+    // extractGeminiReply is reused for both. After 2026-06-18 when
+    // Google sunsets the legacy binary, drop the gemini branch.
+    const isAgy = /(^|\/)agy$/.test(cli.bin);
+    const args: string[] = [];
+    if (isAgy) {
+      args.push("--dangerously-skip-permissions");
+      if (m) args.push("--model", m);
+      args.push("-p", framedPrompt);
+    } else {
+      args.push("--skip-trust");
+      if (m) args.push("-m", m);
+      args.push("-p", framedPrompt);
+    }
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractGeminiReply(raw);
   }
@@ -965,8 +985,13 @@ export function buildCliArgs({
     return m ? [...base, "-m", m, prompt] : [...base, prompt];
   }
   if (cli === "antigravity") {
-    const base = ["--skip-trust"];
-    return m ? [...base, "-m", m, "-p", prompt] : [...base, "-p", prompt];
+    // Probe path can't easily detect which binary is in use here (this
+    // function only sees the kind). Default to the agy flag set since
+    // that's the post-2026-06-18 reality. The probe is only used to
+    // build display hints — actual invocation in runChatTurn dispatches
+    // on the resolved binary correctly.
+    const base = ["--dangerously-skip-permissions"];
+    return m ? [...base, "--model", m, "-p", prompt] : [...base, "-p", prompt];
   }
   return [];
 }
