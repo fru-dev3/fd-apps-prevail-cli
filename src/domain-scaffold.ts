@@ -29,6 +29,65 @@ export function scaffoldDomain(vaultPath: string, rawName: string): ScaffoldResu
   }
 }
 
+// Scaffold a new skill under <vault>/<domain>/skills/<skill-id>/SKILL.md.
+// Mirrors scaffoldDomain in shape — takes a raw user-typed name, slugs it,
+// guards against collisions, returns a ScaffoldResult so callers can show
+// a friendly setMessage on failure. The default SKILL.md is intentionally
+// short — placeholders the user can replace fast in $EDITOR.
+export function scaffoldSkill(
+  vaultPath: string,
+  domainName: string,
+  rawName: string,
+): ScaffoldResult {
+  const name = rawName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  if (!name) return { ok: false, message: "name is empty" };
+  const domainDir = join(vaultPath, domainName);
+  if (!existsSync(domainDir)) return { ok: false, message: `domain ${domainName} not found` };
+  const skillsRoot = join(domainDir, "skills");
+  const dir = join(skillsRoot, name);
+  if (existsSync(dir)) return { ok: false, message: `skill ${name} already exists` };
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), defaultSkill(name, domainName));
+    return { ok: true, message: `created skill ${name}`, path: dir };
+  } catch (err) {
+    return { ok: false, message: (err as Error).message };
+  }
+}
+
+function defaultSkill(name: string, domainName: string): string {
+  return `---
+name: ${name}
+type: task
+domain: ${domainName}
+---
+
+# ${title(name)}
+
+## When to use
+
+Describe the trigger or context where this skill applies.
+
+## Steps
+
+1. First step
+2. Second step
+3. Third step
+
+## Inputs
+
+- key: description
+
+## Outputs
+
+- What this skill produces, where it gets written, etc.
+
+## Notes
+
+Any constraints, gotchas, or links to related skills.
+`;
+}
+
 export function scaffoldApp(vaultPath: string, rawName: string): ScaffoldResult {
   const name = rawName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   if (!name) return { ok: false, message: "name is empty" };

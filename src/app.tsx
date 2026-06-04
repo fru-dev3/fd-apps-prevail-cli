@@ -54,7 +54,7 @@ import {
 } from "./watcher.ts";
 import { scanApps, scanCommunityApps, scanVault, type AppSkill, type Domain, type ViewKey } from "./vault.ts";
 import { theme } from "./theme.ts";
-import { scaffoldApp, scaffoldDomain } from "./domain-scaffold.ts";
+import { scaffoldApp, scaffoldDomain, scaffoldSkill } from "./domain-scaffold.ts";
 import { buildDistillPrompt, parseDistillResponse, writeDistilledSkill } from "./distill.ts";
 import {
   formatRelativeDate,
@@ -100,7 +100,7 @@ const VIEW_FILE: Record<ViewKey, string | null> = {
   skills: null,
 };
 
-type Mode = "idle" | "new-domain" | "new-app" | "pick-cli" | "chat" | "edit";
+type Mode = "idle" | "new-domain" | "new-app" | "new-skill" | "pick-cli" | "chat" | "edit";
 
 interface AppProps {
   vaultPath: string;
@@ -398,7 +398,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     const name = evt.name;
     if (!name) return;
 
-    if (mode === "new-domain" || mode === "new-app" || mode === "edit") return;
+    if (mode === "new-domain" || mode === "new-app" || mode === "new-skill" || mode === "edit") return;
 
     // When an overlay is open (Tools panel, Council config), the overlay
     // owns the keyboard. Without this, scrolling the overlay with arrow
@@ -511,7 +511,14 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     } else if (name === "r") {
       doRefresh();
     } else if (name === "n") {
-      setMode("new-domain");
+      // Context-sensitive: on the Skills tab `n` scaffolds a new skill
+      // under the active domain; everywhere else it scaffolds a new
+      // domain. The CommandBar prompt label reflects which one fires.
+      if (view === "skills" && focus === "domains" && domain) {
+        setMode("new-skill");
+      } else {
+        setMode("new-domain");
+      }
     } else if (name === "c") {
       // 'c' previously force-opened a separate full-pane chat. With the
       // embedded chat now in every workspace, this just bounces the user
@@ -562,6 +569,35 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           setFocus("apps");
         }
         setMessage(`✓ ${result.message}`);
+      } else {
+        setMessage(`✗ ${result.message}`);
+      }
+      return;
+    }
+    if (mode === "new-skill") {
+      // Scaffold under the currently-focused domain. Guard against the
+      // edge case where the user nav'd away between opening the prompt
+      // and submitting — domain could be null. We already pinned this
+      // path through the Skills tab so it's almost always present.
+      if (!domain) {
+        setMessage("✗ no domain selected — pick one first");
+        setMode("idle");
+        return;
+      }
+      const result = scaffoldSkill(vaultPath, domain.name, value);
+      setMode("idle");
+      if (result.ok) {
+        // Re-scan the vault so the new skill shows in the list, then
+        // move the cursor to it so the user can press `e` immediately
+        // to edit their fresh SKILL.md.
+        const next = scanVault(vaultPath);
+        setDomains(next);
+        const fresh = next.find((d) => d.name === domain.name);
+        if (fresh) {
+          const sIdx = fresh.skills.findIndex((s) => s.path.startsWith(result.path ?? ""));
+          if (sIdx >= 0) setSkillIdx(sIdx);
+        }
+        setMessage(`✓ ${result.message} — press [e] to edit, [o] to open the folder`);
       } else {
         setMessage(`✗ ${result.message}`);
       }
@@ -2485,6 +2521,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   const skill = domain?.skills[i];
                   if (skill) openInFinder(dirname(skill.path));
                 }}
+                onNewSkill={() => setMode("new-skill")}
               />
             );
           })()}
@@ -2492,7 +2529,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       </box>
       <CommandBar
         mode={mode}
-        prompt={mode === "new-domain" ? "new domain ›" : mode === "new-app" ? "new app ›" : "chat with:"}
+        prompt={
+          mode === "new-domain"
+            ? "new domain ›"
+            : mode === "new-app"
+              ? "new app ›"
+              : mode === "new-skill"
+                ? `new skill in ${domain?.name ?? "domain"} ›`
+                : "chat with:"
+        }
         message={message}
         cliOptions={clis.map((c) => c.label)}
         cliIndex={cliIdx}
@@ -2502,7 +2547,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           setPendingOpen(null);
         }}
         onAction={(a) => {
-          if (a === "new") setMode(focus === "apps" ? "new-app" : "new-domain");
+          if (a === "new") {
+            // Match the `n` keyboard binding: on Skills tab → new skill,
+            // on apps surface → new app, else → new domain.
+            if (view === "skills" && focus === "domains" && domain) setMode("new-skill");
+            else setMode(focus === "apps" ? "new-app" : "new-domain");
+          }
           else if (a === "chat") {
             if (focus === "apps" && app) openChatForApp(app);
             else if (domain) openChatForDomain(domain);

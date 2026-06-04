@@ -75,9 +75,12 @@ interface Props {
   // case so there's no dead pixel.
   onEditSkill?: (i: number) => void;
   onOpenSkill?: (i: number) => void;
+  // Triggers the new-skill scaffold flow (CommandBar prompt → write
+  // <domain>/skills/<id>/SKILL.md → re-scan → land cursor on it).
+  onNewSkill?: () => void;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, bottomBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill, onOpenChat, onEditSkill, onOpenSkill }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, bottomBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill, onOpenChat, onEditSkill, onOpenSkill, onNewSkill }: Props) {
   if (!domain) {
     return (
       <box
@@ -141,6 +144,7 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
             onToggleSkill={onToggleSkill}
             onEditSkill={onEditSkill}
             onOpenSkill={onOpenSkill}
+            onNewSkill={onNewSkill}
           />
         ) : (
           <scrollbox flexGrow={1} scrollY>
@@ -309,6 +313,7 @@ function SkillsList({
   onToggleSkill,
   onEditSkill,
   onOpenSkill,
+  onNewSkill,
 }: {
   skills: { id: string; title: string }[];
   selectedIdx: number;
@@ -324,6 +329,10 @@ function SkillsList({
   // prompts.md, instead of re-implementing inline.
   onEditSkill?: (i: number) => void;
   onOpenSkill?: (i: number) => void;
+  // Click handler for the "+ new skill" footer row. Mirrors the
+  // keyboard `n` binding on the Skills tab — opens the CommandBar
+  // prompt to capture an id, then scaffolds <domain>/skills/<id>/SKILL.md.
+  onNewSkill?: () => void;
 }) {
   const linkedApps = apps.filter((a) => a.domains.includes(domainName));
   if (skills.length === 0 && linkedApps.length === 0) {
@@ -358,7 +367,7 @@ function SkillsList({
           : "  none selected yet"}
       </text>
       <text fg={theme.fgFaint}>
-        {"  press [e] to edit the highlighted skill in $EDITOR  ·  [o] to open its folder"}
+        {"  [n] new skill  ·  [e] edit highlighted in $EDITOR  ·  [o] open its folder"}
       </text>
       <text> </text>
       <scrollbox flexGrow={1} scrollY>
@@ -446,6 +455,17 @@ function SkillsList({
             </box>
           );
         })}
+        {/* Footer row: click to scaffold a new skill in this domain.
+            Same action as the `n` keyboard shortcut on the Skills tab. */}
+        {onNewSkill && (
+          <box
+            flexDirection="row"
+            height={1}
+            onMouseDown={onNewSkill}
+          >
+            <text fg={theme.goldDim}>{"  + new skill"}</text>
+          </box>
+        )}
         {linkedApps.length > 0 && (
           <box flexDirection="column">
             <text fg={theme.goldDim}>
