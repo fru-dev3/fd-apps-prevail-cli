@@ -275,14 +275,17 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     setSkillIdx(0);
   }, [viewIdx]);
 
-  useEffect(() => {
-    if (mode === "edit" || mode === "new-domain" || mode === "new-app") return;
-    if (focus === "domains" && domain) {
-      autoOpenDomainChat(domain);
-    } else if (focus === "apps" && app) {
-      autoOpenAppChat(app);
-    }
-  }, [domainIdx, appIdx, focus]);
+  // REMOVED: this useEffect used to auto-call autoOpenAppChat /
+  // autoOpenDomainChat on every navigation, which set mode="chat" and
+  // forced the legacy full-pane ChatPane to render. THAT was the actual
+  // root cause of "I have to press Escape on every app." Five prior fixes
+  // (mouse, arrow, Enter/c, sidebar handlers, activeKey nuke) were all
+  // being immediately undone by this effect re-firing on the next render.
+  //
+  // The embedded ConnectorChat / DomainChat in the workspace cover the
+  // chat surface now — no pre-warming a separate chat session is needed.
+  // Users who want the full-pane chat experience can click the chat tab
+  // in the global tab strip explicitly.
 
   const { domainStatus, appStatus } = useMemo(() => {
     const dom = new Map<string, ChatStatus>();
