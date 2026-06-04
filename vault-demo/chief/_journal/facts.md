@@ -14,3 +14,8 @@
 - 2026-06-04 15:03 · Milk chocolate at weekly frequency provides negligible flavanol benefit vs sugar/fat cost.  · [src](../_log/2026-06-04.md)
 - 2026-06-04 15:03 · Skip if tracking tight calorie/sugar goals or if caffeine sensitivity disrupts sleep.  · [src](../_log/2026-06-04.md)
 - 2026-06-04 15:13 · Stripe system design phone screen scheduled for April 8  · [src](../_log/2026-06-04.md)
+- 2026-06-04 15:25 · Today's brief file: vault/chief/02_briefs/2026-06-04_morning-brief.md already exists for 2026-06-04.  · [src](../_log/2026-06-04.md)
+- 2026-06-04 15:25 · chief/state.md last updated 2026-04-12 (53 days stale); plugin states frozen Apr 1–7.  · [src](../_log/2026-06-04.md)
+- 2026-06-04 15:25 · Apr 1 snapshot: net worth $189,400, cash $31.5K, March cash flow +$5,280.  · [src](../_log/2026-06-04.md)
+- 2026-06-04 15:25 · Q1 federal estimate $4,200 (IRS Apr 15) unverified; Q2 federal estimate $1,800 due 2026-06-15.  · [src](../_log/2026-06-04.md)
+- 2026-06-04 15:25 · Lisinopril refill 20 days overdue; CVS deadline referenced as May 15.  · [src](../_log/2026-06-04.md)
