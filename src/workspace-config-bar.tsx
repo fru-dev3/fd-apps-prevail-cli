@@ -17,6 +17,7 @@ import {
 import type { AutoCouncilMode } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
 import { LENSES, type LensSelection } from "./lens.ts";
+import { Chip } from "./chip.tsx";
 
 interface Props {
   vaultPath: string;
@@ -65,7 +66,10 @@ export function WorkspaceConfigBar({
   onEdit,
   domainKey,
 }: Props) {
-  const { id: currentFw, scope: fwScope } = resolveResponseFramework(domainKey);
+  // Scope hint removed — the user found "· domain" confusing
+  // ("why is the text domain here?"). The user already knows the scope
+  // by where they clicked: workspace bar = per-domain, top bar = global.
+  const { id: currentFw } = resolveResponseFramework(domainKey);
   const cycleFramework = () => {
     const order = [null, ...FRAMEWORKS.map((f) => f.id)] as (string | null)[];
     const idx = order.indexOf(currentFw);
@@ -79,12 +83,8 @@ export function WorkspaceConfigBar({
   const fwLabel = currentFw
     ? FRAMEWORKS.find((f) => f.id === currentFw)?.label ?? currentFw
     : "none";
-  // Scope hint removed — the user found "· domain" confusing
-  // ("why is the text domain here?"). The user already knows the scope
-  // by where they clicked: workspace bar = per-domain, top bar = global.
-  void fwScope;
 
-  const { sel: currentLens, scope: lensScope } = resolveResponseLens(domainKey);
+  const { sel: currentLens } = resolveResponseLens(domainKey);
   const cycleLens = () => {
     const order: LensSelection[] = [
       null,
@@ -101,7 +101,6 @@ export function WorkspaceConfigBar({
     : currentLens === "all"
       ? "all (×5)"
       : LENSES.find((l) => l.id === currentLens)?.label ?? currentLens;
-  void lensScope;
 
   // Web access — global only (no per-domain override). The user wanted
   // the existing tools-panel toggle promoted to a clickable chip on the
@@ -148,102 +147,59 @@ export function WorkspaceConfigBar({
     <text fg={theme.border}>{"   │   "}</text>
   );
 
-  // RENDERING NOTE: opentui's text node clips when a <text> has either
-  // (a) literal segments + JSX interpolation as siblings, OR
-  // (b) a single multi-token string sandwiched in JSX whitespace.
-  // The proven safe pattern in this codebase (CLI health row, council
-  // chips) is multiple <text> nodes INSIDE one <box> — each <text>
-  // becomes its own layout cell so opentui never has to split one.
-  // Every chip below uses that shape: <text label/> <text value/>.
-  // Two-tone chip coloring. The LABEL ("◆ Framework:") stays dim — it
-  // names the axis but doesn't tell you anything dynamic. The VALUE
-  // ("BLUF") gets the highlight color so the user can scan the row and
-  // see the active state at a glance. When a chip is OFF / "none",
-  // both halves stay dim — no value to draw attention to.
-  const labelFg = theme.fgDim;
-  const councilValFg = councilOn ? theme.gold : theme.fgDim;
-  const fwValFg = currentFw ? theme.aiAccent : theme.fgDim;
-  const lensValFg = currentLens ? theme.aiAccent : theme.fgDim;
-  const webValFg = webAllow ? theme.aiAccent : theme.fgDim;
-  const saveValFg = checkpointOn ? theme.aiAccent : theme.fgDim;
-  const serendipityValFg = serendipityOn ? theme.aiAccent : theme.fgDim;
-  const autoValFg = autoMode !== "off" ? theme.aiAccent : theme.fgDim;
+  // All chip rendering is delegated to the shared <Chip /> component
+  // (src/chip.tsx) so the opentui-safe pattern lives in exactly one
+  // place. Council pops gold when ON (its activeFg override); every
+  // other chip pops aiAccent (the Chip default). Original rendering
+  // and spacing rationale (NBSP value prefix, two-text-per-chip,
+  // two-tone coloring) moved to chip.tsx as a header comment block.
 
   return (
     <box flexDirection="row" height={1} paddingLeft={1} paddingRight={1}>
-      {/* Spacing note: opentui strips BOTH trailing AND leading
-          whitespace inside text cells, so neither "Foo: " nor " bar"
-          produces a visible gap when the cells are adjacent. Fix: use
-          a non-breaking space (U+00A0,  ) — terminals render it
-          as a space, opentui treats it as a normal glyph and
-          preserves it. NBSP is the leading character on every value
-          cell below.
-          Also normalized Council to use the same "Label: value" shape
-          as the rest. */}
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
+      <Chip
+        label="⚖ Council:"
+        value={councilOn ? "ON" : "OFF"}
+        active={councilOn}
+        activeFg={theme.gold}
         onMouseDown={onToggleCouncil}
-      >
-        <text fg={labelFg}>{"⚖ Council:"}</text>
-        <text fg={councilValFg} attributes={councilOn ? 1 : 0}>{councilOn ? " ON" : " OFF"}</text>
-      </box>
+      />
       {sep}
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
+      <Chip
+        label="◆ Framework:"
+        value={fwLabel}
+        active={!!currentFw}
         onMouseDown={cycleFramework}
-      >
-        <text fg={labelFg}>{"◆ Framework:"}</text>
-        <text fg={fwValFg} attributes={currentFw ? 1 : 0}>{` ${fwLabel}`}</text>
-      </box>
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
+      />
+      <Chip
+        label="◇ Lens:"
+        value={lensLabel}
+        active={!!currentLens}
         onMouseDown={cycleLens}
-      >
-        <text fg={labelFg}>{"◇ Lens:"}</text>
-        <text fg={lensValFg} attributes={currentLens ? 1 : 0}>{` ${lensLabel}`}</text>
-      </box>
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
+      />
+      <Chip
+        label="⬡ Web:"
+        value={webAllow ? "ON" : "OFF"}
+        active={webAllow}
         onMouseDown={cycleWeb}
-      >
-        <text fg={labelFg}>{"⬡ Web:"}</text>
-        <text fg={webValFg} attributes={webAllow ? 1 : 0}>{webAllow ? " ON" : " OFF"}</text>
-      </box>
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
+      />
+      <Chip
+        label="▣ Save:"
+        value={checkpointOn ? "ON" : "OFF"}
+        active={checkpointOn}
         onMouseDown={toggleCheckpoint}
-      >
-        <text fg={labelFg}>{"▣ Save:"}</text>
-        <text fg={saveValFg} attributes={checkpointOn ? 1 : 0}>{checkpointOn ? " ON" : " OFF"}</text>
-      </box>
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
+      />
+      <Chip
+        label="◉ Serendipity:"
+        value={serendipityOn ? "ON" : "OFF"}
+        active={serendipityOn}
         onMouseDown={toggleSerendipity}
-      >
-        <text fg={labelFg}>{"◉ Serendipity:"}</text>
-        <text fg={serendipityValFg} attributes={serendipityOn ? 1 : 0}>{serendipityOn ? " ON" : " OFF"}</text>
-      </box>
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
+      />
+      <Chip
+        label="◐ Auto:"
+        value={autoMode.toUpperCase()}
+        active={autoMode !== "off"}
         onMouseDown={cycleAuto}
-      >
-        <text fg={labelFg}>{"◐ Auto:"}</text>
-        <text fg={autoValFg} attributes={autoMode !== "off" ? 1 : 0}>{` ${autoMode.toUpperCase()}`}</text>
-      </box>
+      />
       <box flexGrow={1} />
       <box
         flexDirection="row"

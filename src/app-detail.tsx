@@ -5,12 +5,9 @@ import { join } from "node:path";
 import { theme } from "./theme.ts";
 import {
   formatRelativeTime,
-  readAppSkill,
-  readAppView,
   type AppSkill,
   type ViewKey,
 } from "./vault.ts";
-import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { probeConnector, type AuthCheckSpec, type ProbeResult } from "./connector-probe.ts";
 import { loadSkillsForConnector, runSkill, logSkillRun, type SkillSpec, type SkillRunResult } from "./connector-skills.ts";
 import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";

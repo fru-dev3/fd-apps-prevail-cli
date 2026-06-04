@@ -19,7 +19,6 @@ import {
   readdirSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";

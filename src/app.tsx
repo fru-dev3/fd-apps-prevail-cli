@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { dirname } from "node:path";
-import { useKeyboard, useRenderer } from "@opentui/react";
+import { useRenderer } from "@opentui/react";
+import { useAppKeyboard } from "./app-keyboard.tsx";
 import { openInFinder } from "./system.ts";
 import { Sidebar, type ChatStatus, type SidebarFocus } from "./sidebar.tsx";
 import { DomainDetail } from "./domain-detail.tsx";
@@ -21,6 +22,7 @@ import { EditorPane } from "./editor-pane.tsx";
 import { TabStrip } from "./tab-strip.tsx";
 import { WorkspaceConfigBar } from "./workspace-config-bar.tsx";
 import { ToolsPanel } from "./tools-panel.tsx";
+import { ErrorBoundary } from "./error-boundary.tsx";
 import {
   ALL_CLI_KINDS,
   isCliKind,
@@ -60,7 +62,6 @@ import { scaffoldApp, scaffoldDomain, scaffoldSkill } from "./domain-scaffold.ts
 import { buildDistillPrompt, parseDistillResponse, writeDistilledSkill } from "./distill.ts";
 import {
   formatRelativeDate,
-  getDomainHistory,
   makeSessionId,
   persistMessage,
   getUserPromptsForDomain,
@@ -121,6 +122,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   const renderer = useRenderer();
   const [domains, setDomains] = useState<Domain[]>(() => scanVault(vaultPath));
   const [apps, setApps] = useState<AppSkill[]>(() => [...scanApps(vaultPath), ...scanCommunityApps()]);
+  // Bumped on Shift+R to force-remount every <ErrorBoundary>'d pane.
+  // When a pane has caught a render-time error, incrementing this
+  // changes its `key` prop, making React mount a fresh instance with
+  // hasError=false — same effect as a "reload" without re-running the
+  // whole cockpit boot.
+  const [errorBoundaryReset, setErrorBoundaryReset] = useState(0);
   const [domainIdx, setDomainIdx] = useState(0);
   const [appIdx, setAppIdx] = useState(0);
   const [focus, setFocus] = useState<SidebarFocus>("domains");
@@ -396,153 +403,39 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     return { domainStatus: dom, appStatus: ap };
   }, [chats]);
 
-  useKeyboard((evt) => {
-    const name = evt.name;
-    if (!name) return;
-
-    if (mode === "new-domain" || mode === "new-app" || mode === "new-skill" || mode === "edit") return;
-
-    // When an overlay is open (Tools panel, Council config), the overlay
-    // owns the keyboard. Without this, scrolling the overlay with arrow
-    // keys also moved the left sidebar selection — the user reported it
-    // was happening on the Tools panel: scroll down to read more →
-    // sidebar jumps to a different app.
-    if (toolsOpen || councilConfigOpen) {
-      if (evt.ctrl && name === "c") {
-        renderer?.destroy?.();
-        process.exit(0);
-      }
-      return;
-    }
-
-    // SECURITY/UX: when the user is typing in an embedded chat input
-    // (Connector/Domain workspace), only ctrl+c (quit) propagates to the
-    // global handler. Every other key — letters, arrows, escape — flows
-    // through to the input so the user can type freely. Without this,
-    // global shortcuts like 'q' (quit), 's' (swap focus), 'h/j/k/l'
-    // (nav), 'n' (new domain) intercept letters and the user can't type.
-    if (embeddedInputActiveRef.current) {
-      if (evt.ctrl && name === "c") {
-        renderer?.destroy?.();
-        process.exit(0);
-      }
-      return;
-    }
-
-    // When the chat's slash-command popover is open, let the chat pane own
-    // arrow/tab navigation — don't steal them for the sidebar.
-    if (autocompleteOpen && (name === "up" || name === "down" || name === "tab")) {
-      return;
-    }
-
-    if (mode === "chat") {
-      // In chat, the InputBox owns the keyboard. Up/Down recall the
-      // user's prior prompts from history (cross-session FTS5 walk);
-      // letters type into the input. The global handler stands aside
-      // and only handles ctrl+c for kill. Sidebar nav while in chat
-      // is via mouse click on the sidebar — keyboard arrows belong
-      // to the chat history.
-      if (evt.ctrl && name === "c") {
-        renderer?.destroy?.();
-        process.exit(0);
-      }
-      return;
-    }
-
-    if (mode === "pick-cli") {
-      if (name === "escape") {
-        setMode("idle");
-        setPendingOpen(null);
-        return;
-      }
-      if (name === "left" || name === "h") {
-        setCliIdx((i) => (i - 1 + clis.length) % clis.length);
-        return;
-      }
-      if (name === "right" || name === "l") {
-        setCliIdx((i) => (i + 1) % clis.length);
-        return;
-      }
-      if (name === "return" || name === "enter") {
-        const chosen = clis[cliIdx];
-        if (chosen && pendingOpen) finalizeOpen(chosen, pendingOpen);
-        return;
-      }
-      return;
-    }
-
-    if (name === "q" || (evt.ctrl && name === "c")) {
-      renderer?.destroy?.();
-      process.exit(0);
-    } else if (name === "s") {
-      // Swap-focus is disabled while apps are collapsed out of the UI.
-      // Keep the handler but make it a no-op so muscle memory doesn't
-      // throw an unhandled-key error.
-      if (SHOW_APPS) setFocus((f) => (f === "domains" ? "apps" : "domains"));
-    } else if (name === "j" || name === "down") {
-      if (focus === "apps") setAppIdx((s) => Math.min(apps.length - 1, s + 1));
-      else if (onSkillsTab && skills.length > 0) setSkillIdx((s) => Math.min(skills.length - 1, s + 1));
-      else setDomainIdx((s) => Math.min(domains.length - 1, s + 1));
-    } else if (name === "k" || name === "up") {
-      if (focus === "apps") setAppIdx((s) => Math.max(0, s - 1));
-      else if (onSkillsTab && skills.length > 0) setSkillIdx((s) => Math.max(0, s - 1));
-      else setDomainIdx((s) => Math.max(0, s - 1));
-    } else if (name === "g" || name === "home") {
-      if (focus === "apps") setAppIdx(0);
-      else if (onSkillsTab) setSkillIdx(0);
-      else setDomainIdx(0);
-    } else if (name === "G" || name === "end") {
-      if (focus === "apps") setAppIdx(Math.max(0, apps.length - 1));
-      else if (onSkillsTab) setSkillIdx(Math.max(0, skills.length - 1));
-      else setDomainIdx(Math.max(0, domains.length - 1));
-    } else if (name === "tab" || name === "right" || name === "l") {
-      if (focus === "domains") setViewIdx((v) => (v + 1) % VIEW_ORDER.length);
-    } else if (name === "left" || name === "h") {
-      if (focus === "domains") setViewIdx((v) => (v - 1 + VIEW_ORDER.length) % VIEW_ORDER.length);
-    } else if (name === "return" || name === "enter") {
-      // Enter no longer auto-opens a separate chat pane for apps/domains —
-      // the connector workspace (and domain detail) both have embedded
-      // chat in their layout, so opening a second chat pane left the
-      // user staring at it and needing Escape to see the workspace they
-      // were trying to reach. Enter on a skill still opens its dedicated
-      // chat because skills don't have the embedded-chat workspace.
-      if (onSkillsTab && skills.length > 0) {
-        const sk = skills[skillIdx];
-        if (sk) openChatForSkill(sk);
-      }
-    } else if (name === "r") {
-      doRefresh();
-    } else if (name === "n") {
-      // Context-sensitive: on the Skills tab `n` scaffolds a new skill
-      // under the active domain; everywhere else it scaffolds a new
-      // domain. The CommandBar prompt label reflects which one fires.
-      if (view === "skills" && focus === "domains" && domain) {
-        setMode("new-skill");
-      } else {
-        setMode("new-domain");
-      }
-    } else if (name === "c") {
-      // 'c' previously force-opened a separate full-pane chat. With the
-      // embedded chat now in every workspace, this just bounces the user
-      // into a redundant view. No-op — the chat input is already onscreen.
-    } else if (name === "e") {
-      doEdit();
-    } else if (name === "o") {
-      // Open-in-finder shortcut. Only meaningful on the Skills tab right
-      // now — it opens the highlighted skill's folder so the user can
-      // edit any file in the skill bundle, not just SKILL.md. Silent
-      // no-op everywhere else (the ConfigBar's `▸ vault` chip covers
-      // "open the domain folder" UX on every other tab).
-      doOpenSkill();
-    } else if (name >= "1" && name <= "5") {
-      // Numbers map 1..N to VIEW_ORDER indices. Guard against pressing a
-      // number past the end of the view list — VIEW_ORDER has 4 entries
-      // (state/quickstart/prompts/skills) so pressing "5" used to leave
-      // viewIdx=4, which then read VIEW_ORDER[4]=undefined and crashed
-      // readDomainView with "paths[1] must be string, got undefined".
-      const idx = Number(name) - 1;
-      if (focus === "domains" && idx < VIEW_ORDER.length) setViewIdx(idx);
-    }
+  useAppKeyboard({
+    mode,
+    toolsOpen,
+    councilConfigOpen,
+    embeddedInputActiveRef,
+    autocompleteOpen,
+    focus,
+    view,
+    onSkillsTab,
+    domains,
+    apps,
+    skills,
+    clis,
+    domain,
+    domainIdx,
+    appIdx,
+    skillIdx,
+    cliIdx,
+    pendingOpen,
+    setFocus,
+    setDomainIdx,
+    setAppIdx,
+    setViewIdx,
+    setSkillIdx,
+    setCliIdx,
+    setMode,
+    setPendingOpen,
+    setErrorBoundaryReset,
+    doEdit,
+    doOpenSkill,
+    doRefresh,
+    openChatForSkill,
+    finalizeOpen,
   });
 
   const stats = useMemo(() => summarize(domains, apps), [domains, apps]);
@@ -2463,54 +2356,64 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             ) : undefined;
 
             if (toolsOpen) {
-              return <ToolsPanel onClose={() => setToolsOpen(false)} />;
+              return (
+                <ErrorBoundary name="ToolsPanel" key={`tools-${errorBoundaryReset}`}>
+                  <ToolsPanel onClose={() => setToolsOpen(false)} />
+                </ErrorBoundary>
+              );
             }
             if (councilConfigOpen) {
               return (
-                <CouncilConfigPanel
-                  availableClis={clis}
-                  councilMode={councilModeFor(activeKey)}
-                  onToggleCouncilMode={() => {
-                    if (activeKey) toggleCouncilModeFor(activeKey);
-                  }}
-                  onClose={() => setCouncilConfigOpen(false)}
-                />
+                <ErrorBoundary name="CouncilConfigPanel" key={`council-${errorBoundaryReset}`}>
+                  <CouncilConfigPanel
+                    availableClis={clis}
+                    councilMode={councilModeFor(activeKey)}
+                    onToggleCouncilMode={() => {
+                      if (activeKey) toggleCouncilModeFor(activeKey);
+                    }}
+                    onClose={() => setCouncilConfigOpen(false)}
+                  />
+                </ErrorBoundary>
               );
             }
             if (inChat) {
               return (
-                <ChatPane
-                  session={activeSession!}
-                  availableClis={clis}
-                  tick={tick}
-                  councilMode={councilModeFor(activeSession!.key)}
-                  onToggleCouncilMode={() =>
-                    toggleCouncilModeFor(activeSession!.key)
-                  }
-                  onSend={sendMessage}
-                  onCommand={handleChatCommand}
-                  onExit={exitChat}
-                  onCancel={cancelChat}
-                  onAutocompleteChange={setAutocompleteOpen}
-                  topBar={tabBar}
-                  bottomBar={configBar}
-                  selectedSkills={
-                    // Only relevant for domain chats; map ids → titles
-                    // so the indicator can render names, not just ids.
-                    focus === "domains" && domain
-                      ? domain.skills.filter((s) => selectedSkillIds.has(s.id))
-                      : []
-                  }
-                />
+                <ErrorBoundary name="ChatPane" key={`chat-${errorBoundaryReset}`}>
+                  <ChatPane
+                    session={activeSession!}
+                    availableClis={clis}
+                    tick={tick}
+                    councilMode={councilModeFor(activeSession!.key)}
+                    onToggleCouncilMode={() =>
+                      toggleCouncilModeFor(activeSession!.key)
+                    }
+                    onSend={sendMessage}
+                    onCommand={handleChatCommand}
+                    onExit={exitChat}
+                    onCancel={cancelChat}
+                    onAutocompleteChange={setAutocompleteOpen}
+                    topBar={tabBar}
+                    bottomBar={configBar}
+                    selectedSkills={
+                      // Only relevant for domain chats; map ids → titles
+                      // so the indicator can render names, not just ids.
+                      focus === "domains" && domain
+                        ? domain.skills.filter((s) => selectedSkillIds.has(s.id))
+                        : []
+                    }
+                  />
+                </ErrorBoundary>
               );
             }
             if (inEdit && editFilename && editTarget) {
               return (
-                <EditorPane
-                  target={editTarget}
-                  filename={editFilename}
-                  onExit={exitEditor}
-                />
+                <ErrorBoundary name="EditorPane" key={`editor-${errorBoundaryReset}`}>
+                  <EditorPane
+                    target={editTarget}
+                    filename={editFilename}
+                    onExit={exitEditor}
+                  />
+                </ErrorBoundary>
               );
             }
             if (focus === "apps" && app) {
@@ -2534,47 +2437,49 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               );
             }
             return (
-              <DomainDetail
-                domain={domain}
-                view={view}
-                skillIdx={skillIdx}
-                apps={apps}
-                onPickSkill={(i) => {
-                  // Just move the keyboard cursor. Mouse-click toggling
-                  // selection is handled by onToggleSkill — clicking a
-                  // skill does NOT auto-open chat anymore. User
-                  // selects N skills, then clicks the chat tab when
-                  // ready.
-                  setSkillIdx(i);
-                }}
-                topBar={tabBar}
-                bottomBar={configBar}
-                setEmbeddedInputActive={setEmbeddedInputActive}
-                showChat={false}
-                councilOn={domain ? councilModeFor(domain.name) : false}
-                onToggleCouncil={() => domain && toggleCouncilModeFor(domain.name)}
-                frameworkTick={frameworkTick}
-                onFrameworkChange={bumpFrameworkTick}
-                selectedSkillIds={selectedSkillIds}
-                onToggleSkill={toggleSkillSelection}
-                onOpenChat={() => domain && openChatForDomain(domain)}
-                onEditSkill={(i) => {
-                  // Move the cursor to the clicked skill so editTarget
-                  // resolves to the right one, then enter edit mode.
-                  // Same machinery as the `e` keyboard shortcut.
-                  setSkillIdx(i);
-                  setMode("edit");
-                }}
-                onOpenSkill={(i) => {
-                  // Click on ▸ opens the skill folder in Finder. Move
-                  // the cursor first so the next keystroke lands on
-                  // the same row the user just acted on.
-                  setSkillIdx(i);
-                  const skill = domain?.skills[i];
-                  if (skill) openInFinder(dirname(skill.path));
-                }}
-                onNewSkill={() => setMode("new-skill")}
-              />
+              <ErrorBoundary name="DomainDetail" key={`domaindetail-${errorBoundaryReset}`}>
+                <DomainDetail
+                  domain={domain}
+                  view={view}
+                  skillIdx={skillIdx}
+                  apps={apps}
+                  onPickSkill={(i) => {
+                    // Just move the keyboard cursor. Mouse-click toggling
+                    // selection is handled by onToggleSkill — clicking a
+                    // skill does NOT auto-open chat anymore. User
+                    // selects N skills, then clicks the chat tab when
+                    // ready.
+                    setSkillIdx(i);
+                  }}
+                  topBar={tabBar}
+                  bottomBar={configBar}
+                  setEmbeddedInputActive={setEmbeddedInputActive}
+                  showChat={false}
+                  councilOn={domain ? councilModeFor(domain.name) : false}
+                  onToggleCouncil={() => domain && toggleCouncilModeFor(domain.name)}
+                  frameworkTick={frameworkTick}
+                  onFrameworkChange={bumpFrameworkTick}
+                  selectedSkillIds={selectedSkillIds}
+                  onToggleSkill={toggleSkillSelection}
+                  onOpenChat={() => domain && openChatForDomain(domain)}
+                  onEditSkill={(i) => {
+                    // Move the cursor to the clicked skill so editTarget
+                    // resolves to the right one, then enter edit mode.
+                    // Same machinery as the `e` keyboard shortcut.
+                    setSkillIdx(i);
+                    setMode("edit");
+                  }}
+                  onOpenSkill={(i) => {
+                    // Click on ▸ opens the skill folder in Finder. Move
+                    // the cursor first so the next keystroke lands on
+                    // the same row the user just acted on.
+                    setSkillIdx(i);
+                    const skill = domain?.skills[i];
+                    if (skill) openInFinder(dirname(skill.path));
+                  }}
+                  onNewSkill={() => setMode("new-skill")}
+                />
+              </ErrorBoundary>
             );
           })()}
         </box>

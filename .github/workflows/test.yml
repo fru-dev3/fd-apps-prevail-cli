@@ -20,6 +20,8 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+      - name: lint (biome)
+        run: bun run lint
       - name: typecheck
         run: bun run typecheck
       - name: unit tests + --help smoke

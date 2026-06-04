@@ -6,7 +6,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { App } from "./app.tsx";
 import { FirstRunWizard } from "./wizard.tsx";
-import { bundledDemoVaultPath, readConfig, writeConfig } from "./config.ts";
+import { bundledDemoVaultPath, readConfig, } from "./config.ts";
 
 interface Args {
   vaultPath: string | null;
@@ -32,6 +32,8 @@ interface Args {
   benchArgs: string[];
   vault: boolean;
   vaultArgs: string[];
+  upgrade: boolean;
+  upgradeArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -58,6 +60,8 @@ function parseArgs(argv: string[]): Args {
   let benchArgs: string[] = [];
   let vault = false;
   let vaultArgs: string[] = [];
+  let upgrade = false;
+  let upgradeArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -105,6 +109,10 @@ function parseArgs(argv: string[]): Args {
       vault = true;
       vaultArgs = argv.slice(i + 1);
       break;
+    } else if (a === "upgrade" || a === "update" || a === "self-update") {
+      upgrade = true;
+      upgradeArgs = argv.slice(i + 1);
+      break;
     } else if (a === "--vault" || a === "-d") {
       const next = argv[i + 1];
       if (next) {
@@ -139,6 +147,8 @@ function parseArgs(argv: string[]): Args {
     benchArgs,
     vault,
     vaultArgs,
+    upgrade,
+    upgradeArgs,
   };
 }
 
@@ -161,6 +171,8 @@ USAGE
   prevail bench [...]         run the public council benchmark suite
   prevail vault [...]         prune old logs, snapshot/restore the vault
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
+  prevail upgrade [...]       self-update from the latest GitHub release
+                              flags: --check (no prompt) --force (no confirm) --pre (include prereleases)
   prevail --vault <path>      override vault path for one session
 
 OPTIONS
@@ -1274,6 +1286,106 @@ async function doctor(opts: { debug: boolean } = { debug: false }) {
   }
 }
 
+async function upgradeCommand(args: string[]): Promise<void> {
+  const {
+    checkForUpdate,
+    downloadBinary,
+    applyUpgrade,
+    currentBinaryPath,
+    platformBinaryName,
+  } = await import("./upgrade.ts");
+  let checkOnly = false;
+  let force = false;
+  let includePrerelease = false;
+  for (const a of args) {
+    if (a === "--check") checkOnly = true;
+    else if (a === "--force" || a === "-y") force = true;
+    else if (a === "--pre" || a === "--prerelease") includePrerelease = true;
+  }
+  console.log("checking for updates…");
+  let info: Awaited<ReturnType<typeof checkForUpdate>>;
+  try {
+    info = await checkForUpdate({ includePrerelease });
+  } catch (err) {
+    console.error(`upgrade check failed: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  console.log(`current: v${info.current}`);
+  console.log(`latest:  v${info.latest} — ${info.releaseUrl}`);
+  if (!info.isNewer) {
+    console.log(`already on latest (v${info.current}). nothing to do.`);
+    return;
+  }
+  if (checkOnly) {
+    // --check just reports; nothing else to do.
+    return;
+  }
+  if (!info.binaryUrl) {
+    console.error(
+      `release v${info.latest} has no asset named ${platformBinaryName()}. Download it manually from ${info.releaseUrl}.`,
+    );
+    process.exit(1);
+  }
+  if (!force) {
+    const answer = await promptYesNo("upgrade?");
+    if (!answer) {
+      console.log("aborted.");
+      return;
+    }
+  }
+  // Download into the same directory as the current binary so the eventual
+  // rename(2) is atomic (same filesystem). Cross-FS renames silently fall
+  // back to copy + unlink, which we explicitly don't want.
+  const { tmpdir: _tmpdir } = await import("node:os");
+  const { join: joinPath, dirname: _dirname } = await import("node:path");
+  const current = currentBinaryPath();
+  const stageDir = _dirname(current);
+  const stageName = `.prevail.upgrade.${process.pid}.${Date.now()}`;
+  let stagePath = joinPath(stageDir, stageName);
+  // If the binary's directory isn't writable we'll catch that in applyUpgrade,
+  // but we should also avoid leaving cruft there — fall back to tmpdir for
+  // the download in that case. (applyUpgrade will then fail cleanly with the
+  // brew-install hint.)
+  try {
+    const { accessSync, constants } = await import("node:fs");
+    accessSync(stageDir, constants.W_OK);
+  } catch {
+    stagePath = joinPath(_tmpdir(), stageName);
+  }
+  console.log(`downloading ${info.binaryUrl} → ${stagePath}…`);
+  try {
+    await downloadBinary(info.binaryUrl, info.sha256Url, stagePath);
+  } catch (err) {
+    console.error(`download failed: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  try {
+    await applyUpgrade(stagePath, current);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+  console.log(`upgraded to v${info.latest}. relaunch to use the new version.`);
+}
+
+function promptYesNo(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    process.stdout.write(`${question} [y/N] `);
+    let buf = "";
+    const onData = (chunk: Buffer) => {
+      buf += chunk.toString("utf8");
+      if (buf.includes("\n")) {
+        process.stdin.off("data", onData);
+        try { process.stdin.pause(); } catch { /* ignore */ }
+        const answer = buf.trim().toLowerCase();
+        resolve(answer === "y" || answer === "yes");
+      }
+    };
+    process.stdin.on("data", onData);
+    try { process.stdin.resume(); } catch { /* ignore */ }
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   if (args.help) {
@@ -1322,6 +1434,10 @@ async function main() {
   }
   if (args.daemon) {
     await daemonCommand(args.daemonArgs, args.vaultPath);
+    return;
+  }
+  if (args.upgrade) {
+    await upgradeCommand(args.upgradeArgs);
     return;
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { heuristicSummarize, writeTurnSummary, readTodayLog } from "./auto-summary.ts";

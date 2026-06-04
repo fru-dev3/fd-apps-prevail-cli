@@ -1,10 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useKeyboard, useRenderer } from "@opentui/react";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { theme } from "./theme.ts";
 import {
-  bundledDemoVaultPath,
   detectVaultCandidates,
   writeConfig,
   type VaultCandidate,
@@ -190,7 +189,3 @@ function shorten(p: string): string {
   const home = homedir();
   return p.startsWith(home) ? "~" + p.slice(home.length) : p;
 }
-
-// Suppress unused import warning if bundledDemoVaultPath is needed later
-void bundledDemoVaultPath;
-void existsSync;

@@ -7,6 +7,54 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.10.0] — 2026-06-04 · Code quality + refactors + self-update
+
+Phases 5, 6, and 7 of the production-readiness audit. The codebase is now smaller, more maintainable, defensively wrapped, and can update itself.
+
+### Added — Biome lint + format
+- `biome.json` at the repo root, `bun run lint` and `bun run lint:fix` scripts.
+- 21 unused imports auto-removed across 15 files.
+- CI workflow now runs `biome check` before typecheck.
+
+### Added — `<Chip />` shared component
+- New `src/chip.tsx` encodes the proven opentui-safe pattern (two adjacent `<text>` cells, NBSP-prefixed value, dim label + highlighted value) in one place.
+- 11 chip sites replaced across `workspace-config-bar.tsx` and `branding.tsx`. ~150 lines of duplication removed.
+- 9 new chip tests covering NBSP prefix, attributes bit, color overrides, click wiring.
+
+### Added — `<ErrorBoundary />` around every major pane
+- Sidebar, DomainDetail, ChatPane, ToolsPanel, CouncilConfigPanel, EditorPane each wrapped.
+- Render-time crash shows "this panel crashed — press R to reload, or q to quit" instead of taking down the whole cockpit.
+- Errors logged to `~/.prevail/debug.log` via the existing `logDebug` channel.
+- Shift+R force-remounts every boundary by bumping a reset counter.
+
+### Cleaned — `void varName` silencers gone
+5 silencer statements removed (`fwScope`, `lensScope`, `bundledDemoVaultPath`, `existsSync` in wizard, `activeChats` / `pendingChats` in branding). Categories: leftover destructure, leftover imports, leftover prop plumbing.
+
+### Refactored — `src/chat-pane.tsx` split
+- **2,221 → 1,247 lines.** 974-line drop.
+- 13 new files under `src/chat-pane/` (bubbles/, types.ts, council-config.tsx).
+- 8 bubble components each have their own file: MessageBubble, CouncilPending, CouncilResponse, CouncilSynthesizing, CouncilVerdict, StreamingAssistant, Serendipity, CouncilSuggestion, Thinking, DistillDraft.
+- `formatMetaBadge` extracted to its own pure helper.
+- Zero behavioral change. Public API preserved via re-exports — `app.tsx`'s imports from `./chat-pane.tsx` continue to work unchanged.
+
+### Refactored — `src/app.tsx` split
+- **2,978 → 2,860 lines.** 118-line drop.
+- New `src/app-keyboard.tsx` exposes `useAppKeyboard(args)` — the global keyboard handler is now its own hook.
+- Every shortcut preserved verbatim: q quits, n new (context-sensitive), e edit, o open skill folder, R reload boundaries, ↑↓ navigate, Esc exits chat, 1-5 view jump, etc.
+- Setters typed as `Dispatch<SetStateAction<...>>` to match React's `useState` returns exactly.
+
+### Added — `prevail upgrade` self-update
+- Checks GitHub Releases, compares to current VERSION, prompts y/N for confirmation.
+- Streams the platform binary into the binary's own directory (atomic rename via `renameSync` on the same APFS volume), verifies SHA-256 against the published checksum.
+- Detects brew-installed binaries (`/opt/homebrew/`, `/usr/local/Cellar/`, etc.) and routes to `brew upgrade prevail` instead.
+- Flags: `--check`, `--force`, `--pre`. Aliases: `update`, `self-update`.
+- 21 new tests covering platform/arch matrix, semver compare, shasum parsing, mocked GitHub API.
+
+### Tests
++53 tests across the cluster (9 chip + 6 error-boundary + 21 upgrade + 17 other). Total: 181 pass / 0 fail / 3 skip across 22 files.
+
+---
+
 ## [0.9.2] — 2026-06-04 · Hard security cluster
 
 Phase 3 of the production-readiness audit. The four real security items from the SECURITY.md threat model, shipped as one cluster.

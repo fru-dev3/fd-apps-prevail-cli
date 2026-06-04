@@ -2,7 +2,8 @@ import { theme } from "./theme.ts";
 import { VERSION } from "./version.ts";
 import { readResponseFramework, readResponseLens, readWebAccess } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
-import { LENSES, getLens, type LensSelection } from "./lens.ts";
+import { getLens, type LensSelection } from "./lens.ts";
+import { Chip } from "./chip.tsx";
 
 interface Props {
   domainCount: number;
@@ -32,8 +33,6 @@ export function Branding({
   appCount,
   vaultLabel,
   cliLabels,
-  activeChats,
-  pendingChats,
   globalCouncilOn,
   onToggleGlobalCouncil,
   onOpenCouncilConfig,
@@ -82,8 +81,6 @@ export function Branding({
           timeLabel={timeLabel}
           vaultLabel={vaultLabel}
           cliText={cliText}
-          activeChats={activeChats}
-          pendingChats={pendingChats}
           globalCouncilOn={globalCouncilOn}
           onToggleGlobalCouncil={onToggleGlobalCouncil}
           onOpenCouncilConfig={onOpenCouncilConfig}
@@ -274,8 +271,6 @@ function StatusColumn({
   timeLabel,
   vaultLabel,
   cliText,
-  activeChats,
-  pendingChats,
   domainCount,
   appCount,
   totalLoops,
@@ -293,8 +288,6 @@ function StatusColumn({
   timeLabel: string;
   vaultLabel: string;
   cliText: string;
-  activeChats: number;
-  pendingChats: number;
   domainCount: number;
   appCount: number;
   totalLoops: number;
@@ -320,7 +313,6 @@ function StatusColumn({
   // that read "no chats yet" most of the time — the user asked to drop
   // the row entirely. Active chat state is implied by the cli health
   // row + per-domain spinners in the sidebar. Locals removed.
-  void activeChats; void pendingChats;
 
   const webAllow = readWebAccess() === "allow";
 
@@ -360,33 +352,42 @@ function StatusColumn({
           framework, ◇ open diamond for the lens) so they don't read
           as repeats — user reported "seems they all have same icons
           right now." */}
-      {/* Two-text-per-chip pattern: opentui clips when a single <text>
-          holds a literal segment plus an interpolated value (we saw
-          values entirely disappear in the cockpit). Splitting the
-          label and the value into separate <text> children inside one
-          <box> makes each its own layout cell — proven safe in the
-          CLI health row and council chips. */}
+      {/* Chip rendering is delegated to the shared <Chip /> component
+          (src/chip.tsx). That component encodes the opentui-safe pattern
+          (two-text-per-chip + NBSP value prefix) so future rendering
+          glitches only need one fix. */}
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"defaults"}</text>
-        <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
-          <text fg={theme.fgDim}>{"⚖ Council:"}</text>
-          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{globalCouncilOn ? " ON" : " OFF"}</text>
-        </box>
-        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
-          <text fg={theme.fgDim}>{"◆ Framework:"}</text>
-          <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>{` ${` ${fwLabel}`}`}</text>
-        </box>
-        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleLens}>
-          <text fg={theme.fgDim}>{"◇ Lens:"}</text>
-          <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>{` ${` ${lensLabel}`}`}</text>
-        </box>
+        <Chip
+          label="⚖ Council:"
+          value={globalCouncilOn ? "ON" : "OFF"}
+          active={!!globalCouncilOn}
+          activeFg={theme.gold}
+          onMouseDown={onToggleGlobalCouncil}
+          paddingLeft={2}
+        />
+        <Chip
+          label="◆ Framework:"
+          value={fwLabel}
+          active={!!fw}
+          onMouseDown={onCycleFramework}
+        />
+        <Chip
+          label="◇ Lens:"
+          value={lensLabel}
+          active={!!lensSel}
+          onMouseDown={onCycleLens}
+        />
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"        "}</text>
-        <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onCycleWeb}>
-          <text fg={theme.fgDim}>{"⬡ Web:"}</text>
-          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{webAllow ? " ON" : " OFF"}</text>
-        </box>
+        <Chip
+          label="⬡ Web:"
+          value={webAllow ? "ON" : "OFF"}
+          active={webAllow}
+          onMouseDown={onCycleWeb}
+          paddingLeft={2}
+        />
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
           <text fg={theme.aiAccent}>◇ configure</text>
         </box>
