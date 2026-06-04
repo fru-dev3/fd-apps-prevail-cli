@@ -1506,7 +1506,23 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       cli: session.cli.kind,
       model: session.model,
     });
-    const promptForCli = makeSeedPrompt(
+    // If the user pre-selected skills in the Skills tab for this domain,
+    // prepend a small <selected_skills> block so the LLM treats them as
+    // explicit context. Only applies on the first turn — once the chat
+    // is going the model already has it. Empty set = no prefix.
+    const selectedSkillsBlock = (() => {
+      if (selectedSkillIds.size === 0) return "";
+      const hostSkills = session.hostDomain.skills.filter((s) => selectedSkillIds.has(s.id));
+      if (hostSkills.length === 0) return "";
+      return [
+        `<selected_skills>`,
+        `The user pre-selected these ${session.hostDomain.name} skills as context for this conversation:`,
+        ...hostSkills.map((s) => `  - ${s.id}: ${s.title}`),
+        `Read their definitions under ${session.hostDomain.path}/skills/ and apply where relevant.`,
+        `</selected_skills>\n\n`,
+      ].join("\n");
+    })();
+    const promptForCli = selectedSkillsBlock + makeSeedPrompt(
       { ...session, messages: [...session.messages, userMsg] },
       text,
     );
@@ -1913,6 +1929,13 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   onCancel={cancelChat}
                   onAutocompleteChange={setAutocompleteOpen}
                   topBar={tabBar}
+                  selectedSkills={
+                    // Only relevant for domain chats; map ids → titles
+                    // so the indicator can render names, not just ids.
+                    focus === "domains" && domain
+                      ? domain.skills.filter((s) => selectedSkillIds.has(s.id))
+                      : []
+                  }
                 />
               );
             }
@@ -1951,9 +1974,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 skillIdx={skillIdx}
                 apps={apps}
                 onPickSkill={(i) => {
+                  // Just move the keyboard cursor. Mouse-click toggling
+                  // selection is handled by onToggleSkill — clicking a
+                  // skill does NOT auto-open chat anymore. User
+                  // selects N skills, then clicks the chat tab when
+                  // ready.
                   setSkillIdx(i);
-                  const sk = domain?.skills[i];
-                  if (sk) openChatForSkill(sk);
                 }}
                 topBar={tabBar}
                 setEmbeddedInputActive={setEmbeddedInputActive}

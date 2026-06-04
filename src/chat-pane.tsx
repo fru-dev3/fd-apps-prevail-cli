@@ -140,9 +140,13 @@ interface Props {
   onCancel?: (key: string) => boolean;
   onAutocompleteChange?: (open: boolean) => void;
   topBar?: React.ReactNode;
+  // Skills the user pre-selected in the Skills tab. Rendered as a
+  // single-line indicator above the message scroll so the user can
+  // confirm what's loaded before sending. Empty array = no indicator.
+  selectedSkills?: { id: string; title: string }[];
 }
 
-export function ChatPane({ session, availableClis, tick, councilMode, onToggleCouncilMode, onSend, onCommand, onExit, onCancel, onAutocompleteChange, topBar }: Props) {
+export function ChatPane({ session, availableClis, tick, councilMode, onToggleCouncilMode, onSend, onCommand, onExit, onCancel, onAutocompleteChange, topBar, selectedSkills }: Props) {
   const ref = useRef<any>(null);
   // Hoisted from InputBox so the popover renders ABOVE InputBox at the
   // chat-pane level, keeping the input row at a stable bottom position.
@@ -280,6 +284,9 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
       bottomTitleAlignment="left"
     >
       {topBar}
+      {selectedSkills && selectedSkills.length > 0 && (
+        <SelectedSkillsIndicator skills={selectedSkills} />
+      )}
       <Transcript
         session={session}
         tick={tick}
@@ -492,6 +499,31 @@ function SkillStrip({
           ))}
         </scrollbox>
       </box>
+    </box>
+  );
+}
+
+// One-line indicator at the top of the chat pane that shows which skills
+// the user pre-selected in the Skills tab. Per user: "If I select
+// multiple skills back in the chat, you have to indicate that either
+// one skill has been selected (you show the skill). If it's multiple
+// skills, show all the skills, or maybe show one and then say 'and
+// other'." Single skill → name. 2-3 skills → all names. 4+ → first +
+// "and N others."
+function SelectedSkillsIndicator({ skills }: { skills: { id: string; title: string }[] }) {
+  const n = skills.length;
+  let label: string;
+  if (n === 1) {
+    label = `${skills[0]!.id} — ${skills[0]!.title}`;
+  } else if (n <= 3) {
+    label = skills.map((s) => s.id).join(", ");
+  } else {
+    label = `${skills[0]!.id} and ${n - 1} others`;
+  }
+  return (
+    <box flexDirection="row" height={1} paddingLeft={2} paddingRight={2}>
+      <text fg={theme.aiAccent} attributes={1}>◆ skills in context</text>
+      <text fg={theme.fgDim}>{`  ·  ${label}`}</text>
     </box>
   );
 }
