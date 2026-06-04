@@ -23,12 +23,14 @@ import {
   readCouncilConfig,
   readResponseFramework,
   readWebAccess,
+  readGlobalCouncilDefault,
   setResponseFramework,
   setCouncilClis,
   setCouncilModel,
   addCouncilModel,
   removeCouncilModel,
   setCouncilChair,
+  setGlobalCouncilDefault,
   setWebAccess,
   type CliKind,
 } from "./config.ts";
@@ -148,7 +150,27 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // view-specific markdown. Resets to false on any view-tab click and on
   // sidebar nav. Without this, each tab clicked just changed viewIdx but
   // the pane never actually rendered different content.
-  const [chatTabActive, setChatTabActive] = useState(false);
+  // Domains default to the chat tab; apps default to overview+chat. The
+  // user spends most of their time TALKING to a domain — that's the
+  // primary surface. State / quickstart / etc. are reference tabs you
+  // click when needed.
+  const [chatTabActive, setChatTabActive] = useState(true);
+  // Multi-select skill set per active domain. Click a skill to toggle
+  // it in the set. Selected skills are surfaced to DomainChat as
+  // <context> so the LLM sees their definitions when answering.
+  // Resets on domain change so each domain starts with a clean slate.
+  const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(new Set());
+  const toggleSkillSelection = (skillId: string) => {
+    setSelectedSkillIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(skillId)) next.delete(skillId);
+      else next.add(skillId);
+      return next;
+    });
+  };
+  useEffect(() => {
+    setSelectedSkillIds(new Set());
+  }, [domainIdx, focus]);
   // Bump to force a re-render when the framework changes via the workspace
   // config bar (the framework value is read from disk, not from React
   // state, so we need a manual nudge).
@@ -216,8 +238,14 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     }, 60_000);
     return () => clearInterval(id);
   }, [clis, cliHealth]);
-  const councilModeFor = (key: string | null): boolean =>
-    key ? councilModeMap.get(key) ?? false : false;
+  // Per-chat council mode with global fallback. If the key has no
+  // explicit setting in the map, use the global default from config.
+  const councilModeFor = (key: string | null): boolean => {
+    if (!key) return false;
+    const explicit = councilModeMap.get(key);
+    if (explicit !== undefined) return explicit;
+    return readGlobalCouncilDefault();
+  };
   const toggleCouncilModeFor = (key: string) => {
     setCouncilModeMap((m) => {
       const next = new Map(m);
@@ -1704,6 +1732,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         cliLabels={clis.map((c) => c.label)}
         activeChats={chatCounts.active}
         pendingChats={chatCounts.pending}
+        globalCouncilOn={readGlobalCouncilDefault()}
+        onToggleGlobalCouncil={() => {
+          setGlobalCouncilDefault(!readGlobalCouncilDefault());
+          bumpFrameworkTick();
+        }}
+        frameworkTick={frameworkTick}
+        onCycleFramework={() => {
+          const cur = readResponseFramework();
+          const ids = [null, "bluf", "win", "scqa", "sbar", "ooda", "proscons", "steelman"] as const;
+          const idx = ids.indexOf(cur as typeof ids[number]);
+          const next = ids[(idx + 1) % ids.length];
+          setResponseFramework(next as Parameters<typeof setResponseFramework>[0]);
+          bumpFrameworkTick();
+        }}
       />
       <box flexDirection="row" flexGrow={1}>
         <Sidebar
@@ -1722,7 +1764,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             setMode("idle");
             setActiveKey(null);
             embeddedInputActiveRef.current = false;
-            setChatTabActive(false);
+            // Domains default to chat. Always.
+            setChatTabActive(true);
           }}
           onPickApp={(i) => {
             setAppIdx(i);
@@ -1730,6 +1773,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             setMode("idle");
             setActiveKey(null);
             embeddedInputActiveRef.current = false;
+            // Apps land on the Overview + Chat tab — chat is part of
+            // that tab, so chatTabActive isn't relevant for apps.
             setChatTabActive(false);
           }}
           onNewDomain={() => {
@@ -1872,6 +1917,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 onToggleCouncil={() => domain && toggleCouncilModeFor(domain.name)}
                 frameworkTick={frameworkTick}
                 onFrameworkChange={bumpFrameworkTick}
+                selectedSkillIds={selectedSkillIds}
+                onToggleSkill={toggleSkillSelection}
               />
             );
           })()}

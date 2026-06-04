@@ -34,6 +34,19 @@ export interface UserConfig {
   // (BLUF, WIN, SCQA, etc). See src/framework.ts for the catalog.
   // Applies globally across all domains and both single-CLI + council mode.
   responseFramework?: FrameworkId;
+  // Global council default. When a chat session has no explicit per-key
+  // setting, this is the fallback. Per-chat overrides still win when set.
+  councilDefaultOn?: boolean;
+}
+
+export function readGlobalCouncilDefault(): boolean {
+  return readConfig()?.councilDefaultOn ?? false;
+}
+
+export function setGlobalCouncilDefault(on: boolean): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  writeConfig({ ...cfg, councilDefaultOn: on });
 }
 
 export interface CouncilConfig {

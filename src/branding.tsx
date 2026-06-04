@@ -1,5 +1,7 @@
 import { theme } from "./theme.ts";
 import { VERSION } from "./version.ts";
+import { readResponseFramework } from "./config.ts";
+import { FRAMEWORKS } from "./framework.ts";
 
 interface Props {
   domainCount: number;
@@ -9,6 +11,13 @@ interface Props {
   cliLabels: string[];
   activeChats: number;
   pendingChats: number;
+  // Global toggles surfaced in the top-right of the banner so the user
+  // can set defaults without opening a chat. Per-chat settings still
+  // override these when present.
+  globalCouncilOn?: boolean;
+  onToggleGlobalCouncil?: () => void;
+  frameworkTick?: number;
+  onCycleFramework?: () => void;
 }
 
 export function Branding({
@@ -19,6 +28,9 @@ export function Branding({
   cliLabels,
   activeChats,
   pendingChats,
+  globalCouncilOn,
+  onToggleGlobalCouncil,
+  onCycleFramework,
 }: Props) {
   const now = new Date();
   const dateLabel = now
@@ -38,7 +50,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={12}
+      height={13}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -61,6 +73,9 @@ export function Branding({
           cliText={cliText}
           activeChats={activeChats}
           pendingChats={pendingChats}
+          globalCouncilOn={globalCouncilOn}
+          onToggleGlobalCouncil={onToggleGlobalCouncil}
+          onCycleFramework={onCycleFramework}
           domainCount={domainCount}
           appCount={appCount}
           totalLoops={totalLoops}
@@ -253,6 +268,9 @@ function StatusColumn({
   domainCount,
   appCount,
   totalLoops,
+  globalCouncilOn,
+  onToggleGlobalCouncil,
+  onCycleFramework,
 }: {
   dateLabel: string;
   yearLabel: number;
@@ -264,7 +282,12 @@ function StatusColumn({
   domainCount: number;
   appCount: number;
   totalLoops: number;
+  globalCouncilOn?: boolean;
+  onToggleGlobalCouncil?: () => void;
+  onCycleFramework?: () => void;
 }) {
+  const fw = readResponseFramework();
+  const fwLabel = fw ? FRAMEWORKS.find((f) => f.id === fw)?.label ?? fw : "off";
   const statusGlyph = pendingChats > 0 ? "⠋" : activeChats > 0 ? "●" : "○";
   const statusColor =
     pendingChats > 0 ? theme.gold : activeChats > 0 ? theme.ok : theme.fgDim;
@@ -301,6 +324,39 @@ function StatusColumn({
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
       <StatRow label="cli" value={cliText} valueColor={theme.fg} />
       <StatRow label="chat" value={statusText} glyph={statusGlyph} valueColor={statusColor} />
+      {/* Global toggles — top-right defaults. Per-chat overrides win when
+          set; if a chat has no per-chat setting, these defaults are
+          used. Both are clickable. */}
+      <box flexDirection="row" height={1} paddingTop={1}>
+        <text fg={theme.fgFaint}>{"defaults ".padEnd(8)}</text>
+        <box
+          flexDirection="row"
+          paddingLeft={1}
+          paddingRight={1}
+          onMouseDown={onToggleGlobalCouncil}
+        >
+          <text
+            fg={globalCouncilOn ? theme.gold : theme.fgDim}
+            attributes={globalCouncilOn ? 1 : 0}
+          >
+            ⚖ {globalCouncilOn ? "ON" : "off"}
+          </text>
+        </box>
+        <text fg={theme.border}>{" │ "}</text>
+        <box
+          flexDirection="row"
+          paddingLeft={1}
+          paddingRight={1}
+          onMouseDown={onCycleFramework}
+        >
+          <text
+            fg={fw ? theme.aiAccent : theme.fgDim}
+            attributes={fw ? 1 : 0}
+          >
+            ◆ {fwLabel}
+          </text>
+        </box>
+      </box>
     </box>
   );
 }

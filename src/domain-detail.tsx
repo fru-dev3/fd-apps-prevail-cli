@@ -12,6 +12,37 @@ import {
 import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 import { WorkspaceConfigBar } from "./workspace-config-bar.tsx";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// Read the first N lines that look like prompts out of PROMPTS.md for a
+// domain. Each prompt is one line that ends in "?", starts with a verb,
+// or begins with "•" / "-" / a numbered bullet. If PROMPTS.md is missing
+// or empty, returns the generic fallback so the empty state always has
+// SOMETHING to click. Pure read; no side effects.
+function suggestionsForDomain(domain: Domain): string[] {
+  const file = join(domain.path, "PROMPTS.md");
+  if (existsSync(file)) {
+    try {
+      const raw = readFileSync(file, "utf8");
+      const candidates = raw
+        .split("\n")
+        .map((l) => l.replace(/^\s*[-•\d.)]+\s*/, "").trim())
+        .filter((l) => l.length > 8 && l.length < 140)
+        .filter((l) => /\?$/.test(l) || /^(what|how|when|why|where|who|tell|walk|review|summarize|list|show|explain|compare|find|check|track|log|plan|draft|write)\b/i.test(l));
+      if (candidates.length >= 3) return candidates.slice(0, 4);
+    } catch {
+      /* fall through to generic */
+    }
+  }
+  // Fallback: generic but useful suggestions any domain can answer.
+  return [
+    `what should I work on first?`,
+    `what's changed in state.md recently?`,
+    `walk me through the open loops`,
+    `summarize where this domain stands`,
+  ];
+}
 
 interface Props {
   domain: Domain | null;
@@ -28,14 +59,17 @@ interface Props {
   // actually DO something — previously DomainDetail always showed chat
   // regardless of tab.
   showChat?: boolean;
-  // Used by the WorkspaceConfigBar at the top of the pane.
   councilOn?: boolean;
   onToggleCouncil?: () => void;
   frameworkTick?: number;
   onFrameworkChange?: () => void;
+  // Multi-select skills. The set is owned by app.tsx so it survives
+  // tab clicks within a domain. Resets on domain change.
+  selectedSkillIds?: Set<string>;
+  onToggleSkill?: (skillId: string) => void;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill }: Props) {
   if (!domain) {
     return (
       <box
@@ -86,7 +120,11 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
           Clicking through the strip now actually toggles what's shown. */}
       <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
         {showChat ? (
-          <DomainChat domain={domain} setEmbeddedInputActive={setEmbeddedInputActive} />
+          <DomainChat
+            domain={domain}
+            setEmbeddedInputActive={setEmbeddedInputActive}
+            selectedSkills={domain.skills.filter((s) => selectedSkillIds?.has(s.id))}
+          />
         ) : view === "skills" ? (
           <SkillsList
             skills={domain.skills}
@@ -94,6 +132,8 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
             onPick={onPickSkill}
             apps={apps}
             domainName={domain.name}
+            selectedSkillIds={selectedSkillIds}
+            onToggleSkill={onToggleSkill}
           />
         ) : (
           <scrollbox flexGrow={1} scrollY>
@@ -109,7 +149,7 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
 // workspace's ConnectorChat — owns its own message history, spawns a
 // runChatTurn streaming reply, and tells the LLM to use ONLY this domain's
 // folder as context.
-function DomainChat({ domain, setEmbeddedInputActive }: { domain: Domain; setEmbeddedInputActive?: (v: boolean) => void }) {
+function DomainChat({ domain, setEmbeddedInputActive, selectedSkills }: { domain: Domain; setEmbeddedInputActive?: (v: boolean) => void; selectedSkills?: { id: string; title: string }[] }) {
   type ChatLine = { role: "user" | "assistant"; content: string; ts: number };
   const [history, setHistory] = useState<ChatLine[]>([]);
   const [pending, setPending] = useState(false);
@@ -144,7 +184,17 @@ function DomainChat({ domain, setEmbeddedInputActive }: { domain: Domain; setEmb
     inputRef.current?.setText?.("");
     setPending(true);
     setStreamBuf("");
-    const prompt = `You are helping with the "${domain.name}" life domain in a personal-AI cockpit called prevAIl. The vault domain folder is ${domain.path}. Start by reading state.md if you need context. Use ONLY this domain's folder — do not read other domains or connectors.\n\nUser question: ${trimmed}`;
+    // If skills were selected in the skills tab, include them as
+    // <context> so the LLM knows what tools/playbooks to apply.
+    const skillsBlock =
+      selectedSkills && selectedSkills.length > 0
+        ? `\n\n<selected_skills>\nThe user pre-selected these ${domain.name} skills as relevant context:\n${selectedSkills
+            .map((s) => `  - ${s.id}: ${s.title}`)
+            .join(
+              "\n",
+            )}\nRead their definitions under ${domain.path}/skills/ and apply them where relevant.\n</selected_skills>`
+        : "";
+    const prompt = `You are helping with the "${domain.name}" life domain in a personal-AI cockpit called prevAIl. The vault domain folder is ${domain.path}. Start by reading state.md if you need context. Use ONLY this domain's folder — do not read other domains or connectors.${skillsBlock}\n\nUser question: ${trimmed}`;
     runChatTurn({
       prompt,
       cwd: domain.path,
@@ -171,10 +221,19 @@ function DomainChat({ domain, setEmbeddedInputActive }: { domain: Domain; setEmb
       <scrollbox flexGrow={1} scrollY>
         {history.length === 0 && !pending && (
           <>
-            <text fg={theme.fgFaint}>{`  ask anything about ${domain.name}. try:`}</text>
-            <text fg={theme.fgDim}>{`    › what should I work on first?`}</text>
-            <text fg={theme.fgDim}>{`    › what's changed in state.md recently?`}</text>
-            <text fg={theme.fgDim}>{`    › walk me through the open loops`}</text>
+            <text fg={theme.fgFaint}>{`  ask anything about ${domain.name}. suggestions${existsSync(join(domain.path, "PROMPTS.md")) ? " (from PROMPTS.md)" : ""}:`}</text>
+            {suggestionsForDomain(domain).map((s, i) => (
+              <text key={i} fg={theme.fgDim}>{`    › ${s}`}</text>
+            ))}
+            {selectedSkills && selectedSkills.length > 0 && (
+              <>
+                <text> </text>
+                <text fg={theme.aiAccent}>{`  ◆ ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"} pre-loaded as context:`}</text>
+                {selectedSkills.map((s) => (
+                  <text key={s.id} fg={theme.fgDim}>{`    · ${s.id} — ${s.title}`}</text>
+                ))}
+              </>
+            )}
           </>
         )}
         {history.map((m, i) => (
@@ -226,12 +285,16 @@ function SkillsList({
   onPick,
   apps,
   domainName,
+  selectedSkillIds,
+  onToggleSkill,
 }: {
   skills: { id: string; title: string }[];
   selectedIdx: number;
   onPick: (i: number) => void;
   apps: AppSkill[];
   domainName: string;
+  selectedSkillIds?: Set<string>;
+  onToggleSkill?: (skillId: string) => void;
 }) {
   const linkedApps = apps.filter((a) => a.domains.includes(domainName));
   if (skills.length === 0 && linkedApps.length === 0) {
@@ -253,7 +316,12 @@ function SkillsList({
   return (
     <box flexDirection="column" flexGrow={1}>
       <text fg={theme.fgDim}>
-        {skills.length} skills  ·  {linkedApps.length} linked apps  ·  ↑/↓ navigate  ·  enter to run
+        {skills.length} skills  ·  {linkedApps.length} linked apps  ·  click to select/unselect  ·  selected ones go into chat context
+      </text>
+      <text fg={theme.fgFaint}>
+        {selectedSkillIds && selectedSkillIds.size > 0
+          ? `  ${selectedSkillIds.size} selected  →  open the chat tab to use them as context`
+          : "  none selected yet"}
       </text>
       <text> </text>
       <scrollbox flexGrow={1} scrollY>
@@ -266,20 +334,27 @@ function SkillsList({
                 ▸ {GROUP_LABEL[g]}  ({rows.length})
               </text>
               {rows.map(({ idx, skill }) => {
-                const active = idx === selectedIdx;
-                const fg = active ? theme.selFg : theme.fg;
-                const bg = active ? theme.selBg : theme.bg;
-                const pointer = active ? "› " : "  ";
-                const titleFg = active ? theme.selFg : theme.fgDim;
+                const isSelected = selectedSkillIds?.has(skill.id) ?? false;
+                const isCursor = idx === selectedIdx;
+                // Two states overlay: selection (☑/☐ glyph + persistent
+                // highlight) and keyboard-cursor (› pointer + bg).
+                const fg = isSelected ? theme.aiAccent : isCursor ? theme.selFg : theme.fg;
+                const bg = isCursor ? theme.selBg : theme.bg;
+                const checkbox = isSelected ? "☑" : "☐";
+                const pointer = isCursor ? "›" : " ";
+                const titleFg = isCursor ? theme.selFg : isSelected ? theme.aiAccent : theme.fgDim;
                 return (
                   <box
                     key={skill.id}
                     flexDirection="row"
                     backgroundColor={bg}
                     height={1}
-                    onMouseDown={() => onPick(idx)}
+                    onMouseDown={() => {
+                      onPick(idx);
+                      onToggleSkill?.(skill.id);
+                    }}
                   >
-                    <text fg={fg} bg={bg}>{pointer}{skill.id}</text>
+                    <text fg={fg} bg={bg}>{pointer} {checkbox} {skill.id}</text>
                     <text fg={titleFg} bg={bg}>  ·  {skill.title}</text>
                   </box>
                 );
