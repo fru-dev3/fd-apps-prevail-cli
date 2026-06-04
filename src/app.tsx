@@ -135,6 +135,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // so a single Escape kills the whole batch.
   const cancelControllersRef = useRef<Map<string, AbortController>>(new Map());
   const pendingGutRef = useRef<Map<string, string>>(new Map());
+  // Tracks whether we've already done the launch-time chat-open so we
+  // don't re-trigger it on every render. The user wants to LAND in chat
+  // for the first domain — but only once, on app boot, not on every
+  // re-render (that was the original auto-open bug).
+  const didLaunchOpenRef = useRef(false);
   // Tracks whether an embedded chat input (in ConnectorChat / DomainChat
   // workspaces) currently has focus. Set to true on first keystroke into
   // the embedded input; reset to false on sidebar navigation. The global
@@ -238,6 +243,22 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     }, 60_000);
     return () => clearInterval(id);
   }, [clis, cliHealth]);
+
+  // Launch-time chat open. The user wants to land directly in chat for
+  // the first domain — "when you launch, you are always in chat,
+  // because I'm always ready to chat." Runs ONCE on mount (guarded by
+  // ref so subsequent renders never re-trigger). Sidebar nav still
+  // re-opens chat for the picked domain; Escape still exits to the
+  // workspace tabs. This is just the initial state.
+  useEffect(() => {
+    if (didLaunchOpenRef.current) return;
+    if (clis.length === 0) return; // wait until at least one CLI is detected
+    if (domains.length === 0) return; // empty vault — nothing to open
+    didLaunchOpenRef.current = true;
+    const first = domains[0];
+    if (first) openChatForDomain(first);
+  }, [clis.length, domains.length]);
+
   // Per-chat council mode with global fallback. If the key has no
   // explicit setting in the map, use the global default from config.
   const councilModeFor = (key: string | null): boolean => {
@@ -374,20 +395,37 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     }
 
     if (mode === "chat") {
-      // Arrow nav in chat mode → idle + null activeKey so the next render
-      // is GUARANTEED to land on the workspace, not a stale chat pane.
+      // Arrow nav in chat mode:
+      //   For DOMAINS — switch the chat to the new domain (user stays
+      //     in chat). The user is "always ready to chat", so navigating
+      //     between domains shouldn't drop them into the state view.
+      //   For APPS — exit chat to the workspace. Apps are configuration
+      //     surfaces (Overview / Auth / Sync / Skills / Data), not
+      //     conversational, so arrow nav here means "go look at that app".
       if (name === "up") {
-        setMode("idle");
-        setActiveKey(null);
-        if (focus === "apps") setAppIdx((s) => Math.max(0, s - 1));
-        else setDomainIdx((s) => Math.max(0, s - 1));
+        if (focus === "apps") {
+          setMode("idle");
+          setActiveKey(null);
+          setAppIdx((s) => Math.max(0, s - 1));
+        } else {
+          const next = Math.max(0, domainIdx - 1);
+          setDomainIdx(next);
+          const d = domains[next];
+          if (d) openChatForDomain(d);
+        }
         return;
       }
       if (name === "down") {
-        setMode("idle");
-        setActiveKey(null);
-        if (focus === "apps") setAppIdx((s) => Math.min(apps.length - 1, s + 1));
-        else setDomainIdx((s) => Math.min(domains.length - 1, s + 1));
+        if (focus === "apps") {
+          setMode("idle");
+          setActiveKey(null);
+          setAppIdx((s) => Math.min(apps.length - 1, s + 1));
+        } else {
+          const next = Math.min(domains.length - 1, domainIdx + 1);
+          setDomainIdx(next);
+          const d = domains[next];
+          if (d) openChatForDomain(d);
+        }
         return;
       }
       if (evt.ctrl && name === "c") {
