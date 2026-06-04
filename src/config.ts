@@ -68,6 +68,13 @@ export interface UserConfig {
   // globally). Per-domain override available.
   serendipity?: boolean;
   domainSerendipity?: Record<string, boolean>;
+  // Auto-council detection. When set to "suggest" (default), every chat
+  // turn sent in non-council mode also fires a tiny classifier in
+  // parallel; if it judges the prompt council-worthy, a passive
+  // suggestion bubble appears in the transcript. "auto" upgrades that
+  // to silently routing through runCouncil instead. "off" disables.
+  autoCouncil?: "off" | "suggest" | "auto";
+  domainAutoCouncil?: Record<string, "off" | "suggest" | "auto">;
 }
 
 export function readGlobalCouncilDefault(): boolean {
@@ -347,6 +354,34 @@ export function setSerendipity(on: boolean, domainKey?: string): void {
     next.domainSerendipity = map;
   } else {
     next.serendipity = on;
+  }
+  writeConfig(next);
+}
+
+// Auto-council mode resolution. Default "suggest" — the user gets a
+// passive hint without surprise behavior.
+export type AutoCouncilMode = "off" | "suggest" | "auto";
+
+export function readAutoCouncil(domainKey?: string): AutoCouncilMode {
+  const cfg = readConfig();
+  if (!cfg) return "suggest";
+  if (domainKey) {
+    const override = cfg.domainAutoCouncil?.[domainKey];
+    if (override) return override;
+  }
+  return cfg.autoCouncil ?? "suggest";
+}
+
+export function setAutoCouncil(mode: AutoCouncilMode, domainKey?: string): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (domainKey) {
+    const map = { ...(next.domainAutoCouncil ?? {}) };
+    map[domainKey] = mode;
+    next.domainAutoCouncil = map;
+  } else {
+    next.autoCouncil = mode;
   }
   writeConfig(next);
 }

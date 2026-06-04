@@ -1,17 +1,20 @@
 import { theme } from "./theme.ts";
 import { openInFinder } from "./system.ts";
 import {
+  readAutoCouncil,
   readCheckpoint,
   readSerendipity,
   readWebAccess,
   resolveResponseFramework,
   resolveResponseLens,
+  setAutoCouncil,
   setCheckpoint,
   setResponseFramework,
   setResponseLens,
   setSerendipity,
   setWebAccess,
 } from "./config.ts";
+import type { AutoCouncilMode } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
 import { LENSES, type LensSelection } from "./lens.ts";
 
@@ -128,6 +131,19 @@ export function WorkspaceConfigBar({
     onFrameworkChange?.();
   };
 
+  // Auto-council mode — cycles off → suggest → auto → off.
+  // "suggest" = passive YES-bubble appended to transcript on YES.
+  // "auto"    = block-and-route to council on YES (latency on every send).
+  // Glyph: ◐ (half-circle) suggests partial / hint mode.
+  const autoMode = readAutoCouncil(domainKey);
+  const cycleAuto = () => {
+    const order: AutoCouncilMode[] = ["off", "suggest", "auto"];
+    const idx = order.indexOf(autoMode);
+    const next = order[(idx + 1) % order.length]!;
+    setAutoCouncil(next, domainKey);
+    onFrameworkChange?.();
+  };
+
   const sep = (
     <text fg={theme.border}>{"   │   "}</text>
   );
@@ -196,6 +212,16 @@ export function WorkspaceConfigBar({
       >
         <text fg={serendipityOn ? theme.aiAccent : theme.fgDim} attributes={serendipityOn ? 1 : 0}>
           ◉ Serendipity: {serendipityOn ? "on" : "off"}
+        </text>
+      </box>
+      <box
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        onMouseDown={cycleAuto}
+      >
+        <text fg={autoMode !== "off" ? theme.aiAccent : theme.fgDim} attributes={autoMode !== "off" ? 1 : 0}>
+          ◐ Auto: {autoMode}
         </text>
       </box>
       <box flexGrow={1} />

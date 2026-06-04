@@ -24,6 +24,7 @@ import {
   isCliKind,
   readCouncilConfig,
   readResponseFramework,
+  readAutoCouncil,
   readCheckpoint,
   readResponseLens,
   readSerendipity,
@@ -66,6 +67,7 @@ import { tickAndRunDue } from "./schedule.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
 import { distillTurnToJournal } from "./journal.ts";
 import { runSerendipityPass } from "./serendipity.ts";
+import { classifyAsCouncilWorthy } from "./auto-council.ts";
 import {
   detectOllama,
   detectSubprocessClis,
@@ -1645,9 +1647,42 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     });
   }
 
-  function sendMessage(key: string, text: string) {
+  function sendMessage(key: string, text: string, opts: { skipAutoCouncil?: boolean } = {}) {
     const session = chats.get(key);
     if (!session || session.pending) return;
+    // Auto-council detection — only fires when council is OFF for this
+    // session and the call wasn't a re-entry from the classifier itself.
+    // Three modes (see src/auto-council.ts):
+    //   "auto"    — classify the prompt; on YES route to runCouncil and
+    //               skip the single-chat path. On NO, fall through to
+    //               this same function with skipAutoCouncil=true so we
+    //               don't classify twice.
+    //   "suggest" — fire classifier in parallel with the chat call; on
+    //               YES, append a passive council-suggestion bubble the
+    //               user can click to re-run. Chat completes normally.
+    //   "off"     — skip the classifier entirely.
+    const autoMode = opts.skipAutoCouncil
+      ? "off"
+      : readAutoCouncil(session.hostDomain.name);
+    const councilAlreadyOn = councilModeFor(key);
+    if (!councilAlreadyOn && autoMode === "auto") {
+      // Block: fire classifier first, then either runCouncil OR
+      // re-enter sendMessage with the skip flag so the chat path
+      // proceeds without a second classifier call.
+      void (async () => {
+        const worthy = await classifyAsCouncilWorthy({
+          cwd: session.hostDomain.path,
+          cli: session.cli,
+          userPrompt: text,
+        });
+        if (worthy) runCouncil(key, text);
+        else sendMessage(key, text, { skipAutoCouncil: true });
+      })().catch(() => {
+        // Classifier failed: don't strand the user. Fall through to chat.
+        sendMessage(key, text, { skipAutoCouncil: true });
+      });
+      return;
+    }
     // Capture-at-send for response-shaping metadata. The user can cycle
     // framework/lens chips between turns, so the badge under each bubble
     // (and the vault decision log) MUST reflect what was active when THIS
@@ -1674,6 +1709,38 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       framework: fwLabel,
       lens: lensLabel,
     });
+    // SUGGEST mode: fire the classifier in parallel with the chat call.
+    // On YES, drop a passive council-suggestion bubble after the reply
+    // lands. We don't block the chat path — the suggestion is
+    // out-of-band. On NO or classifier failure, nothing visible
+    // happens (silent fail-safe).
+    if (!councilAlreadyOn && autoMode === "suggest") {
+      void (async () => {
+        const worthy = await classifyAsCouncilWorthy({
+          cwd: session.hostDomain.path,
+          cli: session.cli,
+          userPrompt: text,
+        });
+        if (!worthy) return;
+        const sTs = Date.now();
+        setChats((m) => {
+          const cur = m.get(key);
+          if (!cur) return m;
+          return new Map(m).set(key, {
+            ...cur,
+            messages: [
+              ...cur.messages,
+              {
+                role: "assistant" as const,
+                content: text, // bubble carries the original prompt for re-run on click
+                ts: sTs,
+                kind: "council-suggestion" as const,
+              },
+            ],
+          });
+        });
+      })().catch(() => {});
+    }
     // If the user pre-selected skills in the Skills tab for this domain,
     // prepend a small <selected_skills> block so the LLM treats them as
     // explicit context. Only applies on the first turn — once the chat

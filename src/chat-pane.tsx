@@ -113,7 +113,11 @@ export interface ChatMsg {
     // lands, an extra lightweight call asks the same CLI for one
     // non-obvious adjacent angle. Result lands here as its own dim
     // bubble so it doesn't pollute the main answer.
-    | "serendipity";
+    | "serendipity"
+    // Auto-council classifier said "this looks council-worthy" while
+    // running in `suggest` mode. content carries the ORIGINAL prompt
+    // so a click on the bubble can re-run it through runCouncil.
+    | "council-suggestion";
   cli?: CliKind; // for council-response bubbles
   model?: string;
   // Captured at SEND TIME so the per-bubble badge can render what was
@@ -358,6 +362,9 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
           recordSuggestionClick(s.id);
           onSend(session.key, s.prompt);
         }}
+        onEscalateCouncil={(prompt) =>
+          onCommand(session.key, { kind: "council", prompt })
+        }
       />
       {councilMode && (
         <box
@@ -593,6 +600,7 @@ function Transcript({
   onAcceptDistill,
   onDiscardDistill,
   onPickSuggestion,
+  onEscalateCouncil,
 }: {
   session: ChatSession;
   tick: number;
@@ -603,6 +611,7 @@ function Transcript({
   onAcceptDistill: (ts: number, content: string) => void;
   onDiscardDistill: (ts: number) => void;
   onPickSuggestion: (s: Suggestion) => void;
+  onEscalateCouncil?: (prompt: string) => void;
 }) {
   const messages = session.messages;
   const showChips =
@@ -690,6 +699,7 @@ function Transcript({
           onToggleCouncilMode={onToggleCouncilMode}
           onAcceptDistill={onAcceptDistill}
           onDiscardDistill={onDiscardDistill}
+          onEscalateCouncil={onEscalateCouncil}
         />
       ))}
       {/* The generic ThinkingBubble is for normal single-CLI chat. During
@@ -847,6 +857,7 @@ function MessageBubble({
   onToggleCouncilMode,
   onAcceptDistill,
   onDiscardDistill,
+  onEscalateCouncil,
 }: {
   msg: ChatMsg;
   tick: number;
@@ -855,6 +866,7 @@ function MessageBubble({
   onToggleCouncilMode: () => void;
   onAcceptDistill: (ts: number, content: string) => void;
   onDiscardDistill: (ts: number) => void;
+  onEscalateCouncil?: (prompt: string) => void;
 }) {
   if (msg.kind === "distill-draft") {
     return <DistillDraftBubble msg={msg} onAccept={onAcceptDistill} onDiscard={onDiscardDistill} />;
@@ -880,6 +892,9 @@ function MessageBubble({
   }
   if (msg.kind === "serendipity") {
     return <SerendipityBubble msg={msg} />;
+  }
+  if (msg.kind === "council-suggestion") {
+    return <CouncilSuggestionBubble msg={msg} onEscalate={onEscalateCouncil} />;
   }
   if (msg.role === "system") {
     return (
@@ -1456,6 +1471,35 @@ function SerendipityBubble({ msg }: { msg: ChatMsg }) {
       >
         {renderMarkdownLines(msg.content)}
       </box>
+    </box>
+  );
+}
+
+// Auto-council "suggest" mode bubble — passive nudge that the prompt
+// looks council-worthy. The original prompt is stored in msg.content
+// so a click on the bubble can re-fire it through the council path.
+function CouncilSuggestionBubble({
+  msg,
+  onEscalate,
+}: {
+  msg: ChatMsg;
+  onEscalate?: (prompt: string) => void;
+}) {
+  const clickable = Boolean(onEscalate);
+  return (
+    <box
+      flexDirection="row"
+      paddingTop={1}
+      paddingBottom={1}
+      paddingLeft={2}
+      paddingRight={2}
+      onMouseDown={clickable ? () => onEscalate!(msg.content) : undefined}
+    >
+      <text fg={theme.aiAccent} attributes={1}>⚖ this looks council-worthy</text>
+      <text fg={theme.fgFaint}>  ·  </text>
+      <text fg={clickable ? theme.gold : theme.fgDim}>
+        {clickable ? "click to re-run through council" : "re-send with /council to get a panel verdict"}
+      </text>
     </box>
   );
 }
