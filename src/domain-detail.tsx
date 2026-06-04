@@ -68,9 +68,16 @@ interface Props {
   selectedSkillIds?: Set<string>;
   onToggleSkill?: (skillId: string) => void;
   onOpenChat?: () => void;
+  // Per-skill actions. onEditSkill(i) opens skill i's SKILL.md in
+  // $EDITOR via the existing edit mode; onOpenSkill(i) opens its
+  // folder in Finder/Explorer. Both are no-ops when the parent
+  // doesn't supply a handler — the UI hides the ✎/▸ icons in that
+  // case so there's no dead pixel.
+  onEditSkill?: (i: number) => void;
+  onOpenSkill?: (i: number) => void;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, bottomBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill, onOpenChat }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, bottomBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill, onOpenChat, onEditSkill, onOpenSkill }: Props) {
   if (!domain) {
     return (
       <box
@@ -132,6 +139,8 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
             domainName={domain.name}
             selectedSkillIds={selectedSkillIds}
             onToggleSkill={onToggleSkill}
+            onEditSkill={onEditSkill}
+            onOpenSkill={onOpenSkill}
           />
         ) : (
           <scrollbox flexGrow={1} scrollY>
@@ -298,6 +307,8 @@ function SkillsList({
   domainName,
   selectedSkillIds,
   onToggleSkill,
+  onEditSkill,
+  onOpenSkill,
 }: {
   skills: { id: string; title: string }[];
   selectedIdx: number;
@@ -306,6 +317,13 @@ function SkillsList({
   domainName: string;
   selectedSkillIds?: Set<string>;
   onToggleSkill?: (skillId: string) => void;
+  // Edit / open-folder hooks for the highlighted skill. ✎ and ▸
+  // glyphs render on the cursor row only, click-targeted to these.
+  // Wired via DomainDetail → app.tsx so we can reuse the same edit
+  // mode machinery that already handles state.md / quickstart.md /
+  // prompts.md, instead of re-implementing inline.
+  onEditSkill?: (i: number) => void;
+  onOpenSkill?: (i: number) => void;
 }) {
   const linkedApps = apps.filter((a) => a.domains.includes(domainName));
   if (skills.length === 0 && linkedApps.length === 0) {
@@ -339,6 +357,9 @@ function SkillsList({
           ? `  ${selectedSkillIds.size} selected  →  open the chat tab to use them as context`
           : "  none selected yet"}
       </text>
+      <text fg={theme.fgFaint}>
+        {"  press [e] to edit the highlighted skill in $EDITOR  ·  [o] to open its folder"}
+      </text>
       <text> </text>
       <scrollbox flexGrow={1} scrollY>
         {GROUP_ORDER.map((g) => {
@@ -365,13 +386,59 @@ function SkillsList({
                     flexDirection="row"
                     backgroundColor={bg}
                     height={1}
-                    onMouseDown={() => {
-                      onPick(idx);
-                      onToggleSkill?.(skill.id);
-                    }}
                   >
-                    <text fg={fg} bg={bg}>{pointer} {checkbox} {skill.id}</text>
-                    <text fg={titleFg} bg={bg}>  ·  {skill.title}</text>
+                    {/* Click on the LABEL toggles selection, same as before.
+                        The two right-edge action chips (✎ edit, ▸ open) only
+                        render on the cursor row so they don't clutter the
+                        whole list — and they have separate click handlers
+                        so toggling and editing never collide. */}
+                    <box
+                      flexDirection="row"
+                      onMouseDown={() => {
+                        onPick(idx);
+                        onToggleSkill?.(skill.id);
+                      }}
+                    >
+                      <text fg={fg} bg={bg}>{pointer} {checkbox} {skill.id}</text>
+                      <text fg={titleFg} bg={bg}>  ·  {skill.title}</text>
+                    </box>
+                    {isCursor && (onEditSkill || onOpenSkill) && (
+                      <>
+                        <box flexGrow={1} backgroundColor={bg} />
+                        {onEditSkill && (
+                          <box
+                            flexDirection="row"
+                            backgroundColor={bg}
+                            paddingLeft={1}
+                            paddingRight={1}
+                            onMouseDown={(e) => {
+                              // Don't bubble — clicking ✎ should NOT also
+                              // toggle the skill's chat-context selection.
+                              (e as any)?.stopPropagation?.();
+                              onEditSkill(idx);
+                            }}
+                          >
+                            <text fg={theme.goldDim} bg={bg}>✎</text>
+                            <text fg={theme.fgFaint} bg={bg}> edit</text>
+                          </box>
+                        )}
+                        {onOpenSkill && (
+                          <box
+                            flexDirection="row"
+                            backgroundColor={bg}
+                            paddingLeft={1}
+                            paddingRight={1}
+                            onMouseDown={(e) => {
+                              (e as any)?.stopPropagation?.();
+                              onOpenSkill(idx);
+                            }}
+                          >
+                            <text fg={theme.aiAccent} bg={bg}>▸</text>
+                            <text fg={theme.fgFaint} bg={bg}> open</text>
+                          </box>
+                        )}
+                      </>
+                    )}
                   </box>
                 );
               })}

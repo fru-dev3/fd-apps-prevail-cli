@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { dirname } from "node:path";
 import { useKeyboard, useRenderer } from "@opentui/react";
+import { openInFinder } from "./system.ts";
 import { Sidebar, type ChatStatus, type SidebarFocus } from "./sidebar.tsx";
 import { DomainDetail } from "./domain-detail.tsx";
 import { AppDetail } from "./app-detail.tsx";
@@ -516,6 +518,13 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       // into a redundant view. No-op — the chat input is already onscreen.
     } else if (name === "e") {
       doEdit();
+    } else if (name === "o") {
+      // Open-in-finder shortcut. Only meaningful on the Skills tab right
+      // now — it opens the highlighted skill's folder so the user can
+      // edit any file in the skill bundle, not just SKILL.md. Silent
+      // no-op everywhere else (the ConfigBar's `▸ vault` chip covers
+      // "open the domain folder" UX on every other tab).
+      doOpenSkill();
     } else if (name >= "1" && name <= "5") {
       // Numbers map 1..N to VIEW_ORDER indices. Guard against pressing a
       // number past the end of the view list — VIEW_ORDER has 4 entries
@@ -2047,6 +2056,19 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   }
 
   function doEdit() {
+    // Skills tab special case: edit the highlighted skill's SKILL.md
+    // rather than refusing. The skill picked is the one under skillIdx
+    // in the current domain's skills list. editTarget computation below
+    // mirrors the same selection so the EditorPane gets the right file.
+    if (view === "skills" && focus === "domains" && domain) {
+      const skill = domain.skills[skillIdx];
+      if (!skill) {
+        setMessage("no skill highlighted — use ↑/↓ to pick one first");
+        return;
+      }
+      setMode("edit");
+      return;
+    }
     const filename = VIEW_FILE[view];
     if (!filename) {
       setMessage("the skills tab isn't editable — switch to state / prompts / quickstart");
@@ -2065,6 +2087,22 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     setMode("edit");
   }
 
+  // Open the highlighted skill's folder in Finder/Explorer. No-op
+  // elsewhere — the rest of the cockpit already has the `▸ vault` chip
+  // on the ConfigBar covering "open the domain folder" UX.
+  function doOpenSkill() {
+    if (view !== "skills" || focus !== "domains" || !domain) return;
+    const skill = domain.skills[skillIdx];
+    if (!skill) {
+      setMessage("no skill highlighted — use ↑/↓ to pick one first");
+      return;
+    }
+    // skill.path = <vault>/<domain>/skills/<skill-id>/SKILL.md
+    // Open the folder (one level up) so the user can edit ANY file
+    // in the skill bundle, not just SKILL.md.
+    openInFinder(dirname(skill.path));
+  }
+
   function exitEditor(saved: boolean) {
     setMode("idle");
     if (saved) {
@@ -2081,16 +2119,33 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
 
   const activeSession = activeKey ? chats.get(activeKey) ?? null : null;
   const inChat = mode === "chat" && activeSession;
+  // Edit-mode target resolution. Skills tab points at the highlighted
+  // skill's folder + SKILL.md; everything else stays at the
+  // domain / app root + the per-tab filename from VIEW_FILE.
+  const editingSkill =
+    mode === "edit" &&
+    view === "skills" &&
+    focus === "domains" &&
+    domain &&
+    domain.skills[skillIdx];
   const editTarget =
     mode === "edit"
-      ? focus === "apps" && app && !app.community
-        ? { path: app.path, name: app.id }
-        : focus === "domains" && domain
-          ? { path: domain.path, name: domain.name }
-          : null
+      ? editingSkill
+        ? { path: dirname(editingSkill.path), name: editingSkill.id }
+        : focus === "apps" && app && !app.community
+          ? { path: app.path, name: app.id }
+          : focus === "domains" && domain
+            ? { path: domain.path, name: domain.name }
+            : null
       : null;
   const inEdit = mode === "edit" && editTarget !== null;
-  const editFilename = inEdit ? VIEW_FILE[view] : null;
+  // editFilename: when editing a skill we always target SKILL.md;
+  // otherwise the per-view file (state.md, QUICKSTART.md, etc).
+  const editFilename = inEdit
+    ? editingSkill
+      ? "SKILL.md"
+      : VIEW_FILE[view]
+    : null;
 
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor={theme.bg}>
@@ -2415,6 +2470,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 selectedSkillIds={selectedSkillIds}
                 onToggleSkill={toggleSkillSelection}
                 onOpenChat={() => domain && openChatForDomain(domain)}
+                onEditSkill={(i) => {
+                  // Move the cursor to the clicked skill so editTarget
+                  // resolves to the right one, then enter edit mode.
+                  // Same machinery as the `e` keyboard shortcut.
+                  setSkillIdx(i);
+                  setMode("edit");
+                }}
+                onOpenSkill={(i) => {
+                  // Click on ▸ opens the skill folder in Finder. Move
+                  // the cursor first so the next keystroke lands on
+                  // the same row the user just acted on.
+                  setSkillIdx(i);
+                  const skill = domain?.skills[i];
+                  if (skill) openInFinder(dirname(skill.path));
+                }}
               />
             );
           })()}
