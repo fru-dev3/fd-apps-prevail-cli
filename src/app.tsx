@@ -63,6 +63,7 @@ import {
 } from "./session.ts";
 import { tickAndRunDue } from "./schedule.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
+import { distillTurnToJournal } from "./journal.ts";
 import {
   detectOllama,
   detectSubprocessClis,
@@ -1526,6 +1527,19 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             // council outcome saved in full for future reference.
             raw: readCheckpoint(session.hostDomain.name),
           });
+          // Curated layer: distill the verdict into journal/decisions.md
+          // + journal/facts.md. Best-effort, async, never blocks the
+          // chat path. Uses the chair model (synthCli) since it already
+          // produced the synthesis and the distill prompt is small.
+          void distillTurnToJournal({
+            domainPath: session.hostDomain.path,
+            userPrompt: text,
+            assistantReply: verdict,
+            ts,
+            cli: synthCli,
+            model: synthModel,
+            signal: controller.signal,
+          }).catch(() => {});
           // Replace the synthesizing placeholder with the verdict, AND flip
           // pending=false in the same setChats so the spinner stops the
           // instant the verdict bubble appears.
@@ -1721,6 +1735,17 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           // of every chat turn across every domain.
           raw: readCheckpoint(session.hostDomain.name),
         });
+        // Curated journal: distill into journal/decisions.md +
+        // journal/facts.md. Uses the same CLI that answered the turn
+        // (no separate "chair" in single-chat mode). Fire-and-forget.
+        void distillTurnToJournal({
+          domainPath: session.hostDomain.path,
+          userPrompt: text,
+          assistantReply: response,
+          ts,
+          cli: session.cli,
+          model: session.model,
+        }).catch(() => {});
         setChats((m) => {
           const cur = m.get(key);
           if (!cur) return m;
