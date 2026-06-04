@@ -63,6 +63,11 @@ export type ChatStatus = "idle" | "active" | "pending";
 interface Props {
   domains: Domain[];
   apps: AppSkill[];
+  // When false, the LIFE APPS section is hidden entirely — the LIFE
+  // DOMAINS section takes the full sidebar height. Apps stay in the
+  // data layer (scanned, tracked, available to re-enable) but the
+  // user never sees them. Keeps the v1 council story focused.
+  showApps?: boolean;
   domainIdx: number;
   appIdx: number;
   focus: SidebarFocus;
@@ -79,6 +84,7 @@ interface Props {
 export function Sidebar({
   domains,
   apps,
+  showApps = true,
   domainIdx,
   appIdx,
   focus,
@@ -105,7 +111,7 @@ export function Sidebar({
         title="LIFE DOMAINS"
         count={domains.length}
         focused={focus === "domains"}
-        flexGrow={3}
+        flexGrow={showApps ? 3 : 1}
         columnHeader="    domain        skills"
         followId={focus === "domains" ? `dom-${domains[domainIdx]?.name ?? ""}` : null}
         footer={<NewRow label="+ new domain" onClick={onNewDomain} />}
@@ -142,6 +148,7 @@ export function Sidebar({
           );
         })}
       </Section>
+      {showApps && (
       <Section
         title="LIFE APPS"
         count={apps.length}
@@ -194,6 +201,7 @@ export function Sidebar({
           );
         })}
       </Section>
+      )}
     </box>
   );
 }

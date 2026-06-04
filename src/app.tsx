@@ -71,6 +71,14 @@ import {
   type CliHealth,
 } from "./cli-bridge.ts";
 
+// Feature flag: when false, the LIFE APPS section, the `s` swap-focus key,
+// the AppDetail panel, and the new-app flow are all collapsed out of the
+// default UI. The connector architecture and the scanApps loader stay in
+// the codebase so the v1 council story can ship clean and we can re-enable
+// apps later once the grounding pipeline (connector → domain context →
+// council prompt) is actually wired. Flip to `true` to bring it all back.
+const SHOW_APPS = false;
+
 const VIEW_ORDER: ViewKey[] = ["state", "quickstart", "prompts", "skills"];
 const VIEW_FILE: Record<ViewKey, string | null> = {
   state: "state.md",
@@ -456,7 +464,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       renderer?.destroy?.();
       process.exit(0);
     } else if (name === "s") {
-      setFocus((f) => (f === "domains" ? "apps" : "domains"));
+      // Swap-focus is disabled while apps are collapsed out of the UI.
+      // Keep the handler but make it a no-op so muscle memory doesn't
+      // throw an unhandled-key error.
+      if (SHOW_APPS) setFocus((f) => (f === "domains" ? "apps" : "domains"));
     } else if (name === "j" || name === "down") {
       if (focus === "apps") setAppIdx((s) => Math.min(apps.length - 1, s + 1));
       else if (onSkillsTab && skills.length > 0) setSkillIdx((s) => Math.min(skills.length - 1, s + 1));
@@ -1880,6 +1891,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         <Sidebar
           domains={domains}
           apps={apps}
+          showApps={SHOW_APPS}
           domainIdx={domainIdx}
           appIdx={appIdx}
           focus={focus}
