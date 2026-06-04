@@ -17,6 +17,7 @@ import {
 } from "./chat-pane.tsx";
 import { EditorPane } from "./editor-pane.tsx";
 import { TabStrip } from "./tab-strip.tsx";
+import { ToolsPanel } from "./tools-panel.tsx";
 import {
   ALL_CLI_KINDS,
   isCliKind,
@@ -160,6 +161,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // primary surface. State / quickstart / etc. are reference tabs you
   // click when needed.
   const [chatTabActive, setChatTabActive] = useState(true);
+  // Tools & Integrations overlay — opened from the banner's 🔧 tools
+  // link. Shows MCP wiring, Telegram setup, briefings, calibration,
+  // bench, connector OAuth flows, and the vault/config file links
+  // (clickable to open in Finder).
+  const [toolsOpen, setToolsOpen] = useState(false);
   // Multi-select skill set per active domain. Click a skill to toggle
   // it in the set. Selected skills are surfaced to DomainChat as
   // <context> so the LLM sees their definitions when answering.
@@ -1764,6 +1770,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           bumpFrameworkTick();
         }}
         onOpenCouncilConfig={() => setCouncilConfigOpen(true)}
+        onOpenTools={() => setToolsOpen(true)}
         frameworkTick={frameworkTick}
         onCycleFramework={() => {
           const cur = readResponseFramework();
@@ -1918,6 +1925,9 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 />
               ) : undefined;
 
+            if (toolsOpen) {
+              return <ToolsPanel onClose={() => setToolsOpen(false)} />;
+            }
             if (councilConfigOpen) {
               return (
                 <CouncilConfigPanel

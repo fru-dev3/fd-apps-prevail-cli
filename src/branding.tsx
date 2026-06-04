@@ -17,10 +17,9 @@ interface Props {
   globalCouncilOn?: boolean;
   onToggleGlobalCouncil?: () => void;
   onOpenCouncilConfig?: () => void;
+  onOpenTools?: () => void;
   frameworkTick?: number;
   onCycleFramework?: () => void;
-  // Live health of each detected CLI — feeds the panelist status row
-  // so the user can see which engines are ready BEFORE running council.
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }
 
@@ -35,6 +34,7 @@ export function Branding({
   globalCouncilOn,
   onToggleGlobalCouncil,
   onOpenCouncilConfig,
+  onOpenTools,
   onCycleFramework,
   cliHealthSummary,
 }: Props) {
@@ -82,6 +82,7 @@ export function Branding({
           globalCouncilOn={globalCouncilOn}
           onToggleGlobalCouncil={onToggleGlobalCouncil}
           onOpenCouncilConfig={onOpenCouncilConfig}
+          onOpenTools={onOpenTools}
           onCycleFramework={onCycleFramework}
           cliHealthSummary={cliHealthSummary}
           domainCount={domainCount}
@@ -274,6 +275,7 @@ function StatusColumn({
   globalCouncilOn,
   onToggleGlobalCouncil,
   onOpenCouncilConfig,
+  onOpenTools,
   onCycleFramework,
   cliHealthSummary,
 }: {
@@ -290,6 +292,7 @@ function StatusColumn({
   globalCouncilOn?: boolean;
   onToggleGlobalCouncil?: () => void;
   onOpenCouncilConfig?: () => void;
+  onOpenTools?: () => void;
   onCycleFramework?: () => void;
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }) {
@@ -355,6 +358,10 @@ function StatusColumn({
           <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>
             ◆ {fwLabel}
           </text>
+        </box>
+        <text fg={theme.border}>{" │ "}</text>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>
+          <text fg={theme.aiAccent} attributes={1}>🔧 tools</text>
         </box>
       </box>
       {cliHealthSummary && cliHealthSummary.length > 0 && (
