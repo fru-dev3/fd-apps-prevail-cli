@@ -7,6 +7,40 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.9.0] — 2026-06-04 · OSS scaffolding + threat model
+
+Phase 1 of the production-readiness audit. Docs and OSS scaffolding only — no code changes, no behavioral changes. Sets up the foundation the subsequent security hardening work will lean on.
+
+### Added — Security posture
+- **SECURITY.md** at repo root — full threat model, in-scope / out-of-scope, known limitations, private reporting flow via GitHub Security Advisories.
+- **docs/threat-model.md** — long-form expansion of SECURITY.md with code cross-references, trust-boundary diagram, worked example of a prompt-injection scenario.
+
+### Added — Open-source scaffolding
+- **CODE_OF_CONDUCT.md** — direct, project-tailored expectations for contributors.
+- **CONTRIBUTING.md** refresh — adds Welcome / Before-you-start / Dev setup / Code style / Commit convention / PR flow sections. Existing LifeApp plugin protocol content preserved verbatim.
+- **.github/ISSUE_TEMPLATE/** — bug report + feature request YAML form templates, plus config.yml that disables blank issues and links security reports to the private advisory channel.
+- **.github/PULL_REQUEST_TEMPLATE.md** — short checklist (typecheck, build, tests, CHANGELOG, backwards-compat).
+
+### Added — Architecture docs
+- **docs/data-flow.md** — how a turn moves end-to-end through cockpit → CLI → \_log → \_journal → benchmark, plus the vault folder layout.
+- **docs/extending.md** — how to add a framework, lens, CLI bridge, ConfigBar chip, slash command. Line-targeted references into the codebase.
+- **docs/scope-discussion.md** — what prevAIl is and isn't, copy-paste-ready for the pinned GitHub Discussion.
+
+### Added — Distribution scaffolding
+- **Formula/prevail.rb** — Homebrew formula targeting the prebuilt release binaries (macOS arm/intel + Linux arm/intel). SHA256 placeholders to be filled by release automation.
+- **Formula/README.md** — release-process notes for maintainers.
+
+### Added — README updates
+- New **Platform** section documenting bun-only runtime and supported targets (macOS arm64/x64, Linux arm64/x64, Windows via WSL).
+- Expanded **Docs · changelog · roadmap** to link the new docs/ files.
+- New **Scope** section before License making the single-user / not-SaaS framing explicit.
+
+### Added — Pinned GitHub issues
+- [Issue #1](https://github.com/fru-dev3/prevail/issues/1) — pinned "Project scope" canonical reference.
+- [Issue #2](https://github.com/fru-dev3/prevail/issues/2), [#3](https://github.com/fru-dev3/prevail/issues/3), [#4](https://github.com/fru-dev3/prevail/issues/4) — three "follow-up" items lifted from prior commit messages into real tracked work.
+
+---
+
 ## [0.8.2] — 2026-06-04 · Skills tab — edit, open, scaffold
 
 Three new entry points into the Skills tab. Zero impact on existing flows (click-to-select still toggles chat-context selection, all other tabs unchanged).

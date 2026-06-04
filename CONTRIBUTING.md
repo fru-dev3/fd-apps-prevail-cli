@@ -1,21 +1,116 @@
-# Contributing to prevail
+# Contributing to prevAIl
 
-Thanks for considering a contribution. prevail is a single-binary terminal
-cockpit for life domains (wealth, health, tax, career, …). The most valuable
-contributions today are **LifeApp plugins** — drop-in adapters that let a
-domain chat talk to a real-world service (Plaid for banking, Greenhouse for
-hiring, MyChart for labs, etc.).
+## Welcome
 
-This doc covers:
+prevAIl is a single-user terminal cockpit for hard personal decisions — a
+council-of-AIs you spawn against your own markdown vault. It is not a
+platform, not a SaaS, and not multi-tenant. Contributions that improve it as
+a personal tool are welcome. The scope is documented in
+[`docs/scope-discussion.md`](docs/scope-discussion.md) and pinned as a
+GitHub Discussion; read it before opening a non-trivial PR.
 
-1. The LifeApp plugin protocol
-2. Where to put your plugin in the repo
-3. How the cockpit discovers and loads plugins
-4. Quick-start: copying the reference `plaid` plugin
+## Before you start
+
+Read these in order so you don't propose something out of scope:
+
+1. [`docs/scope-discussion.md`](docs/scope-discussion.md) — the pinned scope
+   discussion (what prevAIl is, and what it isn't).
+2. [`SECURITY.md`](SECURITY.md) — how to report security findings privately.
+3. [`docs/threat-model.md`](docs/threat-model.md) — the assumptions the
+   codebase is allowed to make.
+
+If your proposal contradicts any of the three, it will be closed.
+
+## Dev setup
+
+```bash
+git clone https://github.com/<owner>/prevail.git
+cd prevail
+# bun ≥ 1.3.0 required
+bun install
+bun run dev          # hot-reload TUI for local development
+bun run build        # produce the single binary at ./dist/prevail
+bun test src/        # run the test suite
+bunx tsc --noEmit    # typecheck (no emit)
+```
+
+The TUI talks to whatever AI CLIs are already logged in on your machine
+(Claude Code, Codex, Gemini CLI, Ollama). It does not bundle credentials.
+
+## Code style
+
+- **TypeScript strict.** No implicit `any`, no unchecked nullables.
+- **Never `shell: true` in spawn calls.** Pass argv arrays. Shell expansion
+  inside subprocess invocations is a recurring source of injection bugs and
+  is banned.
+- **OpenTUI rendering gotchas:**
+  - Trailing whitespace is stripped inside `<text>` cells. When a value must
+    visibly start with a space, prepend a non-breaking space (NBSP, U+00A0).
+  - Mixed literal + interpolation inside a single `<text>` node clips at
+    render time. Split into two adjacent `<text>` nodes — one for the
+    literal, one for the interpolated value.
+- **No emojis in UI output.** Use geometric Unicode only (◆ ◇ ● ○ ✓ ✗ ▸ from
+  the Geometric Shapes block). See `CHANGELOG.md` for the rule and its
+  history.
+- **No `console.log` in TUI paths.** Logs corrupt the rendered frame. Route
+  diagnostics to `debug.log` via the existing logger.
+
+## Commit message convention
+
+Follow the existing pattern:
+
+```
+<type>(<scope>): <imperative subject>
+
+<body explaining WHY, not what>
+```
+
+Allowed types: `feat`, `fix`, `chore`, `docs`, `refactor`. Scope is the
+subsystem (`vault`, `council`, `tui`, `connector`, etc.). The body explains
+the motivation — the diff already shows the what.
+
+When a commit was AI-paired, co-author the assistant exactly as existing
+commits do. Look at recent history with `git log -n 20 --format=fuller` for
+the precise trailer format before adding one.
+
+## Pull request flow
+
+1. Open a PR against `main`.
+2. Fill in every checkbox in `.github/PULL_REQUEST_TEMPLATE.md`. Unchecked
+   items will block review.
+3. Before requesting review, confirm all three of these pass locally:
+
+   ```bash
+   bunx tsc --noEmit
+   bun run build
+   bun test src/
+   ```
+
+4. CI runs the same three. Failing CI blocks merge.
+
+## Reporting bugs / requesting features
+
+Use the templates under `.github/ISSUE_TEMPLATE/`. The templates exist to
+make sure you include the reproduction steps and environment that triage
+actually needs. Free-form issues without the template will be asked to
+refile.
+
+## Security
+
+Never open a public issue for a security finding. See
+[`SECURITY.md`](SECURITY.md) for the private reporting flow (GitHub Security
+Advisories). Public disclosure of an unpatched issue will get the report
+ignored.
 
 ---
 
-## 1. The LifeApp plugin protocol
+## LifeApp plugin protocol
+
+The rest of this document covers the LifeApp plugin protocol — drop-in
+adapters that let a domain chat talk to a real-world service (Plaid for
+banking, Greenhouse for hiring, MyChart for labs, etc.).
+
+### 1. The LifeApp plugin protocol
 
 A LifeApp plugin is a directory with two required files:
 
@@ -35,7 +130,7 @@ apps/community/<plugin-id>/
 └── scripts/          # optional, anything the SKILL.md tells the agent to call
 ```
 
-### `manifest.json` schema
+#### `manifest.json` schema
 
 ```json
 {
@@ -65,7 +160,7 @@ apps/community/<plugin-id>/
 | `license` | no | License under which you ship the plugin. |
 | `author` | no | `{ name, url }`. |
 
-### `SKILL.md` shape
+#### `SKILL.md` shape
 
 The cockpit treats SKILL.md as a prompt fragment the agent reads when the user
 focuses the plugin. It is plain markdown with YAML frontmatter:
@@ -101,9 +196,7 @@ description: |
 Keep it under ~400 lines. Long SKILL.md files dilute the system prompt and
 cost more tokens per chat turn.
 
----
-
-## 2. Where to put your plugin
+### 2. Where to put your plugin
 
 In the monorepo, drop your directory under:
 
@@ -118,9 +211,7 @@ Users who don't want to vendor your plugin upstream can drop the same
 directory at `~/.prevail/apps/<plugin-id>/` on their machine and the cockpit
 will pick it up on next launch.
 
----
-
-## 3. How the cockpit discovers plugins
+### 3. How the cockpit discovers plugins
 
 `scanCommunityApps()` (in `src/vault.ts`) scans these locations, in order, and
 dedups by `manifest.id`:
@@ -135,9 +226,7 @@ counted. Manifests that fail to parse are silently skipped.
 The cockpit merges community apps into the same list as vault-derived apps
 and renders a `★` prefix in the LIFE APPS sidebar so you can tell them apart.
 
----
-
-## 4. Quick start: clone the reference `plaid` plugin
+### 4. Quick start: clone the reference `plaid` plugin
 
 The repo ships one reference plugin under `apps/community/plaid/`. It models a
 Plaid integration without making real HTTP calls — useful as a structural
@@ -155,12 +244,3 @@ Open a PR and we'll review. Plugins that bring a real, useful service to one
 of the existing domains (wealth, tax, health, career, business, insurance,
 real-estate, vision, content, brand, benefits, calendar) are the most
 valuable.
-
----
-
-## Other contributions
-
-Bug reports and feature ideas are welcome via GitHub issues. For code changes
-outside the plugin protocol, please open an issue first to discuss scope.
-The Hermes-inspired v0.2 feature pack (`/distill`, `/search`, scheduler,
-plugins) is the current focus; see `TODO.md` for what's live and what's next.

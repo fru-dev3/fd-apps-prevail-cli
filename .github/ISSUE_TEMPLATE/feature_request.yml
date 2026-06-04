@@ -1,0 +1,42 @@
+name: Feature request
+description: A new feature, command, lens, framework, or workflow you'd like to see.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What are you trying to accomplish? What does your week / decision look like that prompted this?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like prevAIl to handle this? Be concrete — describe the slash command, the chip on the ConfigBar, the new tab, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What's already close?
+      description: What existing prevAIl feature is closest to this? Why doesn't it fit?
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Is this in scope?
+      description: prevAIl is a single-user terminal tool. See the pinned scope discussion. If your request is multi-user / hosted / enterprise, it's likely out of scope.
+      options:
+        - "Yes — single-user, local, follows the threat model"
+        - "Unsure — would like to discuss"
+        - "I know it's out of scope but I want to start a discussion"
+    validations:
+      required: true
+  - type: checkboxes
+    id: pre
+    attributes:
+      label: Before submitting
+      options:
+        - label: I've checked the pinned scope discussion and the recent CHANGELOG
+          required: true

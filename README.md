@@ -160,11 +160,23 @@ prevail daemon --telegram        headless mode (bot + ticker)
 
 Inside the TUI: `↑ ↓` between domains, `s` swap to apps, `e` edit the active markdown tab, `q` quit. `/help` lists every slash command.
 
+## Platform
+
+prevAIl is bun-only. Currently builds for:
+
+- macOS arm64 (Apple Silicon)
+- macOS x86_64 (Intel)
+- Linux arm64
+- Linux x86_64
+- Windows via WSL only (no native Windows build — bun's Windows support is preview-quality as of bun 1.3.x; we'll add Windows binaries when bun's Windows story stabilizes)
+
+A terminal with UTF-8 + true-color is required. Tested on iTerm2, kitty, alacritty, WezTerm, Ghostty, GNOME Terminal. Should work in most modern xterm-256color terminals.
+
 ## Requirements
 
 - One or more of: [Claude Code](https://claude.com/code) · [Codex](https://github.com/openai/codex) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Ollama](https://ollama.com)
 - Terminal with UTF-8 + true color
-- macOS / Linux (Windows via WSL)
+- macOS / Linux (Windows via WSL — see [Platform](#platform))
 
 ## Built with
 
@@ -176,6 +188,17 @@ Inside the TUI: `↑ ↓` between domains, `s` swap to apps, `e` edit the active
 - [**Releases**](https://github.com/fru-dev3/prevail/releases) — pre-built binaries
 - [**Demo vault**](./vault-demo) — synthetic "Alex Rivera" persona
 - [**Connector architecture**](./docs/connector-architecture.md) — auth probes, OAuth runner, manual recipes
+- [**Threat model**](./docs/threat-model.md) — long-form threat model + worked example
+- [**Data flow**](./docs/data-flow.md) — how a turn moves through cockpit / vault / log / journal / benchmark
+- [**Extending**](./docs/extending.md) — how to add a framework, lens, CLI bridge, ConfigBar chip, slash command
+
+## Scope
+
+prevAIl is a **single-user terminal cockpit** for personal decisions. You run it on your own machine, with your own AI CLI credentials, against a folder of your own markdown.
+
+It is **not** a SaaS, **not** multi-tenant, **not** an enterprise audit-log system, **not** a replacement for a knowledge base. If you need any of those, prevAIl is the wrong tool.
+
+The threat model is documented in [SECURITY.md](./SECURITY.md) and [docs/threat-model.md](./docs/threat-model.md). Read those before exposing the MCP server or the Telegram bridge to anything other than your own laptop.
 
 ## License
 

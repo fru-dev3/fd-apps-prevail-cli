@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security advisory
+    url: https://github.com/fru-dev3/prevail/security/advisories/new
+    about: Found a security issue? Report it privately here, NOT a public issue.
+  - name: Discussions
+    url: https://github.com/fru-dev3/prevail/discussions
+    about: Have a question, idea, or want to share your vault layout? Start a discussion.

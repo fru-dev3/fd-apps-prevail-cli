@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in prevAIl broke or behaved unexpectedly.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: prevAIl version
+      placeholder: "Run `prevail --version`"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS + version
+      placeholder: "e.g. macOS 14.3 (arm64), Ubuntu 24.04 (x86_64)"
+    validations:
+      required: true
+  - type: dropdown
+    id: clis
+    attributes:
+      label: Which AI CLIs do you have installed?
+      multiple: true
+      options:
+        - claude
+        - codex
+        - gemini
+        - ollama
+        - other / none
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal reproduction. Include the slash command, framework + lens settings, and any keyboard sequence.
+      placeholder: |
+        1. Launch `prevail` and pick the wealth domain
+        2. Toggle Council ON, set Lens to CONTRARIAN
+        3. Type "/council should I refinance?"
+        4. Press Esc mid-flight
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Paste anything from the cockpit status line, the daily log, or ~/.prevail/debug.log.
+      render: shell
+  - type: checkboxes
+    id: pre
+    attributes:
+      label: Before submitting
+      options:
+        - label: I've checked that this isn't a known limitation in SECURITY.md or the README
+          required: true
+        - label: I've redacted any secrets, API keys, or personal data from the repro and logs
+          required: true
