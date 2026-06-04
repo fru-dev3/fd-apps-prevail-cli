@@ -149,6 +149,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // sidebar nav. Without this, each tab clicked just changed viewIdx but
   // the pane never actually rendered different content.
   const [chatTabActive, setChatTabActive] = useState(false);
+  // Bump to force a re-render when the framework changes via the workspace
+  // config bar (the framework value is read from disk, not from React
+  // state, so we need a manual nudge).
+  const [frameworkTick, setFrameworkTick] = useState(0);
+  const bumpFrameworkTick = () => setFrameworkTick((t) => t + 1);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
@@ -1842,6 +1847,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                     if (sk) openChatForSkill(sk);
                   }}
                   setEmbeddedInputActive={setEmbeddedInputActive}
+                  councilOn={councilModeFor(`app:${app.id}`)}
+                  onToggleCouncil={() => toggleCouncilModeFor(`app:${app.id}`)}
+                  frameworkTick={frameworkTick}
+                  onFrameworkChange={bumpFrameworkTick}
                 />
               );
             }
@@ -1859,6 +1868,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 topBar={tabBar}
                 setEmbeddedInputActive={setEmbeddedInputActive}
                 showChat={chatTabActive}
+                councilOn={domain ? councilModeFor(domain.name) : false}
+                onToggleCouncil={() => domain && toggleCouncilModeFor(domain.name)}
+                frameworkTick={frameworkTick}
+                onFrameworkChange={bumpFrameworkTick}
               />
             );
           })()}

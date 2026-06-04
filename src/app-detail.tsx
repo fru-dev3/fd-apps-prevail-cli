@@ -15,6 +15,7 @@ import { probeConnector, type AuthCheckSpec, type ProbeResult } from "./connecto
 import { loadSkillsForConnector, runSkill, logSkillRun, type SkillSpec, type SkillRunResult } from "./connector-skills.ts";
 import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 import { useRef } from "react";
+import { WorkspaceConfigBar } from "./workspace-config-bar.tsx";
 
 interface Props {
   app: AppSkill;
@@ -26,6 +27,10 @@ interface Props {
   // input is being typed in, so the global keyboard handler can stand
   // down and let single-letter keys flow into the input.
   setEmbeddedInputActive?: (v: boolean) => void;
+  councilOn?: boolean;
+  onToggleCouncil?: () => void;
+  frameworkTick?: number;
+  onFrameworkChange?: () => void;
 }
 
 // Connector workspace tabs. The global tab strip (state/loops/quickstart/
@@ -47,7 +52,7 @@ const CONNECTOR_TABS: { id: ConnectorTab; label: string }[] = [
   { id: "data", label: "Data" },
 ];
 
-export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbeddedInputActive }: Props) {
+export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbeddedInputActive, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange }: Props) {
   const updated = formatRelativeTime(app.stateMtime);
   const domainsLabel =
     app.domains.length > 0 ? `used in ${app.domains.join(", ")}` : "no linked domains";
@@ -74,6 +79,13 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbedde
       bottomTitleAlignment="left"
     >
       {topBar}
+      <WorkspaceConfigBar
+        vaultPath={app.path}
+        councilOn={councilOn ?? false}
+        onToggleCouncil={onToggleCouncil ?? (() => {})}
+        frameworkTick={frameworkTick}
+        onFrameworkChange={onFrameworkChange}
+      />
       <ConnectorTabRow active={tab} onPick={setTab} skillCount={skills.length} />
       {tab === "overview" ? (
         // Overview tab gets a special split layout: compact connection

@@ -11,6 +11,7 @@ import {
 } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
+import { WorkspaceConfigBar } from "./workspace-config-bar.tsx";
 
 interface Props {
   domain: Domain | null;
@@ -27,9 +28,14 @@ interface Props {
   // actually DO something — previously DomainDetail always showed chat
   // regardless of tab.
   showChat?: boolean;
+  // Used by the WorkspaceConfigBar at the top of the pane.
+  councilOn?: boolean;
+  onToggleCouncil?: () => void;
+  frameworkTick?: number;
+  onFrameworkChange?: () => void;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive, showChat }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange }: Props) {
   if (!domain) {
     return (
       <box
@@ -61,6 +67,13 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
       bottomTitleAlignment="left"
     >
       {topBar}
+      <WorkspaceConfigBar
+        vaultPath={domain.path}
+        councilOn={councilOn ?? false}
+        onToggleCouncil={onToggleCouncil ?? (() => {})}
+        frameworkTick={frameworkTick}
+        onFrameworkChange={onFrameworkChange}
+      />
       {/* Each tab renders DIFFERENT content (per user — they were
           clicking through tabs and seeing the same thing every time):
             chat tab       → DomainChat (embedded, full pane)
