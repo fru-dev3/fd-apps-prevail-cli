@@ -426,6 +426,210 @@ export function writeRunDirectory(args: {
   return dir;
 }
 
+// --- SCORE ---------------------------------------------------------------
+
+export interface QuestionScore {
+  id: string;
+  domain: string;
+  // Mechanical keyword-match floor: percentage of
+  // expected_verdict_keywords that appear (case-insensitive,
+  // substring-match) in the model's reply. Null when the question has
+  // no expected_verdict_keywords. Range 0-100.
+  keyword_score: number | null;
+  keyword_hits: string[];
+  keyword_misses: string[];
+  // LLM-as-judge qualitative score. Range 0-10. Null when no judge
+  // ran (e.g. no CLIs available, or scoring was called with --no-judge).
+  judge_score: number | null;
+  judge_rationale: string | null;
+}
+
+export interface RunScore {
+  runDir: string;
+  label: string;
+  questionScores: QuestionScore[];
+  // Per-run aggregates.
+  keyword_avg: number | null;
+  judge_avg: number | null;
+}
+
+function keywordMatch(reply: string, keywords?: string[]): {
+  score: number | null;
+  hits: string[];
+  misses: string[];
+} {
+  if (!keywords || keywords.length === 0) {
+    return { score: null, hits: [], misses: [] };
+  }
+  const lowered = reply.toLowerCase();
+  const hits: string[] = [];
+  const misses: string[] = [];
+  for (const k of keywords) {
+    if (lowered.includes(k.toLowerCase())) hits.push(k);
+    else misses.push(k);
+  }
+  const score = Math.round((hits.length / keywords.length) * 100);
+  return { score, hits, misses };
+}
+
+const JUDGE_INSTRUCTION = [
+  "You are scoring a model's answer to a benchmark question.",
+  "The user has a KNOWN correct decision they stand behind.",
+  "Read the question, the expected decision (ground truth), and the",
+  "model's reply. Output a score from 0 to 10 and a one-line rationale.",
+  "Scoring guidance:",
+  "  10 = reply clearly recommends the expected decision with",
+  "       reasoning that matches the user's stated rationale",
+  "   7 = recommends roughly the right decision but reasoning is",
+  "       weak or different from what the user found compelling",
+  "   5 = mixed — could be read as supporting either side",
+  "   3 = recommends the WRONG decision but at least engages",
+  "   0 = recommends the WRONG decision OR fails to commit",
+  "Reply with EXACTLY two lines and nothing else:",
+  "SCORE: <integer 0-10>",
+  "WHY: <one short sentence>",
+].join("\n");
+
+async function judgeOne(
+  judgeCli: AvailableCli,
+  judgeModel: string,
+  record: CanonicalRunRecord,
+  signal?: AbortSignal,
+): Promise<{ score: number | null; rationale: string | null }> {
+  if (!record.expected_decision || !record.reply) return { score: null, rationale: null };
+  const prompt = [
+    JUDGE_INSTRUCTION,
+    "",
+    "QUESTION:",
+    record.prompt,
+    "",
+    "EXPECTED DECISION (user's ground truth):",
+    record.expected_decision,
+    "",
+    "MODEL'S REPLY:",
+    record.reply.slice(0, 8000),
+  ].join("\n");
+  let raw = "";
+  try {
+    raw = await runChatTurn({
+      prompt,
+      cwd: process.cwd(),
+      cli: judgeCli,
+      model: judgeModel,
+      isFirst: true,
+      bare: true,
+      signal,
+    });
+  } catch {
+    return { score: null, rationale: null };
+  }
+  const scoreMatch = raw.match(/^SCORE:\s*(\d+)/im);
+  const whyMatch = raw.match(/^WHY:\s*(.+)$/im);
+  if (!scoreMatch) return { score: null, rationale: null };
+  const score = Math.max(0, Math.min(10, parseInt(scoreMatch[1]!, 10)));
+  return { score, rationale: whyMatch?.[1]?.trim() ?? null };
+}
+
+export interface ScoreArgs {
+  vaultPath: string;
+  runDir: string;
+  judgeCli?: AvailableCli;
+  judgeModel?: string;
+  signal?: AbortSignal;
+  onProgress?: (id: string) => void;
+}
+
+export async function scoreRun(args: ScoreArgs): Promise<RunScore> {
+  const jsonFile = join(args.runDir, "results.json");
+  const raw = readFileSync(jsonFile, "utf8");
+  const records: CanonicalRunRecord[] = JSON.parse(raw);
+  const questionScores: QuestionScore[] = [];
+  for (const r of records) {
+    args.onProgress?.(r.id);
+    const km = keywordMatch(r.reply, r.expected_verdict_keywords);
+    let judge_score: number | null = null;
+    let judge_rationale: string | null = null;
+    if (args.judgeCli && r.expected_decision && r.reply) {
+      const j = await judgeOne(args.judgeCli, args.judgeModel ?? "", r, args.signal);
+      judge_score = j.score;
+      judge_rationale = j.rationale;
+    }
+    questionScores.push({
+      id: r.id,
+      domain: r.domain,
+      keyword_score: km.score,
+      keyword_hits: km.hits,
+      keyword_misses: km.misses,
+      judge_score,
+      judge_rationale,
+    });
+  }
+  const kScores = questionScores.map((q) => q.keyword_score).filter((s): s is number => s !== null);
+  const jScores = questionScores.map((q) => q.judge_score).filter((s): s is number => s !== null);
+  const avg = (xs: number[]) => xs.length === 0 ? null : Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10;
+  const result: RunScore = {
+    runDir: args.runDir,
+    label: args.runDir.split("/").pop() ?? args.runDir,
+    questionScores,
+    keyword_avg: avg(kScores),
+    judge_avg: avg(jScores),
+  };
+  writeFileSync(join(args.runDir, "score.json"), JSON.stringify(result, null, 2));
+  // Markdown scoreboard alongside the json for grep/PR review.
+  const md: string[] = [];
+  md.push(`# score · ${result.label}`);
+  md.push("");
+  md.push(`- keyword_avg: ${result.keyword_avg ?? "—"}%`);
+  md.push(`- judge_avg:   ${result.judge_avg ?? "—"} / 10`);
+  md.push("");
+  md.push(`| id | domain | keyword% | judge/10 | rationale |`);
+  md.push(`| --- | --- | --- | --- | --- |`);
+  for (const q of questionScores) {
+    md.push(`| ${q.id} | ${q.domain} | ${q.keyword_score ?? "—"} | ${q.judge_score ?? "—"} | ${q.judge_rationale ?? ""} |`);
+  }
+  writeFileSync(join(args.runDir, "score.md"), md.join("\n"));
+  return result;
+}
+
+// Leaderboard: read every <vault>/benchmark/runs/*/score.json and
+// produce a table sorted by judge_avg (when present) or keyword_avg.
+export interface LeaderboardEntry {
+  label: string;
+  runDir: string;
+  keyword_avg: number | null;
+  judge_avg: number | null;
+  questions: number;
+}
+
+export function buildLeaderboard(vaultPath: string): LeaderboardEntry[] {
+  const root = runsDir(vaultPath);
+  if (!existsSync(root)) return [];
+  const out: LeaderboardEntry[] = [];
+  for (const entry of readdirSync(root)) {
+    const dir = join(root, entry);
+    const scoreFile = join(dir, "score.json");
+    if (!existsSync(scoreFile)) continue;
+    try {
+      const data: RunScore = JSON.parse(readFileSync(scoreFile, "utf8"));
+      out.push({
+        label: data.label,
+        runDir: data.runDir,
+        keyword_avg: data.keyword_avg,
+        judge_avg: data.judge_avg,
+        questions: data.questionScores.length,
+      });
+    } catch {
+      /* skip malformed score files */
+    }
+  }
+  return out.sort((a, b) => {
+    const aj = a.judge_avg ?? -1;
+    const bj = b.judge_avg ?? -1;
+    if (aj !== bj) return bj - aj;
+    return (b.keyword_avg ?? -1) - (a.keyword_avg ?? -1);
+  });
+}
+
 // Import seed: pull a council-verdict entry out of a domain's _log file
 // at <vault>/<domain>/_log/<date>.md and turn it into a draft. Heuristic
 // — looks for the most recent "⚖ council" section in the file. Returns

@@ -2,7 +2,7 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { resolve, join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { App } from "./app.tsx";
 import { FirstRunWizard } from "./wizard.tsx";
@@ -644,6 +644,87 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  if (sub === "score") {
+    // Score one canonical run directory. Default: score the LATEST run
+    // unless --run <name> is passed. Default judge: claude (first
+    // detected; can override with --judge-cli/--judge-model). Skip the
+    // LLM-as-judge layer with --no-judge for a fast mechanical pass.
+    const { scoreRun, runsDir } = await import("./canonical-bench.ts");
+    let runName: string | null = null;
+    let noJudge = false;
+    let judgeCliKind: string | null = null;
+    let judgeModel: string | null = null;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      const v = args[i + 1];
+      if (a === "--run" && v) { runName = v; i++; }
+      else if (a === "--no-judge") noJudge = true;
+      else if (a === "--judge-cli" && v) { judgeCliKind = v; i++; }
+      else if (a === "--judge-model" && v) { judgeModel = v; i++; }
+    }
+    const root = runsDir(vault);
+    if (!existsSync(root)) {
+      console.error(`no runs found under ${root}. run \`prevail bench run --canonical\` first.`);
+      process.exit(1);
+    }
+    const candidates = readdirSync(root).sort().reverse();
+    const targetName = runName ?? candidates[0];
+    if (!targetName) {
+      console.error("no runs found.");
+      process.exit(1);
+    }
+    const runDir = join(root, targetName);
+    if (!existsSync(join(runDir, "results.json"))) {
+      console.error(`${runDir} has no results.json — was this run interrupted?`);
+      process.exit(1);
+    }
+    let judgeCli;
+    if (!noJudge) {
+      const { detectClis } = await import("./cli-bridge.ts");
+      const allClis = await detectClis();
+      judgeCli = judgeCliKind
+        ? allClis.find((c) => c.kind === judgeCliKind)
+        : allClis.find((c) => c.kind === "claude") ?? allClis[0];
+      if (!judgeCli) {
+        console.error("no CLI available to act as judge. install one or pass --no-judge.");
+        process.exit(1);
+      }
+    }
+    console.log(`scoring ${targetName}${judgeCli ? ` · judge: ${judgeCli.kind}` : " · keyword-only"}…`);
+    const result = await scoreRun({
+      vaultPath: vault,
+      runDir,
+      judgeCli,
+      judgeModel: judgeModel ?? undefined,
+      onProgress: (id) => process.stdout.write(`  ${id}…\r`),
+    });
+    console.log("");
+    console.log(`✓ scored ${result.questionScores.length} questions`);
+    console.log(`  keyword_avg: ${result.keyword_avg ?? "—"}%`);
+    console.log(`  judge_avg:   ${result.judge_avg ?? "—"} / 10`);
+    console.log(`  written to:  ${runDir}/score.{md,json}`);
+    return;
+  }
+
+  if (sub === "leaderboard" || sub === "lb") {
+    const { buildLeaderboard } = await import("./canonical-bench.ts");
+    const entries = buildLeaderboard(vault);
+    if (entries.length === 0) {
+      console.log("no scored runs yet. run `prevail bench run --canonical` then `prevail bench score`.");
+      return;
+    }
+    console.log(`canonical leaderboard — ${entries.length} run${entries.length === 1 ? "" : "s"}:`);
+    console.log("");
+    console.log(`  judge / 10  keyword %  questions  label`);
+    console.log(`  ----------  ---------  ---------  ----------------------------`);
+    for (const e of entries) {
+      const j = e.judge_avg === null ? "—" : e.judge_avg.toFixed(1).padStart(4, " ");
+      const k = e.keyword_avg === null ? "—" : `${e.keyword_avg}%`.padStart(4, " ");
+      console.log(`  ${j.padStart(10, " ")}  ${k.padStart(9, " ")}  ${String(e.questions).padStart(9, " ")}  ${e.label}`);
+    }
+    return;
+  }
+
   if (sub === "run-canonical" || (sub === "run" && args.includes("--canonical"))) {
     // Personal canonical run: fire each <vault>/benchmark/questions/*.md
     // at the target CLI (or council, when --council is passed) and
@@ -770,10 +851,15 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   console.error("usage:");
   console.error("  prevail bench list");
   console.error("  prevail bench run [--domain <name>] [--question <id>]");
+  console.error("");
+  console.error("personal canonical set (<vault>/benchmark/):");
   console.error("  prevail bench seed --domain <name>             write a stub canonical question");
   console.error("  prevail bench seed --from-log <domain>         import latest council verdict as draft");
   console.error("  prevail bench run --canonical [--cli <kind>] [--model <id>] [--council]");
   console.error("                                                run the personal canonical set");
+  console.error("  prevail bench score [--run <name>] [--no-judge] [--judge-cli <kind>]");
+  console.error("                                                grade a run (keyword + LLM judge)");
+  console.error("  prevail bench leaderboard                     show ranked scoreboard across runs");
   process.exit(1);
 }
 
