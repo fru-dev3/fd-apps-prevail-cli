@@ -1,5 +1,5 @@
 import { theme } from "./theme.ts";
-import { openInFinder, shortenHome } from "./system.ts";
+import { openInFinder } from "./system.ts";
 import {
   resolveResponseFramework,
   resolveResponseLens,
@@ -15,32 +15,43 @@ interface Props {
   onToggleCouncil: () => void;
   frameworkTick?: number;
   onFrameworkChange?: () => void;
-  onOpenChat?: () => void;
-  // When set, the framework AND lens chips operate on per-domain overrides
-  // for that key (falling back to the global default for display when no
-  // override exists). When unset, the chips mutate the global default.
-  // Apps currently pass undefined; that's intentional pending app-scope
-  // plumbing in cli-bridge / council-runner.
+  // Edit button shows up only when the caller passes a handler — usually
+  // when the current tab is editable (state / quickstart / prompts).
+  // In chat mode, leave undefined; in workspace mode, pass the editor
+  // opener so the user can jump into $EDITOR from the same row.
+  onEdit?: () => void;
+  // When set, the framework AND lens chips operate on per-domain
+  // overrides for that key. Falls back to the global default for
+  // display when no override exists.
   domainKey?: string;
 }
 
-// Visible at the top of every domain and connector workspace. One row,
-// left-to-right:
-//   ▸ Chat            → open the full ChatPane
-//   ▸ open vault      → spawn Finder / Explorer / xdg-open at the path
-//   Council: ON/OFF   → toggles council for this surface
-//   ◆ Framework: id   → cycles BLUF → WIN → SCQA → … (output shape)
-//   ◇ Lens: id        → cycles first-principles → … → all → off (angle of attack)
+// The single config row that sits below the TabStrip in BOTH chat mode
+// AND workspace mode. Same shape, same position, no duplication with
+// the TabStrip above or the ChatPane status line below. Reads:
 //
-// Framework and Lens are independent axes — set both at once for the
-// most structured output. Lens only fires when Council is ON; it's still
-// shown when council is off so the user can pre-set it.
+//   ● Council ON   ◆ Framework: SCQA   ◇ Lens: none   ▸ vault   ✎ edit
+//
+// What lives here, and why:
+//   ● Council     — the toggle for THIS surface (per-domain). The TabStrip
+//                   no longer carries Council, so there's exactly one
+//                   clickable Council source in the cockpit.
+//   ◆ Framework  — per-domain override; cycles on click; "· domain"/"· global"
+//                   hint when the user is overriding.
+//   ◇ Lens       — same, for the cognitive lens fanout.
+//   ▸ vault      — quick Finder/xdg-open at the active domain path.
+//   ✎ edit       — opens $EDITOR on the active markdown tab when applicable.
+//
+// What's intentionally NOT here:
+//   - Chat link: the [chat] tab in the TabStrip already does this.
+//   - Configure: it's in the global defaults block in the banner (one place).
+//   - CLI chips: they're in the TabStrip row, attached to nav tabs.
 export function WorkspaceConfigBar({
   vaultPath,
   councilOn,
   onToggleCouncil,
   onFrameworkChange,
-  onOpenChat,
+  onEdit,
   domainKey,
 }: Props) {
   const { id: currentFw, scope: fwScope } = resolveResponseFramework(domainKey);
@@ -60,15 +71,10 @@ export function WorkspaceConfigBar({
   const fwScopeHint =
     domainKey && fwScope === "domain"
       ? " · domain"
-      : domainKey && fwScope === "global"
-        ? " · global"
-        : "";
+      : "";
 
   const { sel: currentLens, scope: lensScope } = resolveResponseLens(domainKey);
   const cycleLens = () => {
-    // Cycle order: off → first-principles → outsider → contrarian →
-    // expansionist → executor → all → off. "all" is the fanout mode and
-    // sits at the end so the user has to deliberately land on it.
     const order: LensSelection[] = [
       null,
       ...LENSES.map((l) => l.id as LensSelection),
@@ -77,46 +83,24 @@ export function WorkspaceConfigBar({
     const idx = order.findIndex((s) => s === currentLens);
     const next = order[(idx + 1) % order.length] ?? null;
     setResponseLens(next, domainKey);
-    onFrameworkChange?.(); // re-uses the same redraw tick — both chips re-render
+    onFrameworkChange?.();
   };
   const lensLabel = currentLens === null
-    ? "off"
+    ? "none"
     : currentLens === "all"
       ? "all (×5)"
       : LENSES.find((l) => l.id === currentLens)?.label ?? currentLens;
   const lensScopeHint =
     domainKey && lensScope === "domain"
       ? " · domain"
-      : domainKey && lensScope === "global"
-        ? " · global"
-        : "";
+      : "";
+
+  const sep = (
+    <text fg={theme.border}>{"   │   "}</text>
+  );
 
   return (
     <box flexDirection="row" height={1} paddingLeft={1} paddingRight={1}>
-      {onOpenChat && (
-        <>
-          <box
-            flexDirection="row"
-            paddingLeft={1}
-            paddingRight={1}
-            onMouseDown={onOpenChat}
-          >
-            <text fg={theme.aiAccent} attributes={1}>▸ Chat</text>
-          </box>
-          <text fg={theme.border}>{"   │   "}</text>
-        </>
-      )}
-      <box
-        flexDirection="row"
-        paddingLeft={1}
-        paddingRight={1}
-        onMouseDown={() => openInFinder(vaultPath)}
-      >
-        <text fg={theme.aiAccent}>▸ </text>
-        <text fg={theme.fgDim}>open vault  </text>
-        <text fg={theme.fgFaint}>{shortenHome(vaultPath)}</text>
-      </box>
-      <text fg={theme.border}>{"   │   "}</text>
       <box
         flexDirection="row"
         paddingLeft={1}
@@ -124,10 +108,10 @@ export function WorkspaceConfigBar({
         onMouseDown={onToggleCouncil}
       >
         <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>
-          Council: {councilOn ? "ON" : "OFF"}
+          {councilOn ? "● Council ON" : "◆ Council off"}
         </text>
       </box>
-      <text fg={theme.border}>{"   │   "}</text>
+      {sep}
       <box
         flexDirection="row"
         paddingLeft={1}
@@ -138,12 +122,9 @@ export function WorkspaceConfigBar({
           ◆ Framework: {fwLabel}
         </text>
         {fwScopeHint && (
-          <text fg={fwScope === "domain" ? theme.gold : theme.fgFaint}>
-            {fwScopeHint}
-          </text>
+          <text fg={theme.gold}>{fwScopeHint}</text>
         )}
       </box>
-      <text fg={theme.border}>{"   │   "}</text>
       <box
         flexDirection="row"
         paddingLeft={1}
@@ -157,14 +138,28 @@ export function WorkspaceConfigBar({
           ◇ Lens: {lensLabel}
         </text>
         {lensScopeHint && (
-          <text fg={lensScope === "domain" ? theme.gold : theme.fgFaint}>
-            {lensScopeHint}
-          </text>
-        )}
-        {currentLens && !councilOn && (
-          <text fg={theme.fgFaint}> · needs council</text>
+          <text fg={theme.gold}>{lensScopeHint}</text>
         )}
       </box>
+      <box flexGrow={1} />
+      <box
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        onMouseDown={() => openInFinder(vaultPath)}
+      >
+        <text fg={theme.aiAccent}>▸ vault</text>
+      </box>
+      {onEdit && (
+        <box
+          flexDirection="row"
+          paddingLeft={1}
+          paddingRight={1}
+          onMouseDown={onEdit}
+        >
+          <text fg={theme.goldDim}>✎ edit</text>
+        </box>
+      )}
     </box>
   );
 }

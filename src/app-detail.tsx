@@ -15,7 +15,6 @@ import { probeConnector, type AuthCheckSpec, type ProbeResult } from "./connecto
 import { loadSkillsForConnector, runSkill, logSkillRun, type SkillSpec, type SkillRunResult } from "./connector-skills.ts";
 import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 import { useRef } from "react";
-import { WorkspaceConfigBar } from "./workspace-config-bar.tsx";
 
 interface Props {
   app: AppSkill;
@@ -83,15 +82,9 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbedde
       bottomTitle={` ${communityMark}${domainsLabel}  ·  updated ${updated}  ·  ${skills.length} skill${skills.length === 1 ? "" : "s"} `}
       bottomTitleAlignment="left"
     >
+      {/* topBar is the full bundle: TabStrip + ConfigBar.
+          AppDetail no longer renders its own WorkspaceConfigBar. */}
       {topBar}
-      <WorkspaceConfigBar
-        vaultPath={app.path}
-        councilOn={councilOn ?? false}
-        onToggleCouncil={onToggleCouncil ?? (() => {})}
-        frameworkTick={frameworkTick}
-        onFrameworkChange={onFrameworkChange}
-        onOpenChat={onOpenChat}
-      />
       {/* Apps now use the GLOBAL TabStrip exactly like domains —
           clicking state/quickstart/prompts/skills/chat changes which
           section of the connector workspace shows. Same behavior as

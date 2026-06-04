@@ -17,6 +17,7 @@ import {
 } from "./chat-pane.tsx";
 import { EditorPane } from "./editor-pane.tsx";
 import { TabStrip } from "./tab-strip.tsx";
+import { WorkspaceConfigBar } from "./workspace-config-bar.tsx";
 import { ToolsPanel } from "./tools-panel.tsx";
 import {
   ALL_CLI_KINDS,
@@ -1870,7 +1871,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           const cur = readResponseLens();
           const order = [
             null, "first-principles", "outsider", "contrarian",
-            "expansionist", "executor", "all",
+            "expansionist", "executor", "alien", "mom", "dad", "all",
           ] as const;
           const idx = order.findIndex((s) => s === cur);
           const next = order[(idx + 1) % order.length];
@@ -2023,6 +2024,41 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 />
               ) : undefined;
 
+            // ConfigBar (council + framework + lens + vault + edit) — sits
+            // at the BOTTOM of the content area in BOTH chat and workspace
+            // mode. In chat mode that's right above the input box (where
+            // the user is typing). In workspace mode it's at the bottom of
+            // the tab content. Identical row, identical position, no top
+            // duplication with the TabStrip. Domain context drives
+            // domainKey so per-domain overrides resolve correctly.
+            const isEditableView =
+              !inChat && (view === "state" || view === "quickstart" || view === "prompts");
+            const configBarTarget = inChat
+              ? activeSession?.hostDomain
+              : focus === "domains"
+                ? domain
+                : null;
+            const configBar = configBarTarget && !inEdit ? (
+              <WorkspaceConfigBar
+                vaultPath={configBarTarget.path}
+                councilOn={
+                  inChat && activeSession
+                    ? councilModeFor(activeSession.key)
+                    : domain
+                      ? councilModeFor(domain.name)
+                      : false
+                }
+                onToggleCouncil={() => {
+                  if (inChat && activeSession) toggleCouncilModeFor(activeSession.key);
+                  else if (domain) toggleCouncilModeFor(domain.name);
+                }}
+                frameworkTick={frameworkTick}
+                onFrameworkChange={bumpFrameworkTick}
+                domainKey={configBarTarget.name}
+                onEdit={isEditableView ? () => doEdit() : undefined}
+              />
+            ) : undefined;
+
             if (toolsOpen) {
               return <ToolsPanel onClose={() => setToolsOpen(false)} />;
             }
@@ -2054,6 +2090,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   onCancel={cancelChat}
                   onAutocompleteChange={setAutocompleteOpen}
                   topBar={tabBar}
+                  bottomBar={configBar}
                   selectedSkills={
                     // Only relevant for domain chats; map ids → titles
                     // so the indicator can render names, not just ids.
@@ -2108,6 +2145,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                   setSkillIdx(i);
                 }}
                 topBar={tabBar}
+                bottomBar={configBar}
                 setEmbeddedInputActive={setEmbeddedInputActive}
                 showChat={false}
                 councilOn={domain ? councilModeFor(domain.name) : false}

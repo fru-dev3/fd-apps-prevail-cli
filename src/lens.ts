@@ -15,7 +15,10 @@ export type LensId =
   | "outsider"
   | "contrarian"
   | "expansionist"
-  | "executor";
+  | "executor"
+  | "alien"
+  | "mom"
+  | "dad";
 
 // "off" = no lens applied (single response).
 // "all" = fan out across every lens in LENSES (multiplies panelists by 5).
@@ -68,6 +71,27 @@ export const LENSES: readonly Lens[] = [
     blurb: "What to do right now. Cut all theory. The next 24 hours only.",
     instruction:
       "Approach this problem as an operator who cares only about the next 24 hours. Cut all theory and all options analysis. What is the single most important action the user can take TODAY? Be concrete, be specific about the first move, be impatient. If the right answer cannot be acted on in the next 24 hours, the framing is wrong — find the smallest concrete step that can.",
+  },
+  {
+    id: "alien",
+    label: "ALIEN",
+    blurb: "Foreign intelligence. No biases, no priors, no human context.",
+    instruction:
+      "Approach this problem as an alien intelligence encountering humans for the first time. You have NO prior context, NO understanding of human culture, NO biases about money, family, work, health, status, or any other human institution. Treat every assumption baked into the question — including what 'success' or 'good' means here — as a foreign artifact worth interrogating. What would a completely outside intelligence, looking at the raw situation, actually do? Name the assumptions you had to throw out to see it clearly.",
+  },
+  {
+    id: "mom",
+    label: "MOM",
+    blurb: "A loving mother's voice. Long view. Wellbeing first. What's the cost?",
+    instruction:
+      "Approach this problem as the user's mother — someone who loves them deeply, has watched them across decades, and worries about their wellbeing more than their wins. What is the LONG view here? What is the user not seeing about themselves, their relationships, their body, their family, their peace of mind? Be warm, be direct, be honest about what mom thinks they're avoiding. Don't moralize; speak from love. Name what you'd say to them if it were just the two of you talking.",
+  },
+  {
+    id: "dad",
+    label: "DAD",
+    blurb: "A grounded father's voice. Practical, responsibility, hard truths.",
+    instruction:
+      "Approach this problem as the user's father — someone who loves them deeply but speaks in practical, grounded terms. What is the responsible move? What does the user need to OWN here that they're sidestepping? What hard truth do they need to hear from someone who has their back but won't sugarcoat it? Focus on responsibility, follow-through, and the real-world cost of inaction. Be steady, be plain-spoken, and tell them what dad would actually say at the kitchen table.",
   },
 ];
 

@@ -11,7 +11,6 @@ import {
 } from "./vault.ts";
 import { renderMarkdownLines } from "./markdown-lite.tsx";
 import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
-import { WorkspaceConfigBar } from "./workspace-config-bar.tsx";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -51,6 +50,7 @@ interface Props {
   apps: AppSkill[];
   onPickSkill: (i: number) => void;
   topBar?: React.ReactNode;
+  bottomBar?: React.ReactNode;
   setEmbeddedInputActive?: (v: boolean) => void;
   // When the user clicks the "chat" tab in the global tab strip we set
   // this to true, which makes DomainDetail render DomainChat instead of
@@ -70,7 +70,7 @@ interface Props {
   onOpenChat?: () => void;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill, onOpenChat }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, bottomBar, setEmbeddedInputActive, showChat, councilOn, onToggleCouncil, frameworkTick, onFrameworkChange, selectedSkillIds, onToggleSkill, onOpenChat }: Props) {
   if (!domain) {
     return (
       <box
@@ -103,16 +103,11 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
       bottomTitle={` updated ${updated}  ·  skills ${domain.skills.length}  ·  open ${domain.openLoopCount} `}
       bottomTitleAlignment="left"
     >
+      {/* topBar is now the full bundle: TabStrip + ConfigBar (Council +
+          Framework + Lens + vault + edit). DomainDetail no longer renders
+          its own WorkspaceConfigBar — app.tsx builds the bundle once so
+          chat mode and workspace mode share the exact same row. */}
       {topBar}
-      <WorkspaceConfigBar
-        vaultPath={domain.path}
-        councilOn={councilOn ?? false}
-        onToggleCouncil={onToggleCouncil ?? (() => {})}
-        frameworkTick={frameworkTick}
-        onFrameworkChange={onFrameworkChange}
-        onOpenChat={onOpenChat}
-        domainKey={domain.name}
-      />
       {/* Each tab renders DIFFERENT content (per user — they were
           clicking through tabs and seeing the same thing every time):
             chat tab       → DomainChat (embedded, full pane)
@@ -144,6 +139,7 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
           </scrollbox>
         )}
       </box>
+      {bottomBar}
     </box>
   );
 }

@@ -143,13 +143,14 @@ interface Props {
   onCancel?: (key: string) => boolean;
   onAutocompleteChange?: (open: boolean) => void;
   topBar?: React.ReactNode;
+  bottomBar?: React.ReactNode;
   // Skills the user pre-selected in the Skills tab. Rendered as a
   // single-line indicator above the message scroll so the user can
   // confirm what's loaded before sending. Empty array = no indicator.
   selectedSkills?: { id: string; title: string }[];
 }
 
-export function ChatPane({ session, availableClis, tick, councilMode, onToggleCouncilMode, onSend, onCommand, onExit, onCancel, onAutocompleteChange, topBar, selectedSkills }: Props) {
+export function ChatPane({ session, availableClis, tick, councilMode, onToggleCouncilMode, onSend, onCommand, onExit, onCancel, onAutocompleteChange, topBar, bottomBar, selectedSkills }: Props) {
   const ref = useRef<any>(null);
   // Hoisted from InputBox so the popover renders ABOVE InputBox at the
   // chat-pane level, keeping the input row at a stable bottom position.
@@ -321,6 +322,7 @@ export function ChatPane({ session, availableClis, tick, councilMode, onToggleCo
         </box>
       )}
       <StatusLine session={session} tick={tick} />
+      {bottomBar}
       {popover && (
         <box flexDirection="column" paddingLeft={2} paddingRight={2}>
           <SlashAutocomplete
@@ -1560,50 +1562,9 @@ function CouncilModelChip({
 }
 
 function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: number }) {
-  // When pending, the per-message ThinkingBubble at the end of the transcript
-  // already shows the spinner + "X is thinking…" word. Rendering the same
-  // here was a duplicate, so the status line stays silent during work and
-  // only carries the idle ready-prompt.
-  //
-  // Both Framework and Lens chips live on this status line in chat mode
-  // because the WorkspaceConfigBar (which also carries them) is NOT
-  // rendered in chat — chat mode replaces the workspace view entirely.
-  // Without these chips, the user had no way to see or change the active
-  // framework/lens for the domain while chatting. Click either chip to
-  // cycle; per-domain override semantics match the workspace bar.
-  const domainKey = session.hostDomain.name;
-  const [, bump] = useState(0);
-  const forceRefresh = () => bump((n) => n + 1);
-
-  const fwId = readResponseFramework(domainKey);
-  const fw = getFramework(fwId);
-  const cycleFw = () => {
-    const order = [null, ...FRAMEWORKS.map((f) => f.id)] as (FrameworkId | null)[];
-    const idx = order.indexOf(fwId);
-    const next = order[(idx + 1) % order.length] ?? null;
-    setResponseFramework(next, domainKey);
-    forceRefresh();
-  };
-
-  const lensSel: LensSelection = readResponseLens(domainKey);
-  const lensLabel =
-    lensSel === null
-      ? "off"
-      : lensSel === "all"
-        ? "all (×5)"
-        : getLens(lensSel)?.label ?? "off";
-  const cycleLens = () => {
-    const order: LensSelection[] = [
-      null,
-      ...LENSES.map((l) => l.id as LensSelection),
-      "all",
-    ];
-    const idx = order.findIndex((s) => s === lensSel);
-    const next = order[(idx + 1) % order.length] ?? null;
-    setResponseLens(next, domainKey);
-    forceRefresh();
-  };
-
+  // Framework / Lens / Council chips moved to the WorkspaceConfigBar that
+  // now renders above the chat too — one row, one source of truth. The
+  // status line below the transcript is just ready-state + usage badge.
   return (
     <box
       flexDirection="row"
@@ -1612,18 +1573,6 @@ function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: numb
       paddingRight={2}
       backgroundColor={theme.bg}
     >
-      <box flexDirection="row" onMouseDown={cycleFw} paddingRight={1}>
-        <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>
-          {`◆ ${fw ? fw.label : "Framework: off"}`}
-        </text>
-      </box>
-      <text fg={theme.fgFaint}>{"·  "}</text>
-      <box flexDirection="row" onMouseDown={cycleLens} paddingRight={1}>
-        <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>
-          {`◇ Lens: ${lensLabel}`}
-        </text>
-      </box>
-      <text fg={theme.fgFaint}>{"·  "}</text>
       {session.pending ? (
         <text fg={theme.fgFaint}> </text>
       ) : (

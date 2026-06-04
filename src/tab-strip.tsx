@@ -93,37 +93,11 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
           <text fg={theme.goldDim}>✎ edit</text>
         </box>
       )}
-      {cli && (
-        // Council toggle + ◇ configure are now always visible on the
-        // tab strip — same consistent controls regardless of mode (in
-        // chat or on state/skills/etc).
-        <>
-          <box
-            flexDirection="row"
-            onMouseDown={cli.onToggleCouncilMode}
-            paddingLeft={1}
-            paddingRight={1}
-            backgroundColor={cli.councilMode ? theme.selBg : theme.bg}
-          >
-            <text
-              fg={cli.councilMode ? theme.goldBright : theme.gold}
-              attributes={cli.councilMode ? 1 : 0}
-            >
-              {cli.councilMode ? "● Council ON" : "◆ Council"}
-            </text>
-          </box>
-          <text fg={theme.fgFaint}> </text>
-          <box
-            flexDirection="row"
-            onMouseDown={cli.onOpenCouncilConfig}
-            paddingLeft={1}
-            paddingRight={1}
-            backgroundColor={theme.bgPanel}
-          >
-            <text fg={theme.gold}>◇ configure</text>
-          </box>
-        </>
-      )}
+      {/* Council toggle + ◇ configure used to live here, but they
+          duplicated the same controls in the WorkspaceConfigBar below.
+          Council now lives only on the ConfigBar (per-surface); ◇
+          configure stays in the global defaults block in the banner.
+          The TabStrip is now nav + cli chips only — one job per row. */}
     </box>
   );
 }

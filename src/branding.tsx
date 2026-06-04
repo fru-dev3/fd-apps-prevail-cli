@@ -59,7 +59,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={11}
+      height={9}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -303,14 +303,14 @@ function StatusColumn({
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }) {
   const fw = readResponseFramework();
-  const fwLabel = fw ? FRAMEWORKS.find((f) => f.id === fw)?.label ?? fw : "off";
+  const fwLabel = fw ? FRAMEWORKS.find((f) => f.id === fw)?.label ?? fw : "none";
   const lensSel: LensSelection = readResponseLens();
   const lensLabel =
     lensSel === null
-      ? "off"
+      ? "none"
       : lensSel === "all"
         ? "all (×5)"
-        : getLens(lensSel)?.label ?? "off";
+        : getLens(lensSel)?.label ?? "none";
   const statusGlyph = pendingChats > 0 ? "⠋" : activeChats > 0 ? "●" : "○";
   const statusColor =
     pendingChats > 0 ? theme.gold : activeChats > 0 ? theme.ok : theme.fgDim;
@@ -343,26 +343,12 @@ function StatusColumn({
       <text fg={theme.fgDim}>
         {`${timeLabel}  ·  prevail v${VERSION}  ·  opentui`}
       </text>
-      <text> </text>
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
-      {/* "cli" row was redundant with the panel-health row below — same
-          list of names, just without the ✓/⚠/⠋ status. Dropped; the
-          health row now does both jobs (labeled "cli" so it matches
-          the user's mental model). */}
       <StatRow label="chat" value={statusText} glyph={statusGlyph} valueColor={statusColor} />
-      {/* Global toggles + panelist health. ⚖ toggles council default,
-          ⚙ opens the configure panel (pick which engines + models go
-          into the panel, choose a chair, etc). The little health
-          row below shows ✓/⚠/⠋ per panelist so the user knows BEFORE
-          firing /council which engines are ready. */}
-      <text> </text>
       {/* Two rows for the defaults block — the status column is too
           narrow to fit Council + configure + Framework + Lens + tools
-          on a single line. opentui clipped every chip past Council on
-          the original one-line layout (user reported "i don't see any
-          text there in those options"). Row 1 carries the surface-level
-          controls (council toggle, configure, tools); row 2 carries the
-          two response-shaping defaults (framework, lens). */}
+          on a single line. Row 1: Council + configure + tools (surface
+          controls). Row 2: Framework + Lens (response shaping). */}
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"defaults"}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
