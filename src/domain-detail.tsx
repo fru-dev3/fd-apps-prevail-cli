@@ -20,9 +20,16 @@ interface Props {
   onPickSkill: (i: number) => void;
   topBar?: React.ReactNode;
   setEmbeddedInputActive?: (v: boolean) => void;
+  // When the user clicks the "chat" tab in the global tab strip we set
+  // this to true, which makes DomainDetail render DomainChat instead of
+  // the view-specific markdown. Clicking any other tab (state/quickstart/
+  // prompts/skills) sets it back to false. This is what makes each tab
+  // actually DO something — previously DomainDetail always showed chat
+  // regardless of tab.
+  showChat?: boolean;
 }
 
-export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive }: Props) {
+export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar, setEmbeddedInputActive, showChat }: Props) {
   if (!domain) {
     return (
       <box
@@ -54,12 +61,18 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
       bottomTitleAlignment="left"
     >
       {topBar}
-      {/* Skills tab keeps its dedicated list. State / loops / quickstart /
-          prompts all get the split layout: content on top, embedded chat
-          below — so users land on the domain ready to ask questions
-          without navigating anywhere else. */}
-      {view === "skills" ? (
-        <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+      {/* Each tab renders DIFFERENT content (per user — they were
+          clicking through tabs and seeing the same thing every time):
+            chat tab       → DomainChat (embedded, full pane)
+            skills tab     → SkillsList
+            state tab      → state.md content
+            quickstart tab → QUICKSTART.md
+            prompts tab    → PROMPTS.md
+          Clicking through the strip now actually toggles what's shown. */}
+      <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+        {showChat ? (
+          <DomainChat domain={domain} setEmbeddedInputActive={setEmbeddedInputActive} />
+        ) : view === "skills" ? (
           <SkillsList
             skills={domain.skills}
             selectedIdx={skillIdx}
@@ -67,18 +80,12 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
             apps={apps}
             domainName={domain.name}
           />
-        </box>
-      ) : (
-        // Chat fills the entire panel. Input sits at the very bottom of
-        // the chat layout with nothing underneath — per user: "the text
-        // box there should not be anything underneath it." If you need
-        // to see state.md / loops / quickstart / prompts, ask the chat
-        // ("walk me through state.md") — that's the point of having a
-        // panelist read the vault for you.
-        <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-          <DomainChat domain={domain} setEmbeddedInputActive={setEmbeddedInputActive} />
-        </box>
-      )}
+        ) : (
+          <scrollbox flexGrow={1} scrollY>
+            {renderMarkdownLines(readDomainView(domain, view))}
+          </scrollbox>
+        )}
+      </box>
     </box>
   );
 }

@@ -143,6 +143,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   const setEmbeddedInputActive = (v: boolean) => {
     embeddedInputActiveRef.current = v;
   };
+  // When user clicks the "chat" tab in the global TabStrip, this flips to
+  // true so DomainDetail shows the embedded DomainChat instead of the
+  // view-specific markdown. Resets to false on any view-tab click and on
+  // sidebar nav. Without this, each tab clicked just changed viewIdx but
+  // the pane never actually rendered different content.
+  const [chatTabActive, setChatTabActive] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
@@ -1710,9 +1716,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             setFocus("domains");
             setMode("idle");
             setActiveKey(null);
-            // Release embedded-input focus on navigation so the global
-            // keyboard handler comes back to life for the new selection.
             embeddedInputActiveRef.current = false;
+            setChatTabActive(false);
           }}
           onPickApp={(i) => {
             setAppIdx(i);
@@ -1720,6 +1725,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             setMode("idle");
             setActiveKey(null);
             embeddedInputActiveRef.current = false;
+            setChatTabActive(false);
           }}
           onNewDomain={() => {
             setFocus("domains");
@@ -1736,15 +1742,21 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               ((focus === "domains" && domain) || (focus === "apps" && app)) && !inEdit ? (
                 <TabStrip
                   activeView={view}
-                  inChat={Boolean(inChat)}
+                  inChat={chatTabActive || Boolean(inChat)}
                   onPickView={(i) => {
                     setFocus(focus);
                     setViewIdx(i);
                     if (mode === "chat") setMode("idle");
+                    // Clicking any non-chat tab returns to view-specific
+                    // content (state.md, skills list, etc.).
+                    setChatTabActive(false);
                   }}
                   onPickChat={() => {
-                    if (focus === "apps" && app) openChatForApp(app);
-                    else if (domain) openChatForDomain(domain);
+                    // Show the embedded DomainChat / ConnectorChat
+                    // inline instead of switching to the full-pane
+                    // global ChatPane. Keeps everything in the workspace
+                    // — no Escape required to come back.
+                    setChatTabActive(true);
                   }}
                   onEdit={() => {
                     if (mode === "chat") setMode("idle");
@@ -1846,6 +1858,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 }}
                 topBar={tabBar}
                 setEmbeddedInputActive={setEmbeddedInputActive}
+                showChat={chatTabActive}
               />
             );
           })()}
