@@ -77,6 +77,10 @@ export async function classifyAsCouncilWorthy(args: ClassifyArgs): Promise<boole
       isFirst: true,
       bare: true,
       signal: args.signal,
+      // The classifier should reply with exactly YES or NO. 200 chars
+      // catches any model that decides to elaborate before we cut it
+      // off — the parser only checks the first token anyway.
+      maxOutputChars: 200,
     });
   } catch {
     return false;

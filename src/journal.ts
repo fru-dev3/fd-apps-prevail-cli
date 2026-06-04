@@ -175,6 +175,9 @@ export async function distillTurnToJournal(args: DistillArgs): Promise<void> {
       isFirst: true,
       bare: true,
       signal: args.signal,
+      // Distillation should produce at most ~5 DECISION/FACTS lines.
+      // 8000 chars is generous headroom.
+      maxOutputChars: 8000,
     });
   } catch {
     return;

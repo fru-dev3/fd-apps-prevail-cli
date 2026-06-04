@@ -556,6 +556,14 @@ export interface ChatTurn {
   // Each call receives a string delta (NOT the cumulative buffer); the
   // caller does its own accumulation if needed.
   onChunk?: (delta: string) => void;
+  // Truncate the cumulative reply at this many characters. When the
+  // stream crosses the cap, the child process is SIGKILL'd (same
+  // pgroup trick used by abort) and the reply returned to the caller
+  // is sliced to maxOutputChars + " (truncated at cap)". Useful for
+  // lightweight callers — distillation, classifiers, serendipity —
+  // that have no business returning 50KB. Undefined = no cap (today's
+  // behavior).
+  maxOutputChars?: number;
 }
 
 const WEB_DENY_NOTE = [
@@ -575,7 +583,7 @@ function augmentManualWithWebGate(manual: string | null): string | null {
   return `${manual}\n\n${WEB_DENY_NOTE}`;
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, signal, onChunk }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, signal, onChunk, maxOutputChars }: ChatTurn): Promise<string> {
   const m = model.trim();
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
@@ -609,7 +617,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     // --append-system-prompt is only meaningful on the first turn; --continue inherits it
     if (manualForClaude && isFirst) args.push("--append-system-prompt", manualForClaude);
     args.push(...head);
-    return runCapture(cli.bin, args, cwd, signal, onChunk);
+    return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }
   if (cli.kind === "codex") {
     // --skip-git-repo-check: vault dirs aren't git repos; without this codex
@@ -626,7 +634,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
       ? `(This is a general advisory question — not a software/coding task. Engage with it directly and give your real opinion.)\n\n${framedPrompt}`
       : framedPrompt;
     const args = m ? [...base, "-m", m, codexPrompt] : [...base, codexPrompt];
-    const raw = await runCapture(cli.bin, args, cwd, signal, onChunk);
+    const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractCodexReply(raw);
   }
   if (cli.kind === "gemini") {
@@ -634,7 +642,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     const args = m
       ? [...base, "-m", m, "-p", framedPrompt]
       : [...base, "-p", framedPrompt];
-    const raw = await runCapture(cli.bin, args, cwd, signal, onChunk);
+    const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractGeminiReply(raw);
   }
   if (cli.kind === "ollama") {
@@ -644,6 +652,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
       prompt: framedPrompt,
       signal,
       onChunk,
+      maxOutputChars,
     });
   }
   return `(no handler for ${cli.kind})`;
@@ -655,6 +664,10 @@ interface OllamaChatArgs {
   prompt: string;
   signal?: AbortSignal;
   onChunk?: (delta: string) => void;
+  // Same semantics as the runCapture cap — abort the in-flight fetch
+  // once the cumulative reply crosses the threshold and return the
+  // sliced reply with a " ... (truncated at N chars)" suffix.
+  maxOutputChars?: number;
 }
 
 // One-shot chat completion against an OpenAI-compatible endpoint (Ollama,
@@ -665,7 +678,7 @@ interface OllamaChatArgs {
 // instead of thrown, so a single panelist failure doesn't blow up the
 // whole council fanout.
 export async function runOllamaChat(args: OllamaChatArgs): Promise<string> {
-  const { baseUrl, model, prompt, signal, onChunk } = args;
+  const { baseUrl, model, prompt, signal, onChunk, maxOutputChars } = args;
   const url = `${baseUrl.replace(/\/+$/, "")}/v1/chat/completions`;
   const stream = !!onChunk;
   const body = {
@@ -692,6 +705,9 @@ export async function runOllamaChat(args: OllamaChatArgs): Promise<string> {
       if (data.error?.message) return `(ollama: ${data.error.message})`;
       const content = data.choices?.[0]?.message?.content;
       if (!content) return "(ollama: empty reply)";
+      if (typeof maxOutputChars === "number" && content.length > maxOutputChars) {
+        return content.slice(0, maxOutputChars) + " ... (truncated at " + maxOutputChars + " chars)";
+      }
       return content.trim();
     }
     // SSE stream — each event is `data: { ... }\n\n`, terminated by
@@ -730,6 +746,14 @@ export async function runOllamaChat(args: OllamaChatArgs): Promise<string> {
             /* malformed event — skip */
           }
         }
+      }
+      // Output cap. Abort the SSE read once cumulative reply crosses
+      // the threshold — same intent as the runCapture pgroup-kill, but
+      // for the fetch path. cancel() rejects the reader; we exit cleanly
+      // via the truncated-return below.
+      if (typeof maxOutputChars === "number" && full.length > maxOutputChars) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        return full.slice(0, maxOutputChars) + " ... (truncated at " + maxOutputChars + " chars)";
       }
     }
     return full.trim() || "(ollama: empty reply)";
@@ -922,11 +946,13 @@ function runCapture(
   cwd: string,
   signal?: AbortSignal,
   onChunk?: (delta: string) => void,
+  maxOutputChars?: number,
 ): Promise<string> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let child;
+    let truncated = false;
     if (signal?.aborted) {
       resolve("(cancelled)");
       return;
@@ -981,6 +1007,26 @@ function runCapture(
       // the same text the user would have seen in a terminal, which is
       // good enough for the "feels live" UX.
       if (onChunk) onChunk(chunk);
+      // Output cap. Once the cumulative stdout crosses maxOutputChars,
+      // SIGKILL the whole pgroup (same trick as the abort path — gemini's
+      // wrapper ignores SIGTERM). Distinct from abort: not a user cancel,
+      // just a "this caller has no business returning 50KB" guard.
+      if (
+        !truncated &&
+        typeof maxOutputChars === "number" &&
+        stdout.length > maxOutputChars
+      ) {
+        truncated = true;
+        try {
+          if (typeof child!.pid === "number") {
+            process.kill(-child!.pid, "SIGKILL");
+          } else {
+            child!.kill("SIGKILL");
+          }
+        } catch {
+          try { child!.kill("SIGKILL"); } catch {}
+        }
+      }
     });
     child.stderr.on("data", (b) => {
       stderr += b.toString();
@@ -989,6 +1035,10 @@ function runCapture(
       signal?.removeEventListener("abort", onAbort);
       if (cancelled) {
         resolve("(cancelled)");
+        return;
+      }
+      if (truncated && typeof maxOutputChars === "number") {
+        resolve(stdout.slice(0, maxOutputChars) + " ... (truncated at " + maxOutputChars + " chars)");
         return;
       }
       const out = stdout.trim();
@@ -1004,6 +1054,8 @@ function runCapture(
       signal?.removeEventListener("abort", onAbort);
       if (cancelled) {
         resolve("(cancelled)");
+      } else if (truncated && typeof maxOutputChars === "number") {
+        resolve(stdout.slice(0, maxOutputChars) + " ... (truncated at " + maxOutputChars + " chars)");
       } else {
         resolve(`(error running ${bin}: ${err.message})`);
       }

@@ -7,6 +7,39 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.9.1] — 2026-06-04 · Operational hygiene + vault tooling
+
+Phase 2 of the production-readiness audit. Five tasks shipped in one tag — all small, isolated, additive.
+
+### Added — `prevail vault prune --older-than <duration>`
+Walks `<vault>/<domain>/_log/*.md` and `<vault>/<domain>/_journal/{decisions,facts}.md` older than the threshold. Dry-run by default; `--force` to actually delete. Reports "would free X / N files" before doing anything. Will NEVER touch `state.md`, `QUICKSTART.md`, `PROMPTS.md`, `open-loops.md`, or `skills/`. Duration syntax: `30d`, `12h`, `7d12h`, `1y`.
+
+### Added — `prevail vault backup` and `prevail vault restore`
+Tarball the vault + safe parts of `~/.prevail/` (config.json, sessions DB). Explicitly excludes `telegram.json`, `mcp.json`, `connectors/*/auth/*`, and anything matching `*.token`. Restore prompts for the exact vault basename to confirm before overwriting.
+
+### Added — `prevail vault verify` (placeholder)
+No-op stub for now. Will be the tamper-evident-log verifier when #41 lands.
+
+### Added — `~/.prevail/debug.log` with rotation
+New module `src/debug-log.ts` exposes `logDebug(category, message, meta)`. Synchronous JSON-Lines append. Rotates at 5MB (keeps 3 archives). All files chmod 0600. `prevail doctor --debug` prints the last 50 entries.
+
+### Added — Output caps on lightweight LLM calls
+`runChatTurn` gained an optional `maxOutputChars` field. When the stream crosses the cap, the child process gets SIGKILL'd via process group and the reply returns sliced with a `... (truncated at N chars)` suffix. Wired into:
+- Journal distillation — 8000 chars
+- Auto-council classifier — 200 chars (it should only say YES or NO)
+- Serendipity post-turn — 4000 chars
+
+### Hardening — secrets at rest
+Audited every `~/.prevail/` writer. All sensitive files (config.json, telegram.json, OAuth refresh tokens) already chmod 0600. No new code needed; verified and documented.
+
+### Docs
+README Scope section now includes the vault-sync caveat: sync `<vault>/` only; **never** sync `~/.prevail/`.
+
+### Tests
++27 new tests (14 vault-ops + 6 debug-log + 7 cli-bridge truncation). Total: 131 pass / 0 fail / 3 skip.
+
+---
+
 ## [0.9.0] — 2026-06-04 · OSS scaffolding + threat model
 
 Phase 1 of the production-readiness audit. Docs and OSS scaffolding only — no code changes, no behavioral changes. Sets up the foundation the subsequent security hardening work will lean on.

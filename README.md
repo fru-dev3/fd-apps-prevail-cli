@@ -198,6 +198,8 @@ prevAIl is a **single-user terminal cockpit** for personal decisions. You run it
 
 It is **not** a SaaS, **not** multi-tenant, **not** an enterprise audit-log system, **not** a replacement for a knowledge base. If you need any of those, prevAIl is the wrong tool.
 
+> **Vault sync caveat.** If you sync your vault folder via iCloud, Dropbox, Tailscale Drive, git, or any other mechanism, sync should cover `<vault>/` only and **MUST EXCLUDE `~/.prevail/`**. The latter contains secrets (Telegram bot tokens, OAuth refresh tokens) and machine-local state.
+
 The threat model is documented in [SECURITY.md](./SECURITY.md) and [docs/threat-model.md](./docs/threat-model.md). Read those before exposing the MCP server or the Telegram bridge to anything other than your own laptop.
 
 ## License

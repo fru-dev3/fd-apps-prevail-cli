@@ -58,6 +58,9 @@ export async function runSerendipityPass(args: SerendipityArgs): Promise<string 
       isFirst: true,
       bare: true,
       signal: args.signal,
+      // Serendipity should be one paragraph max. 4000 chars catches
+      // models that over-explain without truncating useful short replies.
+      maxOutputChars: 4000,
     });
     const trimmed = reply.trim();
     if (!trimmed) return null;

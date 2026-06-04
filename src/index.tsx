@@ -15,6 +15,7 @@ interface Args {
   help: boolean;
   version: boolean;
   doctor: boolean;
+  debug: boolean;
   schedule: boolean;
   scheduleArgs: string[];
   daemon: boolean;
@@ -28,6 +29,8 @@ interface Args {
   mcp: boolean;
   bench: boolean;
   benchArgs: string[];
+  vault: boolean;
+  vaultArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -37,6 +40,7 @@ function parseArgs(argv: string[]): Args {
   let help = false;
   let version = false;
   let doctor = false;
+  let debug = false;
   let schedule = false;
   let scheduleArgs: string[] = [];
   let daemon = false;
@@ -50,6 +54,8 @@ function parseArgs(argv: string[]): Args {
   let mcp = false;
   let bench = false;
   let benchArgs: string[] = [];
+  let vault = false;
+  let vaultArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -57,6 +63,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === "init" || a === "--init") forceInit = true;
     else if (a === "demo" || a === "--demo") demo = true;
     else if (a === "doctor") doctor = true;
+    else if (a === "--debug") debug = true;
     else if (a === "schedule") {
       schedule = true;
       scheduleArgs = argv.slice(i + 1);
@@ -84,6 +91,10 @@ function parseArgs(argv: string[]): Args {
       bench = true;
       benchArgs = argv.slice(i + 1);
       break;
+    } else if (a === "vault") {
+      vault = true;
+      vaultArgs = argv.slice(i + 1);
+      break;
     } else if (a === "--vault" || a === "-d") {
       const next = argv[i + 1];
       if (next) {
@@ -101,6 +112,7 @@ function parseArgs(argv: string[]): Args {
     help,
     version,
     doctor,
+    debug,
     schedule,
     scheduleArgs,
     daemon,
@@ -114,6 +126,8 @@ function parseArgs(argv: string[]): Args {
     mcp,
     bench,
     benchArgs,
+    vault,
+    vaultArgs,
   };
 }
 
@@ -125,12 +139,14 @@ USAGE
   prevail init                run the first-run wizard
   prevail demo                ignore config, boot the synthetic vault
   prevail doctor              check installed AI clis + vault shape
+  prevail doctor --debug      also print the last 50 entries from ~/.prevail/debug.log
   prevail schedule [...]      manage embedded cron-style schedules
   prevail telegram [...]      configure the Telegram bot bridge
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
   prevail bench [...]         run the public council benchmark suite
+  prevail vault [...]         prune old logs, snapshot/restore the vault
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
   prevail --vault <path>      override vault path for one session
 
@@ -1004,6 +1020,146 @@ async function connectorsCommand(args: string[]): Promise<void> {
   process.exit(1);
 }
 
+async function vaultCommand(args: string[], vaultOverride: string | null): Promise<void> {
+  const {
+    pruneLog,
+    parseDuration,
+    backupVault,
+    restoreVault,
+    defaultBackupPath,
+    formatBytes,
+    VERIFY_PLACEHOLDER_MESSAGE,
+  } = await import("./vault-ops.ts");
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  const sub = args[0];
+
+  if (!sub) {
+    printVaultHelp();
+    process.exit(1);
+  }
+
+  if (sub === "prune") {
+    let older = "30d";
+    let force = false;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      const v = args[i + 1];
+      if ((a === "--older-than" || a === "--older") && v) {
+        older = v;
+        i++;
+      } else if (a === "--force" || a === "-f") {
+        force = true;
+      }
+    }
+    let olderMs: number;
+    try {
+      olderMs = parseDuration(older);
+    } catch (err) {
+      console.error(`prune: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    if (!existsSync(vault)) {
+      console.error(`vault path not found: ${vault}`);
+      process.exit(1);
+    }
+    // Always do a dry pass first to print what we'd free, even in --force
+    // mode (so the user sees what got deleted, not just a silent OK).
+    const dryResult = pruneLog({
+      vaultPath: vault,
+      olderThanMs: olderMs,
+      dryRun: true,
+    });
+    if (dryResult.files.length === 0) {
+      console.log(`nothing to prune in ${vault} older than ${older}.`);
+      return;
+    }
+    const verb = force ? "freed" : "would free";
+    console.log(
+      `${verb} ${formatBytes(dryResult.totalBytes)} / ${dryResult.files.length} file${dryResult.files.length === 1 ? "" : "s"}`,
+    );
+    for (const f of dryResult.files) console.log(`  ${f.startsWith(vault) ? f.slice(vault.length + 1) : f}`);
+    if (!force) {
+      console.log("");
+      console.log("re-run with --force to actually delete.");
+      return;
+    }
+    // Actually delete.
+    pruneLog({ vaultPath: vault, olderThanMs: olderMs, dryRun: false });
+    console.log("");
+    console.log(`✓ deleted ${dryResult.files.length} file${dryResult.files.length === 1 ? "" : "s"}.`);
+    return;
+  }
+
+  if (sub === "backup") {
+    let output: string | null = null;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      const v = args[i + 1];
+      if ((a === "--output" || a === "-o") && v) {
+        output = resolve(process.cwd(), v);
+        i++;
+      }
+    }
+    if (!output) output = defaultBackupPath();
+    if (!existsSync(vault)) {
+      console.error(`vault path not found: ${vault}`);
+      process.exit(1);
+    }
+    console.log(`backing up ${vault} → ${output}…`);
+    try {
+      const r = await backupVault({ vaultPath: vault, outputPath: output });
+      console.log(`✓ wrote ${r.archivePath} (${formatBytes(r.bytes)})`);
+    } catch (err) {
+      console.error(`backup failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (sub === "restore") {
+    const archive = args[1];
+    if (!archive) {
+      console.error("usage: prevail vault restore <archive>");
+      process.exit(1);
+    }
+    if (!existsSync(vault)) {
+      // The target may not exist yet — restore will create it. But warn
+      // the user so they don't accidentally extract into the wrong place.
+      console.log(`note: target vault ${vault} does not exist; will be created.`);
+    }
+    try {
+      await restoreVault({
+        archivePath: resolve(process.cwd(), archive),
+        targetVaultPath: vault,
+      });
+      console.log(`✓ restored into ${vault}`);
+    } catch (err) {
+      console.error(`restore failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (sub === "verify") {
+    console.log(VERIFY_PLACEHOLDER_MESSAGE);
+    return;
+  }
+
+  console.error(`unknown vault subcommand: ${sub}\n`);
+  printVaultHelp();
+  process.exit(1);
+}
+
+function printVaultHelp(): void {
+  console.error("usage:");
+  console.error("  prevail vault prune [--older-than <duration>] [--force]");
+  console.error("                                          dry-run by default; --force to delete");
+  console.error("  prevail vault backup [--output <path>]  default: ~/prevail-backup-<date>.tar.gz");
+  console.error("  prevail vault restore <archive>         interactive confirm prompt");
+  console.error("  prevail vault verify                    placeholder (#41)");
+}
+
 async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const wantTelegram = args.includes("--telegram") || args.includes("-t");
   if (!wantTelegram) {
@@ -1032,7 +1188,7 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
   });
 }
 
-async function doctor() {
+async function doctor(opts: { debug: boolean } = { debug: false }) {
   const { detectClis } = await import("./cli-bridge.ts");
   const cfg = readConfig();
   console.log("prevail doctor\n");
@@ -1054,6 +1210,18 @@ async function doctor() {
   } else {
     for (const c of clis) console.log(`cli          ${c.label.padEnd(14)} ${c.bin}`);
   }
+  if (opts.debug) {
+    const { readDebugTail, debugLogPath } = await import("./debug-log.ts");
+    console.log("");
+    console.log(`debug log    ${debugLogPath()}`);
+    const tail = readDebugTail(50);
+    if (tail.length === 0) {
+      console.log("             no debug log yet — nothing has logged");
+    } else {
+      console.log(`             last ${tail.length} entries:`);
+      for (const line of tail) console.log(line);
+    }
+  }
 }
 
 async function main() {
@@ -1068,7 +1236,7 @@ async function main() {
     return;
   }
   if (args.doctor) {
-    await doctor();
+    await doctor({ debug: args.debug });
     return;
   }
   if (args.schedule) {
@@ -1096,6 +1264,10 @@ async function main() {
   }
   if (args.bench) {
     await benchCommand(args.benchArgs, args.vaultPath);
+    return;
+  }
+  if (args.vault) {
+    await vaultCommand(args.vaultArgs, args.vaultPath);
     return;
   }
   if (args.daemon) {

@@ -172,6 +172,64 @@ describe("runOllamaChat", () => {
     });
     expect(r).toBe("(cancelled)");
   });
+
+  // maxOutputChars enforcement. Spin up a one-shot fake OpenAI-compatible
+  // server that returns a content blob much larger than the cap; verify
+  // the runner slices it down and tags the reply with the truncation
+  // marker instead of returning the full 50KB.
+  test("maxOutputChars truncates oversize replies (non-stream path)", async () => {
+    const big = "x".repeat(5000);
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: big } }],
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+    try {
+      const r = await runOllamaChat({
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        model: "llama3.1",
+        prompt: "hi",
+        maxOutputChars: 100,
+      });
+      expect(r.startsWith("x".repeat(100))).toBe(true);
+      expect(r).toContain("(truncated at 100 chars)");
+      expect(r.length).toBeLessThan(big.length);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("maxOutputChars leaves under-cap replies untouched", async () => {
+    const small = "hello world";
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: small } }],
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+    try {
+      const r = await runOllamaChat({
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        model: "llama3.1",
+        prompt: "hi",
+        maxOutputChars: 1000,
+      });
+      expect(r).toBe(small);
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 describe("detectClis", () => {
