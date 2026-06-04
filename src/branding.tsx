@@ -16,8 +16,12 @@ interface Props {
   // override these when present.
   globalCouncilOn?: boolean;
   onToggleGlobalCouncil?: () => void;
+  onOpenCouncilConfig?: () => void;
   frameworkTick?: number;
   onCycleFramework?: () => void;
+  // Live health of each detected CLI — feeds the panelist status row
+  // so the user can see which engines are ready BEFORE running council.
+  cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }
 
 export function Branding({
@@ -30,7 +34,9 @@ export function Branding({
   pendingChats,
   globalCouncilOn,
   onToggleGlobalCouncil,
+  onOpenCouncilConfig,
   onCycleFramework,
+  cliHealthSummary,
 }: Props) {
   const now = new Date();
   const dateLabel = now
@@ -50,7 +56,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={13}
+      height={14}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -75,7 +81,9 @@ export function Branding({
           pendingChats={pendingChats}
           globalCouncilOn={globalCouncilOn}
           onToggleGlobalCouncil={onToggleGlobalCouncil}
+          onOpenCouncilConfig={onOpenCouncilConfig}
           onCycleFramework={onCycleFramework}
+          cliHealthSummary={cliHealthSummary}
           domainCount={domainCount}
           appCount={appCount}
           totalLoops={totalLoops}
@@ -270,7 +278,9 @@ function StatusColumn({
   totalLoops,
   globalCouncilOn,
   onToggleGlobalCouncil,
+  onOpenCouncilConfig,
   onCycleFramework,
+  cliHealthSummary,
 }: {
   dateLabel: string;
   yearLabel: number;
@@ -284,7 +294,9 @@ function StatusColumn({
   totalLoops: number;
   globalCouncilOn?: boolean;
   onToggleGlobalCouncil?: () => void;
+  onOpenCouncilConfig?: () => void;
   onCycleFramework?: () => void;
+  cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }) {
   const fw = readResponseFramework();
   const fwLabel = fw ? FRAMEWORKS.find((f) => f.id === fw)?.label ?? fw : "off";
@@ -324,39 +336,46 @@ function StatusColumn({
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
       <StatRow label="cli" value={cliText} valueColor={theme.fg} />
       <StatRow label="chat" value={statusText} glyph={statusGlyph} valueColor={statusColor} />
-      {/* Global toggles — top-right defaults. Per-chat overrides win when
-          set; if a chat has no per-chat setting, these defaults are
-          used. Both are clickable. */}
+      {/* Global toggles + panelist health. ⚖ toggles council default,
+          ⚙ opens the configure panel (pick which engines + models go
+          into the panel, choose a chair, etc). The little health
+          row below shows ✓/⚠/⠋ per panelist so the user knows BEFORE
+          firing /council which engines are ready. */}
       <box flexDirection="row" height={1} paddingTop={1}>
         <text fg={theme.fgFaint}>{"defaults ".padEnd(8)}</text>
-        <box
-          flexDirection="row"
-          paddingLeft={1}
-          paddingRight={1}
-          onMouseDown={onToggleGlobalCouncil}
-        >
-          <text
-            fg={globalCouncilOn ? theme.gold : theme.fgDim}
-            attributes={globalCouncilOn ? 1 : 0}
-          >
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
+          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>
             ⚖ {globalCouncilOn ? "ON" : "off"}
           </text>
         </box>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
+          <text fg={theme.aiAccent}>⚙ configure</text>
+        </box>
         <text fg={theme.border}>{" │ "}</text>
-        <box
-          flexDirection="row"
-          paddingLeft={1}
-          paddingRight={1}
-          onMouseDown={onCycleFramework}
-        >
-          <text
-            fg={fw ? theme.aiAccent : theme.fgDim}
-            attributes={fw ? 1 : 0}
-          >
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
+          <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>
             ◆ {fwLabel}
           </text>
         </box>
       </box>
+      {cliHealthSummary && cliHealthSummary.length > 0 && (
+        <box flexDirection="row" height={1}>
+          <text fg={theme.fgFaint}>{"panel    ".padEnd(8)}</text>
+          {cliHealthSummary.map((h, i) => {
+            const glyph =
+              h.ok === true ? "✓" : h.ok === false ? "⚠" : "⠋";
+            const fgC =
+              h.ok === true ? theme.ok : h.ok === false ? theme.warn : theme.fgDim;
+            return (
+              <text key={h.kind} fg={theme.fgDim}>
+                {i > 0 ? "  " : " "}
+                <span fg={fgC}>{glyph}</span>
+                <span fg={theme.fg}>{` ${h.label}`}</span>
+              </text>
+            );
+          })}
+        </box>
+      )}
     </box>
   );
 }

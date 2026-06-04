@@ -1737,6 +1737,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           setGlobalCouncilDefault(!readGlobalCouncilDefault());
           bumpFrameworkTick();
         }}
+        onOpenCouncilConfig={() => setCouncilConfigOpen(true)}
         frameworkTick={frameworkTick}
         onCycleFramework={() => {
           const cur = readResponseFramework();
@@ -1746,6 +1747,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           setResponseFramework(next as Parameters<typeof setResponseFramework>[0]);
           bumpFrameworkTick();
         }}
+        cliHealthSummary={clis.map((c) => {
+          const h = cliHealth.get(c.kind);
+          return {
+            kind: c.kind,
+            label: c.label,
+            ok: h === null || h === undefined ? null : h.ok,
+            message: h?.message,
+          };
+        })}
       />
       <box flexDirection="row" flexGrow={1}>
         <Sidebar
