@@ -148,20 +148,19 @@ export function WorkspaceConfigBar({
     <text fg={theme.border}>{"   │   "}</text>
   );
 
-  // Pre-build every chip label as a SINGLE string literal — opentui's
-  // text renderer clips trailing interpolated values when you mix
-  // literal segments with {expr} inside one <text>. The user saw
-  // "⬡ Web:" / "▣ Save:" / "◉ Serendipity:" / "◐ Auto:" with the
-  // on/off/mode values blank. Same bug class as the skills-tab header
-  // bleed we hit before. Fix: render each chip as a single template
-  // literal.
-  const councilLabel = councilOn ? "⚖ Council ON" : "⚖ Council off";
-  const fwChipLabel = `◆ Framework: ${fwLabel}`;
-  const lensChipLabel = `◇ Lens: ${lensLabel}`;
-  const webChipLabel = `⬡ Web: ${webAllow ? "on" : "off"}`;
-  const saveChipLabel = `▣ Save: ${checkpointOn ? "on" : "off"}`;
-  const serendipityChipLabel = `◉ Serendipity: ${serendipityOn ? "on" : "off"}`;
-  const autoChipLabel = `◐ Auto: ${autoMode}`;
+  // RENDERING NOTE: opentui's text node clips when a <text> has either
+  // (a) literal segments + JSX interpolation as siblings, OR
+  // (b) a single multi-token string sandwiched in JSX whitespace.
+  // The proven safe pattern in this codebase (CLI health row, council
+  // chips) is multiple <text> nodes INSIDE one <box> — each <text>
+  // becomes its own layout cell so opentui never has to split one.
+  // Every chip below uses that shape: <text label/> <text value/>.
+  const fwFg = currentFw ? theme.aiAccent : theme.fgDim;
+  const lensFg = currentLens ? theme.aiAccent : theme.fgDim;
+  const webFg = webAllow ? theme.aiAccent : theme.fgDim;
+  const saveFg = checkpointOn ? theme.aiAccent : theme.fgDim;
+  const serendipityFg = serendipityOn ? theme.aiAccent : theme.fgDim;
+  const autoFg = autoMode !== "off" ? theme.aiAccent : theme.fgDim;
 
   return (
     <box flexDirection="row" height={1} paddingLeft={1} paddingRight={1}>
@@ -171,9 +170,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={onToggleCouncil}
       >
-        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>
-          {councilLabel}
-        </text>
+        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{"⚖ Council "}</text>
+        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{councilOn ? "ON" : "off"}</text>
       </box>
       {sep}
       <box
@@ -182,9 +180,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleFramework}
       >
-        <text fg={currentFw ? theme.aiAccent : theme.fgDim} attributes={currentFw ? 1 : 0}>
-          {fwChipLabel}
-        </text>
+        <text fg={fwFg} attributes={currentFw ? 1 : 0}>{"◆ Framework: "}</text>
+        <text fg={fwFg} attributes={currentFw ? 1 : 0}>{fwLabel}</text>
       </box>
       <box
         flexDirection="row"
@@ -192,12 +189,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleLens}
       >
-        <text
-          fg={currentLens ? theme.aiAccent : theme.fgDim}
-          attributes={currentLens ? 1 : 0}
-        >
-          {lensChipLabel}
-        </text>
+        <text fg={lensFg} attributes={currentLens ? 1 : 0}>{"◇ Lens: "}</text>
+        <text fg={lensFg} attributes={currentLens ? 1 : 0}>{lensLabel}</text>
       </box>
       <box
         flexDirection="row"
@@ -205,9 +198,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleWeb}
       >
-        <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>
-          {webChipLabel}
-        </text>
+        <text fg={webFg} attributes={webAllow ? 1 : 0}>{"⬡ Web: "}</text>
+        <text fg={webFg} attributes={webAllow ? 1 : 0}>{webAllow ? "on" : "off"}</text>
       </box>
       <box
         flexDirection="row"
@@ -215,9 +207,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={toggleCheckpoint}
       >
-        <text fg={checkpointOn ? theme.aiAccent : theme.fgDim} attributes={checkpointOn ? 1 : 0}>
-          {saveChipLabel}
-        </text>
+        <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{"▣ Save: "}</text>
+        <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{checkpointOn ? "on" : "off"}</text>
       </box>
       <box
         flexDirection="row"
@@ -225,9 +216,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={toggleSerendipity}
       >
-        <text fg={serendipityOn ? theme.aiAccent : theme.fgDim} attributes={serendipityOn ? 1 : 0}>
-          {serendipityChipLabel}
-        </text>
+        <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{"◉ Serendipity: "}</text>
+        <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{serendipityOn ? "on" : "off"}</text>
       </box>
       <box
         flexDirection="row"
@@ -235,9 +225,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleAuto}
       >
-        <text fg={autoMode !== "off" ? theme.aiAccent : theme.fgDim} attributes={autoMode !== "off" ? 1 : 0}>
-          {autoChipLabel}
-        </text>
+        <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{"◐ Auto: "}</text>
+        <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{autoMode}</text>
       </box>
       <box flexGrow={1} />
       <box

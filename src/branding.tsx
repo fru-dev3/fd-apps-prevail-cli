@@ -360,34 +360,32 @@ function StatusColumn({
           framework, ◇ open diamond for the lens) so they don't read
           as repeats — user reported "seems they all have same icons
           right now." */}
-      {/* Each chip is a pre-built single string — opentui's text
-          renderer clips trailing {expr} segments when they're mixed
-          with literal text inside one <text> (same bug class as the
-          skills-tab header bleed). Concatenate first, render once. */}
+      {/* Two-text-per-chip pattern: opentui clips when a single <text>
+          holds a literal segment plus an interpolated value (we saw
+          values entirely disappear in the cockpit). Splitting the
+          label and the value into separate <text> children inside one
+          <box> makes each its own layout cell — proven safe in the
+          CLI health row and council chips. */}
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"defaults"}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
-          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>
-            {`⚖ Council: ${globalCouncilOn ? "ON" : "off"}`}
-          </text>
+          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{"⚖ Council: "}</text>
+          <text fg={globalCouncilOn ? theme.gold : theme.fgDim} attributes={globalCouncilOn ? 1 : 0}>{globalCouncilOn ? "ON" : "off"}</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
-          <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>
-            {`◆ Framework: ${fwLabel}`}
-          </text>
+          <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>{"◆ Framework: "}</text>
+          <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>{fwLabel}</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleLens}>
-          <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>
-            {`◇ Lens: ${lensLabel}`}
-          </text>
+          <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>{"◇ Lens: "}</text>
+          <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>{lensLabel}</text>
         </box>
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"        "}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onCycleWeb}>
-          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>
-            {`⬡ Web: ${webAllow ? "on" : "off"}`}
-          </text>
+          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{"⬡ Web: "}</text>
+          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>{webAllow ? "on" : "off"}</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
           <text fg={theme.aiAccent}>◇ configure</text>
