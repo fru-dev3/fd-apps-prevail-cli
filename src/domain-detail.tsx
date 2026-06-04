@@ -69,28 +69,14 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
           />
         </box>
       ) : (
-        <box flexDirection="column" flexGrow={1}>
-          {/* Chat IS the domain. User wanted chat where the content used
-              to be — the primary thing you do with a domain is talk to
-              its panel. The state.md / loops / etc. content is shown as
-              a short reference strip BELOW the chat instead of taking
-              top-half real estate. Toggle the strip with the tab keys
-              (h/l) which are the existing view switcher. */}
-          <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={0}>
-            <DomainChat domain={domain} setEmbeddedInputActive={setEmbeddedInputActive} />
-          </box>
-          <box paddingLeft={2} paddingRight={2}>
-            <text fg={theme.border}>{"─".repeat(80)}</text>
-          </box>
-          {/* Compact reference: max 6 lines of the active markdown view */}
-          <box flexBasis={7} paddingLeft={2} paddingRight={2} paddingBottom={1}>
-            <box flexDirection="column" flexGrow={1}>
-              <text fg={theme.fgFaint}>{`▸ ${view}.md  (reference)`}</text>
-              <scrollbox flexGrow={1} scrollY>
-                {renderMarkdownLines(readDomainView(domain, view))}
-              </scrollbox>
-            </box>
-          </box>
+        // Chat fills the entire panel. Input sits at the very bottom of
+        // the chat layout with nothing underneath — per user: "the text
+        // box there should not be anything underneath it." If you need
+        // to see state.md / loops / quickstart / prompts, ask the chat
+        // ("walk me through state.md") — that's the point of having a
+        // panelist read the vault for you.
+        <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+          <DomainChat domain={domain} setEmbeddedInputActive={setEmbeddedInputActive} />
         </box>
       )}
     </box>

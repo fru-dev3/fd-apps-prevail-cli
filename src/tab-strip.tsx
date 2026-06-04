@@ -61,7 +61,14 @@ export function TabStrip({ activeView, inChat, onPickView, onPickChat, onEdit, c
         const active = isChatTab ? inChat : !inChat && tab.key === activeView;
         const fg = active ? theme.gold : theme.fgDim;
         const label = active ? `[${tab.label}]` : ` ${tab.label} `;
-        const onClick = isChatTab ? onPickChat : () => onPickView(i);
+        // CRITICAL FIX: TABS includes "chat" at index 0 but VIEW_ORDER in
+        // app.tsx is [state, quickstart, prompts, skills] — no chat. So
+        // the TABS index for non-chat tabs is OFFSET BY 1 from VIEW_ORDER.
+        // Pass (i - 1) so clicking "state" (TABS i=1) maps to VIEW_ORDER[0],
+        // "skills" (TABS i=4) maps to VIEW_ORDER[3]. Without this, every
+        // tab click selected the NEXT tab in the list, and "skills" went
+        // off the end (showed nothing).
+        const onClick = isChatTab ? onPickChat : () => onPickView(i - 1);
         return (
           <box key={tab.key} flexDirection="row" onMouseDown={onClick}>
             <text fg={fg} attributes={active ? 1 : 0}>{label}</text>
