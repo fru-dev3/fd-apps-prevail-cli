@@ -55,6 +55,29 @@ export type ChatSeed =
   | { kind: "skill"; id: string; title: string }
   | { kind: "app"; id: string; title: string; domains: string[] };
 
+// One-line dim badge rendered DIRECTLY UNDER every assistant bubble.
+// Shape: `<cli> · <model> · ◆ <framework> · ◇ <lens>` with a `verdict ·`
+// prefix on council-verdict bubbles. Any segment whose value is missing
+// is dropped, so a vanilla chat with no framework + default model
+// collapses to just `<cli>` — and when even that's redundant we return
+// null and the caller skips the row entirely.
+//
+// Display labels (BLUF, CONTRARIAN, ...) come pre-resolved on the ChatMsg
+// — no id-to-label lookup here, so this stays pure / cheap on every
+// re-render of the transcript.
+export function formatMetaBadge(
+  msg: ChatMsg,
+  opts: { verdict?: boolean } = {},
+): string | null {
+  const parts: string[] = [];
+  if (msg.cli) parts.push(msg.cli);
+  if (msg.model && msg.model.trim()) parts.push(msg.model.trim());
+  if (msg.framework) parts.push(`◆ ${msg.framework}`);
+  if (msg.lens) parts.push(`◇ ${msg.lens}`);
+  if (parts.length === 0) return null;
+  return opts.verdict ? `verdict · ${parts.join(" · ")}` : parts.join(" · ");
+}
+
 export interface ChatMsg {
   role: "user" | "assistant" | "system";
   content: string;
@@ -74,6 +97,14 @@ export interface ChatMsg {
     | "streaming";
   cli?: CliKind; // for council-response bubbles
   model?: string;
+  // Captured at SEND TIME so the per-bubble badge can render what was
+  // active when THIS turn fired — not the current global state. The user
+  // may have cycled framework/lens chips between turns, and the badge has
+  // to be loyal to the moment, not the latest config.
+  // Stored as display labels (e.g. "BLUF", "CONTRARIAN") rather than ids
+  // so rendering is a straight string concat — no lookup at draw time.
+  framework?: string;
+  lens?: string;
 }
 
 export interface ChatSession {
@@ -846,6 +877,12 @@ function MessageBubble({
     : msg.cli
       ? ` ${msg.cli}${msg.model ? ` · ${msg.model}` : ""} `
       : " assistant ";
+  // Per-bubble metadata badge — only on assistant bubbles, only when
+  // there's actually something to say (model, framework, or lens).
+  // The user can switch models / lenses / frameworks turn-to-turn, so
+  // the badge is the only thing in the transcript that makes the
+  // current bubble's provenance unambiguous.
+  const badge = !isUser ? formatMetaBadge(msg) : null;
   return (
     <box flexDirection="column" paddingBottom={1}>
       <box
@@ -860,6 +897,7 @@ function MessageBubble({
       >
         {renderMarkdownLines(msg.content)}
       </box>
+      {badge && <text fg={theme.fgFaint}>{badge}</text>}
     </box>
   );
 }
@@ -1379,6 +1417,7 @@ function CouncilResponseBubble({ msg }: { msg: ChatMsg }) {
   const labelParts = [cli ?? "unknown"];
   if (msg.model) labelParts.push(msg.model);
   const title = ` ⚖ ${labelParts.join(" · ")} `;
+  const badge = formatMetaBadge(msg);
   return (
     <box flexDirection="column" paddingBottom={1}>
       <box
@@ -1393,6 +1432,7 @@ function CouncilResponseBubble({ msg }: { msg: ChatMsg }) {
       >
         {renderMarkdownLines(msg.content)}
       </box>
+      {badge && <text fg={theme.fgFaint}>{badge}</text>}
     </box>
   );
 }
@@ -1440,6 +1480,7 @@ function CouncilVerdictBubble({ msg }: { msg: ChatMsg }) {
   if (msg.model) labelParts.push(msg.model);
   const parsed = parseVerdict(msg.content);
   const titleSuffix = parsed.hasDivergence ? "  ·  🔀 disagreement" : "";
+  const badge = formatMetaBadge(msg, { verdict: true });
   return (
     <box flexDirection="column" paddingBottom={1}>
       <box
@@ -1462,6 +1503,7 @@ function CouncilVerdictBubble({ msg }: { msg: ChatMsg }) {
           renderMarkdownLines(msg.content)
         )}
       </box>
+      {badge && <text fg={theme.fgFaint}>{badge}</text>}
     </box>
   );
 }

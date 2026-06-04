@@ -73,6 +73,19 @@ function db(): Database | null {
         ts UNINDEXED, cli UNINDEXED, model UNINDEXED
       );
     `);
+    // Sidecar metadata keyed by the FTS rowid. FTS5 virtual tables don't
+    // accept ALTER TABLE ADD COLUMN ("virtual tables may not be altered"),
+    // so framework + lens live in a regular table joined on rowid. The
+    // CREATE IF NOT EXISTS form is idempotent — re-running on an upgraded
+    // db is a no-op. Old rows that predate this table simply return NULL
+    // on the LEFT JOIN, which is the desired "no metadata captured" state.
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS messages_ext (
+        rowid INTEGER PRIMARY KEY,
+        framework TEXT,
+        lens TEXT
+      );
+    `);
     dbInstance = d;
     return d;
   } catch {
@@ -88,6 +101,12 @@ export interface PersistedMessage {
   ts: number;
   cli?: string;
   model?: string;
+  // Display labels (e.g. "BLUF", "CONTRARIAN") captured at SEND TIME.
+  // Persisted to the messages_ext sidecar table so future recall, replay,
+  // and the vault decision-log learning loop know which lens of attack
+  // and which response structure shaped each turn.
+  framework?: string;
+  lens?: string;
 }
 
 export function persistMessage(msg: PersistedMessage): void {
@@ -112,6 +131,20 @@ export function persistMessage(msg: PersistedMessage): void {
           msg.model ?? "",
         ],
       );
+      // Sidecar write — only when at least one tag is present, to avoid
+      // bloating the sidecar with NULL/NULL rows for the (overwhelming)
+      // case where no framework or lens is active. Reads use LEFT JOIN
+      // so missing rows naturally read as no metadata.
+      if (msg.framework || msg.lens) {
+        try {
+          handle.run(
+            `INSERT INTO messages_ext (rowid, framework, lens) VALUES (last_insert_rowid(), ?, ?)`,
+            [msg.framework ?? null, msg.lens ?? null],
+          );
+        } catch {
+          /* best-effort — schema mismatch shouldn't break chat */
+        }
+      }
     }
     // Per-domain prompt log — human-readable, prompts only.
     appendPromptFile(msg);

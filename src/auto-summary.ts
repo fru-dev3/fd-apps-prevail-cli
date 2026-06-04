@@ -29,6 +29,12 @@ export interface TurnSummaryArgs {
   // so calibration.ts can later compute "how often does my gut match
   // the council, and when it doesn't, who's right?"
   gut?: string;
+  // Optional response-shaping metadata that was ACTIVE at send time.
+  // Surfaced in the daily log as a `> meta:` blockquote line so the
+  // domain learns over time which lens/framework combos shaped which
+  // decisions. Display labels (e.g. "BLUF", "CONTRARIAN"), not ids.
+  framework?: string;
+  lens?: string;
 }
 
 // Write a chat-turn summary to today's log file. Creates _log/ if missing.
@@ -104,6 +110,20 @@ function renderEntry(args: TurnSummaryArgs): string {
           retroDue: defaultRetroDue(args.ts),
         })
       : null;
+  // Response-shaping metadata: emit a blockquote line under the Q/A pair
+  // when the turn carried a framework or a lens. Blockquote form keeps
+  // the existing format intact (every renderer / recall pass already
+  // skips quoted prose), while leaving a greppable trail of which
+  // lens-of-attack + structure shaped this decision. Skipped entirely
+  // when neither is set — old entries render exactly as before.
+  const shapeBits: string[] = [];
+  shapeBits.push(args.cliLabel);
+  if (args.framework) shapeBits.push(`framework=${args.framework}`);
+  if (args.lens) shapeBits.push(`lens=${args.lens}`);
+  const shapeLine =
+    args.framework || args.lens
+      ? `> meta: ${shapeBits.join(" · ")}`
+      : null;
   return [
     "",
     `## ${timeKey(args.ts)}  ·  ${tag}${divergenceFlag}`,
@@ -112,6 +132,7 @@ function renderEntry(args: TurnSummaryArgs): string {
     `**Q:** ${quoteShield(q)}`,
     "",
     `**A:** ${quoteShield(a)}`,
+    ...(shapeLine ? ["", shapeLine] : []),
     "",
   ].join("\n");
 }

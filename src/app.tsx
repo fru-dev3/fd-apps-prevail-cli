@@ -39,7 +39,7 @@ import {
   type CliKind,
 } from "./config.ts";
 import { FRAMEWORKS, getFramework, isFrameworkId } from "./framework.ts";
-import { buildLensPreamble, expandLensSelection, type Lens } from "./lens.ts";
+import { buildLensPreamble, expandLensSelection, getLens, type Lens } from "./lens.ts";
 import { buildDomainHeatmap, renderHeatmapText } from "./heatmap.ts";
 import {
   readRecentObservations,
@@ -1114,10 +1114,27 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       return;
     }
     const userTs = Date.now();
+    // Capture-at-send for response-shaping metadata. The chair verdict
+    // bubble + the user's own prompt carry the GLOBAL council framework
+    // and lens setting (the lens of the COUNCIL, not per-panelist). The
+    // lens label is "all" when fanout is on, else the resolved single
+    // lens, else undefined. Per-panelist lens labels are derived from
+    // job.lens inside the calls loop further down.
+    const councilFwId = readResponseFramework(session.hostDomain.name);
+    const councilLensSel = readResponseLens(session.hostDomain.name);
+    const councilFwLabel = getFramework(councilFwId)?.label;
+    const councilLensLabel =
+      councilLensSel === "all"
+        ? "all"
+        : councilLensSel
+          ? getLens(councilLensSel)?.label
+          : undefined;
     const userMsg = {
       role: "user" as const,
       content: `/council ${text}`,
       ts: userTs,
+      framework: councilFwLabel,
+      lens: councilLensLabel,
     };
     persistMessage({
       domain: session.hostDomain.name,
@@ -1127,13 +1144,15 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       ts: userTs,
       cli: "council",
       model: "",
+      framework: councilFwLabel,
+      lens: councilLensLabel,
     });
     // Expand panel × lenses. When the domain (or global) has a lens
     // selection of "all", every panelist runs once per lens — 4 CLIs ×
     // 5 lenses = 20 jobs per question. Specific id = each panelist
     // runs once with that lens prepended. null = today's behavior, one
     // job per panelist with no lens directive.
-    const lensList = expandLensSelection(readResponseLens(session.hostDomain.name));
+    const lensList = expandLensSelection(councilLensSel);
     type Job = { cli: AvailableCli; model: string; lens: Lens | null };
     const jobs: Job[] =
       lensList.length === 0
@@ -1281,6 +1300,11 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         .then((response) => {
           const ts = Date.now();
           collected.push({ cli, model: mdl, lens, response, ok: true });
+          // Per-panelist lens label = the lens actually attached to THIS
+          // job, not the council-wide selection. With fanout active each
+          // panelist runs once per lens, so the bubble badge needs to show
+          // the SPECIFIC lens of attack used here (CONTRARIAN, MOM, ...).
+          const jobLensLabel = lens?.label;
           persistMessage({
             domain: session.hostDomain.name,
             session_id: session.sessionId,
@@ -1289,6 +1313,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             ts,
             cli: cli.kind,
             model: mdl,
+            framework: councilFwLabel,
+            lens: jobLensLabel,
           });
           // Replace the pending placeholder for THIS job (by ts — many
           // jobs may share a CLI/model when lens fanout is active, so
@@ -1304,6 +1330,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               kind: "council-response" as const,
               cli: cli.kind,
               model: mdl,
+              framework: councilFwLabel,
+              lens: jobLensLabel,
             };
             const idx = cur.messages.findIndex(
               (x) => x.kind === "council-pending" && x.ts === pendingTs,
@@ -1471,6 +1499,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             ts,
             cli: synthCli.kind,
             model: synthModel,
+            framework: councilFwLabel,
+            lens: councilLensLabel,
           });
           // Self-curating vault: log the verdict (not the individual panel
           // responses — those are kept in the session log but the verdict is
@@ -1488,6 +1518,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             ts,
             kind: "council-verdict",
             gut,
+            framework: councilFwLabel,
+            lens: councilLensLabel,
           });
           // Replace the synthesizing placeholder with the verdict, AND flip
           // pending=false in the same setChats so the spinner stops the
@@ -1502,6 +1534,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               kind: "council-verdict" as const,
               cli: synthCli.kind,
               model: synthModel,
+              framework: councilFwLabel,
+              lens: councilLensLabel,
             };
             const idx = cur.messages.findIndex(
               (x) => x.kind === "council-synthesizing" && x.ts === synthTs,
@@ -1559,6 +1593,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   function sendMessage(key: string, text: string) {
     const session = chats.get(key);
     if (!session || session.pending) return;
+    // Capture-at-send for response-shaping metadata. The user can cycle
+    // framework/lens chips between turns, so the badge under each bubble
+    // (and the vault decision log) MUST reflect what was active when THIS
+    // turn fired, not the current global state. Resolve to display labels
+    // here so downstream code (bubble badge, sqlite sidecar, daily log)
+    // never has to look the id up again.
+    const fwId = readResponseFramework(session.hostDomain.name);
+    const lensSel = readResponseLens(session.hostDomain.name);
+    const fwLabel = getFramework(fwId)?.label;
+    // Single-chat path: a LensSelection of "all" doesn't fan out (lens=all
+    // is council-only by design), so for a single chat we only attach a
+    // lens label when a concrete lens id was set. Anything else = no lens.
+    const lensLabel =
+      lensSel && lensSel !== "all" ? getLens(lensSel)?.label : undefined;
     const userMsg = { role: "user" as const, content: text, ts: Date.now() };
     persistMessage({
       domain: session.hostDomain.name,
@@ -1568,6 +1616,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       ts: userMsg.ts,
       cli: session.cli.kind,
       model: session.model,
+      framework: fwLabel,
+      lens: lensLabel,
     });
     // If the user pre-selected skills in the Skills tab for this domain,
     // prepend a small <selected_skills> block so the LLM treats them as
@@ -1646,6 +1696,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           ts,
           cli: session.cli.kind,
           model: session.model,
+          framework: fwLabel,
+          lens: lensLabel,
         });
         // Self-curating vault: append a one-paragraph snapshot of this turn
         // to <domain>/_log/YYYY-MM-DD.md so the vault remembers what was
@@ -1657,15 +1709,28 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           cliLabel: session.model ? `${session.cli.label}·${session.model}` : session.cli.label,
           ts,
           kind: "chat",
+          framework: fwLabel,
+          lens: lensLabel,
         });
         setChats((m) => {
           const cur = m.get(key);
           if (!cur) return m;
           // Replace the live streaming placeholder with the canonical
           // assistant message — same ts so the bubble doesn't reorder.
+          // Attach the framework + lens that were active at SEND TIME so
+          // the per-bubble badge stays loyal to the moment, not the
+          // (possibly-cycled) current global state.
           const messages = cur.messages.map((msg) =>
             msg.ts === streamTs && msg.kind === "streaming"
-              ? { role: "assistant" as const, content: response, ts }
+              ? {
+                  role: "assistant" as const,
+                  content: response,
+                  ts,
+                  cli: session.cli.kind,
+                  model: session.model,
+                  framework: fwLabel,
+                  lens: lensLabel,
+                }
               : msg,
           );
           // If for some reason the placeholder wasn't found (rare race),
@@ -1675,7 +1740,18 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             ...cur,
             messages: hadPlaceholder
               ? messages
-              : [...messages, { role: "assistant", content: response, ts }],
+              : [
+                  ...messages,
+                  {
+                    role: "assistant",
+                    content: response,
+                    ts,
+                    cli: session.cli.kind,
+                    model: session.model,
+                    framework: fwLabel,
+                    lens: lensLabel,
+                  },
+                ],
             pending: false,
             hasFirstTurn: true,
             usage: {
