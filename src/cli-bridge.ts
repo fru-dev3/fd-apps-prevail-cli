@@ -917,6 +917,18 @@ function runCapture(
         cwd,
         env: scrubbedEnv(),
         stdio: ["ignore", "pipe", "pipe"],
+        // Run the child as its OWN process-group leader so abort can
+        // signal the entire tree, not just the launcher. Required for
+        // `gemini`: its CLI is a shell wrapper that installs no-op
+        // handlers for SIGTERM/SIGINT/SIGHUP and spawns the real
+        // worker as a separate PID with inherited stdio. A plain
+        // child.kill("SIGTERM") hits the wrapper, gets swallowed, and
+        // the worker runs to the 120s timeout — so ESC in the TUI
+        // visibly cancels claude/codex/ollama but Gemini keeps going.
+        //
+        // We do NOT call child.unref() here: detached only creates a
+        // new pgroup, it does not background the process.
+        detached: true,
       });
     } catch (err) {
       resolve(`(error spawning ${bin}: ${(err as Error).message})`);
@@ -926,8 +938,18 @@ function runCapture(
     const onAbort = () => {
       cancelled = true;
       try {
-        child!.kill("SIGTERM");
-      } catch {}
+        // Negative pid = signal the whole process group (the wrapper
+        // AND its real worker). SIGKILL because gemini's wrapper
+        // ignores SIGTERM. If for some reason we don't have a pid,
+        // fall back to direct SIGKILL on the handle.
+        if (typeof child!.pid === "number") {
+          process.kill(-child!.pid, "SIGKILL");
+        } else {
+          child!.kill("SIGKILL");
+        }
+      } catch {
+        try { child!.kill("SIGKILL"); } catch {}
+      }
     };
     signal?.addEventListener("abort", onAbort);
     child.stdout.on("data", (b) => {
