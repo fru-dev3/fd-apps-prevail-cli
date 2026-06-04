@@ -589,6 +589,61 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  if (sub === "seed") {
+    // Personal canonical benchmark — separate from the bundled
+    // bench/questions/ suite. Writes to <vault>/benchmark/questions/.
+    // Two modes:
+    //   prevail bench seed --domain <name>           interactive scaffold,
+    //                                                writes a fillable stub
+    //   prevail bench seed --from-log <domain>       imports the most
+    //                                                recent council verdict
+    //                                                from that domain's _log
+    const {
+      ensureScaffold,
+      writeDraftQuestion,
+      seedFromLatestCouncil,
+    } = await import("./canonical-bench.ts");
+    ensureScaffold(vault);
+    let domain: string | null = null;
+    let fromLog = false;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      const v = args[i + 1];
+      if (a === "--domain" && v) {
+        domain = v;
+        i++;
+      } else if (a === "--from-log" && v) {
+        domain = v;
+        fromLog = true;
+        i++;
+      }
+    }
+    if (!domain) {
+      console.error("usage:");
+      console.error("  prevail bench seed --domain <name>        write an empty stub question");
+      console.error("  prevail bench seed --from-log <domain>    import latest council verdict");
+      process.exit(1);
+    }
+    if (fromLog) {
+      const result = seedFromLatestCouncil(vault, domain);
+      if (!result) {
+        console.error(`no council verdict found under ${vault}/${domain}/_log/. Either run a council in this domain first, or use --domain to write a fresh stub.`);
+        process.exit(1);
+      }
+      console.log(`drafted from ${result.sourceFile}`);
+      console.log(`  ${result.path}`);
+      console.log(`\nopen the file and fill in expected_decision + expected_verdict_keywords with the answer you stand behind.`);
+      return;
+    }
+    const path = writeDraftQuestion({ vaultPath: vault, domain });
+    console.log(`wrote stub: ${path}`);
+    console.log(`\nopen the file and fill in:`);
+    console.log(`  - prompt (the question, as you'd type it to the council)`);
+    console.log(`  - expected_decision (the answer you stand behind)`);
+    console.log(`  - expected_verdict_keywords (substrings a good answer should hit)`);
+    return;
+  }
+
   if (sub === "run") {
     const questions = loadQuestions();
     if (questions.length === 0) {
@@ -639,6 +694,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   console.error("usage:");
   console.error("  prevail bench list");
   console.error("  prevail bench run [--domain <name>] [--question <id>]");
+  console.error("  prevail bench seed --domain <name>        write a stub canonical question");
+  console.error("  prevail bench seed --from-log <domain>    import latest council verdict as draft");
   process.exit(1);
 }
 
