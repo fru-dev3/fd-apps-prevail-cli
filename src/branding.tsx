@@ -38,10 +38,12 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={10}
+      height={12}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
+      paddingTop={1}
+      paddingBottom={1}
     >
       <box
         flexDirection="row"

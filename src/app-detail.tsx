@@ -75,6 +75,8 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbedde
       backgroundColor={theme.bg}
       title={` ${app.id}  ·  ${app.title} `}
       titleAlignment="left"
+      paddingTop={1}
+      paddingBottom={1}
       bottomTitle={` ${communityMark}${domainsLabel}  ·  updated ${updated}  ·  ${skills.length} skill${skills.length === 1 ? "" : "s"} `}
       bottomTitleAlignment="left"
     >

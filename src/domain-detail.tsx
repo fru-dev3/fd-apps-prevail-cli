@@ -63,6 +63,8 @@ export function DomainDetail({ domain, view, skillIdx, apps, onPickSkill, topBar
       backgroundColor={theme.bg}
       title={` ${domain.name} `}
       titleAlignment="left"
+      paddingTop={1}
+      paddingBottom={1}
       bottomTitle={` updated ${updated}  ·  skills ${domain.skills.length}  ·  open ${domain.openLoopCount} `}
       bottomTitleAlignment="left"
     >
