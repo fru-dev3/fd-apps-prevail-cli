@@ -7,6 +7,42 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.4.0] — 2026-06-04 · Customize the benchmark from inside the cockpit
+
+User: "Is the user able to customize the tests to the actual data in their vault so, over time, if new models are coming up, they can learn from it?"
+
+The CLI flow already supported customization (`prevail bench seed --domain <name>` and `prevail bench seed --from-log <domain>`), but the BenchmarkPanel shipped in v1.3.0 was read-only — no way to add, edit, or import questions without dropping to the shell. This closes the loop.
+
+### Added — Three customization buttons on `BenchmarkPanel`
+
+Sit directly below the question list. Same overlay, same Escape-to-close, same no-impact-on-anything-else.
+
+- **`+ new question`** — opens an inline form. Pick a domain, type a short prompt (optional), submit. Writes a stub canonical question via the same `writeDraftQuestion` the CLI uses. After write, the file opens in your OS's default editor (TextEdit / VSCode / Obsidian / whatever) so you can fill in `expected_decision`, `expected_verdict_keywords`, full context, and notes.
+- **`✎ edit highlighted`** — opens the highlighted question's `.md` file in your default editor. Click any question row in the list to mark it as highlighted; the row gets a `›` pointer and the gold selection highlight.
+- **`▸ import from journal`** — opens an inline domain picker. Pick a domain, prevAIl scans `<vault>/<domain>/_log/` for the most recent `⚖ council` entry, scaffolds a draft with that prompt + the verdict pre-filled in `## Notes`, and opens it in your editor. The fastest path from "I just had a council decision" to "that decision is now a benchmark question."
+
+### How the over-time learning loop works
+
+1. You make a real decision via `/council` in some domain. Verdict lands in `<domain>/_log/<date>.md`.
+2. Open the benchmark panel (`Shift+B`), click **`▸ import from journal`**, pick the domain.
+3. prevAIl pre-fills a draft from your latest verdict. Fill in `expected_decision` and 3-5 verdict keywords (~30 seconds).
+4. When a new model ships (Claude 5, GPT-6, Antigravity 2), open the panel, pick that CLI, **`▸ run N questions`**.
+5. Leaderboard shows whether the new model's reasoning aligns with the answers you actually committed to.
+
+Over months, your benchmark stops being the bundled starter pack and becomes a portfolio of your real decisions. New models get tested against your life, not against a generic suite.
+
+### Implementation notes
+
+- Sub-modes `"new"` / `"import"` swap into the panel below the question list. Escape from a sub-mode drops back to `"list"`; Escape from `"list"` closes the panel entirely (two-tier Esc).
+- `domainNames` is read from app.tsx's existing domain list (scanned at boot) — no re-scan, no perf hit.
+- Files open via `openInFinder` (the OS handles editor choice), not via the in-cockpit `EditorPane` — keeps the overlay state simple and lets each user use their preferred editor.
+- After any scaffold, `refreshQuestions` re-reads from disk so the new question appears in the row list without a panel reload.
+- All scaffolding reuses `writeDraftQuestion` and `seedFromLatestCouncil` from `src/canonical-bench.ts` — the file format the UI writes is byte-identical to what the CLI writes.
+
+185 tests pass / 0 fail / 3 skip. Existing CLI commands unchanged.
+
+---
+
 ## [1.3.0] — 2026-06-04 · Benchmark UI overlay
 
 User: "Is there a way to put a different section within the UI ... where I can go in and run the benchmark on available models to see the results from the UI, not just the command line? I don't wanna break any existing functionalities because what we have is pretty good." The CLI flow was complete after v1.2.0 but invisible from inside the cockpit. This release adds the UI surface without touching any existing tab, sidebar, or chat behavior.

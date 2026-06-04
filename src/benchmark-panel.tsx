@@ -6,6 +6,8 @@ import {
   listQuestions,
   runCanonicalSet,
   scoreRun,
+  seedFromLatestCouncil,
+  writeDraftQuestion,
   writeRunDirectory,
   type CanonicalQuestion,
   type CanonicalRunRecord,
@@ -13,6 +15,7 @@ import {
   type RunScore,
 } from "./canonical-bench.ts";
 import { type AvailableCli } from "./cli-bridge.ts";
+import { openInFinder } from "./system.ts";
 
 interface Props {
   onClose: () => void;
@@ -20,6 +23,10 @@ interface Props {
   // The cockpit already detected these at boot — reuse so the panel
   // doesn't re-probe and we get a fast open.
   availableClis: AvailableCli[];
+  // Domain names — used by the "import from journal" picker. Reading
+  // them from app.tsx state (already scanned at boot) instead of
+  // re-scanning the vault here.
+  domainNames: string[];
 }
 
 // Two-pane benchmark overlay. The user picks a target CLI/model, fires
@@ -37,21 +44,98 @@ interface Props {
 // benchmark" link is the cleanest fit.
 type Mode = "idle" | "running" | "scoring" | "done" | "error";
 
+// Sub-modes for the customization flow. These swap in/out as small
+// inline forms beneath the question list — they never leave the
+// overlay, so the user's mental model stays "I'm in the benchmark
+// view." Escape from any sub-mode returns to "list".
+type PanelMode = "list" | "new" | "import";
+
 interface ProgressEntry {
   id: string;
   status: "start" | "ok" | "error";
   info?: string;
 }
 
-export function BenchmarkPanel({ onClose, vaultPath, availableClis }: Props) {
+export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames }: Props) {
   useKeyboard((evt) => {
-    if (evt.name === "escape") onClose();
+    if (evt.name === "escape") {
+      // Escape from a sub-form drops back to the list. Escape from the
+      // list closes the panel entirely. Two-tier Escape matches how
+      // the chat input + workspace tabs behave.
+      if (panelMode !== "list") {
+        setPanelMode("list");
+        return;
+      }
+      onClose();
+    }
   });
+
+  // Refresh tick — bumped after any scaffold operation so listQuestions
+  // re-reads from disk and the new question shows up in the row list.
+  const [refreshTick, setRefreshTick] = useState(0);
+  const refreshQuestions = () => setRefreshTick((t) => t + 1);
 
   const questions = useMemo<CanonicalQuestion[]>(
     () => listQuestions(vaultPath),
-    [vaultPath],
+    [vaultPath, refreshTick],
   );
+  // Highlighted question for "✎ edit highlighted". Clicking any row
+  // sets this; defaults to first.
+  const [selectedQuestionIdx, setSelectedQuestionIdx] = useState(0);
+  const [panelMode, setPanelMode] = useState<PanelMode>("list");
+  const [newDomain, setNewDomain] = useState("");
+  const [newPrompt, setNewPrompt] = useState("");
+  const [customizeMessage, setCustomizeMessage] = useState<string | null>(null);
+
+  function openExistingInFinder(q: CanonicalQuestion) {
+    // The OS's default markdown editor (TextEdit / VSCode / Obsidian /
+    // whatever the user has configured) opens the file. Doesn't tie us
+    // to a specific in-cockpit editor, doesn't unmount the overlay.
+    openInFinder(q.filePath);
+    setCustomizeMessage(`opened ${q.id}.md in your editor`);
+    setTimeout(() => setCustomizeMessage(null), 3000);
+  }
+
+  function commitNewQuestion() {
+    const domain = newDomain.trim();
+    if (!domain) {
+      setCustomizeMessage("✗ pick a domain first");
+      return;
+    }
+    try {
+      const path = writeDraftQuestion({
+        vaultPath,
+        domain,
+        prompt: newPrompt.trim() || undefined,
+      });
+      openInFinder(path);
+      refreshQuestions();
+      setNewDomain("");
+      setNewPrompt("");
+      setPanelMode("list");
+      setCustomizeMessage(`✓ wrote stub — fill in the rest in your editor (${path.split("/").pop()})`);
+      setTimeout(() => setCustomizeMessage(null), 5000);
+    } catch (err) {
+      setCustomizeMessage(`✗ ${(err as Error).message}`);
+    }
+  }
+
+  function commitImportFrom(domain: string) {
+    try {
+      const r = seedFromLatestCouncil(vaultPath, domain);
+      if (!r) {
+        setCustomizeMessage(`✗ no council verdict found under ${domain}/_log/`);
+        return;
+      }
+      openInFinder(r.path);
+      refreshQuestions();
+      setPanelMode("list");
+      setCustomizeMessage(`✓ imported from ${r.sourceFile.split("/").pop()} — edit to mark expected_decision`);
+      setTimeout(() => setCustomizeMessage(null), 6000);
+    } catch (err) {
+      setCustomizeMessage(`✗ ${(err as Error).message}`);
+    }
+  }
   const [targetIdx, setTargetIdx] = useState(0);
   const [model, setModel] = useState("");
   const [useCouncil, setUseCouncil] = useState(false);
@@ -173,18 +257,190 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis }: Props) {
         </text>
         <text> </text>
 
-        {/* Question list — read-only, just orientation. */}
-        <text fg={theme.fgDim} attributes={1}>{"questions"}</text>
+        {/* Question list — clickable rows, the highlighted one is the
+            target of "✎ edit highlighted" below. */}
+        <text fg={theme.fgDim} attributes={1}>
+          {`questions (${questions.length})`}
+        </text>
         {questions.length === 0 && (
           <text fg={theme.warn}>
-            {"  no canonical questions found. run `prevail bench seed --domain <name>` to add some."}
+            {"  no canonical questions yet — use + new question or ▸ import below"}
           </text>
         )}
-        {questions.map((q) => (
-          <text key={q.id} fg={theme.fgDim}>
-            {`  ◆ ${q.id}  ·  ${q.domain}`}
-          </text>
-        ))}
+        {questions.map((q, i) => {
+          const active = i === selectedQuestionIdx;
+          const fg = active ? theme.gold : theme.fgDim;
+          const pointer = active ? "›" : " ";
+          return (
+            <box
+              key={q.id}
+              flexDirection="row"
+              height={1}
+              backgroundColor={active ? theme.selBg : theme.bg}
+              onMouseDown={() => setSelectedQuestionIdx(i)}
+            >
+              <text fg={fg}>
+                {` ${pointer} ◆ ${q.id}  ·  ${q.domain}`}
+              </text>
+            </box>
+          );
+        })}
+        <text> </text>
+
+        {/* CUSTOMIZE — three buttons that let the user grow their
+            benchmark over time without leaving the cockpit. Reuses the
+            same scaffolding functions as the CLI (writeDraftQuestion,
+            seedFromLatestCouncil) so the file format never diverges. */}
+        <text fg={theme.fgDim} attributes={1}>{"customize"}</text>
+        <box flexDirection="row" paddingTop={0}>
+          <box
+            flexDirection="row"
+            paddingLeft={1}
+            paddingRight={1}
+            backgroundColor={theme.bgPanel}
+            onMouseDown={() => {
+              setPanelMode("new");
+              setCustomizeMessage(null);
+            }}
+          >
+            <text fg={theme.aiAccent}>{"+ new question"}</text>
+          </box>
+          <text fg={theme.fgFaint}>{"  "}</text>
+          {questions.length > 0 && (
+            <>
+              <box
+                flexDirection="row"
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={theme.bgPanel}
+                onMouseDown={() => {
+                  const q = questions[selectedQuestionIdx];
+                  if (q) openExistingInFinder(q);
+                }}
+              >
+                <text fg={theme.goldDim}>{"✎ edit highlighted"}</text>
+              </box>
+              <text fg={theme.fgFaint}>{"  "}</text>
+            </>
+          )}
+          <box
+            flexDirection="row"
+            paddingLeft={1}
+            paddingRight={1}
+            backgroundColor={theme.bgPanel}
+            onMouseDown={() => {
+              setPanelMode("import");
+              setCustomizeMessage(null);
+            }}
+          >
+            <text fg={theme.aiAccent}>{"▸ import from journal"}</text>
+          </box>
+        </box>
+        {customizeMessage && (
+          <text fg={theme.gold}>{`  ${customizeMessage}`}</text>
+        )}
+
+        {/* SUB-FORM: new question. Single-line inputs for domain + a
+            short prompt. After we write the stub, openInFinder kicks
+            the user into their default markdown editor to fill in the
+            rest (expected_decision, verdict keywords, full context,
+            notes). The CLI-side flow is the same. */}
+        {panelMode === "new" && (
+          <box flexDirection="column" paddingTop={1} paddingLeft={2}>
+            <text fg={theme.aiAccent} attributes={1}>{"+ new canonical question"}</text>
+            <text fg={theme.fgFaint}>
+              {"  fill in the rest of the fields in your editor after the file opens"}
+            </text>
+            <text> </text>
+            <box flexDirection="row">
+              <text fg={theme.fgFaint}>{"  domain:  "}</text>
+              <input
+                value={newDomain}
+                placeholder="e.g. wealth, health, tax"
+                maxLength={48}
+                backgroundColor={theme.bgPanel}
+                textColor={theme.fg}
+                onInput={(v: string) => setNewDomain(v)}
+              />
+            </box>
+            <box flexDirection="row">
+              <text fg={theme.fgFaint}>{"  prompt:  "}</text>
+              <input
+                value={newPrompt}
+                placeholder="(optional — fillable in the file)"
+                maxLength={200}
+                backgroundColor={theme.bgPanel}
+                textColor={theme.fg}
+                onInput={(v: string) => setNewPrompt(v)}
+              />
+            </box>
+            <text> </text>
+            <box flexDirection="row">
+              <box
+                flexDirection="row"
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={theme.selBg}
+                onMouseDown={commitNewQuestion}
+              >
+                <text fg={theme.gold} attributes={1}>{"▸ write stub & open in editor"}</text>
+              </box>
+              <text fg={theme.fgFaint}>{"   "}</text>
+              <box
+                flexDirection="row"
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={theme.bgPanel}
+                onMouseDown={() => setPanelMode("list")}
+              >
+                <text fg={theme.fgDim}>{"cancel"}</text>
+              </box>
+            </box>
+            <text> </text>
+          </box>
+        )}
+
+        {/* SUB-FORM: import from journal. Pick a domain whose _log/
+            you want to pull the most recent council verdict from.
+            seedFromLatestCouncil walks the latest <date>.md, finds the
+            last "⚖ council" section, and pre-fills a draft with the
+            prompt + verdict in the Notes section — the user only has
+            to type the expected_decision + keywords. */}
+        {panelMode === "import" && (
+          <box flexDirection="column" paddingTop={1} paddingLeft={2}>
+            <text fg={theme.aiAccent} attributes={1}>{"▸ import latest council verdict"}</text>
+            <text fg={theme.fgFaint}>
+              {"  pick a domain — we'll find its most recent ⚖ council entry in _log/ and seed a draft"}
+            </text>
+            <text> </text>
+            {domainNames.length === 0 ? (
+              <text fg={theme.warn}>{"  no domains in the vault yet."}</text>
+            ) : (
+              domainNames.map((d) => (
+                <box
+                  key={d}
+                  flexDirection="row"
+                  height={1}
+                  paddingLeft={2}
+                  onMouseDown={() => commitImportFrom(d)}
+                >
+                  <text fg={theme.aiAccent}>{`  ▸ ${d}`}</text>
+                </box>
+              ))
+            )}
+            <text> </text>
+            <box
+              flexDirection="row"
+              paddingLeft={1}
+              paddingRight={1}
+              backgroundColor={theme.bgPanel}
+              onMouseDown={() => setPanelMode("list")}
+            >
+              <text fg={theme.fgDim}>{"cancel"}</text>
+            </box>
+            <text> </text>
+          </box>
+        )}
         <text> </text>
 
         {/* Run form */}

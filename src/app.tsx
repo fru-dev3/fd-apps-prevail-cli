@@ -2382,6 +2382,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                     onClose={() => setBenchmarkOpen(false)}
                     vaultPath={vaultPath}
                     availableClis={clis}
+                    domainNames={domains.map((d) => d.name)}
                   />
                 </ErrorBoundary>
               );
