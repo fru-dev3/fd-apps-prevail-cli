@@ -498,7 +498,10 @@ export function bundledDemoVaultPath(): string {
 }
 
 export interface VaultCandidate {
-  kind: "demo" | "existing" | "ai-folder" | "current-dir" | "default-home";
+  // "custom" is a placeholder pseudo-candidate that, when picked in the
+  // wizard, swaps the list view for an inline path-input box. The path
+  // field is empty for "custom" — the user types it.
+  kind: "demo" | "existing" | "ai-folder" | "current-dir" | "default-home" | "custom";
   label: string;
   path: string;
   exists: boolean;
@@ -535,6 +538,15 @@ export function detectVaultCandidates(): VaultCandidate[] {
       label: "~/.prevail/vault (fresh start — scaffold 22 default domains)",
       path: prevailVault,
       exists: existsSync(prevailVault),
+    },
+    {
+      // Sentinel option — selecting this in the wizard opens an inline
+      // path-input box. The path field is empty; the wizard fills it in
+      // from what the user types.
+      kind: "custom",
+      label: "type a custom path (existing folder or new — will scaffold if empty)",
+      path: "",
+      exists: false,
     },
   ];
 }

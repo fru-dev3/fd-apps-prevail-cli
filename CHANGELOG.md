@@ -7,6 +7,23 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.0.1] — 2026-06-04 · First-run UX fixes
+
+Two small but irritating bugs caught on first use.
+
+### Fixed — First letter swallowed when scaffolding a new domain / skill / app
+Pressing `n` on the cockpit and immediately typing a name was losing the first character ("wealth" → "ealth"). opentui's `<input focused>` was racing the user's first keystroke against the focus settling. Fixed by re-running the focus call across 0 / 30 / 120 ms — the same proven pattern from the chat input. Same fix applied to the wizard's new custom-path input below.
+
+### Added — Custom vault path in the first-run wizard
+The wizard now has a "type a custom path" option at the bottom of the list. Picking it opens an inline `vault path › _` input where the user can paste or type any path:
+- Absolute (`/Users/jane/docs/my-vault`)
+- Tilde-relative (`~/Documents/vault`)
+- Or cwd-relative (`./my-vault`)
+
+The path is then treated exactly like the existing default-home option — scaffolded with the 22 default domains if it doesn't exist, adopted as-is if it does.
+
+---
+
 ## [1.0.0] — 2026-06-04 · 1.0
 
 prevAIl 1.0. The deliberation cockpit is feature-complete for its scope, production-hardened for its threat model, and OSS-ready for outside contribution.

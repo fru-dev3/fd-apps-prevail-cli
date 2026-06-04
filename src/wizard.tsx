@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useKeyboard, useRenderer } from "@opentui/react";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { theme } from "./theme.ts";
 import {
   detectVaultCandidates,
@@ -41,20 +42,56 @@ export function FirstRunWizard({ onDone }: Props) {
   const [candidates] = useState<VaultCandidate[]>(() => detectVaultCandidates());
   const [selected, setSelected] = useState(0);
   const [status, setStatus] = useState<string | null>(null);
+  // When the user picks the "custom" sentinel option, we flip into
+  // input mode and capture the path they type. The list view goes away
+  // so the input has the full focus; pressing Esc returns to the list.
+  const [customMode, setCustomMode] = useState(false);
 
   useKeyboard((evt) => {
     if (status) return;
+    if (customMode) return; // CustomPathInput owns the keyboard in input mode
     if (evt.name === "up" || evt.name === "k") {
       setSelected((s) => Math.max(0, s - 1));
     } else if (evt.name === "down" || evt.name === "j") {
       setSelected((s) => Math.min(candidates.length - 1, s + 1));
     } else if (evt.name === "return" || evt.name === "enter") {
-      void commit(candidates[selected]);
+      const chosen = candidates[selected];
+      if (chosen?.kind === "custom") {
+        setCustomMode(true);
+      } else if (chosen) {
+        void commit(chosen);
+      }
     } else if (evt.name === "q" || (evt.ctrl && evt.name === "c")) {
       renderer?.destroy?.();
       process.exit(0);
     }
   });
+
+  function commitCustom(rawPath: string) {
+    setCustomMode(false);
+    const trimmed = rawPath.trim();
+    if (!trimmed) {
+      setStatus("path is empty — pick an option or try again");
+      setTimeout(() => setStatus(null), 2000);
+      return;
+    }
+    // Expand ~ and resolve to absolute. Refuse paths that look obviously
+    // wrong (relative to / when CWD isn't root, etc.) by always going
+    // through resolve(homedir(), ...) when ~/-prefixed.
+    const expanded = trimmed.startsWith("~/")
+      ? resolve(homedir(), trimmed.slice(2))
+      : resolve(process.cwd(), trimmed);
+    const c: VaultCandidate = {
+      // Reuse "default-home" semantics: scaffold if missing, otherwise
+      // adopt as-is. Same code path the existing default-home option
+      // takes.
+      kind: "default-home",
+      label: expanded,
+      path: expanded,
+      exists: existsSync(expanded),
+    };
+    void commit(c);
+  }
 
   async function commit(c: VaultCandidate) {
     setStatus(`preparing ${c.label}…`);
@@ -125,12 +162,25 @@ export function FirstRunWizard({ onDone }: Props) {
           (vaults are folders of markdown — one subfolder per life domain)
         </text>
         <text> </text>
-        {candidates.map((c, i) => (
-          <Option key={c.path} candidate={c} active={i === selected} />
-        ))}
+        {customMode ? (
+          <CustomPathInput
+            onSubmit={commitCustom}
+            onCancel={() => setCustomMode(false)}
+          />
+        ) : (
+          candidates.map((c, i) => (
+            <Option
+              key={`${c.kind}-${c.path}`}
+              candidate={c}
+              active={i === selected}
+            />
+          ))
+        )}
         <text> </text>
         <text fg={theme.fgFaint}>
-          ↑/↓ choose · enter to select · q to quit
+          {customMode
+            ? "enter to use this path · esc to go back · q to quit"
+            : "↑/↓ choose · enter to select · q to quit"}
         </text>
         <text> </text>
         {status && <text fg={theme.gold}>{status}</text>}
@@ -181,6 +231,55 @@ function Option({ candidate, active }: { candidate: VaultCandidate; active: bool
         {existsTag}
       </text>
       <text fg={theme.ok}>{isDemoTag}</text>
+    </box>
+  );
+}
+
+// Inline path-input shown when the user picks the "type a custom path"
+// sentinel option. Same multi-pass focus pattern as the CommandBar's
+// FocusedInput — opentui's `focused` prop sometimes loses the first
+// keystroke if the user types before the focus has settled, so we
+// re-focus across 0 / 30 / 120 ms to catch the race window.
+function CustomPathInput({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (path: string) => void;
+  onCancel: () => void;
+}) {
+  const ref = useRef<any>(null);
+  useEffect(() => {
+    const focus = () => {
+      try { ref.current?.focus?.(); } catch {}
+    };
+    focus();
+    const ids = [
+      setTimeout(focus, 0),
+      setTimeout(focus, 30),
+      setTimeout(focus, 120),
+    ];
+    return () => ids.forEach(clearTimeout);
+  }, []);
+  useKeyboard((evt) => {
+    if (evt.name === "escape") onCancel();
+  });
+  return (
+    <box flexDirection="column">
+      <text fg={theme.fgFaint}>
+        absolute, ~/relative, or relative to your current dir. tilde and ~ both expand.
+      </text>
+      <box flexDirection="row" backgroundColor={theme.selBg} height={1}>
+        <text fg={theme.gold}>{"vault path › "}</text>
+        <input
+          ref={ref}
+          focused
+          placeholder="~/Documents/my-vault"
+          maxLength={400}
+          backgroundColor={theme.selBg}
+          textColor={theme.selFg}
+          onSubmit={onSubmit as any}
+        />
+      </box>
     </box>
   );
 }

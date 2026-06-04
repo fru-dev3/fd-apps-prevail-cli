@@ -90,14 +90,35 @@ function Button({ label, hint, onClick }: { label: string; hint: string; onClick
   );
 }
 
-function FocusedInput({ onSubmit, onCancel }: { onSubmit: (v: string) => void; onCancel: () => void }) {
+function FocusedInput({
+  onSubmit,
+  onCancel,
+  placeholder,
+  maxLength,
+}: {
+  onSubmit: (v: string) => void;
+  onCancel: () => void;
+  placeholder?: string;
+  maxLength?: number;
+}) {
   const ref = useRef<any>(null);
+  // Multi-pass focus: opentui's <input focused> is supposed to focus on
+  // mount, but in practice the very first keystroke after `n` is pressed
+  // (or any other mode switch that mounts this input) sometimes lands
+  // BEFORE the focus has settled — so the user types "wealth" and gets
+  // "ealth". Force-focus across three frames (0 / 30ms / 120ms) catches
+  // the race window. Same pattern proven in chat-pane's input.
   useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    try {
-      node.focus?.();
-    } catch {}
+    const focus = () => {
+      try { ref.current?.focus?.(); } catch {}
+    };
+    focus();
+    const ids = [
+      setTimeout(focus, 0),
+      setTimeout(focus, 30),
+      setTimeout(focus, 120),
+    ];
+    return () => ids.forEach(clearTimeout);
   }, []);
 
   useKeyboard((evt) => {
@@ -108,8 +129,8 @@ function FocusedInput({ onSubmit, onCancel }: { onSubmit: (v: string) => void; o
     <input
       ref={ref}
       focused
-      placeholder="domain-name (lowercase, kebab-case)"
-      maxLength={48}
+      placeholder={placeholder ?? "domain-name (lowercase, kebab-case)"}
+      maxLength={maxLength ?? 48}
       backgroundColor={theme.selBg}
       textColor={theme.selFg}
       onSubmit={onSubmit as any}
