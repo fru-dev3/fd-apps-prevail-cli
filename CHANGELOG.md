@@ -7,6 +7,28 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.8.2] — 2026-06-04 · Skills tab — edit, open, scaffold
+
+Three new entry points into the Skills tab. Zero impact on existing flows (click-to-select still toggles chat-context selection, all other tabs unchanged).
+
+### Added — Edit the highlighted skill
+- **Keyboard:** `e` on the Skills tab opens the highlighted skill's `SKILL.md` in the bundled `EditorPane`. Reuses the existing edit-mode plumbing — same `Ctrl+S` to save, same `Esc` to back out.
+- **Mouse:** the highlighted row sprouts a right-aligned `✎ edit` chip; click to fire the same action. Non-cursor rows render unchanged — no chip clutter.
+
+### Added — Open the skill folder
+- **Keyboard:** `o` on the Skills tab opens the highlighted skill's folder in Finder / Explorer / xdg-open. Lets you edit any file in the skill bundle, not just `SKILL.md`.
+- **Mouse:** the highlighted row also gets a `▸ open` chip alongside `✎ edit`. Both have `stopPropagation` so clicking either never accidentally toggles the skill's chat-context selection.
+
+### Added — Scaffold a new skill
+- **Keyboard:** `n` on the Skills tab opens the CommandBar with prompt `new skill in <domain> ›`. Submit a name → writes `<vault>/<domain>/skills/<id>/SKILL.md` with a minimal frontmatter + section template. Cursor lands on the new row so `e` immediately opens it in the editor.
+- **Mouse:** a `+ new skill` footer row appears at the bottom of the skills list.
+- **Toolbar:** the bottom `[n new]` chip is now context-aware — on Skills tab it scaffolds a skill; elsewhere it still scaffolds a domain.
+
+### Help text update
+The skills tab subheader now reads: `[n] new skill  ·  [e] edit highlighted in $EDITOR  ·  [o] open its folder`.
+
+---
+
 ## [0.8.1] — 2026-06-04 · UI polish + the GIFs the v0.8 release deserved
 
 A polish pass on top of v0.8.0's seven new features.
