@@ -1,6 +1,6 @@
 import { theme } from "./theme.ts";
 import { VERSION } from "./version.ts";
-import { readResponseFramework, readResponseLens } from "./config.ts";
+import { readResponseFramework, readResponseLens, readWebAccess } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
 import { LENSES, getLens, type LensSelection } from "./lens.ts";
 
@@ -22,6 +22,7 @@ interface Props {
   frameworkTick?: number;
   onCycleFramework?: () => void;
   onCycleLens?: () => void;
+  onCycleWeb?: () => void;
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }
 
@@ -39,6 +40,7 @@ export function Branding({
   onOpenTools,
   onCycleFramework,
   onCycleLens,
+  onCycleWeb,
   cliHealthSummary,
 }: Props) {
   const now = new Date();
@@ -88,6 +90,7 @@ export function Branding({
           onOpenTools={onOpenTools}
           onCycleFramework={onCycleFramework}
           onCycleLens={onCycleLens}
+          onCycleWeb={onCycleWeb}
           cliHealthSummary={cliHealthSummary}
           domainCount={domainCount}
           appCount={appCount}
@@ -282,6 +285,7 @@ function StatusColumn({
   onOpenTools,
   onCycleFramework,
   onCycleLens,
+  onCycleWeb,
   cliHealthSummary,
 }: {
   dateLabel: string;
@@ -300,6 +304,7 @@ function StatusColumn({
   onOpenTools?: () => void;
   onCycleFramework?: () => void;
   onCycleLens?: () => void;
+  onCycleWeb?: () => void;
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }) {
   const fw = readResponseFramework();
@@ -316,6 +321,8 @@ function StatusColumn({
   // the row entirely. Active chat state is implied by the cli health
   // row + per-domain spinners in the sidebar. Locals removed.
   void activeChats; void pendingChats;
+
+  const webAllow = readWebAccess() === "allow";
 
   return (
     <box flexDirection="column" flexGrow={1} paddingLeft={2}>
@@ -373,7 +380,12 @@ function StatusColumn({
       </box>
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"        "}</text>
-        <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
+        <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onCycleWeb}>
+          <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>
+            ⬡ Web: {webAllow ? "on" : "off"}
+          </text>
+        </box>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
           <text fg={theme.aiAccent}>◇ configure</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>

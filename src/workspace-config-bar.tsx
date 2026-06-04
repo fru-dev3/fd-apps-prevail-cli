@@ -1,10 +1,12 @@
 import { theme } from "./theme.ts";
 import { openInFinder } from "./system.ts";
 import {
+  readWebAccess,
   resolveResponseFramework,
   resolveResponseLens,
   setResponseFramework,
   setResponseLens,
+  setWebAccess,
 } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
 import { LENSES, type LensSelection } from "./lens.ts";
@@ -26,19 +28,18 @@ interface Props {
   domainKey?: string;
 }
 
-// The single config row that sits below the TabStrip in BOTH chat mode
-// AND workspace mode. Same shape, same position, no duplication with
-// the TabStrip above or the ChatPane status line below. Reads:
+// The single config row that sits at the BOTTOM of the content area in
+// BOTH chat mode AND workspace mode. Same shape, same position, no
+// duplication with the TabStrip above. Reads:
 //
-//   ● Council ON   ◆ Framework: SCQA   ◇ Lens: none   ▸ vault   ✎ edit
+//   ⚖ Council ON   ◆ Framework: SCQA   ◇ Lens: none   ⬡ Web: on   ▸ vault   ✎ edit
 //
 // What lives here, and why:
-//   ● Council     — the toggle for THIS surface (per-domain). The TabStrip
-//                   no longer carries Council, so there's exactly one
-//                   clickable Council source in the cockpit.
-//   ◆ Framework  — per-domain override; cycles on click; "· domain"/"· global"
-//                   hint when the user is overriding.
-//   ◇ Lens       — same, for the cognitive lens fanout.
+//   ⚖ Council     — toggle for THIS surface (per-domain).
+//   ◆ Framework  — per-domain override; cycles on click.
+//   ◇ Lens       — per-domain override for the cognitive lens fanout.
+//   ⬡ Web        — global web-access toggle (allow/deny). Promoted out
+//                   of the Tools panel because the user flips it often.
 //   ▸ vault      — quick Finder/xdg-open at the active domain path.
 //   ✎ edit       — opens $EDITOR on the active markdown tab when applicable.
 //
@@ -92,6 +93,16 @@ export function WorkspaceConfigBar({
       : LENSES.find((l) => l.id === currentLens)?.label ?? currentLens;
   void lensScope;
 
+  // Web access — global only (no per-domain override). The user wanted
+  // the existing tools-panel toggle promoted to a clickable chip on the
+  // ConfigBar so they can flip web on/off as easily as council/framework.
+  // Click cycles allow ↔ deny.
+  const webAllow = readWebAccess() === "allow";
+  const cycleWeb = () => {
+    setWebAccess(webAllow ? "deny" : "allow");
+    onFrameworkChange?.();
+  };
+
   const sep = (
     <text fg={theme.border}>{"   │   "}</text>
   );
@@ -130,6 +141,16 @@ export function WorkspaceConfigBar({
           attributes={currentLens ? 1 : 0}
         >
           ◇ Lens: {lensLabel}
+        </text>
+      </box>
+      <box
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        onMouseDown={cycleWeb}
+      >
+        <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>
+          ⬡ Web: {webAllow ? "on" : "off"}
         </text>
       </box>
       <box flexGrow={1} />

@@ -1954,6 +1954,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           setResponseLens(next as Parameters<typeof setResponseLens>[0]);
           bumpFrameworkTick();
         }}
+        onCycleWeb={() => {
+          // Web access is a global allow/deny. The WorkspaceConfigBar
+          // chip writes to the same key, so both surfaces stay in sync.
+          setWebAccess(readWebAccess() === "allow" ? "deny" : "allow");
+          bumpFrameworkTick();
+        }}
         cliHealthSummary={clis.map((c) => {
           const h = cliHealth.get(c.kind);
           return {
