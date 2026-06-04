@@ -7,6 +7,40 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.6.1] — 2026-06-03 · UX polish + visibility
+
+Iterative fixes to v0.6.0 based on real-use feedback. No new features so much as **making the existing ones findable**.
+
+### Fixed — Navigation
+- **No more "press Escape to see the app."** Removed the auto-open-chat `useEffect` that was silently re-setting mode to "chat" on every navigation, undoing every nav-fix attempt. Clicking a sidebar item now lands you on the workspace immediately.
+- **Tab strip off-by-one.** Clicking `state` was selecting `quickstart`, clicking `skills` was selecting nothing. TabStrip array includes `chat` at index 0 but `VIEW_ORDER` doesn't — the click handler was passing TabStrip indices straight to `setViewIdx`. Now offset by 1 so each tab actually selects what it says.
+- **Arrow nav + Enter / `c` keys** no longer force-open a separate chat pane. The embedded chat in every workspace is enough.
+
+### Fixed — Layout
+- **Wordmark spacing.** Five iterations on this. Final shape: 10×7 uniform ANSI-Shadow-style letters in identical bounding boxes, all gaps equal (single cell between every letter, no group breaks). The `A` glyph's body is now centered with its top rows. Banner padding above and below the hero.
+- **Domain pane: nothing below the chat input.** No more reference strip — chat fills the entire pane, input at the very bottom.
+- **App Overview compacted** from 8 labeled rows to 4 (`kind` / `how` / `scope` plus the title line carrying status + last probe). Issue + fix rows only appear when the connection is broken.
+
+### Added — Visibility
+- **Workspace config bar** at the top of every domain and connector pane: `📂 open vault` (spawns Finder/Explorer/xdg-open) · `⚖ Council ON/OFF` · `◆ Framework <name>`. All clickable. Three things users were doing via slash commands before.
+- **Global toggles in the banner top-right**: `defaults  ⚖ ON/off  ⚙ configure  │  ◆ <framework>`. The `⚙ configure` link opens the full CouncilConfigPanel (pick engines, pick models, pin the chair). The `⚖` toggle writes a `councilDefaultOn` to config — per-chat overrides still win when set.
+- **Panel health row in the banner**: `panel  ✓ Claude  ✓ Codex  ⚠ Gemini  ⠋ Ollama`. You see BEFORE firing council which panelists are healthy.
+- **Per-domain prompt suggestions.** DomainChat empty-state reads `PROMPTS.md` from the domain folder and extracts question-shaped lines; falls back to generic prompts when the file is sparse.
+- **Multi-select skills** in the domain Skills tab. Click a skill to select it (☑); click again to unselect. Selected skills are injected as `<selected_skills>` context into the next chat turn.
+
+### Added — Defaults
+- **Domains default to the chat tab.** Clicking a domain in the sidebar opens its chat with suggested prompts — `state` / `quickstart` / `prompts` / `skills` are still one click away.
+- **Single version source of truth** at `src/version.ts`. Imported by `--version`, the banner, and the MCP `serverInfo`.
+
+### Skills shipped per connector (carried from v0.6.0)
+- github: `pr-queue`, `repo-stars-trend`
+- plaid: `list-institutions`, `recent-transactions`
+- youtube-analytics: `channel-metrics`
+- linkedin: `profile-views` (stub — browser runner phase 6)
+- google-calendar: `today-events` (stub — MCP runner phase 5)
+
+---
+
 ## [0.6.0] — 2026-06-03 · connectors are workspaces, not manifests
 
 Apps stop being passive manifest viewers and become **live workspaces**. Clicking any connector now lands you on a `Overview + Chat` page: connection status at the top, a working chat with the connector's data right below. No more "click Skills to find anything."
