@@ -26,6 +26,7 @@ import {
   readResponseFramework,
   readCheckpoint,
   readResponseLens,
+  readSerendipity,
   readWebAccess,
   readGlobalCouncilDefault,
   setResponseFramework,
@@ -64,6 +65,7 @@ import {
 import { tickAndRunDue } from "./schedule.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
 import { distillTurnToJournal } from "./journal.ts";
+import { runSerendipityPass } from "./serendipity.ts";
 import {
   detectOllama,
   detectSubprocessClis,
@@ -1540,6 +1542,40 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             model: synthModel,
             signal: controller.signal,
           }).catch(() => {});
+          // Serendipity on the council VERDICT — same pattern as the
+          // single-chat path. The post-call uses the chair model so
+          // the angle stays consistent with the synthesis voice.
+          if (readSerendipity(session.hostDomain.name)) {
+            void (async () => {
+              const angle = await runSerendipityPass({
+                cwd: session.hostDomain.path,
+                cli: synthCli,
+                model: synthModel,
+                userPrompt: text,
+                assistantReply: verdict,
+              });
+              if (!angle) return;
+              const sTs = Date.now();
+              setChats((m) => {
+                const cur = m.get(key);
+                if (!cur) return m;
+                return new Map(m).set(key, {
+                  ...cur,
+                  messages: [
+                    ...cur.messages,
+                    {
+                      role: "assistant" as const,
+                      content: angle,
+                      ts: sTs,
+                      kind: "serendipity" as const,
+                      cli: synthCli.kind,
+                      model: synthModel,
+                    },
+                  ],
+                });
+              });
+            })().catch(() => {});
+          }
           // Replace the synthesizing placeholder with the verdict, AND flip
           // pending=false in the same setChats so the spinner stops the
           // instant the verdict bubble appears.
@@ -1746,6 +1782,42 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           cli: session.cli,
           model: session.model,
         }).catch(() => {});
+        // Serendipity (Option B): when enabled, fire a SECOND call to
+        // the same CLI asking for one non-obvious adjacent angle. The
+        // result lands as its own dim bubble below the main reply.
+        // Fire-and-forget — if the call fails or returns empty, the
+        // bubble simply never appears.
+        if (readSerendipity(session.hostDomain.name)) {
+          void (async () => {
+            const angle = await runSerendipityPass({
+              cwd: session.hostDomain.path,
+              cli: session.cli,
+              model: session.model,
+              userPrompt: text,
+              assistantReply: response,
+            });
+            if (!angle) return;
+            const sTs = Date.now();
+            setChats((m) => {
+              const cur = m.get(key);
+              if (!cur) return m;
+              return new Map(m).set(key, {
+                ...cur,
+                messages: [
+                  ...cur.messages,
+                  {
+                    role: "assistant" as const,
+                    content: angle,
+                    ts: sTs,
+                    kind: "serendipity" as const,
+                    cli: session.cli.kind,
+                    model: session.model,
+                  },
+                ],
+              });
+            });
+          })().catch(() => {});
+        }
         setChats((m) => {
           const cur = m.get(key);
           if (!cur) return m;

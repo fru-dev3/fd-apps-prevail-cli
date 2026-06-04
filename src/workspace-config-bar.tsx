@@ -2,12 +2,14 @@ import { theme } from "./theme.ts";
 import { openInFinder } from "./system.ts";
 import {
   readCheckpoint,
+  readSerendipity,
   readWebAccess,
   resolveResponseFramework,
   resolveResponseLens,
   setCheckpoint,
   setResponseFramework,
   setResponseLens,
+  setSerendipity,
   setWebAccess,
 } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
@@ -117,6 +119,15 @@ export function WorkspaceConfigBar({
     onFrameworkChange?.();
   };
 
+  // Serendipity — when ON, every turn fires a second small call after
+  // the main reply asking for one non-obvious adjacent angle. Lands as
+  // a dim ◉ bubble. OFF by default — opt-in per domain.
+  const serendipityOn = readSerendipity(domainKey);
+  const toggleSerendipity = () => {
+    setSerendipity(!serendipityOn, domainKey);
+    onFrameworkChange?.();
+  };
+
   const sep = (
     <text fg={theme.border}>{"   │   "}</text>
   );
@@ -175,6 +186,16 @@ export function WorkspaceConfigBar({
       >
         <text fg={checkpointOn ? theme.aiAccent : theme.fgDim} attributes={checkpointOn ? 1 : 0}>
           ▣ Save: {checkpointOn ? "on" : "off"}
+        </text>
+      </box>
+      <box
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        onMouseDown={toggleSerendipity}
+      >
+        <text fg={serendipityOn ? theme.aiAccent : theme.fgDim} attributes={serendipityOn ? 1 : 0}>
+          ◉ Serendipity: {serendipityOn ? "on" : "off"}
         </text>
       </box>
       <box flexGrow={1} />

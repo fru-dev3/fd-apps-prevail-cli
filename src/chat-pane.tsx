@@ -108,7 +108,12 @@ export interface ChatMsg {
     // Live-updating assistant bubble during streaming. Replaced with a
     // normal "assistant" message when the stream finishes. Used by the
     // single-CLI chat path; council uses its own panelist-streaming flow.
-    | "streaming";
+    | "streaming"
+    // Post-turn serendipity injection (Option B). After the main reply
+    // lands, an extra lightweight call asks the same CLI for one
+    // non-obvious adjacent angle. Result lands here as its own dim
+    // bubble so it doesn't pollute the main answer.
+    | "serendipity";
   cli?: CliKind; // for council-response bubbles
   model?: string;
   // Captured at SEND TIME so the per-bubble badge can render what was
@@ -873,6 +878,9 @@ function MessageBubble({
   if (msg.kind === "streaming") {
     return <StreamingAssistantBubble msg={msg} tick={tick} />;
   }
+  if (msg.kind === "serendipity") {
+    return <SerendipityBubble msg={msg} />;
+  }
   if (msg.role === "system") {
     return (
       <box flexDirection="column" paddingTop={1} paddingBottom={1}>
@@ -1420,6 +1428,33 @@ function CouncilPendingBubble({ msg, tick }: { msg: ChatMsg; tick: number }) {
       >
         <text fg={theme.gold}>{spinnerChar(tick)}</text>
         <text fg={theme.fgDim}>  {thinkingWord(tick)}…</text>
+      </box>
+    </box>
+  );
+}
+
+// Post-turn "serendipity" injection — rendered as a dim, narrow bubble
+// directly under the main reply. The ◉ glyph differentiates it from
+// council bubbles (⚖) and ordinary assistant bubbles. Color is dim
+// gold so the user clearly sees it's adjacent commentary, not the
+// answer to their question.
+function SerendipityBubble({ msg }: { msg: ChatMsg }) {
+  const labelParts: string[] = ["serendipity"];
+  if (msg.cli) labelParts.push(msg.cli);
+  if (msg.model && msg.model.trim()) labelParts.push(msg.model.trim());
+  return (
+    <box flexDirection="column" paddingBottom={1} paddingLeft={2}>
+      <box
+        flexDirection="column"
+        border
+        borderColor={theme.goldDim}
+        backgroundColor={theme.bg}
+        title={` ◉ ${labelParts.join(" · ")} `}
+        titleAlignment="left"
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        {renderMarkdownLines(msg.content)}
       </box>
     </box>
   );

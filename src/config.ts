@@ -61,6 +61,13 @@ export interface UserConfig {
   // touching the global.
   checkpoint?: boolean;
   domainCheckpoint?: Record<string, boolean>;
+  // Serendipity injection — when on, every chat turn fires a second
+  // lightweight call after the main reply to surface one non-obvious
+  // adjacent angle, fact, or question the user didn't ask but might
+  // value. Off by default (the user opts in domain-by-domain or
+  // globally). Per-domain override available.
+  serendipity?: boolean;
+  domainSerendipity?: Record<string, boolean>;
 }
 
 export function readGlobalCouncilDefault(): boolean {
@@ -314,6 +321,32 @@ export function setCheckpoint(on: boolean, domainKey?: string): void {
     next.domainCheckpoint = map;
   } else {
     next.checkpoint = on;
+  }
+  writeConfig(next);
+}
+
+// Serendipity — same shape as checkpoint, but OFF by default (this is
+// an opt-in injection; the user picks where it adds signal).
+export function readSerendipity(domainKey?: string): boolean {
+  const cfg = readConfig();
+  if (!cfg) return false;
+  if (domainKey) {
+    const override = cfg.domainSerendipity?.[domainKey];
+    if (override !== undefined) return override;
+  }
+  return cfg.serendipity ?? false;
+}
+
+export function setSerendipity(on: boolean, domainKey?: string): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (domainKey) {
+    const map = { ...(next.domainSerendipity ?? {}) };
+    map[domainKey] = on;
+    next.domainSerendipity = map;
+  } else {
+    next.serendipity = on;
   }
   writeConfig(next);
 }
