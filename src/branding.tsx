@@ -59,7 +59,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={10}
+      height={11}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -356,6 +356,13 @@ function StatusColumn({
           row below shows ✓/⚠/⠋ per panelist so the user knows BEFORE
           firing /council which engines are ready. */}
       <text> </text>
+      {/* Two rows for the defaults block — the status column is too
+          narrow to fit Council + configure + Framework + Lens + tools
+          on a single line. opentui clipped every chip past Council on
+          the original one-line layout (user reported "i don't see any
+          text there in those options"). Row 1 carries the surface-level
+          controls (council toggle, configure, tools); row 2 carries the
+          two response-shaping defaults (framework, lens). */}
       <box flexDirection="row" height={1}>
         <text fg={theme.fgFaint}>{"defaults"}</text>
         <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onToggleGlobalCouncil}>
@@ -367,19 +374,21 @@ function StatusColumn({
           <text fg={theme.aiAccent}>◇ configure</text>
         </box>
         <text fg={theme.border}>{" │ "}</text>
-        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>
+          <text fg={theme.aiAccent} attributes={1}>▸ tools</text>
+        </box>
+      </box>
+      <box flexDirection="row" height={1}>
+        <text fg={theme.fgFaint}>{"        "}</text>
+        <box flexDirection="row" paddingLeft={2} paddingRight={1} onMouseDown={onCycleFramework}>
           <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>
-            ◆ {fwLabel}
+            ◆ Framework: {fwLabel}
           </text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleLens}>
           <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>
             ◇ Lens: {lensLabel}
           </text>
-        </box>
-        <text fg={theme.border}>{" │ "}</text>
-        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>
-          <text fg={theme.aiAccent} attributes={1}>▸ tools</text>
         </box>
       </box>
       {cliHealthSummary && cliHealthSummary.length > 0 && (
