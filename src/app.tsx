@@ -628,13 +628,12 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       setMode("chat");
       return;
     }
-    if (clis.length === 1) {
-      finalizeOpen(clis[0], open);
-    } else {
-      setCliIdx(0);
-      setPendingOpen(open);
-      setMode("pick-cli");
-    }
+    // Default to claude when available; fall back to the first detected
+    // engine. The user can switch with /claude /codex /gemini /ollama
+    // inside the chat. Going to the pick-cli overlay before chat starts
+    // was an extra step the user didn't want.
+    const preferred = clis.find((c) => c.kind === "claude") ?? clis[0]!;
+    finalizeOpen(preferred, open);
   }
 
   function finalizeOpen(cli: AvailableCli, open: PendingOpen) {
@@ -1771,11 +1770,13 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           onPickDomain={(i) => {
             setDomainIdx(i);
             setFocus("domains");
-            setMode("idle");
-            setActiveKey(null);
             embeddedInputActiveRef.current = false;
-            // Domains default to chat. Always.
-            setChatTabActive(true);
+            // Domains default to chat — the FULL ChatPane experience
+            // (council mode, up-arrow history, streaming, escape, slash
+            // commands, /distill, /council, etc.). Escape exits chat
+            // back to the workspace's other tabs (state/skills/etc).
+            const d = domains[i];
+            if (d) openChatForDomain(d);
           }}
           onPickApp={(i) => {
             setAppIdx(i);
@@ -1783,9 +1784,8 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             setMode("idle");
             setActiveKey(null);
             embeddedInputActiveRef.current = false;
-            // Apps land on the Overview + Chat tab — chat is part of
-            // that tab, so chatTabActive isn't relevant for apps.
-            setChatTabActive(false);
+            // Apps stay on the Overview workspace (Auth / Sync / Skills
+            // / Data tabs). User clicks the chat tab to enter ChatPane.
           }}
           onNewDomain={() => {
             setFocus("domains");
@@ -1802,21 +1802,18 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
               ((focus === "domains" && domain) || (focus === "apps" && app)) && !inEdit ? (
                 <TabStrip
                   activeView={view}
-                  inChat={chatTabActive || Boolean(inChat)}
+                  inChat={Boolean(inChat)}
                   onPickView={(i) => {
                     setFocus(focus);
                     setViewIdx(i);
                     if (mode === "chat") setMode("idle");
-                    // Clicking any non-chat tab returns to view-specific
-                    // content (state.md, skills list, etc.).
-                    setChatTabActive(false);
                   }}
                   onPickChat={() => {
-                    // Show the embedded DomainChat / ConnectorChat
-                    // inline instead of switching to the full-pane
-                    // global ChatPane. Keeps everything in the workspace
-                    // — no Escape required to come back.
-                    setChatTabActive(true);
+                    // Open the full ChatPane with council mode, up-arrow
+                    // history, streaming, escape, slash commands — all
+                    // of it. Escape returns to the workspace.
+                    if (focus === "apps" && app) openChatForApp(app);
+                    else if (domain) openChatForDomain(domain);
                   }}
                   onEdit={() => {
                     if (mode === "chat") setMode("idle");
@@ -1922,7 +1919,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
                 }}
                 topBar={tabBar}
                 setEmbeddedInputActive={setEmbeddedInputActive}
-                showChat={chatTabActive}
+                showChat={false}
                 councilOn={domain ? councilModeFor(domain.name) : false}
                 onToggleCouncil={() => domain && toggleCouncilModeFor(domain.name)}
                 frameworkTick={frameworkTick}
