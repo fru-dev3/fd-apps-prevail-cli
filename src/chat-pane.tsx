@@ -22,15 +22,18 @@ import {
 import {
   readCouncilConfig,
   readResponseFramework,
+  readResponseLens,
   setCouncilClis,
   setCouncilModel,
   addCouncilModel,
   removeCouncilModel,
   setCouncilChair,
   setResponseFramework,
+  setResponseLens,
   type CliKind as ConfigCliKind,
 } from "./config.ts";
 import { FRAMEWORKS, getFramework, type FrameworkId } from "./framework.ts";
+import { LENSES, getLens, type LensSelection } from "./lens.ts";
 import { parseVerdict } from "./verdict-parser.ts";
 import {
   buildSuggestions,
@@ -1561,10 +1564,46 @@ function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: numb
   // already shows the spinner + "X is thinking…" word. Rendering the same
   // here was a duplicate, so the status line stays silent during work and
   // only carries the idle ready-prompt.
-  // Display the framework that will actually be applied to this domain —
-  // per-domain override wins, falls through to global. Keeps the status
-  // line honest when the user has set an override on this domain only.
-  const fw = getFramework(readResponseFramework(session.hostDomain.name));
+  //
+  // Both Framework and Lens chips live on this status line in chat mode
+  // because the WorkspaceConfigBar (which also carries them) is NOT
+  // rendered in chat — chat mode replaces the workspace view entirely.
+  // Without these chips, the user had no way to see or change the active
+  // framework/lens for the domain while chatting. Click either chip to
+  // cycle; per-domain override semantics match the workspace bar.
+  const domainKey = session.hostDomain.name;
+  const [, bump] = useState(0);
+  const forceRefresh = () => bump((n) => n + 1);
+
+  const fwId = readResponseFramework(domainKey);
+  const fw = getFramework(fwId);
+  const cycleFw = () => {
+    const order = [null, ...FRAMEWORKS.map((f) => f.id)] as (FrameworkId | null)[];
+    const idx = order.indexOf(fwId);
+    const next = order[(idx + 1) % order.length] ?? null;
+    setResponseFramework(next, domainKey);
+    forceRefresh();
+  };
+
+  const lensSel: LensSelection = readResponseLens(domainKey);
+  const lensLabel =
+    lensSel === null
+      ? "off"
+      : lensSel === "all"
+        ? "all (×5)"
+        : getLens(lensSel)?.label ?? "off";
+  const cycleLens = () => {
+    const order: LensSelection[] = [
+      null,
+      ...LENSES.map((l) => l.id as LensSelection),
+      "all",
+    ];
+    const idx = order.findIndex((s) => s === lensSel);
+    const next = order[(idx + 1) % order.length] ?? null;
+    setResponseLens(next, domainKey);
+    forceRefresh();
+  };
+
   return (
     <box
       flexDirection="row"
@@ -1573,12 +1612,18 @@ function StatusLine({ session, tick: _tick }: { session: ChatSession; tick: numb
       paddingRight={2}
       backgroundColor={theme.bg}
     >
-      {fw && (
-        <text>
-          <span fg={theme.aiAccent} attributes={1}>{`◆ ${fw.label}`}</span>
-          <span fg={theme.fgFaint}>{"  ·  "}</span>
+      <box flexDirection="row" onMouseDown={cycleFw} paddingRight={1}>
+        <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>
+          {`◆ ${fw ? fw.label : "Framework: off"}`}
         </text>
-      )}
+      </box>
+      <text fg={theme.fgFaint}>{"·  "}</text>
+      <box flexDirection="row" onMouseDown={cycleLens} paddingRight={1}>
+        <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>
+          {`◇ Lens: ${lensLabel}`}
+        </text>
+      </box>
+      <text fg={theme.fgFaint}>{"·  "}</text>
       {session.pending ? (
         <text fg={theme.fgFaint}> </text>
       ) : (

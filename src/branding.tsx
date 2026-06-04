@@ -1,7 +1,8 @@
 import { theme } from "./theme.ts";
 import { VERSION } from "./version.ts";
-import { readResponseFramework } from "./config.ts";
+import { readResponseFramework, readResponseLens } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
+import { LENSES, getLens, type LensSelection } from "./lens.ts";
 
 interface Props {
   domainCount: number;
@@ -20,6 +21,7 @@ interface Props {
   onOpenTools?: () => void;
   frameworkTick?: number;
   onCycleFramework?: () => void;
+  onCycleLens?: () => void;
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }
 
@@ -36,6 +38,7 @@ export function Branding({
   onOpenCouncilConfig,
   onOpenTools,
   onCycleFramework,
+  onCycleLens,
   cliHealthSummary,
 }: Props) {
   const now = new Date();
@@ -84,6 +87,7 @@ export function Branding({
           onOpenCouncilConfig={onOpenCouncilConfig}
           onOpenTools={onOpenTools}
           onCycleFramework={onCycleFramework}
+          onCycleLens={onCycleLens}
           cliHealthSummary={cliHealthSummary}
           domainCount={domainCount}
           appCount={appCount}
@@ -277,6 +281,7 @@ function StatusColumn({
   onOpenCouncilConfig,
   onOpenTools,
   onCycleFramework,
+  onCycleLens,
   cliHealthSummary,
 }: {
   dateLabel: string;
@@ -294,10 +299,18 @@ function StatusColumn({
   onOpenCouncilConfig?: () => void;
   onOpenTools?: () => void;
   onCycleFramework?: () => void;
+  onCycleLens?: () => void;
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
 }) {
   const fw = readResponseFramework();
   const fwLabel = fw ? FRAMEWORKS.find((f) => f.id === fw)?.label ?? fw : "off";
+  const lensSel: LensSelection = readResponseLens();
+  const lensLabel =
+    lensSel === null
+      ? "off"
+      : lensSel === "all"
+        ? "all (×5)"
+        : getLens(lensSel)?.label ?? "off";
   const statusGlyph = pendingChats > 0 ? "⠋" : activeChats > 0 ? "●" : "○";
   const statusColor =
     pendingChats > 0 ? theme.gold : activeChats > 0 ? theme.ok : theme.fgDim;
@@ -357,6 +370,11 @@ function StatusColumn({
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleFramework}>
           <text fg={fw ? theme.aiAccent : theme.fgDim} attributes={fw ? 1 : 0}>
             ◆ {fwLabel}
+          </text>
+        </box>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onCycleLens}>
+          <text fg={lensSel ? theme.aiAccent : theme.fgDim} attributes={lensSel ? 1 : 0}>
+            ◇ Lens: {lensLabel}
           </text>
         </box>
         <text fg={theme.border}>{" │ "}</text>

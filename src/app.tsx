@@ -27,6 +27,7 @@ import {
   readWebAccess,
   readGlobalCouncilDefault,
   setResponseFramework,
+  setResponseLens,
   setCouncilClis,
   setCouncilModel,
   addCouncilModel,
@@ -1849,6 +1850,20 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           const idx = ids.indexOf(cur as typeof ids[number]);
           const next = ids[(idx + 1) % ids.length];
           setResponseFramework(next as Parameters<typeof setResponseFramework>[0]);
+          bumpFrameworkTick();
+        }}
+        onCycleLens={() => {
+          // Mirror the framework cycle but for the global lens default.
+          // Per-domain overrides still win at the workspace bar / chat
+          // status line — this only sets the fallback.
+          const cur = readResponseLens();
+          const order = [
+            null, "first-principles", "outsider", "contrarian",
+            "expansionist", "executor", "all",
+          ] as const;
+          const idx = order.findIndex((s) => s === cur);
+          const next = order[(idx + 1) % order.length];
+          setResponseLens(next as Parameters<typeof setResponseLens>[0]);
           bumpFrameworkTick();
         }}
         cliHealthSummary={clis.map((c) => {
