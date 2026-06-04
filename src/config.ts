@@ -53,6 +53,14 @@ export interface UserConfig {
   // Global council default. When a chat session has no explicit per-key
   // setting, this is the fallback. Per-chat overrides still win when set.
   councilDefaultOn?: boolean;
+  // Checkpointing — when true, every chat turn (prompt + reply) is
+  // appended verbatim to <domain>/_log/YYYY-MM-DD.md. Default ON: the
+  // user wants every interaction saved for future reference. Read via
+  // readCheckpoint(domainKey?) so a per-domain override (rare — most
+  // users want everything saved) can disable a noisy domain without
+  // touching the global.
+  checkpoint?: boolean;
+  domainCheckpoint?: Record<string, boolean>;
 }
 
 export function readGlobalCouncilDefault(): boolean {
@@ -279,6 +287,33 @@ export function setResponseLens(
   } else {
     if (sel === null) delete next.responseLens;
     else next.responseLens = sel;
+  }
+  writeConfig(next);
+}
+
+// Checkpoint resolution — global default is ON because the user
+// explicitly asked for every interaction to be logged. Per-domain
+// override flips a single domain without touching the global.
+export function readCheckpoint(domainKey?: string): boolean {
+  const cfg = readConfig();
+  if (!cfg) return true;
+  if (domainKey) {
+    const override = cfg.domainCheckpoint?.[domainKey];
+    if (override !== undefined) return override;
+  }
+  return cfg.checkpoint ?? true;
+}
+
+export function setCheckpoint(on: boolean, domainKey?: string): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (domainKey) {
+    const map = { ...(next.domainCheckpoint ?? {}) };
+    map[domainKey] = on;
+    next.domainCheckpoint = map;
+  } else {
+    next.checkpoint = on;
   }
   writeConfig(next);
 }

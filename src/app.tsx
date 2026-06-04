@@ -24,6 +24,7 @@ import {
   isCliKind,
   readCouncilConfig,
   readResponseFramework,
+  readCheckpoint,
   readResponseLens,
   readWebAccess,
   readGlobalCouncilDefault,
@@ -1520,6 +1521,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             gut,
             framework: councilFwLabel,
             lens: councilLensLabel,
+            // Checkpoint mode persists the verdict verbatim instead of
+            // the 400-char heuristic snapshot. The user wants every
+            // council outcome saved in full for future reference.
+            raw: readCheckpoint(session.hostDomain.name),
           });
           // Replace the synthesizing placeholder with the verdict, AND flip
           // pending=false in the same setChats so the spinner stops the
@@ -1711,6 +1716,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           kind: "chat",
           framework: fwLabel,
           lens: lensLabel,
+          // Checkpoint mode persists the prompt + full reply verbatim.
+          // Default ON globally so the user has a complete transcript
+          // of every chat turn across every domain.
+          raw: readCheckpoint(session.hostDomain.name),
         });
         setChats((m) => {
           const cur = m.get(key);

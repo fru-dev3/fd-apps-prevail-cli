@@ -35,6 +35,12 @@ export interface TurnSummaryArgs {
   // decisions. Display labels (e.g. "BLUF", "CONTRARIAN"), not ids.
   framework?: string;
   lens?: string;
+  // When true, the FULL user prompt + FULL assistant reply are written
+  // verbatim (just whitespace-normalized) — no heuristicSummarize
+  // truncation. This is "checkpoint" mode: every interaction lands on
+  // disk in its original form so the user has a complete transcript.
+  // Default (false) preserves the long-standing summarized log shape.
+  raw?: boolean;
 }
 
 // Write a chat-turn summary to today's log file. Creates _log/ if missing.
@@ -87,7 +93,12 @@ function timeKey(ts: number): string {
 }
 
 function renderEntry(args: TurnSummaryArgs): string {
-  const q = heuristicSummarize(args.userPrompt, 220);
+  // Checkpoint mode (raw=true): keep the prompt and reply VERBATIM. The
+  // user explicitly asked for the chat to be saved as-it-happens, not
+  // condensed. Strip nothing except trailing whitespace; markdown stays
+  // markdown. Summarized mode (default) keeps the existing one-line
+  // snapshot used by the daily index + memory recall.
+  const q = args.raw ? args.userPrompt.trimEnd() : heuristicSummarize(args.userPrompt, 220);
   let assistantSnippet = args.assistantReply;
   let divergenceFlag = "";
   if (args.kind === "council-verdict") {
@@ -95,7 +106,7 @@ function renderEntry(args: TurnSummaryArgs): string {
     if (parsed.verdict) assistantSnippet = parsed.verdict;
     if (parsed.hasDivergence) divergenceFlag = "  ·  🔀 disagreement";
   }
-  const a = heuristicSummarize(assistantSnippet, 400);
+  const a = args.raw ? assistantSnippet.trimEnd() : heuristicSummarize(assistantSnippet, 400);
   const tag = args.kind === "council-verdict" ? "⚖ council" : args.cliLabel;
   // Calibration metadata — invisible in rendered markdown but greppable
   // and machine-readable. Only written when there's something to track

@@ -1,9 +1,11 @@
 import { theme } from "./theme.ts";
 import { openInFinder } from "./system.ts";
 import {
+  readCheckpoint,
   readWebAccess,
   resolveResponseFramework,
   resolveResponseLens,
+  setCheckpoint,
   setResponseFramework,
   setResponseLens,
   setWebAccess,
@@ -32,7 +34,7 @@ interface Props {
 // BOTH chat mode AND workspace mode. Same shape, same position, no
 // duplication with the TabStrip above. Reads:
 //
-//   ⚖ Council ON   ◆ Framework: SCQA   ◇ Lens: none   ⬡ Web: on   ▸ vault   ✎ edit
+//   ⚖ Council ON   ◆ Framework: SCQA   ◇ Lens: none   ⬡ Web: on   ▣ Save: on   ▸ vault   ✎ edit
 //
 // What lives here, and why:
 //   ⚖ Council     — toggle for THIS surface (per-domain).
@@ -40,6 +42,9 @@ interface Props {
 //   ◇ Lens       — per-domain override for the cognitive lens fanout.
 //   ⬡ Web        — global web-access toggle (allow/deny). Promoted out
 //                   of the Tools panel because the user flips it often.
+//   ▣ Save       — per-domain checkpoint toggle. ON (default) writes
+//                   the full prompt + reply to <domain>/_log/ on every
+//                   turn so the user has a complete transcript.
 //   ▸ vault      — quick Finder/xdg-open at the active domain path.
 //   ✎ edit       — opens $EDITOR on the active markdown tab when applicable.
 //
@@ -103,6 +108,15 @@ export function WorkspaceConfigBar({
     onFrameworkChange?.();
   };
 
+  // Checkpoint — when ON (default), every chat turn writes raw Q+A to
+  // <domain>/_log/. Per-domain override available so a noisy domain
+  // can be turned off without disabling globally.
+  const checkpointOn = readCheckpoint(domainKey);
+  const toggleCheckpoint = () => {
+    setCheckpoint(!checkpointOn, domainKey);
+    onFrameworkChange?.();
+  };
+
   const sep = (
     <text fg={theme.border}>{"   │   "}</text>
   );
@@ -151,6 +165,16 @@ export function WorkspaceConfigBar({
       >
         <text fg={webAllow ? theme.aiAccent : theme.fgDim} attributes={webAllow ? 1 : 0}>
           ⬡ Web: {webAllow ? "on" : "off"}
+        </text>
+      </box>
+      <box
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        onMouseDown={toggleCheckpoint}
+      >
+        <text fg={checkpointOn ? theme.aiAccent : theme.fgDim} attributes={checkpointOn ? 1 : 0}>
+          ▣ Save: {checkpointOn ? "on" : "off"}
         </text>
       </box>
       <box flexGrow={1} />
