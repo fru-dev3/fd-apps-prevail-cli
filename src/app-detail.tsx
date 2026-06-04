@@ -92,31 +92,31 @@ export function AppDetail({ app, view, skillIdx, onPickSkill, topBar, setEmbedde
         onFrameworkChange={onFrameworkChange}
         onOpenChat={onOpenChat}
       />
-      {/* Same shape as DomainDetail: a single scrollable view, no
-          nested tab strip. The connector content is stacked top to
-          bottom — overview / auth / sync / skills / data — so the user
-          sees everything at a glance and scrolls for the rest. Chat
-          is reached by clicking the chat tab in the global TabStrip
-          (it opens ChatPane just like a domain chat). */}
+      {/* Apps now use the GLOBAL TabStrip exactly like domains —
+          clicking state/quickstart/prompts/skills/chat changes which
+          section of the connector workspace shows. Same behavior as
+          domain tabs:
+            state      → overview (connection summary + data)
+            quickstart → auth (how to authenticate)
+            prompts    → scheduled syncs
+            skills     → runnable skills list
+            chat       → ChatPane (handled at the app.tsx level)
+          The user gets the SAME tab interaction across domains AND
+          apps; only the content differs. */}
       <box flexGrow={1} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
         <scrollbox flexGrow={1} scrollY>
-          <ConnectorCompactSummary app={app} skillsCount={skills.length} />
-          <text> </text>
-          <text fg={theme.border}>{"─".repeat(80)}</text>
-          <text fg={theme.gold} attributes={1}>▸ Authentication</text>
-          <ConnectorAuthPanel app={app} />
-          <text> </text>
-          <text fg={theme.border}>{"─".repeat(80)}</text>
-          <text fg={theme.gold} attributes={1}>{`▸ Scheduled syncs`}</text>
-          <ConnectorSyncPanel app={app} skills={skills} />
-          <text> </text>
-          <text fg={theme.border}>{"─".repeat(80)}</text>
-          <text fg={theme.gold} attributes={1}>{`▸ Skills (${skills.length})`}</text>
-          <ConnectorSkillsPanel app={app} skills={skills} />
-          <text> </text>
-          <text fg={theme.border}>{"─".repeat(80)}</text>
-          <text fg={theme.gold} attributes={1}>▸ Data</text>
-          <ConnectorDataPanel app={app} />
+          {view === "state" && (
+            <>
+              <ConnectorCompactSummary app={app} skillsCount={skills.length} />
+              <text> </text>
+              <text fg={theme.border}>{"─".repeat(80)}</text>
+              <text fg={theme.gold} attributes={1}>▸ Data</text>
+              <ConnectorDataPanel app={app} />
+            </>
+          )}
+          {view === "quickstart" && <ConnectorAuthPanel app={app} />}
+          {view === "prompts" && <ConnectorSyncPanel app={app} skills={skills} />}
+          {view === "skills" && <ConnectorSkillsPanel app={app} skills={skills} />}
         </scrollbox>
       </box>
     </box>
