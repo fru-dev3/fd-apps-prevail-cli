@@ -1808,11 +1808,13 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           onPickApp={(i) => {
             setAppIdx(i);
             setFocus("apps");
-            setMode("idle");
-            setActiveKey(null);
             embeddedInputActiveRef.current = false;
-            // Apps stay on the Overview workspace (Auth / Sync / Skills
-            // / Data tabs). User clicks the chat tab to enter ChatPane.
+            // Mirror the domain experience — land in chat for the app
+            // too. Escape exits chat to the workspace (Overview / Auth
+            // / Sync / Skills / Data) when the user wants to see the
+            // connection details, APIs, etc.
+            const a = apps[i];
+            if (a) openChatForApp(a);
           }}
           onNewDomain={() => {
             setFocus("domains");
