@@ -1,6 +1,9 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
+import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
+
 // Canonical benchmark — the USER's personal set of questions with KNOWN
 // ground-truth verdicts. Distinct from the bundled bench/ generic suite:
 //
@@ -221,6 +224,206 @@ function escapeYaml(s: string): string {
 function escapeKeyword(s: string): string {
   if (/[\s,\[\]]/.test(s)) return `"${s.replace(/"/g, '\\"')}"`;
   return s;
+}
+
+// --- RUN -----------------------------------------------------------------
+
+export interface CanonicalRunArgs {
+  vaultPath: string;
+  questions: CanonicalQuestion[];
+  clis: AvailableCli[];
+  // Which CLI to run the question through. When undefined and the
+  // question has council=true, the call is fanned to the whole panel
+  // via runCouncilOneShot. When defined, the question is run as a
+  // single chat — useful for benchmarking ONE new model against the
+  // canonical set.
+  targetCli?: AvailableCli;
+  targetModel?: string;
+  signal?: AbortSignal;
+  onProgress?: (id: string, status: "start" | "ok" | "error", info?: string) => void;
+}
+
+export interface CanonicalRunRecord {
+  id: string;
+  domain: string;
+  prompt: string;
+  expected_decision?: string;
+  expected_verdict_keywords?: string[];
+  reply: string;
+  ms: number;
+  council: boolean;
+  cli?: string;
+  model?: string;
+  ok: boolean;
+  error?: string;
+}
+
+function buildQuestionPrompt(q: CanonicalQuestion): string {
+  const parts: string[] = [];
+  if (q.context) {
+    parts.push(`Context:\n${q.context.trim()}`);
+    parts.push("");
+  }
+  parts.push(q.prompt.trim());
+  return parts.join("\n");
+}
+
+// Run the entire canonical set (or a filtered subset). Returns one
+// record per question. Caller writes the records to disk via
+// writeRunDirectory below.
+export async function runCanonicalSet(args: CanonicalRunArgs): Promise<CanonicalRunRecord[]> {
+  const records: CanonicalRunRecord[] = [];
+  for (const q of args.questions) {
+    args.onProgress?.(q.id, "start");
+    const prompt = buildQuestionPrompt(q);
+    const cwd = join(args.vaultPath, q.domain);
+    const effectiveCwd = existsSync(cwd) ? cwd : args.vaultPath;
+    const start = Date.now();
+    // When the question is council-flagged AND no specific target CLI
+    // was passed, run the whole council. When a target IS pinned, run
+    // it as a single chat against that CLI — that's the "test new
+    // model" use case.
+    const useCouncil = q.council === true && !args.targetCli;
+    try {
+      if (useCouncil) {
+        const panel = buildCouncilPanel(args.clis);
+        const result = await runCouncilOneShot({
+          prompt,
+          cwd: effectiveCwd,
+          panelists: panel,
+          signal: args.signal,
+        });
+        records.push({
+          id: q.id,
+          domain: q.domain,
+          prompt,
+          expected_decision: q.expected_decision,
+          expected_verdict_keywords: q.expected_verdict_keywords,
+          reply: result.verdict,
+          ms: Date.now() - start,
+          council: true,
+          ok: !result.degraded,
+        });
+        args.onProgress?.(q.id, "ok", `council · ${result.panel.length} panelists`);
+      } else {
+        const cli = args.targetCli ?? args.clis[0];
+        if (!cli) throw new Error("no CLI available");
+        const reply = await runChatTurn({
+          prompt,
+          cwd: effectiveCwd,
+          cli,
+          model: args.targetModel ?? "",
+          isFirst: true,
+          bare: true,
+          signal: args.signal,
+        });
+        records.push({
+          id: q.id,
+          domain: q.domain,
+          prompt,
+          expected_decision: q.expected_decision,
+          expected_verdict_keywords: q.expected_verdict_keywords,
+          reply,
+          ms: Date.now() - start,
+          council: false,
+          cli: cli.kind,
+          model: args.targetModel,
+          ok: true,
+        });
+        args.onProgress?.(q.id, "ok", `${cli.label}${args.targetModel ? "·" + args.targetModel : ""}`);
+      }
+    } catch (err) {
+      records.push({
+        id: q.id,
+        domain: q.domain,
+        prompt,
+        expected_decision: q.expected_decision,
+        expected_verdict_keywords: q.expected_verdict_keywords,
+        reply: "",
+        ms: Date.now() - start,
+        council: useCouncil,
+        cli: args.targetCli?.kind,
+        model: args.targetModel,
+        ok: false,
+        error: (err as Error).message,
+      });
+      args.onProgress?.(q.id, "error", (err as Error).message);
+    }
+  }
+  return records;
+}
+
+function dayKey(ts: number): string {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Build the human-readable name for a run directory:
+//   2026-06-04_claude-opus-4-7
+//   2026-06-04_council
+function runLabel(args: { targetCli?: AvailableCli; targetModel?: string }): string {
+  if (!args.targetCli) return "council";
+  const parts: string[] = [args.targetCli.kind];
+  if (args.targetModel && args.targetModel.trim()) parts.push(args.targetModel.trim());
+  return parts.join("-");
+}
+
+export function writeRunDirectory(args: {
+  vaultPath: string;
+  records: CanonicalRunRecord[];
+  ts?: number;
+  targetCli?: AvailableCli;
+  targetModel?: string;
+}): string {
+  const ts = args.ts ?? Date.now();
+  ensureScaffold(args.vaultPath);
+  const label = `${dayKey(ts)}_${runLabel(args)}`;
+  const dir = join(runsDir(args.vaultPath), label);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  // results.md — one section per question with the reply, timing, and
+  // any error. Greppable, PR-able, the source of truth for `bench score`.
+  const md: string[] = [];
+  md.push(`# canonical run · ${label}`);
+  md.push("");
+  md.push(`- date: ${new Date(ts).toISOString()}`);
+  md.push(`- target: ${runLabel(args)}`);
+  md.push(`- questions: ${args.records.length}`);
+  const ok = args.records.filter((r) => r.ok).length;
+  md.push(`- successful: ${ok}/${args.records.length}`);
+  md.push("");
+  for (const r of args.records) {
+    md.push(`## ${r.id}`);
+    md.push("");
+    md.push(`- domain: ${r.domain}`);
+    md.push(`- council: ${r.council}`);
+    if (r.cli) md.push(`- cli: ${r.cli}${r.model ? "·" + r.model : ""}`);
+    md.push(`- ms: ${r.ms}`);
+    md.push(`- ok: ${r.ok}`);
+    if (r.expected_decision) md.push(`- expected_decision: ${r.expected_decision}`);
+    if (r.expected_verdict_keywords) md.push(`- expected_verdict_keywords: [${r.expected_verdict_keywords.join(", ")}]`);
+    md.push("");
+    md.push(`### prompt`);
+    md.push("");
+    md.push(r.prompt);
+    md.push("");
+    md.push(`### reply`);
+    md.push("");
+    md.push(r.ok ? r.reply : `(error: ${r.error})`);
+    md.push("");
+    md.push("---");
+    md.push("");
+  }
+  writeFileSync(join(dir, "results.md"), md.join("\n"));
+  // results.json — machine-readable mirror for `bench score` to load
+  // without re-parsing markdown.
+  writeFileSync(
+    join(dir, "results.json"),
+    JSON.stringify(args.records, null, 2),
+  );
+  return dir;
 }
 
 // Import seed: pull a council-verdict entry out of a domain's _log file

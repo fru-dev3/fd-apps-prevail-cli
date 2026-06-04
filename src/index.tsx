@@ -644,6 +644,82 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  if (sub === "run-canonical" || (sub === "run" && args.includes("--canonical"))) {
+    // Personal canonical run: fire each <vault>/benchmark/questions/*.md
+    // at the target CLI (or council, when --council is passed) and
+    // write results to <vault>/benchmark/runs/<date>_<label>/.
+    const { listQuestions, runCanonicalSet, writeRunDirectory } = await import(
+      "./canonical-bench.ts"
+    );
+    const questions = listQuestions(vault);
+    if (questions.length === 0) {
+      console.error(`no canonical questions found under ${vault}/benchmark/questions/`);
+      console.error("run `prevail bench seed --domain <name>` to add some.");
+      process.exit(1);
+    }
+    let domain: string | null = null;
+    let questionId: string | null = null;
+    let targetCliKind: string | null = null;
+    let targetModel: string | null = null;
+    let useCouncil = false;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      const v = args[i + 1];
+      if (a === "--canonical") continue;
+      if (a === "--domain" && v) { domain = v; i++; }
+      else if (a === "--question" && v) { questionId = v; i++; }
+      else if (a === "--cli" && v) { targetCliKind = v; i++; }
+      else if (a === "--model" && v) { targetModel = v; i++; }
+      else if (a === "--council") { useCouncil = true; }
+    }
+    let filtered = questions;
+    if (domain) filtered = filtered.filter((q) => q.domain === domain);
+    if (questionId) filtered = filtered.filter((q) => q.id === questionId);
+    if (filtered.length === 0) {
+      console.error("no questions matched the filter");
+      process.exit(1);
+    }
+    const { detectClis } = await import("./cli-bridge.ts");
+    const allClis = await detectClis();
+    if (allClis.length === 0) {
+      console.error("no CLIs detected — install claude / codex / gemini / ollama first");
+      process.exit(1);
+    }
+    const targetCli = useCouncil
+      ? undefined
+      : (targetCliKind
+          ? allClis.find((c) => c.kind === targetCliKind)
+          : allClis[0]);
+    if (!useCouncil && !targetCli) {
+      console.error(`cli ${targetCliKind} not detected. available: ${allClis.map((c) => c.kind).join(", ")}`);
+      process.exit(1);
+    }
+    console.log(`running ${filtered.length} canonical question${filtered.length === 1 ? "" : "s"}…`);
+    const records = await runCanonicalSet({
+      vaultPath: vault,
+      questions: filtered,
+      clis: allClis,
+      targetCli,
+      targetModel: targetModel ?? undefined,
+      onProgress: (id, status, info) => {
+        if (status === "start") process.stdout.write(`  ${id}…`);
+        else if (status === "ok") console.log(` ${info ?? "ok"}`);
+        else console.log(` ✗ ${info ?? "error"}`);
+      },
+    });
+    const dir = writeRunDirectory({
+      vaultPath: vault,
+      records,
+      targetCli,
+      targetModel: targetModel ?? undefined,
+    });
+    const ok = records.filter((r) => r.ok).length;
+    console.log("");
+    console.log(`✓ ${ok}/${records.length} successful · written to ${dir}`);
+    console.log(`  next: prevail bench score (coming in #28)`);
+    return;
+  }
+
   if (sub === "run") {
     const questions = loadQuestions();
     if (questions.length === 0) {
@@ -694,8 +770,10 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   console.error("usage:");
   console.error("  prevail bench list");
   console.error("  prevail bench run [--domain <name>] [--question <id>]");
-  console.error("  prevail bench seed --domain <name>        write a stub canonical question");
-  console.error("  prevail bench seed --from-log <domain>    import latest council verdict as draft");
+  console.error("  prevail bench seed --domain <name>             write a stub canonical question");
+  console.error("  prevail bench seed --from-log <domain>         import latest council verdict as draft");
+  console.error("  prevail bench run --canonical [--cli <kind>] [--model <id>] [--council]");
+  console.error("                                                run the personal canonical set");
   process.exit(1);
 }
 
