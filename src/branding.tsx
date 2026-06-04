@@ -56,7 +56,7 @@ export function Branding({
   return (
     <box
       flexDirection="column"
-      height={12}
+      height={11}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
@@ -334,7 +334,10 @@ function StatusColumn({
       </text>
       <text> </text>
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
-      <StatRow label="cli" value={cliText} valueColor={theme.fg} />
+      {/* "cli" row was redundant with the panel-health row below — same
+          list of names, just without the ✓/⚠/⠋ status. Dropped; the
+          health row now does both jobs (labeled "cli" so it matches
+          the user's mental model). */}
       <StatRow label="chat" value={statusText} glyph={statusGlyph} valueColor={statusColor} />
       {/* Global toggles + panelist health. ⚖ toggles council default,
           ⚙ opens the configure panel (pick which engines + models go
@@ -367,7 +370,7 @@ function StatusColumn({
         // collapsed at render time ("panel" + "Claude" + "Codex" came
         // out as "panellts ✓ Claude c✓nCodex …" in the cockpit).
         <box flexDirection="row" height={1}>
-          <text fg={theme.fgFaint}>{"engines"}</text>
+          <text fg={theme.fgFaint}>{"cli"}</text>
           {cliHealthSummary.map((h) => {
             const glyph =
               h.ok === true ? "✓" : h.ok === false ? "⚠" : "⠋";
