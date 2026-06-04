@@ -28,6 +28,7 @@ export interface UseAppKeyboardArgs {
   mode: Mode;
   toolsOpen: boolean;
   councilConfigOpen: boolean;
+  benchmarkOpen: boolean;
   embeddedInputActiveRef: { current: boolean };
   autocompleteOpen: boolean;
 
@@ -62,6 +63,7 @@ export interface UseAppKeyboardArgs {
   setMode: Dispatch<SetStateAction<Mode>>;
   setPendingOpen: Dispatch<SetStateAction<PendingOpenLike | null>>;
   setErrorBoundaryReset: Dispatch<SetStateAction<number>>;
+  setBenchmarkOpen: Dispatch<SetStateAction<boolean>>;
 
   // Callbacks
   doEdit: () => void;
@@ -84,7 +86,7 @@ export function useAppKeyboard(args: UseAppKeyboardArgs) {
     // keys also moved the left sidebar selection — the user reported it
     // was happening on the Tools panel: scroll down to read more →
     // sidebar jumps to a different app.
-    if (args.toolsOpen || args.councilConfigOpen) {
+    if (args.toolsOpen || args.councilConfigOpen || args.benchmarkOpen) {
       if (evt.ctrl && name === "c") {
         renderer?.destroy?.();
         process.exit(0);
@@ -192,6 +194,11 @@ export function useAppKeyboard(args: UseAppKeyboardArgs) {
       // the reset counter. This is the recovery path when a pane has
       // caught a render-time error and is showing the "crashed" view.
       args.setErrorBoundaryReset((n) => n + 1);
+    } else if (name === "B") {
+      // Capital B: open the Benchmark overlay. Lowercase `b` is unused
+      // globally (model picker / chat input handle it). Same Esc-to-
+      // close pattern as Tools / Council Config.
+      args.setBenchmarkOpen(true);
     } else if (name === "r") {
       args.doRefresh();
     } else if (name === "n") {

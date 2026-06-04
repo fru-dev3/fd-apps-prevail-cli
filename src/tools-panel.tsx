@@ -8,6 +8,10 @@ import { openInFinder } from "./system.ts";
 
 interface Props {
   onClose: () => void;
+  // Opens the live BenchmarkPanel overlay (close Tools, open Benchmark).
+  // Wired from app.tsx — the panel doesn't import BenchmarkPanel
+  // directly so Tools stays a thin read-only chrome.
+  onOpenBenchmark?: () => void;
 }
 
 // Single overlay where everything prevAIl ships but doesn't otherwise
@@ -15,7 +19,7 @@ interface Props {
 // even see them" — this is the answer. Read-only status + the exact
 // command or shell snippet to make each integration go. Press Escape or
 // click ✕ to close.
-export function ToolsPanel({ onClose }: Props) {
+export function ToolsPanel({ onClose, onOpenBenchmark }: Props) {
   useKeyboard((evt) => {
     if (evt.name === "escape") onClose();
   });
@@ -45,6 +49,36 @@ export function ToolsPanel({ onClose }: Props) {
       paddingBottom={1}
     >
       <scrollbox flexGrow={1} scrollY>
+        {/* Benchmark — opens the live runner overlay. Lives at the top
+            of the panel because "test a new model against my real
+            questions" is a high-value, low-friction action. */}
+        {onOpenBenchmark && (
+          <Section
+            glyph="◈"
+            title="Benchmark — run canonical questions against any model"
+            status="open the runner"
+            statusFg={theme.aiAccent}
+          >
+            <text fg={theme.fg}>
+              Run prevAIl's canonical Q&amp;A benchmark against the model of
+              your choice. See per-question keyword scores, LLM-judge
+              scores, and a cross-run leaderboard — without leaving the
+              cockpit.
+            </text>
+            <text fg={theme.fgDim}>{" "}</text>
+            <box
+              flexDirection="row"
+              paddingLeft={1}
+              paddingRight={1}
+              backgroundColor={theme.selBg}
+              onMouseDown={onOpenBenchmark}
+            >
+              <text fg={theme.gold} attributes={1}>{"▸ open benchmark"}</text>
+              <text fg={theme.fgFaint}>{"   (shortcut: Shift+B)"}</text>
+            </box>
+          </Section>
+        )}
+
         {/* MCP — the big one. prevail BECOMES a tool that other agents
             (Claude Desktop, Cursor, Continue, Goose) can call. */}
         <Section

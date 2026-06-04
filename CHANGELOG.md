@@ -7,6 +7,39 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.3.0] — 2026-06-04 · Benchmark UI overlay
+
+User: "Is there a way to put a different section within the UI ... where I can go in and run the benchmark on available models to see the results from the UI, not just the command line? I don't wanna break any existing functionalities because what we have is pretty good." The CLI flow was complete after v1.2.0 but invisible from inside the cockpit. This release adds the UI surface without touching any existing tab, sidebar, or chat behavior.
+
+### Added — `BenchmarkPanel` overlay
+New full-screen overlay (`src/benchmark-panel.tsx`), same pattern as the existing Tools and Council Config overlays:
+
+- **Question list:** all canonical questions currently in `<vault>/benchmark/questions/`, with domain tags.
+- **Run form:** pick target CLI (Claude / Codex / Antigravity / Ollama), type a model name (or leave blank for the CLI's default), optional council fanout toggle.
+- **Run button:** fires `runCanonicalSet` live with per-question progress (✓ / ✗ / · for ok / error / pending). Cancel button while running.
+- **Auto-scoring:** after the run completes, `scoreRun` grades with keyword-match + LLM-as-judge using the same target CLI as the chair. Per-question rationale shown inline.
+- **Leaderboard:** every prior run scored with `bench score` shows up at the bottom — judge_avg, keyword_avg, question count, label. Auto-refreshes after each new run.
+
+### Added — Two entry points (no conflicts)
+- **Shift+B from anywhere** opens the panel (lowercase `b` was unused globally; capital won't collide with the model-picker input).
+- **Tools panel link:** new "Benchmark" section at the top of the Tools overlay with a click-target.
+
+### Zero impact on existing UI
+- No tab added, no sidebar entry, no chip on the ConfigBar.
+- Overlay early-return in the keyboard hook updated so the benchmark panel **owns** the keyboard while open — arrows don't leak to the sidebar (same fix that closed the original "scrolling moves the sidebar selection" bug).
+- Wrapped in the existing `<ErrorBoundary />`. A render-time crash inside the benchmark UI doesn't take the cockpit down.
+
+### How it feels
+1. `Shift+B` (or click ▸ tools → ▸ open benchmark).
+2. Pick `Claude`, type `claude-opus-4-7` (or leave blank).
+3. ▸ run 10 questions.
+4. Watch ✓ ✓ ✓ ⋯ progress for a few minutes.
+5. Per-question scores + a one-line judge rationale per row land inline. Leaderboard at the bottom now has this run.
+
+Pre-existing CLI commands (`prevail bench run --canonical`, `prevail bench score`, `prevail bench leaderboard`) are completely unchanged.
+
+---
+
 ## [1.2.0] — 2026-06-04 · Canonical benchmark starter pack
 
 Honest gap exposed: the `prevail bench` tooling shipped in v0.8.0 was machinery without content. A fresh install had `bench seed / bench run / bench score / bench leaderboard` all wired up — but no canonical questions, so `bench run --canonical` returned "no canonical questions found under ..." and the whole flow felt empty. The user asked. This release fixes it.

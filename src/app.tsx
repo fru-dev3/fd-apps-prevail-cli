@@ -22,6 +22,7 @@ import { EditorPane } from "./editor-pane.tsx";
 import { TabStrip } from "./tab-strip.tsx";
 import { WorkspaceConfigBar } from "./workspace-config-bar.tsx";
 import { ToolsPanel } from "./tools-panel.tsx";
+import { BenchmarkPanel } from "./benchmark-panel.tsx";
 import { ErrorBoundary } from "./error-boundary.tsx";
 import {
   ALL_CLI_KINDS,
@@ -195,6 +196,10 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   // bench, connector OAuth flows, and the vault/config file links
   // (clickable to open in Finder).
   const [toolsOpen, setToolsOpen] = useState(false);
+  // Benchmark overlay — opened via Shift+B or the Tools panel link.
+  // Same keyboard-ownership rules as toolsOpen / councilConfigOpen
+  // (see the overlay early-return in app-keyboard.tsx).
+  const [benchmarkOpen, setBenchmarkOpen] = useState(false);
   // Multi-select skill set per active domain. Click a skill to toggle
   // it in the set. Selected skills are surfaced to DomainChat as
   // <context> so the LLM sees their definitions when answering.
@@ -406,6 +411,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   useAppKeyboard({
     mode,
     toolsOpen,
+    benchmarkOpen,
     councilConfigOpen,
     embeddedInputActiveRef,
     autocompleteOpen,
@@ -431,6 +437,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
     setMode,
     setPendingOpen,
     setErrorBoundaryReset,
+    setBenchmarkOpen,
     doEdit,
     doOpenSkill,
     doRefresh,
@@ -2358,7 +2365,24 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
             if (toolsOpen) {
               return (
                 <ErrorBoundary name="ToolsPanel" key={`tools-${errorBoundaryReset}`}>
-                  <ToolsPanel onClose={() => setToolsOpen(false)} />
+                  <ToolsPanel
+                    onClose={() => setToolsOpen(false)}
+                    onOpenBenchmark={() => {
+                      setToolsOpen(false);
+                      setBenchmarkOpen(true);
+                    }}
+                  />
+                </ErrorBoundary>
+              );
+            }
+            if (benchmarkOpen) {
+              return (
+                <ErrorBoundary name="BenchmarkPanel" key={`bench-${errorBoundaryReset}`}>
+                  <BenchmarkPanel
+                    onClose={() => setBenchmarkOpen(false)}
+                    vaultPath={vaultPath}
+                    availableClis={clis}
+                  />
                 </ErrorBoundary>
               );
             }
