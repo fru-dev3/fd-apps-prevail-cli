@@ -155,12 +155,19 @@ export function WorkspaceConfigBar({
   // chips) is multiple <text> nodes INSIDE one <box> — each <text>
   // becomes its own layout cell so opentui never has to split one.
   // Every chip below uses that shape: <text label/> <text value/>.
-  const fwFg = currentFw ? theme.aiAccent : theme.fgDim;
-  const lensFg = currentLens ? theme.aiAccent : theme.fgDim;
-  const webFg = webAllow ? theme.aiAccent : theme.fgDim;
-  const saveFg = checkpointOn ? theme.aiAccent : theme.fgDim;
-  const serendipityFg = serendipityOn ? theme.aiAccent : theme.fgDim;
-  const autoFg = autoMode !== "off" ? theme.aiAccent : theme.fgDim;
+  // Two-tone chip coloring. The LABEL ("◆ Framework:") stays dim — it
+  // names the axis but doesn't tell you anything dynamic. The VALUE
+  // ("BLUF") gets the highlight color so the user can scan the row and
+  // see the active state at a glance. When a chip is OFF / "none",
+  // both halves stay dim — no value to draw attention to.
+  const labelFg = theme.fgDim;
+  const councilValFg = councilOn ? theme.gold : theme.fgDim;
+  const fwValFg = currentFw ? theme.aiAccent : theme.fgDim;
+  const lensValFg = currentLens ? theme.aiAccent : theme.fgDim;
+  const webValFg = webAllow ? theme.aiAccent : theme.fgDim;
+  const saveValFg = checkpointOn ? theme.aiAccent : theme.fgDim;
+  const serendipityValFg = serendipityOn ? theme.aiAccent : theme.fgDim;
+  const autoValFg = autoMode !== "off" ? theme.aiAccent : theme.fgDim;
 
   return (
     <box flexDirection="row" height={1} paddingLeft={1} paddingRight={1}>
@@ -179,8 +186,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={onToggleCouncil}
       >
-        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{"⚖ Council:"}</text>
-        <text fg={councilOn ? theme.gold : theme.fgDim} attributes={councilOn ? 1 : 0}>{councilOn ? " ON" : " OFF"}</text>
+        <text fg={labelFg}>{"⚖ Council:"}</text>
+        <text fg={councilValFg} attributes={councilOn ? 1 : 0}>{councilOn ? " ON" : " OFF"}</text>
       </box>
       {sep}
       <box
@@ -189,8 +196,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleFramework}
       >
-        <text fg={fwFg} attributes={currentFw ? 1 : 0}>{"◆ Framework:"}</text>
-        <text fg={fwFg} attributes={currentFw ? 1 : 0}>{` ${fwLabel}`}</text>
+        <text fg={labelFg}>{"◆ Framework:"}</text>
+        <text fg={fwValFg} attributes={currentFw ? 1 : 0}>{` ${fwLabel}`}</text>
       </box>
       <box
         flexDirection="row"
@@ -198,8 +205,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleLens}
       >
-        <text fg={lensFg} attributes={currentLens ? 1 : 0}>{"◇ Lens:"}</text>
-        <text fg={lensFg} attributes={currentLens ? 1 : 0}>{` ${lensLabel}`}</text>
+        <text fg={labelFg}>{"◇ Lens:"}</text>
+        <text fg={lensValFg} attributes={currentLens ? 1 : 0}>{` ${lensLabel}`}</text>
       </box>
       <box
         flexDirection="row"
@@ -207,8 +214,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleWeb}
       >
-        <text fg={webFg} attributes={webAllow ? 1 : 0}>{"⬡ Web:"}</text>
-        <text fg={webFg} attributes={webAllow ? 1 : 0}>{webAllow ? " ON" : " OFF"}</text>
+        <text fg={labelFg}>{"⬡ Web:"}</text>
+        <text fg={webValFg} attributes={webAllow ? 1 : 0}>{webAllow ? " ON" : " OFF"}</text>
       </box>
       <box
         flexDirection="row"
@@ -216,8 +223,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={toggleCheckpoint}
       >
-        <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{"▣ Save:"}</text>
-        <text fg={saveFg} attributes={checkpointOn ? 1 : 0}>{checkpointOn ? " ON" : " OFF"}</text>
+        <text fg={labelFg}>{"▣ Save:"}</text>
+        <text fg={saveValFg} attributes={checkpointOn ? 1 : 0}>{checkpointOn ? " ON" : " OFF"}</text>
       </box>
       <box
         flexDirection="row"
@@ -225,8 +232,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={toggleSerendipity}
       >
-        <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{"◉ Serendipity:"}</text>
-        <text fg={serendipityFg} attributes={serendipityOn ? 1 : 0}>{serendipityOn ? " ON" : " OFF"}</text>
+        <text fg={labelFg}>{"◉ Serendipity:"}</text>
+        <text fg={serendipityValFg} attributes={serendipityOn ? 1 : 0}>{serendipityOn ? " ON" : " OFF"}</text>
       </box>
       <box
         flexDirection="row"
@@ -234,8 +241,8 @@ export function WorkspaceConfigBar({
         paddingRight={1}
         onMouseDown={cycleAuto}
       >
-        <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{"◐ Auto:"}</text>
-        <text fg={autoFg} attributes={autoMode !== "off" ? 1 : 0}>{` ${autoMode.toUpperCase()}`}</text>
+        <text fg={labelFg}>{"◐ Auto:"}</text>
+        <text fg={autoValFg} attributes={autoMode !== "off" ? 1 : 0}>{` ${autoMode.toUpperCase()}`}</text>
       </box>
       <box flexGrow={1} />
       <box
