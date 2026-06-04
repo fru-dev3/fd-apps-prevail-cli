@@ -7,6 +7,52 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.8.0] — 2026-06-04 · Memory, judgment, calibration
+
+Six features bolted onto v0.7.0's council foundation. Each one stands alone; together they turn the cockpit from "ask multiple models" into a system that remembers, distills, and audits itself.
+
+### Added — ⬡ Web toggle on the ConfigBar
+The `webAccess` allow/deny setting was buried in the Tools panel. Promoted to a first-class clickable chip on the WorkspaceConfigBar AND the global defaults block in the banner. Click cycles allow ↔ deny.
+
+### Added — ▣ Checkpoint (raw transcript persistence)
+Default ON. Every chat turn (single chat + council verdict) appends the full prompt + full reply verbatim to `<domain>/_log/YYYY-MM-DD.md`. The existing summarized log shape is preserved for `raw: false` callers; the user's chats are no longer truncated to 220/400 chars. New `▣ Save` chip on the ConfigBar with per-domain override.
+
+### Added — `journal/` folder with AI-distilled decisions + facts
+New module `src/journal.ts`. After every turn, an async lightweight call extracts:
+- `DECISION:` — one short sentence naming the decision the user is making, or NONE.
+- `FACTS:` — up to 5 bullets of concrete numbers / dates / rules surfaced, or NONE.
+
+Appended to `<domain>/journal/decisions.md` and `<domain>/journal/facts.md` with timestamped backlinks to the `_log/` entry that produced them. Best-effort and silent on failure — the raw `_log/` stays the source of truth, journal is the index on top.
+
+### Added — ◉ Serendipity (Option B)
+Per-domain toggle, OFF by default. When on, every turn fires a SECOND lightweight call after the main reply asking for one non-obvious adjacent angle, fact, or question the user did NOT ask but would benefit from. The result lands as its own dim `◉ serendipity` bubble below the main reply. Distinct from the main answer so the visual hierarchy makes it obvious which is which.
+
+### Added — ◐ Auto-council detection
+Three modes (`autoCouncil` config, default `"suggest"`):
+- `"off"`: skip the classifier; sendMessage runs single chat as today.
+- `"suggest"`: fire classifier in PARALLEL with the chat. On YES, append a passive `⚖ this looks council-worthy` bubble. Click re-runs through council. Zero latency penalty on the main reply.
+- `"auto"`: BLOCK on the classifier. On YES route to runCouncil; on NO fall through to chat. The user opts into latency for auto-routing.
+
+Classifier prompt explicitly includes the user's stated examples — "Summarize this email" (NO), "Should I leave my job?" (YES). Per-domain override available.
+
+### Added — Canonical benchmark dataset
+The biggest one. Three new CLI subcommands wrap a new `<vault>/benchmark/` area:
+
+- `prevail bench seed --domain <name>` — write a stub canonical question with FILL-IN placeholders.
+- `prevail bench seed --from-log <domain>` — import the most recent council verdict from that domain's `_log/` as a draft (the user's ground-truth answers already live there).
+- `prevail bench run --canonical [--cli <kind>] [--model <id>] [--council]` — fire every canonical question at the target CLI (or council). Reuses `runChatTurn` + `runCouncilOneShot` so behavior matches the cockpit. Writes results + timing to `<vault>/benchmark/runs/<date>_<label>/results.{md,json}`.
+- `prevail bench score [--run <name>] [--no-judge]` — two-layer scoring:
+  - **Mechanical keyword match** (0-100%): hits/misses on `expected_verdict_keywords`. Objective floor.
+  - **LLM-as-judge** (0-10): tight rubric (10 = right decision + matching reasoning, 0 = wrong or fails to commit). Per-question rationale captured.
+- `prevail bench leaderboard` — cross-run scoreboard sorted by judge_avg then keyword_avg.
+
+Distinct from the bundled `bench/questions/` generic suite. This one is for the user's personal Q&A with KNOWN ground truth — the test you can point at a new model the day it ships.
+
+### Fixed — Council escalation symmetry
+`council-suggestion` bubble reuses the existing `kind: "council"` ChatCommand path, so a click re-fires the prompt through `runCouncil` with no special-case glue.
+
+---
+
 ## [0.7.0] — 2026-06-04 · Council, lens, framework — the deliberation release
 
 The biggest jump since v0.6. prevAIl's pitch is now sharply about ONE thing — hard decisions across multiple models — and the cockpit, persistence, and ergonomics all aligned around that.
