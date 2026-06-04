@@ -7,6 +7,34 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [0.8.1] — 2026-06-04 · UI polish + the GIFs the v0.8 release deserved
+
+A polish pass on top of v0.8.0's seven new features.
+
+### Fixed — ConfigBar chips
+The ConfigBar rendered correctly during typecheck but the chips' values were either clipped, missing, or run-together in the actual terminal. Five distinct bugs, each found by user screenshot:
+- **Values blank.** opentui clips when a single `<text>` mixes a literal segment with a JSX interpolation. Pre-building a single template literal didn't help; splitting label + value into TWO `<text>` cells inside one `<box>` did.
+- **No space between label and value.** opentui strips BOTH leading and trailing whitespace inside text cells. Fix: leading character on every value cell is a non-breaking space (U+00A0), which terminals render as a space but opentui treats as a normal glyph.
+- **Inconsistent casing.** Framework + Lens labels (BLUF, FIRST PRINCIPLES) were uppercase but on/off/suggest were lowercase. All values now uppercase for visual uniformity.
+- **Labels and values same color.** Hard to scan. Now two-tone: label dim (theme.fgDim), value highlighted (aiAccent cyan, or gold for Council when ON).
+- **Council scope-hint noise.** Removed the `· domain` / `· global` suffix on framework/lens chips — the user already knows scope by which surface they clicked.
+
+### Fixed — `_log/` meta line carries the full cockpit state
+The `> meta:` blockquote on every chat-turn entry now includes the FULL config snapshot at send time:
+```
+> meta: claude · model=claude-opus-4-7 · framework=BLUF · lens=CONTRARIAN · web=on · serendipity=off · council=on
+```
+Date stays implicit in the file path, time in the `## HH:MM` section header. Every other dial that could have shaped the turn is now greppable.
+
+### Changed — `journal/` → `_journal/`
+Parity with `_log/`. Same naming convention for both AI-managed sidecar folders.
+
+### Added — Two new demo GIFs
+- `assets/demo.gif` — main hero. Boot, walk the 20+ life domains, return. Shows wordmark + sidebar + active workspace + ConfigBar.
+- `assets/deliberation.gif` — navigate to wealth, walk the tabs (state / quick start / prompts / skills / back to chat). Shows the per-domain workspace structure.
+
+---
+
 ## [0.8.0] — 2026-06-04 · Memory, judgment, calibration
 
 Six features bolted onto v0.7.0's council foundation. Each one stands alone; together they turn the cockpit from "ask multiple models" into a system that remembers, distills, and audits itself.

@@ -16,14 +16,20 @@
 </p>
 
 <p align="center">
-  <img src="./assets/demo.gif" alt="prevAIl cockpit demo" width="900"/>
+  <img src="./assets/demo.gif" alt="prevAIl cockpit — 20+ life domains, council × framework × lens × web × save × serendipity × auto" width="900"/>
   <br/>
-  <sub><i>render the GIF locally with</i> <code>brew install vhs && vhs assets/demo.tape</code></sub>
+  <sub><b>The cockpit at a glance.</b> 20+ life domains in the sidebar. The active workspace on the right (here: chief). A single ConfigBar at the bottom carries every per-turn dial — <b>Council</b> · <b>Framework</b> · <b>Lens</b> · <b>Web</b> · <b>Save</b> · <b>Serendipity</b> · <b>Auto</b> — each clickable.</sub>
 </p>
 
 ---
 
 **One question. Four engines. One verdict.** Every part of your life — wealth, health, tax, career — is a folder of markdown. Open one, ask, and prevAIl fans the question out to every CLI you already have logged in. A chair model reads all four replies and writes one decisive answer, with a dedicated panel surfacing the *disagreement* — which is the point. Works from your terminal or your phone (Telegram bridge). Single 95 MB binary. No daemon, no Docker, no API keys.
+
+<p align="center">
+  <img src="./assets/deliberation.gif" alt="prevAIl — navigate to a domain, switch tabs, see the deliberation chips" width="900"/>
+  <br/>
+  <sub><b>Per-domain workspaces.</b> Each domain has its own <code>chat / state / quick start / prompts / skills</code> tabs. Frameworks (BLUF, SCQA, …) and lenses (FIRST PRINCIPLES, CONTRARIAN, MOM, DAD, …) override per-domain — what you set on <code>wealth</code> stays on <code>wealth</code>.</sub>
+</p>
 
 ```
 ┌─ wealth ─────────────────────────────────────────────────────── prevAIl ─┐

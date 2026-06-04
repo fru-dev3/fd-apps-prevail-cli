@@ -1,10 +1,18 @@
-# prevAIl — terminal cockpit demo
+# prevAIl — terminal cockpit demo (main hero GIF)
 # Render with: vhs assets/demo.tape  →  assets/demo.gif
 #
-# Walks through: boot demo vault, navigate domains, cycle tabs, toggle
-# council, cycle framework, open tools, quit. ~14s of GIF that shows the
-# full cockpit vocabulary without depending on live council responses
-# (those are unpredictable and would mistime the tape).
+# Storyboard (~20s):
+#   1. Boot the demo vault — splash + cockpit appears
+#   2. Tour the LIFE DOMAINS sidebar (20+ life areas)
+#   3. Cycle the Framework chip a few times (BLUF → WIN → SCQA)
+#   4. Cycle the Lens chip through multiple cognitive lenses
+#   5. Toggle Council ON
+#   6. Toggle Serendipity ON
+#   7. Quit cleanly
+#
+# We're showing the COCKPIT vocabulary — the chips that drive every
+# turn (council × framework × lens × web × save × serendipity × auto).
+# No live AI calls; those take too long and are nondeterministic.
 
 Output assets/demo.gif
 
@@ -25,25 +33,43 @@ Show
 Type "./dist/prevail demo"
 Sleep 400ms
 Enter
+
+# Boot the cockpit. Wordmark + sidebar + active domain pane.
 Sleep 3500ms
 
-# Land in chat on the first domain. Pause so the cockpit reads.
-Sleep 1500ms
-
-# Walk down through the sidebar to show the domain list.
-Down
-Sleep 500ms
-Down
-Sleep 500ms
-Down
-Sleep 500ms
-Down
-Sleep 500ms
-Up
-Sleep 500ms
-Up
+# Exit chat so arrow keys navigate the sidebar instead of going to
+# the chat input's history recall.
+Escape
 Sleep 600ms
 
-# Quit cleanly.
+# Walk down the sidebar to show the 20+ LIFE DOMAINS.
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 700ms
+
+# Walk back up to chief.
+Up
+Sleep 350ms
+Up
+Sleep 350ms
+Up
+Sleep 350ms
+Up
+Sleep 350ms
+Up
+Sleep 700ms
+
+# Quit so the GIF ends cleanly. The viewer has now seen the wordmark,
+# the sidebar of 20+ life domains, the active chief workspace with
+# suggested prompts, and the ConfigBar at the bottom showing the
+# whole chip stack (Council / Framework / Lens / Web / Save /
+# Serendipity / Auto / vault / edit).
 Type "q"
 Sleep 800ms
