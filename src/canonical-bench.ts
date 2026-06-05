@@ -37,11 +37,23 @@ export interface CanonicalQuestion {
   council?: boolean; // true = run via runCouncil; false = single chat
   expected_decision?: string;
   expected_verdict_keywords?: string[];
+  // Relative paths under <vault>/benchmark/attachments/ to inline into
+  // the prompt. Markdown / plain text recommended for portability;
+  // binary formats (PDFs, images) work when the receiving CLI has
+  // native multimodal support, but the bench runner currently inlines
+  // their CONTENT as text so non-text files won't be meaningful for
+  // Codex / Ollama. Use the build-bench-attachments.sh script to
+  // generate companion PDFs for visual inspection.
+  attachments?: string[];
   filePath: string;
 }
 
 export function benchmarkRoot(vaultPath: string): string {
   return join(vaultPath, "benchmark");
+}
+
+export function attachmentsDir(vaultPath: string): string {
+  return join(benchmarkRoot(vaultPath), "attachments");
 }
 
 export function questionsDir(vaultPath: string): string {
@@ -124,6 +136,9 @@ export function readQuestion(filePath: string): CanonicalQuestion | null {
     expected_decision: typeof fields.expected_decision === "string" ? fields.expected_decision : undefined,
     expected_verdict_keywords: Array.isArray(fields.expected_verdict_keywords)
       ? fields.expected_verdict_keywords
+      : undefined,
+    attachments: Array.isArray(fields.attachments)
+      ? (fields.attachments as string[]).filter((s) => typeof s === "string")
       : undefined,
     filePath,
   };
@@ -258,11 +273,47 @@ export interface CanonicalRunRecord {
   error?: string;
 }
 
-function buildQuestionPrompt(q: CanonicalQuestion): string {
+// Per-attachment inline budget. The prompt build truncates the read
+// file to this many chars and labels the truncation. Keeps a single
+// 50KB attachment from blowing out the prompt size for cheap CLIs
+// while still letting a model see enough context to reason from.
+const ATTACHMENT_CHAR_BUDGET = 16000;
+
+function buildQuestionPrompt(q: CanonicalQuestion, vaultPath: string): string {
   const parts: string[] = [];
   if (q.context) {
     parts.push(`Context:\n${q.context.trim()}`);
     parts.push("");
+  }
+  // Inline attachments as labeled blocks. The runner is single-CLI-
+  // agnostic by design — we don't translate to @path syntax for
+  // Claude even though Claude Code would resolve it. Inlining keeps
+  // Codex/Antigravity/Ollama on the same footing and avoids the
+  // per-CLI attachment-syntax sprawl. Binary formats (PDFs/images)
+  // come out as their raw bytes decoded as UTF-8 — meaningful for
+  // PDFs that contain extractable text in their stream, useless for
+  // images. Use `bash scripts/build-bench-attachments.sh` to produce
+  // companion PDFs for visual inspection; this runner sees the .md.
+  if (q.attachments && q.attachments.length > 0) {
+    const dir = attachmentsDir(vaultPath);
+    for (const rel of q.attachments) {
+      const full = join(dir, rel);
+      let content = "";
+      try {
+        content = readFileSync(full, "utf8");
+      } catch {
+        content = `(could not read attachment: ${rel})`;
+      }
+      const truncated =
+        content.length > ATTACHMENT_CHAR_BUDGET
+          ? content.slice(0, ATTACHMENT_CHAR_BUDGET) +
+            `\n\n[... attachment truncated at ${ATTACHMENT_CHAR_BUDGET} chars]`
+          : content;
+      parts.push(`[ATTACHMENT: ${rel}]`);
+      parts.push(truncated);
+      parts.push("[END ATTACHMENT]");
+      parts.push("");
+    }
   }
   parts.push(q.prompt.trim());
   return parts.join("\n");
@@ -275,7 +326,7 @@ export async function runCanonicalSet(args: CanonicalRunArgs): Promise<Canonical
   const records: CanonicalRunRecord[] = [];
   for (const q of args.questions) {
     args.onProgress?.(q.id, "start");
-    const prompt = buildQuestionPrompt(q);
+    const prompt = buildQuestionPrompt(q, args.vaultPath);
     const cwd = join(args.vaultPath, q.domain);
     const effectiveCwd = existsSync(cwd) ? cwd : args.vaultPath;
     const start = Date.now();

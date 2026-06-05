@@ -6,3 +6,7 @@ bun.lockb
 .*.bun-build
 /aireadyu
 /prevail
+
+# Local bench run outputs (one folder per run). The canonical questions
+# and attachments are committed; the per-run reply transcripts are not.
+vault-demo/benchmark/runs/

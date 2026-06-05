@@ -7,6 +7,43 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.6.0] — 2026-06-04 · Richer benchmark — attachments, cultural / brevity / recency / bias scenarios
+
+User: "Can you increase the complexity of the benchmark? Maybe include some PDFs, dense PDFs with data, so that we can also gauge how the model can pass PDF and such, like different file formats... You can also include some fairly complex or relatively complex tax scenario that could trip three people up... include a test for how recent it is... Put a test in there with some cultural nuance... Put a test in there about the brevity or the verbosity of it. Obviously put something about family-oriented that will take a surface some cultural nuance or sensitivity."
+
+The canonical benchmark grows from 10 questions covering pure binary decisions to **21 questions covering 8 capability dimensions**, including attachment-driven document analysis, recency-of-knowledge probing, cultural literacy, brevity compliance, bias detection, insufficient-info recognition, and a complex tax trap that catches the majority of high-income W-2 earners pitched on real-estate syndications.
+
+### Added — Attachment schema + runner
+
+The canonical question frontmatter gains an `attachments: [filename.md, ...]` field. When present, the bench runner reads each file from `vault-demo/benchmark/attachments/` and **inlines its contents into the prompt** between `[ATTACHMENT: name]` and `[END ATTACHMENT]` delimiters. This works uniformly across Claude / Codex / Antigravity / Ollama without depending on each CLI's specific attachment syntax. Each attachment is truncated to **16,000 chars per question** to keep prompt sizes bounded.
+
+Implementation: `src/canonical-bench.ts` adds `attachmentsDir()`, `ATTACHMENT_CHAR_BUDGET`, an updated `readQuestion` that parses the attachments array, and a new `buildQuestionPrompt(q, vaultPath)` that walks the array.
+
+### Added — 5 attachment-rich document-analysis questions
+- **`wealth-q4-pnl-review`** — reads `wealth-q4-statements.md` (Oct/Nov/Dec 2026 P&L with AR aging trending 31 → 44 days). The correct answer surfaces AR aging as the load-bearing signal, not the December revenue dip.
+- **`tax-end-of-year-strategy`** — reads `tax-year-end-packet.md` (draft 1040, W-2, 1099-DIV, brokerage positions). Tests harvest-NVDA-loss + mega-backdoor + defer-RSU strategies, with Roth conversion as the trap (drives MAGI into a higher IRMAA tier).
+- **`health-lab-panel-review`** — reads `health-lab-panel.md` (HOMA-IR 3.5, ApoB 124, Lp(a) 92, Vit D 22). Tests prioritizing signal over the abundance of yellow flags.
+- **`legal-msa-review`** — reads `legal-msa-draft.md` (uncapped consultant indemnification, asymmetric liability cap, 18-month non-compete, 60-day payment). Tests catching the load-bearing risk clauses, not just enumerating every flag.
+- **`business-pricing-decision`** — reads `business-pricing-analysis.md` (pricing tiers, competitor scan, Q4 metrics, Pinetree at 67-day AR aging). Tests engaging with the AR signal rather than just raising prices in a vacuum.
+
+### Added — 6 scenario questions per user spec
+- **`recency-knowledge-cutoff`** — Tests whether the model knows about Google's `gemini-cli` → `agy` transition (relevant to this project's June 18 2026 migration). Reveals knowledge cutoff.
+- **`family-cultural-obligation`** — Nigerian immigrant's sister's wedding asks for $40k contribution. Tests engaging with non-Western family/cultural obligation honestly rather than flattening into "set boundaries with your sister" Western individualist advice.
+- **`brevity-test`** — Question demands a one-sentence answer with no preamble. Tests instruction-following discipline; verbose, headered, hedged answers fail.
+- **`tax-passive-loss-trap`** — $50k K-1 loss from real estate syndication against $280k W-2. The correct answer is NO under IRC §469 passive activity rules, with the real-estate-professional exception failing the 50% time test. This catches roughly 80% of LLMs in practice.
+- **`insufficient-info-recognition`** — HDHP vs PPO with only premium difference disclosed. The correct answer is to refuse to recommend and list the missing facts; hidden-assumption confident answers fail.
+- **`bias-trap-anchoring`** — "Patek Philippe at $10k below retail" with leading anchors. The correct answer rejects the frame entirely and names the real comparison ($25k spent vs $25k compounding).
+
+### Added — Companion PDF / image build script
+
+`scripts/build-bench-attachments.sh` converts every attachment `.md` to a sibling `.pdf` via weasyprint (with custom CSS for letter-size, helvetica, banded tables) and emits one PNG chart via ImageMagick for future multimodal authoring. The `.md` files remain the canonical source the bench runner reads — the PDFs/PNGs are for visual inspection. Gracefully degrades if weasyprint's system libs are missing.
+
+### Updated — Benchmark README
+
+`vault-demo/benchmark/README.md` now opens with a capability-coverage table (8 categories × question count × what-it-tests), an Attachments section explaining the inline-text dispatch and the 16k char budget, and a `--from-log` reminder that the user's real decisions are the highest-value benchmark fuel.
+
+---
+
 ## [1.5.1] — 2026-06-04 · Cross-provider model selection
 
 User: "Am I able to select models across providers? Like 2 from Claude and 3 from Codex etc to run the benchmark?"
