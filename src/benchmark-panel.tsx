@@ -15,7 +15,12 @@ import {
   type LeaderboardEntry,
   type RunScore,
 } from "./canonical-bench.ts";
-import { type AvailableCli } from "./cli-bridge.ts";
+import {
+  MODEL_QUICKPICKS_FALLBACK,
+  defaultModelFor,
+  type AvailableCli,
+  type CliKind,
+} from "./cli-bridge.ts";
 import { openInFinder } from "./system.ts";
 
 interface Props {
@@ -138,21 +143,76 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
     }
   }
   const [targetIdx, setTargetIdx] = useState(0);
-  const [model, setModel] = useState("");
+  // Per-CLI multi-select: when the user switches CLI, their previous
+  // model selection for that CLI persists. The "" (empty string) entry
+  // means "the CLI's default model" — useful when the user just wants
+  // to bench whatever's current without pinning a version.
+  const [selectedByCli, setSelectedByCli] = useState<Record<string, string[]>>({});
   const [useCouncil, setUseCouncil] = useState(false);
   const [mode, setMode] = useState<Mode>("idle");
+  // Per-model results from the most recent multi-model run. Each entry
+  // carries the raw records (for the click-to-expand Q/expected/reply
+  // drill-down) AND the score. Replaces the old single-result state.
+  type ModelResult = {
+    cli: CliKind;
+    model: string;
+    runDir: string;
+    records: CanonicalRunRecord[];
+    score: RunScore;
+  };
+  const [results, setResults] = useState<ModelResult[]>([]);
+  // Per-(modelKey + questionId) progress + active model display. The
+  // active model is whichever one is currently running in the loop —
+  // shown above the progress list.
+  const [activeModel, setActiveModel] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [latestScore, setLatestScore] = useState<RunScore | null>(null);
-  const [latestRunDir, setLatestRunDir] = useState<string | null>(null);
+  // Click-to-expand a result row: shows the question, expected_decision,
+  // and the model's actual reply inline so the user can judge the
+  // score themselves instead of trusting the LLM judge.
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(() =>
     buildLeaderboard(vaultPath),
   );
   const abortRef = useRef<AbortController | null>(null);
 
   const target = availableClis[targetIdx];
+  const selectedModels: string[] = target
+    ? selectedByCli[target.kind] ?? [""]
+    : [];
 
-  // Refresh leaderboard whenever a run finishes.
+  // Model picks for the current CLI = quickpicks list + a "(default)"
+  // sentinel. We include the default at the TOP so it's the first one
+  // toggled on when a user lands on a freshly-switched CLI.
+  const modelChoices: string[] = useMemo(() => {
+    if (!target) return [];
+    const def = defaultModelFor(target.kind);
+    const picks = MODEL_QUICKPICKS_FALLBACK[target.kind] ?? [];
+    // De-dupe while preserving order: default first, then picks (minus
+    // the one that already matches the default).
+    const seen = new Set([def]);
+    const out = [def];
+    for (const p of picks) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        out.push(p);
+      }
+    }
+    return out;
+  }, [target?.kind]);
+
+  function toggleModel(m: string) {
+    if (!target) return;
+    setSelectedByCli((prev) => {
+      const cur = prev[target.kind] ?? [];
+      const next = cur.includes(m)
+        ? cur.filter((x) => x !== m)
+        : [...cur, m];
+      return { ...prev, [target.kind]: next };
+    });
+  }
+
+  // Refresh leaderboard whenever the multi-model run finishes.
   useEffect(() => {
     if (mode === "done") {
       setLeaderboard(buildLeaderboard(vaultPath));
@@ -170,51 +230,66 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
       setMode("error");
       return;
     }
+    // No models picked = fall back to the CLI's default (matches single-
+    // model behavior pre-v1.5.0 so users who don't bother picking still
+    // get a usable run).
+    const modelsToRun: string[] =
+      selectedModels.length > 0 ? selectedModels : [""];
+
     setError(null);
     setMode("running");
     setProgress([]);
-    setLatestScore(null);
-    setLatestRunDir(null);
+    setResults([]);
+    setExpandedKey(null);
 
     const controller = new AbortController();
     abortRef.current = controller;
 
+    const collected: ModelResult[] = [];
+
     try {
-      const records = await runCanonicalSet({
-        vaultPath,
-        questions,
-        clis: availableClis,
-        targetCli: useCouncil ? undefined : target,
-        targetModel: model.trim() || undefined,
-        signal: controller.signal,
-        onProgress: (id, status, info) => {
-          setProgress((p) => [...p, { id, status, info }]);
-        },
-      });
+      for (let mi = 0; mi < modelsToRun.length; mi++) {
+        if (controller.signal.aborted) break;
+        const m = modelsToRun[mi]!;
+        const label =
+          m === "" ? `${target.kind} (default)` : `${target.kind} · ${m}`;
+        setActiveModel(`${mi + 1}/${modelsToRun.length} — ${label}`);
+        setProgress([]); // reset per-model progress
 
-      const runDir = writeRunDirectory({
-        vaultPath,
-        records,
-        targetCli: useCouncil ? undefined : target,
-        targetModel: model.trim() || undefined,
-      });
-      setLatestRunDir(runDir);
+        const records = await runCanonicalSet({
+          vaultPath,
+          questions,
+          clis: availableClis,
+          targetCli: useCouncil ? undefined : target,
+          targetModel: m || undefined,
+          signal: controller.signal,
+          onProgress: (id, status, info) => {
+            setProgress((p) => [...p, { id, status, info }]);
+          },
+        });
 
-      // Score immediately. The chair CLI is whichever target was used —
-      // imperfect (a model judging itself), but matches the CLI-side
-      // default and avoids requiring a second CLI to be installed.
-      setMode("scoring");
-      const result = await scoreRun({
-        vaultPath,
-        runDir,
-        judgeCli: target,
-        signal: controller.signal,
-        onProgress: () => {
-          // No per-question scoring progress display for now; runs are
-          // typically <30s of judging total.
-        },
-      });
-      setLatestScore(result);
+        const runDir = writeRunDirectory({
+          vaultPath,
+          records,
+          targetCli: useCouncil ? undefined : target,
+          targetModel: m || undefined,
+        });
+
+        setMode("scoring");
+        const score = await scoreRun({
+          vaultPath,
+          runDir,
+          judgeCli: target,
+          signal: controller.signal,
+          onProgress: () => {},
+        });
+        // Keep running, but already commit this model's result so the
+        // user can read the partial leaderboard while later models fire.
+        collected.push({ cli: target.kind, model: m, runDir, records, score });
+        setResults([...collected]);
+        setMode("running");
+      }
+      setActiveModel(null);
       setMode("done");
     } catch (err) {
       const msg = (err as Error)?.message ?? "run failed";
@@ -484,16 +559,43 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
           )}
         </box>
         <box flexDirection="row" paddingTop={0}>
-          <text fg={theme.fgFaint}>{"  model:   "}</text>
-          <input
-            placeholder="(blank = CLI default)"
-            value={model}
-            maxLength={120}
-            backgroundColor={theme.bgPanel}
-            textColor={theme.fg}
-            onInput={(v: string) => setModel(v)}
-          />
+          <text fg={theme.fgFaint}>{"  models:  "}</text>
+          <text fg={theme.fg}>
+            {selectedModels.length === 0
+              ? "(none — will use CLI default)"
+              : `${selectedModels.length} selected · click chips to toggle`}
+          </text>
         </box>
+        {/* Multi-select chip picker. Each model from this CLI's
+            quickpicks list is its own clickable chip. Selected chips
+            get a ✓ + selBg highlight. The default model is pinned at
+            the top so users who don't care about specific versions
+            still get a meaningful pick. */}
+        <box flexDirection="row" paddingTop={0} paddingLeft={2}>
+          <text fg={theme.fgFaint}>{" "}</text>
+        </box>
+        {modelChoices.length > 0 && (
+          <box flexDirection="column" paddingLeft={4}>
+            {modelChoices.map((m) => {
+              const checked = selectedModels.includes(m);
+              const isDefault = target ? m === defaultModelFor(target.kind) : false;
+              const labelTxt = isDefault ? `${m} (default)` : m;
+              return (
+                <box
+                  key={m}
+                  flexDirection="row"
+                  height={1}
+                  backgroundColor={checked ? theme.selBg : theme.bg}
+                  onMouseDown={() => toggleModel(m)}
+                >
+                  <text fg={checked ? theme.aiAccent : theme.fgDim} attributes={checked ? 1 : 0}>
+                    {`  ${checked ? "✓" : "·"} ${labelTxt}`}
+                  </text>
+                </box>
+              );
+            })}
+          </box>
+        )}
         <box flexDirection="row" paddingTop={0}>
           <text fg={theme.fgFaint}>{"  council: "}</text>
           <box
@@ -519,7 +621,7 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
               onMouseDown={() => void fireRun()}
             >
               <text fg={theme.gold} attributes={1}>
-                {`▸ run ${questions.length} question${questions.length === 1 ? "" : "s"}`}
+                {`▸ run ${selectedModels.length || 1} model${(selectedModels.length || 1) === 1 ? "" : "s"} × ${questions.length} question${questions.length === 1 ? "" : "s"}`}
               </text>
             </box>
           ) : (
@@ -537,6 +639,9 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
         <text> </text>
 
         {/* Progress / status */}
+        {(mode === "running" || mode === "scoring") && activeModel && (
+          <text fg={theme.gold} attributes={1}>{`▸ ${activeModel}`}</text>
+        )}
         {mode === "running" && (
           <>
             <text fg={theme.fgDim} attributes={1}>{`progress (${progress.filter((p) => p.status === "ok" || p.status === "error").length}/${questions.length})`}</text>
@@ -560,26 +665,90 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
           <text fg={theme.warn}>{`✗ ${error}`}</text>
         )}
 
-        {/* Result of the just-completed run */}
-        {latestScore && (
+        {/* Per-model results with click-to-expand drill-down. The user
+            asked: "what was the question, expected answer, what did
+            the model say?" — that's what the expanded view shows. */}
+        {results.length > 0 && (
           <>
-            <text fg={theme.aiAccent} attributes={1}>{`◈ result — ${latestScore.label}`}</text>
-            <text fg={theme.fg}>
-              {`  keyword_avg: ${latestScore.keyword_avg ?? "—"}%   judge_avg: ${latestScore.judge_avg ?? "—"} / 10   (${latestScore.questionScores.length} questions)`}
-            </text>
-            <text fg={theme.fgFaint}>
-              {latestRunDir
-                ? `  full report: ${latestRunDir}/score.md`
-                : "  (no run directory)"}
-            </text>
+            <text fg={theme.aiAccent} attributes={1}>{`◈ results — ${results.length} model${results.length === 1 ? "" : "s"}`}</text>
+            <text fg={theme.fgFaint}>{"  click any question row to see the prompt + expected decision + model's reply"}</text>
             <text> </text>
-            <text fg={theme.fgDim} attributes={1}>{"per-question scores"}</text>
-            {latestScore.questionScores.map((q) => (
-              <text key={q.id} fg={theme.fgDim}>
-                {`  ${q.id.padEnd(36)}  ${(q.keyword_score ?? "—").toString().padStart(4)}%  ${q.judge_score === null ? "—" : `${q.judge_score}/10`}  ${q.judge_rationale ?? ""}`}
-              </text>
-            ))}
-            <text> </text>
+            {results.map((r) => {
+              const modelLabel = r.model === "" ? `${r.cli} (default)` : `${r.cli} · ${r.model}`;
+              return (
+                <box key={`${r.cli}-${r.model}`} flexDirection="column">
+                  <text fg={theme.gold} attributes={1}>{`  ${modelLabel}`}</text>
+                  <text fg={theme.fg}>
+                    {`    keyword_avg: ${r.score.keyword_avg ?? "—"}%   judge_avg: ${r.score.judge_avg ?? "—"} / 10   (${r.score.questionScores.length} questions)`}
+                  </text>
+                  <text fg={theme.fgFaint}>{`    full report: ${r.runDir}/score.md`}</text>
+                  {r.score.questionScores.map((q) => {
+                    const key = `${r.cli}-${r.model}-${q.id}`;
+                    const expanded = expandedKey === key;
+                    // Look up the original question + the model's record
+                    // for this question. Lazy: we already have them in
+                    // memory from the run, no need to re-read disk.
+                    const question = questions.find((qq) => qq.id === q.id);
+                    const record = r.records.find((rec) => rec.id === q.id);
+                    return (
+                      <box key={key} flexDirection="column">
+                        <box
+                          flexDirection="row"
+                          height={1}
+                          onMouseDown={() => setExpandedKey(expanded ? null : key)}
+                        >
+                          <text fg={theme.fgDim}>
+                            {`    ${expanded ? "▾" : "▸"} ${q.id.padEnd(36)}  ${(q.keyword_score ?? "—").toString().padStart(4)}%  ${q.judge_score === null ? "—" : `${q.judge_score}/10`}  ${q.judge_rationale ?? ""}`}
+                          </text>
+                        </box>
+                        {expanded && (
+                          <box flexDirection="column" paddingLeft={8} paddingTop={1} paddingBottom={1}>
+                            <text fg={theme.fgDim} attributes={1}>{"question"}</text>
+                            <text fg={theme.fg}>
+                              {question?.prompt ?? "(question file not loaded)"}
+                            </text>
+                            {question?.context && (
+                              <>
+                                <text> </text>
+                                <text fg={theme.fgDim} attributes={1}>{"context"}</text>
+                                <text fg={theme.fg}>{question.context}</text>
+                              </>
+                            )}
+                            <text> </text>
+                            <text fg={theme.fgDim} attributes={1}>{"expected decision"}</text>
+                            <text fg={theme.ok}>
+                              {question?.expected_decision ?? "(no expected_decision set)"}
+                            </text>
+                            {question?.expected_verdict_keywords && (
+                              <text fg={theme.fgFaint}>
+                                {`keywords: ${question.expected_verdict_keywords.join(", ")}`}
+                              </text>
+                            )}
+                            <text> </text>
+                            <text fg={theme.fgDim} attributes={1}>{"model said"}</text>
+                            <text fg={theme.fg}>
+                              {record?.reply || "(empty reply or error)"}
+                            </text>
+                            <text> </text>
+                            <text fg={theme.fgDim} attributes={1}>{"keyword scoring"}</text>
+                            <text fg={theme.ok}>{`  ✓ hit:  ${q.keyword_hits.join(", ") || "(none)"}`}</text>
+                            <text fg={theme.warn}>{`  ✗ miss: ${q.keyword_misses.join(", ") || "(none)"}`}</text>
+                            {q.judge_rationale && (
+                              <>
+                                <text> </text>
+                                <text fg={theme.fgDim} attributes={1}>{`judge rationale (${q.judge_score}/10)`}</text>
+                                <text fg={theme.fg}>{q.judge_rationale}</text>
+                              </>
+                            )}
+                          </box>
+                        )}
+                      </box>
+                    );
+                  })}
+                  <text> </text>
+                </box>
+              );
+            })}
           </>
         )}
 

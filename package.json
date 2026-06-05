@@ -1,6 +1,6 @@
 {
   "name": "prevail",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "prevAIl — a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,

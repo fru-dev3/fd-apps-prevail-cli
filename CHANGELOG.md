@@ -7,6 +7,54 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.5.0] — 2026-06-04 · Multi-model benchmark + click-to-drill
+
+User: "I would rather have picker lists than input fields. And I'm not even sure how to read the benchmark result. What was the question, expected answer, what did the model say?"
+
+Two big BenchmarkPanel changes that fix both gaps at once.
+
+### Added — Multi-select model picker
+Replaces the free-text `model: <input>` field with a clickable chip list. For the currently-picked CLI, every model from `MODEL_QUICKPICKS_FALLBACK` shows as its own row:
+
+```
+target:  ▸ Claude   Codex   Antigravity   Ollama
+models:  3 selected · click chips to toggle
+    ✓ claude-opus-4-7 (default)
+    ✓ claude-opus-4-6
+    ✓ claude-opus-4-5
+    · claude-sonnet-4-7
+    · claude-sonnet-4-6
+    · claude-haiku-4-5
+```
+
+- Default model is pinned at the top so users who don't care about pinning still get a meaningful choice.
+- Selection is **per-CLI** — switching from Claude to Codex preserves your Claude picks for when you come back.
+- Multiple models = sequential run. Each model gets its own run dir and its own score; all of them land on the leaderboard with distinct labels.
+- Run-button label updates live: "▸ run 3 models × 10 questions = 30 calls".
+
+### Added — Click any question row to drill into full Q/A
+The per-question result line is now clickable. Click → expands inline to show:
+
+- **The question** — full prompt + context block from the canonical question file
+- **The expected decision** — your ground-truth answer (the one you stand behind)
+- **The expected keywords** — what a competent reply should hit
+- **The model's full reply** — verbatim from the run, not truncated
+- **Keyword scoring** — which expected keywords hit (✓) and which missed (✗)
+- **The judge rationale** — the LLM judge's one-line explanation of the 0-10 score
+
+This is the difference between "the model scored 7/10" and "the model scored 7/10 because it picked the right side but missed the liquidity constraint." You can now agree or disagree with the judge yourself, since you can see exactly what the model said vs what you expected.
+
+### Implementation
+- `selectedByCli: Record<CliKind, string[]>` — per-CLI selection persists across CLI switches.
+- `results: ModelResult[]` — replaces the old `latestScore` single-state. Each entry carries both the raw run records AND the score so the drill-down has everything it needs in memory (no re-read of `results.json` from disk).
+- The run loop streams results into `setResults` incrementally — you can read the first model's drill-down while later models are still firing.
+- Cancel mid-comparison preserves the models that already completed.
+
+### Unchanged
+All CLI flows (`prevail bench run --canonical`, `bench score`, `bench leaderboard`) still work identically. File format unchanged. Existing single-model runs render as a single result block with one drill-down list.
+
+---
+
 ## [1.4.2] — 2026-06-04 · `▸ open folder` link in BenchmarkPanel
 
 User: "Put a link inside bench so I can open and see the folder."
