@@ -5,6 +5,7 @@ import {
   benchmarkRoot,
   buildLeaderboard,
   listQuestions,
+  loadRunForInspection,
   runCanonicalSet,
   scoreRun,
   seedFromLatestCouncil,
@@ -171,6 +172,12 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
   // and the model's actual reply inline so the user can judge the
   // score themselves instead of trusting the LLM judge.
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  // When the user clicks a row in the leaderboard, we hydrate `results`
+  // from that run's saved results.json + score.json so the existing
+  // expand-on-click drill-down works on historical runs too. This label
+  // is shown above the results section so the user can tell they're
+  // looking at a saved run rather than a fresh one.
+  const [loadedRunLabel, setLoadedRunLabel] = useState<string | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(() =>
     buildLeaderboard(vaultPath),
   );
@@ -244,6 +251,33 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
     }
   }, [mode, vaultPath]);
 
+  // Click a leaderboard row → hydrate results from that run's saved
+  // results.json + score.json so the user can drill into every
+  // question/expected/reply/judge-rationale tuple for any historical
+  // run without re-firing the council.
+  function openHistoricalRun(entry: LeaderboardEntry) {
+    const loaded = loadRunForInspection(entry.runDir);
+    if (!loaded) {
+      setError(`could not load saved run at ${entry.runDir}`);
+      setMode("error");
+      return;
+    }
+    const first = loaded.records[0];
+    const cli = (first?.cli as CliKind | undefined) ?? "claude";
+    const model = first?.model ?? "(historical)";
+    setResults([{
+      cli,
+      model,
+      runDir: entry.runDir,
+      records: loaded.records,
+      score: loaded.score,
+    }]);
+    setLoadedRunLabel(entry.label);
+    setExpandedKey(null);
+    setError(null);
+    setMode("done");
+  }
+
   async function fireRun() {
     if (availableClis.length === 0) {
       setError("no CLI detected — install claude / codex / antigravity / ollama first");
@@ -276,6 +310,7 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
     setProgress([]);
     setResults([]);
     setExpandedKey(null);
+    setLoadedRunLabel(null);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -718,6 +753,9 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
         {results.length > 0 && (
           <>
             <text fg={theme.aiAccent} attributes={1}>{`◈ results — ${results.length} model${results.length === 1 ? "" : "s"}`}</text>
+            {loadedRunLabel && (
+              <text fg={theme.gold}>{`  ◆ viewing saved run: ${loadedRunLabel}  (click another leaderboard row to swap, or run a benchmark above for fresh results)`}</text>
+            )}
             <text fg={theme.fgFaint}>{"  click any question row to see the prompt + expected decision + model's reply"}</text>
             <text> </text>
             {results.map((r) => {
@@ -737,6 +775,15 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
                     // memory from the run, no need to re-read disk.
                     const question = questions.find((qq) => qq.id === q.id);
                     const record = r.records.find((rec) => rec.id === q.id);
+                    // Single-line summary row: hard-truncate the rationale
+                    // so it can't wrap to col 0 and shatter the column
+                    // alignment. Full rationale is shown in the expanded
+                    // panel below so nothing is hidden.
+                    const RATIONALE_PREVIEW = 60;
+                    const rationaleRaw = (q.judge_rationale ?? "").replace(/\s+/g, " ").trim();
+                    const rationalePreview = rationaleRaw.length > RATIONALE_PREVIEW
+                      ? rationaleRaw.slice(0, RATIONALE_PREVIEW - 1) + "…"
+                      : rationaleRaw;
                     return (
                       <box key={key} flexDirection="column">
                         <box
@@ -745,14 +792,14 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
                           onMouseDown={() => setExpandedKey(expanded ? null : key)}
                         >
                           <text fg={theme.fgDim}>
-                            {`    ${expanded ? "▾" : "▸"} ${q.id.padEnd(36)}  ${(q.keyword_score ?? "—").toString().padStart(4)}%  ${q.judge_score === null ? "—" : `${q.judge_score}/10`}  ${q.judge_rationale ?? ""}`}
+                            {`    ${expanded ? "▾" : "▸"} ${q.id.padEnd(36)}  ${(q.keyword_score ?? "—").toString().padStart(4)}%  ${q.judge_score === null ? "—" : `${q.judge_score}/10`}  ${rationalePreview}`}
                           </text>
                         </box>
                         {expanded && (
                           <box flexDirection="column" paddingLeft={8} paddingTop={1} paddingBottom={1}>
                             <text fg={theme.fgDim} attributes={1}>{"question"}</text>
                             <text fg={theme.fg}>
-                              {question?.prompt ?? "(question file not loaded)"}
+                              {question?.prompt ?? record?.prompt ?? "(question text not available)"}
                             </text>
                             {question?.context && (
                               <>
@@ -764,11 +811,11 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
                             <text> </text>
                             <text fg={theme.fgDim} attributes={1}>{"expected decision"}</text>
                             <text fg={theme.ok}>
-                              {question?.expected_decision ?? "(no expected_decision set)"}
+                              {question?.expected_decision ?? record?.expected_decision ?? "(no expected_decision set)"}
                             </text>
-                            {question?.expected_verdict_keywords && (
+                            {(question?.expected_verdict_keywords ?? record?.expected_verdict_keywords) && (
                               <text fg={theme.fgFaint}>
-                                {`keywords: ${question.expected_verdict_keywords.join(", ")}`}
+                                {`keywords: ${(question?.expected_verdict_keywords ?? record?.expected_verdict_keywords ?? []).join(", ")}`}
                               </text>
                             )}
                             <text> </text>
@@ -799,7 +846,10 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
           </>
         )}
 
-        {/* Leaderboard across all prior runs */}
+        {/* Leaderboard across all prior runs. Each row is clickable —
+            opens that run's saved per-question records into the results
+            section above for full drill-down without re-firing the
+            council. */}
         <text fg={theme.aiAccent} attributes={1}>{"◈ leaderboard"}</text>
         {leaderboard.length === 0 ? (
           <text fg={theme.fgFaint}>
@@ -807,15 +857,23 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
           </text>
         ) : (
           <>
+            <text fg={theme.fgFaint}>{"  click any row to inspect that run's per-question results"}</text>
             <text fg={theme.fgDim}>{"  judge / 10  keyword %  questions  label"}</text>
             <text fg={theme.fgFaint}>{"  ----------  ---------  ---------  ------------------------------"}</text>
             {leaderboard.map((e) => {
               const j = e.judge_avg === null ? "—" : e.judge_avg.toFixed(1);
               const k = e.keyword_avg === null ? "—" : `${e.keyword_avg}%`;
+              const isLoaded = loadedRunLabel === e.label;
               return (
-                <text key={e.label} fg={theme.fg}>
-                  {`  ${j.padStart(10)}  ${k.padStart(9)}  ${String(e.questions).padStart(9)}  ${e.label}`}
-                </text>
+                <box
+                  key={e.label}
+                  height={1}
+                  onMouseDown={() => openHistoricalRun(e)}
+                >
+                  <text fg={isLoaded ? theme.gold : theme.fg}>
+                    {`  ${isLoaded ? "▸" : " "} ${j.padStart(8)}  ${k.padStart(9)}  ${String(e.questions).padStart(9)}  ${e.label}`}
+                  </text>
+                </box>
               );
             })}
           </>

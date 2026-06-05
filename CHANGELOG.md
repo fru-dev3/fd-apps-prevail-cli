@@ -7,6 +7,34 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.6.1] — 2026-06-04 · Bench results: clean single-line rows + clickable historical drill-down
+
+User report 1: "The text on some of these benchmark results doesn't wrap correctly. When I expand the very first one and collapse it back, the text is not aligned or wrapped properly."
+
+User report 2: "Because all of this is saved, I should be able to go back and click on previous test results and see the detailed results, the questions, and the answers across different assessments."
+
+Two small fixes that together make the bench result browser actually browsable.
+
+### Fixed — Summary row wraps to column 0 and breaks alignment
+
+The collapsed per-question row appended the full `judge_rationale` to a `height={1}` row. When the rationale was longer than the remaining terminal width, the overflow wrapped to column 0 and visually fractured every subsequent row. The full rationale is already shown in the click-to-expand panel below, so the summary row now hard-truncates to 60 chars with an ellipsis. Single-line invariant restored on any terminal ≥100 cols.
+
+### Added — Clickable leaderboard rows
+
+Each leaderboard entry is now interactive. Clicking a row reads that run's saved `results.json` + `score.json` and hydrates the per-model results section above with full per-question drill-down — same expand-to-see (question / context / expected decision / model's reply / keyword hits/misses / judge rationale) UI as a fresh run, no re-firing of the council required.
+
+A `◆ viewing saved run: <label>` badge appears above the results when you're inspecting a historical run, and the active row in the leaderboard is highlighted gold with a `▸` marker. Firing a new benchmark or clicking a different leaderboard row swaps the view.
+
+### Added — `loadRunForInspection(runDir)`
+
+New helper in `canonical-bench.ts` that reads + parses both JSON files from a run dir and returns `{ records, score }` or null. Keeps the panel free of fs/path imports.
+
+### Hardened — Expand-panel fallback for deleted question files
+
+If a historical run references a question whose source `.md` has since been deleted or renamed, the expanded view now falls back to `record.prompt`, `record.expected_decision`, and `record.expected_verdict_keywords` (all persisted at run time in `results.json`) so the drill-down stays useful even after the source files drift.
+
+---
+
 ## [1.6.0] — 2026-06-04 · Richer benchmark — attachments, cultural / brevity / recency / bias scenarios
 
 User: "Can you increase the complexity of the benchmark? Maybe include some PDFs, dense PDFs with data, so that we can also gauge how the model can pass PDF and such, like different file formats... You can also include some fairly complex or relatively complex tax scenario that could trip three people up... include a test for how recent it is... Put a test in there with some cultural nuance... Put a test in there about the brevity or the verbosity of it. Obviously put something about family-oriented that will take a surface some cultural nuance or sensitivity."

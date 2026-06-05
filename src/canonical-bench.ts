@@ -681,6 +681,25 @@ export function buildLeaderboard(vaultPath: string): LeaderboardEntry[] {
   });
 }
 
+// Load a single saved run for inspection — used when the user clicks
+// a leaderboard row to drill into a historical run's per-question
+// results without re-running.
+export function loadRunForInspection(runDir: string): {
+  records: CanonicalRunRecord[];
+  score: RunScore;
+} | null {
+  const resultsFile = join(runDir, "results.json");
+  const scoreFile = join(runDir, "score.json");
+  if (!existsSync(resultsFile) || !existsSync(scoreFile)) return null;
+  try {
+    const records: CanonicalRunRecord[] = JSON.parse(readFileSync(resultsFile, "utf8"));
+    const score: RunScore = JSON.parse(readFileSync(scoreFile, "utf8"));
+    return { records, score };
+  } catch {
+    return null;
+  }
+}
+
 // Import seed: pull a council-verdict entry out of a domain's _log file
 // at <vault>/<domain>/_log/<date>.md and turn it into a draft. Heuristic
 // — looks for the most recent "⚖ council" section in the file. Returns
