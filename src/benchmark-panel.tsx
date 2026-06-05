@@ -178,8 +178,33 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
 
   const target = availableClis[targetIdx];
   const selectedModels: string[] = target
-    ? selectedByCli[target.kind] ?? [""]
+    ? selectedByCli[target.kind] ?? []
     : [];
+
+  // Cross-provider total: every (cli, model) pair the user has checked
+  // across ALL CLI tabs. This is what fireRun iterates and what the
+  // run-button label shows — picks in Claude AND Codex AND Antigravity
+  // all fire in the same run.
+  const allSelections: { cli: AvailableCli; model: string }[] = useMemo(() => {
+    const out: { cli: AvailableCli; model: string }[] = [];
+    for (const c of availableClis) {
+      const picks = selectedByCli[c.kind] ?? [];
+      for (const m of picks) out.push({ cli: c, model: m });
+    }
+    return out;
+  }, [availableClis, selectedByCli]);
+
+  // Per-CLI summary string for the "selected across providers" row.
+  // Empty when only one provider has picks (the picker already shows
+  // the count for the active CLI).
+  const providerBreakdown = useMemo(() => {
+    const parts: string[] = [];
+    for (const c of availableClis) {
+      const n = (selectedByCli[c.kind] ?? []).length;
+      if (n > 0) parts.push(`${c.label} ${n}`);
+    }
+    return parts;
+  }, [availableClis, selectedByCli]);
 
   // Model picks for the current CLI = quickpicks list + a "(default)"
   // sentinel. We include the default at the TOP so it's the first one
@@ -220,7 +245,7 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
   }, [mode, vaultPath]);
 
   async function fireRun() {
-    if (!target) {
+    if (availableClis.length === 0) {
       setError("no CLI detected — install claude / codex / antigravity / ollama first");
       setMode("error");
       return;
@@ -230,11 +255,21 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
       setMode("error");
       return;
     }
-    // No models picked = fall back to the CLI's default (matches single-
-    // model behavior pre-v1.5.0 so users who don't bother picking still
-    // get a usable run).
-    const modelsToRun: string[] =
-      selectedModels.length > 0 ? selectedModels : [""];
+    // Cross-provider plan: every (cli, model) pair the user picked
+    // across every CLI tab. If nothing is picked, fall back to the
+    // CURRENT target CLI's default — matches pre-1.5.x behavior so
+    // users who didn't tick any chip still get a usable run.
+    const plan: { cli: AvailableCli; model: string }[] =
+      allSelections.length > 0
+        ? allSelections
+        : target
+          ? [{ cli: target, model: "" }]
+          : [];
+    if (plan.length === 0) {
+      setError("no models selected");
+      setMode("error");
+      return;
+    }
 
     setError(null);
     setMode("running");
@@ -248,19 +283,19 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
     const collected: ModelResult[] = [];
 
     try {
-      for (let mi = 0; mi < modelsToRun.length; mi++) {
+      for (let mi = 0; mi < plan.length; mi++) {
         if (controller.signal.aborted) break;
-        const m = modelsToRun[mi]!;
+        const { cli, model: m } = plan[mi]!;
         const label =
-          m === "" ? `${target.kind} (default)` : `${target.kind} · ${m}`;
-        setActiveModel(`${mi + 1}/${modelsToRun.length} — ${label}`);
+          m === "" ? `${cli.kind} (default)` : `${cli.kind} · ${m}`;
+        setActiveModel(`${mi + 1}/${plan.length} — ${label}`);
         setProgress([]); // reset per-model progress
 
         const records = await runCanonicalSet({
           vaultPath,
           questions,
           clis: availableClis,
-          targetCli: useCouncil ? undefined : target,
+          targetCli: useCouncil ? undefined : cli,
           targetModel: m || undefined,
           signal: controller.signal,
           onProgress: (id, status, info) => {
@@ -271,7 +306,7 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
         const runDir = writeRunDirectory({
           vaultPath,
           records,
-          targetCli: useCouncil ? undefined : target,
+          targetCli: useCouncil ? undefined : cli,
           targetModel: m || undefined,
         });
 
@@ -279,13 +314,15 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
         const score = await scoreRun({
           vaultPath,
           runDir,
-          judgeCli: target,
+          // Use the model's own CLI as the judge — matches per-provider
+          // default behavior; avoids cross-provider judging bias.
+          judgeCli: cli,
           signal: controller.signal,
           onProgress: () => {},
         });
         // Keep running, but already commit this model's result so the
         // user can read the partial leaderboard while later models fire.
-        collected.push({ cli: target.kind, model: m, runDir, records, score });
+        collected.push({ cli: cli.kind, model: m, runDir, records, score });
         setResults([...collected]);
         setMode("running");
       }
@@ -562,10 +599,20 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
           <text fg={theme.fgFaint}>{"  models:  "}</text>
           <text fg={theme.fg}>
             {selectedModels.length === 0
-              ? "(none — will use CLI default)"
-              : `${selectedModels.length} selected · click chips to toggle`}
+              ? "(none picked for this CLI yet)"
+              : `${selectedModels.length} selected for ${target?.label ?? ""}`}
           </text>
         </box>
+        {/* Cross-provider summary — only shows when 2+ CLI tabs have
+            picks, so the single-provider case stays uncluttered. */}
+        {providerBreakdown.length >= 2 && (
+          <box flexDirection="row" paddingTop={0}>
+            <text fg={theme.fgFaint}>{"  across:  "}</text>
+            <text fg={theme.aiAccent} attributes={1}>
+              {`${allSelections.length} total · ${providerBreakdown.join(" + ")}`}
+            </text>
+          </box>
+        )}
         {/* Multi-select chip picker. Each model from this CLI's
             quickpicks list is its own clickable chip. Selected chips
             get a ✓ + selBg highlight. The default model is pinned at
@@ -621,7 +668,7 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
               onMouseDown={() => void fireRun()}
             >
               <text fg={theme.gold} attributes={1}>
-                {`▸ run ${selectedModels.length || 1} model${(selectedModels.length || 1) === 1 ? "" : "s"} × ${questions.length} question${questions.length === 1 ? "" : "s"}`}
+                {`▸ run ${allSelections.length || 1} model${(allSelections.length || 1) === 1 ? "" : "s"} × ${questions.length} question${questions.length === 1 ? "" : "s"}`}
               </text>
             </box>
           ) : (

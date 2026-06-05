@@ -7,6 +7,38 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.5.1] — 2026-06-04 · Cross-provider model selection
+
+User: "Am I able to select models across providers? Like 2 from Claude and 3 from Codex etc to run the benchmark?"
+
+The v1.5.0 multi-model picker already persisted selections per-CLI (switching from Claude to Codex didn't clear your Claude picks), but the runner only fired the currently-active CLI's selections. **Now it iterates every (cli, model) pair across every CLI tab.**
+
+### Changed — Cross-provider run loop
+- `allSelections` derived from every CLI's checked chips, flattened into a `(cli, model)` plan
+- Run loop iterates the full plan — claude · opus-4-7, claude · opus-4-6, codex · gpt-5.4, antigravity · "Gemini 3.1 Pro (High)", all in one go
+- Each entry gets its own run dir, its own score, and its own row on the leaderboard with full provider context
+- Judge for each is the model's own CLI (Claude judges Claude runs, Codex judges Codex runs) — avoids cross-provider judging bias
+
+### Added — "across providers" summary row
+When 2+ CLI tabs have picks selected, a new row appears above the run button:
+
+```
+target:    ▸ Claude   Codex   Antigravity   Ollama
+models:    2 selected for Claude
+across:    6 total · Claude 2 + Codex 3 + Antigravity 1
+[ ▸ run 6 models × 10 questions = 60 calls ]
+```
+
+When only one CLI has picks, the row stays hidden — single-provider runs feel exactly like 1.5.0.
+
+### Run-button label
+Reflects the total cross-provider count, not just the current CLI's. The previous `▸ run 2 models × 10` is now `▸ run 6 models × 10` when the plan crosses providers.
+
+### No data shape changes
+Existing run/score files unchanged. Past leaderboard runs still display. CLI commands unchanged.
+
+---
+
 ## [1.5.0] — 2026-06-04 · Multi-model benchmark + click-to-drill
 
 User: "I would rather have picker lists than input fields. And I'm not even sure how to read the benchmark result. What was the question, expected answer, what did the model say?"
