@@ -1,9 +1,19 @@
+import { useState } from "react";
+import { useOnResize, useRenderer } from "@opentui/react";
 import { theme } from "./theme.ts";
 import { VERSION } from "./version.ts";
 import { readResponseFramework, readResponseLens, readWebAccess } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
 import { getLens, type LensSelection } from "./lens.ts";
 import { Chip } from "./chip.tsx";
+
+// Below these thresholds the banner switches to a compact 3-row layout
+// — no giant ASCII PREVAIL logo, all chips collapsed onto a single line
+// each. Triggered on a 13" laptop (typically ~90-100 cols × 24-30 rows
+// in iTerm/Terminal full-screen). Big screens stay on the original
+// 9-row banner; no behavior change there.
+const COMPACT_WIDTH = 100;
+const COMPACT_HEIGHT = 32;
 
 interface Props {
   domainCount: number;
@@ -59,6 +69,47 @@ export function Branding({
       ? cliLabels.map((s) => s.toLowerCase()).join("  ·  ")
       : "no cli detected";
 
+  // Track terminal size so we can collapse the banner on small screens
+  // (13" laptops, split iTerm panes, etc.) without touching the
+  // big-screen layout. The threshold is intentionally generous — if
+  // there's any chance the banner is eating too much space, fall to
+  // compact mode.
+  const renderer = useRenderer();
+  const [size, setSize] = useState(() => ({
+    w: renderer?.terminalWidth ?? 120,
+    h: renderer?.terminalHeight ?? 40,
+  }));
+  useOnResize(() => {
+    setSize({
+      w: renderer?.terminalWidth ?? 120,
+      h: renderer?.terminalHeight ?? 40,
+    });
+  });
+  const compact = size.w < COMPACT_WIDTH || size.h < COMPACT_HEIGHT;
+
+  if (compact) {
+    return (
+      <CompactBranding
+        dateLabel={dateLabel}
+        timeLabel={timeLabel}
+        domainCount={domainCount}
+        appCount={appCount}
+        totalLoops={totalLoops}
+        vaultLabel={vaultLabel}
+        cliText={cliText}
+        globalCouncilOn={globalCouncilOn}
+        onToggleGlobalCouncil={onToggleGlobalCouncil}
+        onOpenCouncilConfig={onOpenCouncilConfig}
+        onOpenTools={onOpenTools}
+        onOpenBenchmark={onOpenBenchmark}
+        onCycleFramework={onCycleFramework}
+        onCycleLens={onCycleLens}
+        onCycleWeb={onCycleWeb}
+        cliHealthSummary={cliHealthSummary}
+      />
+    );
+  }
+
   return (
     <box
       flexDirection="column"
@@ -96,6 +147,148 @@ export function Branding({
           appCount={appCount}
           totalLoops={totalLoops}
         />
+      </box>
+    </box>
+  );
+}
+
+// Compact (small-screen) banner — 3 rows instead of 9. Drops the giant
+// ASCII PREVAIL logo and the vault path row; collapses defaults +
+// configure/bench/tools onto two single-line chip rows; CLI health
+// shares a row with the date. Every clickable affordance from the big
+// banner is preserved.
+function CompactBranding({
+  dateLabel,
+  timeLabel,
+  domainCount,
+  appCount,
+  totalLoops,
+  vaultLabel,
+  cliText: _cliText,
+  globalCouncilOn,
+  onToggleGlobalCouncil,
+  onOpenCouncilConfig,
+  onOpenTools,
+  onOpenBenchmark,
+  onCycleFramework,
+  onCycleLens,
+  onCycleWeb,
+  cliHealthSummary,
+}: {
+  dateLabel: string;
+  timeLabel: string;
+  domainCount: number;
+  appCount: number;
+  totalLoops: number;
+  vaultLabel: string;
+  cliText: string;
+  globalCouncilOn?: boolean;
+  onToggleGlobalCouncil?: () => void;
+  onOpenCouncilConfig?: () => void;
+  onOpenTools?: () => void;
+  onOpenBenchmark?: () => void;
+  onCycleFramework?: () => void;
+  onCycleLens?: () => void;
+  onCycleWeb?: () => void;
+  cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
+}) {
+  const fw = readResponseFramework();
+  const fwLabel = fw ? FRAMEWORKS.find((f) => f.id === fw)?.label ?? fw : "none";
+  const lensSel: LensSelection = readResponseLens();
+  const lensLabel =
+    lensSel === null
+      ? "none"
+      : lensSel === "all"
+        ? "all"
+        : getLens(lensSel)?.label ?? "none";
+  const webAllow = readWebAccess() === "allow";
+  return (
+    <box
+      flexDirection="column"
+      height={3}
+      border={["bottom"]}
+      borderColor={theme.gold}
+      backgroundColor={theme.bg}
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      {/* Row 1: brand + date + stats + cli health */}
+      <box flexDirection="row" height={1}>
+        <text fg={theme.gold} attributes={1}>{"◈ prevAIl"}</text>
+        <text fg={theme.goldDim}>{` v${VERSION}`}</text>
+        <text fg={theme.fgFaint}>{"  ·  "}</text>
+        <text fg={theme.gold}>{dateLabel}</text>
+        <text fg={theme.fgFaint}>{"  "}</text>
+        <text fg={theme.fgDim}>{timeLabel}</text>
+        <text fg={theme.fgFaint}>{"  ·  "}</text>
+        <text fg={theme.fgDim}>
+          <span fg={theme.fg}>{domainCount}</span>
+          {"d "}
+          <span fg={theme.fg}>{appCount}</span>
+          {"a "}
+          <span fg={totalLoops > 0 ? theme.warn : theme.fg}>{totalLoops}</span>
+          {"o"}
+        </text>
+        <box flexGrow={1} />
+        {cliHealthSummary && cliHealthSummary.length > 0 && (
+          <box flexDirection="row">
+            {cliHealthSummary.map((h) => {
+              const glyph = h.ok === true ? "✓" : h.ok === false ? "!" : "·";
+              const fgC = h.ok === true ? theme.ok : h.ok === false ? theme.warn : theme.fgDim;
+              return (
+                <box key={h.kind} flexDirection="row" paddingLeft={1}>
+                  <text fg={fgC}>{glyph}</text>
+                  <text fg={theme.fgDim}>{h.label.toLowerCase()}</text>
+                </box>
+              );
+            })}
+          </box>
+        )}
+      </box>
+      {/* Row 2: defaults — every per-question knob */}
+      <box flexDirection="row" height={1}>
+        <text fg={theme.fgFaint}>{"defaults"}</text>
+        <Chip
+          label="⚖ C:"
+          value={globalCouncilOn ? "ON" : "OFF"}
+          active={!!globalCouncilOn}
+          activeFg={theme.gold}
+          onMouseDown={onToggleGlobalCouncil}
+          paddingLeft={1}
+        />
+        <Chip
+          label="◆ F:"
+          value={fwLabel}
+          active={!!fw}
+          onMouseDown={onCycleFramework}
+        />
+        <Chip
+          label="◇ L:"
+          value={lensLabel}
+          active={!!lensSel}
+          onMouseDown={onCycleLens}
+        />
+        <Chip
+          label="⬡ W:"
+          value={webAllow ? "ON" : "OFF"}
+          active={webAllow}
+          onMouseDown={onCycleWeb}
+        />
+        <box flexGrow={1} />
+        <text fg={theme.fgFaint}>{vaultLabel}</text>
+      </box>
+      {/* Row 3: tools — open the heavy panels */}
+      <box flexDirection="row" height={1}>
+        <text fg={theme.fgFaint}>{"tools   "}</text>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
+          <text fg={theme.aiAccent}>◇ configure</text>
+        </box>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenBenchmark}>
+          <text fg={theme.aiAccent} attributes={1}>◈ bench</text>
+        </box>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>
+          <text fg={theme.aiAccent} attributes={1}>▸ tools</text>
+        </box>
       </box>
     </box>
   );

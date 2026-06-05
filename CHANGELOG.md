@@ -7,6 +7,29 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.6.3] — 2026-06-05 · Compact banner on small screens (13" MBP friendly)
+
+User: "I'm on my other Mac 13 inch M5 and the screen doesn't show all the text. Anyway to make it when in full mode to show all the text. It's really hard to use. Don't change or break existing functionality."
+
+The corporate-style branding header was a fixed 9 rows — fine on a 27" Studio Display but eating roughly half the vertical space on a 13" MBP terminal in fullscreen. Below 100 cols OR 32 rows the banner now collapses to a **3-row compact layout**. Wide screens are unchanged.
+
+### Added — Auto-compact banner
+
+- Reads `renderer.terminalWidth` / `terminalHeight` and subscribes to `resize`
+- Switches to a 3-row layout when width < 100 OR height < 32
+- Compact rows:
+  - Row 1: `◈ prevAIl v1.6.3 · <date> <time> · Nd Na No` · cli health badges (right)
+  - Row 2: `defaults  ⚖ C:ON  ◆ F:none  ◇ L:none  ⬡ W:OFF` · vault label (right)
+  - Row 3: `tools   ◇ configure  ◈ bench  ▸ tools`
+- Every chip remains clickable and behaves identically — only the layout collapses
+- The 6 rows freed up go to the chat history pane, where the user actually wants them
+
+### Unchanged on wide screens
+
+If your terminal is ≥ 100 cols AND ≥ 32 rows, you get the exact same 9-row banner with the ASCII PREVAIL logo, status column, and two-row defaults/tools layout you had in 1.6.2. Zero behavioral diff.
+
+---
+
 ## [1.6.2] — 2026-06-04 · Bench questions: click to preview before running
 
 User: "On the UI, I should be able to click and see the question itself, the context, and the expected answer, even before I run the benchmark, right?"
