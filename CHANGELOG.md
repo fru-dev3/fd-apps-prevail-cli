@@ -7,6 +7,45 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.6.4] — 2026-06-05 · Three-tier responsive layout (not just a 13" hack)
+
+User: "I hope you're not just building it for the 13" Mac, right, because computer screens are not all the same, so you gotta be way smarter than this."
+
+Fair. 1.6.3's binary "compact OR full" switch was too coarse. There's a whole spectrum of terminal sizes between a 13" MBP fullscreen and a 27" Studio Display — 14" MBPs, 15" MBPs, 24" 1080p externals, split iTerm panes on big monitors. 1.6.4 introduces a three-tier responsive system that adapts to each.
+
+### Added — `useLayoutTier()` hook
+
+New shared `src/use-layout-tier.ts` exposes the current terminal size plus a classified tier. Both the banner and the sidebar consume it; any future component can too.
+
+| Tier | Width range | Height range | Typical setup |
+|---|---|---|---|
+| **compact** | < 100 | < 28 | 13" MBP fullscreen, split iTerm panes |
+| **medium** | 100–149 | 28–35 | 14" / 15" MBP, 24" 1080p external |
+| **wide** | ≥ 150 | ≥ 36 | 16" MBP, 27" Studio Display, big externals |
+
+The check is **OR-mode** — any dimension being tight knocks the layout down a tier. A 90×50 split pane gets `compact` (not `medium`) so the wide banner doesn't horizontally clip.
+
+### Changed — Banner layout per tier
+
+- **wide**: unchanged from 1.6.2 — 9-row banner with the giant ASCII PREVAIL logo and the full status column. Zero behavioral diff for big-screen users.
+- **medium**: 7-row banner — ASCII logo hidden, status column takes the full width with an inline `◈ prevAIl vX.Y.Z · opentui` brand header at the top. All chips (Council / Framework / Lens / Web / configure / bench / tools) and CLI health badges still present.
+- **compact**: 3-row banner from 1.6.3 — Council/Framework/Lens/Web/configure/bench/tools all on two compressed rows, brand and stats on one row, CLI health stacked inline.
+
+### Changed — Sidebar width per tier
+
+- **compact**: 22 cells (was 32) — frees ~10 cells horizontally for the chat / workspace pane
+- **medium / wide**: 32 cells (unchanged)
+
+22 still fits `▸ ◆ business-pricing` (the longest demo-id) plus the 2-cell skill count.
+
+### Why this matters
+
+The 1.6.3 fix worked for the 13" Mac but flipped a 14"/15" MBP into the "small" bucket as well, hiding the logo the user might still want on a perfectly comfortable terminal. The 3-tier system gives medium-screen users the best of both: no giant logo eating horizontal space, but the full status column with all chips and information.
+
+The layout re-classifies live on every terminal resize, so dragging the iTerm window between sizes flips between tiers without a remount.
+
+---
+
 ## [1.6.3] — 2026-06-05 · Compact banner on small screens (13" MBP friendly)
 
 User: "I'm on my other Mac 13 inch M5 and the screen doesn't show all the text. Anyway to make it when in full mode to show all the text. It's really hard to use. Don't change or break existing functionality."

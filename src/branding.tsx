@@ -1,19 +1,30 @@
-import { useState } from "react";
-import { useOnResize, useRenderer } from "@opentui/react";
 import { theme } from "./theme.ts";
 import { VERSION } from "./version.ts";
 import { readResponseFramework, readResponseLens, readWebAccess } from "./config.ts";
 import { FRAMEWORKS } from "./framework.ts";
 import { getLens, type LensSelection } from "./lens.ts";
 import { Chip } from "./chip.tsx";
+import { useLayoutTier } from "./use-layout-tier.ts";
 
-// Below these thresholds the banner switches to a compact 3-row layout
-// — no giant ASCII PREVAIL logo, all chips collapsed onto a single line
-// each. Triggered on a 13" laptop (typically ~90-100 cols × 24-30 rows
-// in iTerm/Terminal full-screen). Big screens stay on the original
-// 9-row banner; no behavior change there.
-const COMPACT_WIDTH = 100;
-const COMPACT_HEIGHT = 32;
+// Banner layout switches between three tiers based on terminal size:
+//
+//   wide    (≥ 150 cols AND ≥ 36 rows) — 9-row banner with ASCII PREVAIL
+//                                        logo + full status column.
+//                                        The original 1.6.2 layout.
+//
+//   medium  (≥ 100 cols AND ≥ 28 rows, but smaller than wide) — 7-row
+//                                        banner: logo hidden, status
+//                                        column gets the full width.
+//                                        Fits 14"/15" MBPs and 24" 1080p
+//                                        externals comfortably.
+//
+//   compact (smaller than medium) — 3-row banner: brand condensed to one
+//                                   inline string, defaults and tools
+//                                   each on a single row. Fits 13" MBP
+//                                   fullscreen / split iTerm panes.
+//
+// Every clickable affordance survives at every tier — only layout
+// changes.
 
 interface Props {
   domainCount: number;
@@ -69,25 +80,9 @@ export function Branding({
       ? cliLabels.map((s) => s.toLowerCase()).join("  ·  ")
       : "no cli detected";
 
-  // Track terminal size so we can collapse the banner on small screens
-  // (13" laptops, split iTerm panes, etc.) without touching the
-  // big-screen layout. The threshold is intentionally generous — if
-  // there's any chance the banner is eating too much space, fall to
-  // compact mode.
-  const renderer = useRenderer();
-  const [size, setSize] = useState(() => ({
-    w: renderer?.terminalWidth ?? 120,
-    h: renderer?.terminalHeight ?? 40,
-  }));
-  useOnResize(() => {
-    setSize({
-      w: renderer?.terminalWidth ?? 120,
-      h: renderer?.terminalHeight ?? 40,
-    });
-  });
-  const compact = size.w < COMPACT_WIDTH || size.h < COMPACT_HEIGHT;
+  const { tier } = useLayoutTier();
 
-  if (compact) {
+  if (tier === "compact") {
     return (
       <CompactBranding
         dateLabel={dateLabel}
@@ -110,24 +105,31 @@ export function Branding({
     );
   }
 
+  // tier === "medium" → hide the giant ASCII logo so the status column
+  // gets the full banner width. Drops height from 9 to 7. All status
+  // rows (date / time / vault / defaults / tools / cli) survive
+  // verbatim.
+  const showLogo = tier === "wide";
+  const bannerHeight = showLogo ? 9 : 7;
+
   return (
     <box
       flexDirection="column"
-      height={9}
+      height={bannerHeight}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
-      paddingTop={1}
+      paddingTop={showLogo ? 1 : 0}
       paddingBottom={0}
     >
       <box
         flexDirection="row"
         flexGrow={1}
-        paddingLeft={3}
-        paddingRight={3}
+        paddingLeft={showLogo ? 3 : 2}
+        paddingRight={showLogo ? 3 : 2}
       >
-        <BrandColumn />
-        <Separator />
+        {showLogo && <BrandColumn />}
+        {showLogo && <Separator />}
         <StatusColumn
           dateLabel={dateLabel}
           yearLabel={yearLabel}
@@ -146,6 +148,7 @@ export function Branding({
           domainCount={domainCount}
           appCount={appCount}
           totalLoops={totalLoops}
+          showBrandHeader={!showLogo}
         />
       </box>
     </box>
@@ -479,6 +482,7 @@ function StatusColumn({
   onCycleLens,
   onCycleWeb,
   cliHealthSummary,
+  showBrandHeader = false,
 }: {
   dateLabel: string;
   yearLabel: number;
@@ -497,6 +501,7 @@ function StatusColumn({
   onCycleLens?: () => void;
   onCycleWeb?: () => void;
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
+  showBrandHeader?: boolean;
 }) {
   const fw = readResponseFramework();
   const fwLabel = fw ? FRAMEWORKS.find((f) => f.id === fw)?.label ?? fw : "none";
@@ -516,6 +521,15 @@ function StatusColumn({
 
   return (
     <box flexDirection="column" flexGrow={1} paddingLeft={2}>
+      {/* When the giant ASCII logo is hidden (medium tier), surface a
+          one-line brand header inline so the user still sees the app
+          name + version at the top of the banner. */}
+      {showBrandHeader && (
+        <box flexDirection="row" height={1}>
+          <text fg={theme.gold} attributes={1}>{"◈ prevAIl"}</text>
+          <text fg={theme.goldDim}>{`  v${VERSION}  ·  opentui`}</text>
+        </box>
+      )}
       <box flexDirection="row" height={1}>
         <text fg={theme.gold} attributes={1}>
           {dateLabel}
@@ -533,9 +547,14 @@ function StatusColumn({
           {" open"}
         </text>
       </box>
-      <text fg={theme.fgDim}>
-        {`${timeLabel}  ·  prevail v${VERSION}  ·  opentui`}
-      </text>
+      {!showBrandHeader && (
+        <text fg={theme.fgDim}>
+          {`${timeLabel}  ·  prevail v${VERSION}  ·  opentui`}
+        </text>
+      )}
+      {showBrandHeader && (
+        <text fg={theme.fgDim}>{timeLabel}</text>
+      )}
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
       {/* "chat" line dropped — it was just "no chats yet" most of the
           time and added noise. Active chat count moves elsewhere when

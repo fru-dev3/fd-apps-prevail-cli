@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { theme, spinnerChar } from "./theme.ts";
 import type { Domain, AppSkill } from "./vault.ts";
+import { useLayoutTier } from "./use-layout-tier.ts";
 
 // Per-domain icons — Unicode geometric shapes only (no emoji). Each maps to
 // the lower-case folder name. Unknown domains fall back to DEFAULT_ICON.
@@ -97,10 +98,16 @@ export function Sidebar({
   onNewDomain,
   onNewApp,
 }: Props) {
+  // Sidebar narrows on small terminals so the chat / workspace pane
+  // gets more horizontal real estate. 22 cells is enough to render
+  // "▸ ◆ business-pricing" (the longest demo domain id) plus a
+  // 2-cell skill count.
+  const { tier } = useLayoutTier();
+  const sidebarWidth = tier === "compact" ? 22 : 32;
   return (
     <box
       flexDirection="column"
-      width={32}
+      width={sidebarWidth}
       border
       borderColor={theme.border}
       backgroundColor={theme.bgPanel}
