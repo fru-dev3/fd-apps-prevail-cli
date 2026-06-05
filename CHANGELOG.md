@@ -7,6 +7,25 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.6.5] — 2026-06-05 · Revert medium tier — wide layout preserved on any non-tiny screen
+
+User: "You need to keep the layout like this. You changed it without asking me."
+
+1.6.4's "medium" tier was the wrong call. The threshold (≥150 cols AND ≥36 rows for full wide layout) was too aggressive — perfectly comfortable 14"/15" MBPs and most external setups were being knocked into a no-logo medium layout the user did not want. Reverting to a strict 2-tier system.
+
+### Changed — Layout tiers now compact OR wide
+
+- **wide**: ≥ 100 cols AND ≥ 28 rows — **IDENTICAL** to the original 1.6.2 layout. ASCII PREVAIL logo, full status column, 9-row banner, 32-cell sidebar. Zero adaptation, zero surprises. If you're not on a 13" laptop or split pane, this is what you see.
+- **compact**: smaller than wide — 3-row banner, 22-cell sidebar. For 13" MBP fullscreen / split iTerm panes only.
+
+No more middle ground. The medium tier and its inline brand header are gone. The `showBrandHeader` prop on StatusColumn is removed.
+
+### Why this matters
+
+The user's screenshot showed the 1.6.2 wide layout (ASCII PREVAIL logo, full status column) and said "keep the layout like this." The right answer is to honor that for any screen that can fit the wide layout, and only adapt when the terminal is genuinely too small to render it. 100×28 is roughly the minimum the wide layout fits in without horizontal clipping, so that's the new threshold.
+
+---
+
 ## [1.6.4] — 2026-06-05 · Three-tier responsive layout (not just a 13" hack)
 
 User: "I hope you're not just building it for the 13" Mac, right, because computer screens are not all the same, so you gotta be way smarter than this."

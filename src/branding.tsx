@@ -6,25 +6,22 @@ import { getLens, type LensSelection } from "./lens.ts";
 import { Chip } from "./chip.tsx";
 import { useLayoutTier } from "./use-layout-tier.ts";
 
-// Banner layout switches between three tiers based on terminal size:
+// Banner layout switches between two tiers based on terminal size:
 //
-//   wide    (≥ 150 cols AND ≥ 36 rows) — 9-row banner with ASCII PREVAIL
-//                                        logo + full status column.
-//                                        The original 1.6.2 layout.
+//   wide    (≥ 100 cols AND ≥ 28 rows) — IDENTICAL to the original
+//                                        1.6.2 layout. 9-row banner
+//                                        with the ASCII PREVAIL logo
+//                                        and the full status column.
+//                                        No adaptation, no surprises.
 //
-//   medium  (≥ 100 cols AND ≥ 28 rows, but smaller than wide) — 7-row
-//                                        banner: logo hidden, status
-//                                        column gets the full width.
-//                                        Fits 14"/15" MBPs and 24" 1080p
-//                                        externals comfortably.
+//   compact (smaller than wide) — 3-row banner: brand condensed to one
+//                                 inline string, defaults and tools
+//                                 each on a single row. Fits 13" MBP
+//                                 fullscreen / split iTerm panes.
 //
-//   compact (smaller than medium) — 3-row banner: brand condensed to one
-//                                   inline string, defaults and tools
-//                                   each on a single row. Fits 13" MBP
-//                                   fullscreen / split iTerm panes.
-//
-// Every clickable affordance survives at every tier — only layout
-// changes.
+// Every clickable affordance survives at both tiers — only layout
+// changes. User explicitly asked for the wide layout to be left alone
+// for any non-tiny screen; no middle ground.
 
 interface Props {
   domainCount: number;
@@ -105,31 +102,27 @@ export function Branding({
     );
   }
 
-  // tier === "medium" → hide the giant ASCII logo so the status column
-  // gets the full banner width. Drops height from 9 to 7. All status
-  // rows (date / time / vault / defaults / tools / cli) survive
-  // verbatim.
-  const showLogo = tier === "wide";
-  const bannerHeight = showLogo ? 9 : 7;
-
+  // tier === "wide" → IDENTICAL to the 1.6.2 layout. The ASCII PREVAIL
+  // logo, the separator, the full status column, the 9-row banner. No
+  // adaptation, no behavioral diff. User explicitly asked for this.
   return (
     <box
       flexDirection="column"
-      height={bannerHeight}
+      height={9}
       border={["bottom"]}
       borderColor={theme.gold}
       backgroundColor={theme.bg}
-      paddingTop={showLogo ? 1 : 0}
+      paddingTop={1}
       paddingBottom={0}
     >
       <box
         flexDirection="row"
         flexGrow={1}
-        paddingLeft={showLogo ? 3 : 2}
-        paddingRight={showLogo ? 3 : 2}
+        paddingLeft={3}
+        paddingRight={3}
       >
-        {showLogo && <BrandColumn />}
-        {showLogo && <Separator />}
+        <BrandColumn />
+        <Separator />
         <StatusColumn
           dateLabel={dateLabel}
           yearLabel={yearLabel}
@@ -148,7 +141,6 @@ export function Branding({
           domainCount={domainCount}
           appCount={appCount}
           totalLoops={totalLoops}
-          showBrandHeader={!showLogo}
         />
       </box>
     </box>
@@ -482,7 +474,6 @@ function StatusColumn({
   onCycleLens,
   onCycleWeb,
   cliHealthSummary,
-  showBrandHeader = false,
 }: {
   dateLabel: string;
   yearLabel: number;
@@ -501,7 +492,6 @@ function StatusColumn({
   onCycleLens?: () => void;
   onCycleWeb?: () => void;
   cliHealthSummary?: { kind: string; label: string; ok: boolean | null; message?: string }[];
-  showBrandHeader?: boolean;
 }) {
   const fw = readResponseFramework();
   const fwLabel = fw ? FRAMEWORKS.find((f) => f.id === fw)?.label ?? fw : "none";
@@ -521,15 +511,6 @@ function StatusColumn({
 
   return (
     <box flexDirection="column" flexGrow={1} paddingLeft={2}>
-      {/* When the giant ASCII logo is hidden (medium tier), surface a
-          one-line brand header inline so the user still sees the app
-          name + version at the top of the banner. */}
-      {showBrandHeader && (
-        <box flexDirection="row" height={1}>
-          <text fg={theme.gold} attributes={1}>{"◈ prevAIl"}</text>
-          <text fg={theme.goldDim}>{`  v${VERSION}  ·  opentui`}</text>
-        </box>
-      )}
       <box flexDirection="row" height={1}>
         <text fg={theme.gold} attributes={1}>
           {dateLabel}
@@ -547,14 +528,9 @@ function StatusColumn({
           {" open"}
         </text>
       </box>
-      {!showBrandHeader && (
-        <text fg={theme.fgDim}>
-          {`${timeLabel}  ·  prevail v${VERSION}  ·  opentui`}
-        </text>
-      )}
-      {showBrandHeader && (
-        <text fg={theme.fgDim}>{timeLabel}</text>
-      )}
+      <text fg={theme.fgDim}>
+        {`${timeLabel}  ·  prevail v${VERSION}  ·  opentui`}
+      </text>
       <StatRow label="vault" value={vaultLabel} valueColor={theme.fg} />
       {/* "chat" line dropped — it was just "no chats yet" most of the
           time and added noise. Active chat count moves elsewhere when

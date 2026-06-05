@@ -1,33 +1,32 @@
 import { useState } from "react";
 import { useOnResize, useRenderer } from "@opentui/react";
 
-// Three-tier responsive layout. Drives both the Branding height/contents
+// Two-tier responsive layout. Drives both the Branding height/contents
 // and the Sidebar width — and any other component that wants to adapt.
-// The thresholds are tuned to common real-world terminal sizes:
 //
-//   compact  — 13" MBP terminal, split iTerm panes (≲ 100 cols × 28 rows)
-//   medium   — 14"/15" MBPs, 24" 1080p externals (≲ 150 cols × 36 rows)
-//   wide     — 16" MBP, 27" Studio Display, external monitors (anything more)
+//   compact — 13" MBP terminal, split iTerm panes (≲ 100 cols OR < 28 rows)
+//   wide    — everything else — IDENTICAL to the original 1.6.2 layout
+//             with the ASCII PREVAIL logo and full status column
+//
+// User feedback (v1.6.5): the v1.6.4 "medium" tier was too aggressive —
+// it knocked perfectly comfortable 14"/15" MBP and external-monitor
+// setups into a no-logo layout the user did not want. Only adapt when
+// the terminal is genuinely small.
 //
 // We check BOTH dimensions in OR mode: any axis being tight knocks the
-// layout down a tier. That way a tall-but-narrow split (90 cols × 50
-// rows) still drops to compact instead of trying to render a wide
+// layout down to compact. That way a tall-but-narrow split (90 cols ×
+// 50 rows) still drops to compact instead of trying to render a wide
 // 9-row banner that gets horizontally clipped.
-export type LayoutTier = "compact" | "medium" | "wide";
+export type LayoutTier = "compact" | "wide";
 
 export const TIER_THRESHOLDS = {
   compactMaxWidth: 100,
   compactMaxHeight: 28,
-  mediumMaxWidth: 150,
-  mediumMaxHeight: 36,
 } as const;
 
 export function classifyTier(width: number, height: number): LayoutTier {
   if (width < TIER_THRESHOLDS.compactMaxWidth || height < TIER_THRESHOLDS.compactMaxHeight) {
     return "compact";
-  }
-  if (width < TIER_THRESHOLDS.mediumMaxWidth || height < TIER_THRESHOLDS.mediumMaxHeight) {
-    return "medium";
   }
   return "wide";
 }
