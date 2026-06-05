@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useKeyboard } from "@opentui/react";
 import { theme } from "./theme.ts";
 import {
+  benchmarkRoot,
   buildLeaderboard,
   listQuestions,
   runCanonicalSet,
@@ -251,7 +252,24 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
       paddingBottom={1}
     >
       <scrollbox flexGrow={1} scrollY>
-        <text fg={theme.aiAccent} attributes={1}>{"◈ canonical benchmark"}</text>
+        <box flexDirection="row">
+          <text fg={theme.aiAccent} attributes={1}>{"◈ canonical benchmark"}</text>
+          <text fg={theme.fgFaint}>{"     "}</text>
+          {/* Click to open <vault>/benchmark/ in the OS file browser.
+              Lets the user see questions/ + runs/ + README side by side,
+              grep through past run scoreboards, or version-control the
+              whole folder externally. Same openInFinder pattern as the
+              ConfigBar's ▸ vault chip. */}
+          <box
+            flexDirection="row"
+            paddingLeft={1}
+            paddingRight={1}
+            backgroundColor={theme.bgPanel}
+            onMouseDown={() => openInFinder(benchmarkRoot(vaultPath))}
+          >
+            <text fg={theme.aiAccent}>{"▸ open folder"}</text>
+          </box>
+        </box>
         <text fg={theme.fgFaint}>
           {`${questions.length} questions under ${vaultPath}/benchmark/questions/ — replace any of them with your own via \`prevail bench seed --from-log <domain>\``}
         </text>

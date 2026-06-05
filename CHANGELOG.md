@@ -7,6 +7,14 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.4.2] — 2026-06-04 · `▸ open folder` link in BenchmarkPanel
+
+User: "Put a link inside bench so I can open and see the folder."
+
+One small thing: a clickable `▸ open folder` in the benchmark panel header that calls `openInFinder` on `<vault>/benchmark/`. Lets you see the questions/, runs/, and README side by side in Finder / your file browser; grep through past run scoreboards; or version-control the whole folder externally. Same pattern as the ConfigBar's `▸ vault` chip. No behavior changes anywhere else.
+
+---
+
 ## [1.4.1] — 2026-06-04 · Surface the Benchmark launcher
 
 User: "I don't see any button to launch the benchmark. Where is it?"
