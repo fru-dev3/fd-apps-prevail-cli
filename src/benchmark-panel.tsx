@@ -172,6 +172,11 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
   // and the model's actual reply inline so the user can judge the
   // score themselves instead of trusting the LLM judge.
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  // Click-to-expand a question row BEFORE running anything — shows the
+  // prompt + context + expected_decision so the user can audit what's
+  // in the benchmark (and what the answer should be) without having to
+  // open the markdown file in $EDITOR.
+  const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
   // When the user clicks a row in the leaderboard, we hydrate `results`
   // from that run's saved results.json + score.json so the existing
   // expand-on-click drill-down works on historical runs too. This label
@@ -434,19 +439,57 @@ export function BenchmarkPanel({ onClose, vaultPath, availableClis, domainNames 
         )}
         {questions.map((q, i) => {
           const active = i === selectedQuestionIdx;
+          const expanded = expandedQuestionId === q.id;
           const fg = active ? theme.gold : theme.fgDim;
           const pointer = active ? "›" : " ";
+          const arrow = expanded ? "▾" : "▸";
           return (
-            <box
-              key={q.id}
-              flexDirection="row"
-              height={1}
-              backgroundColor={active ? theme.selBg : theme.bg}
-              onMouseDown={() => setSelectedQuestionIdx(i)}
-            >
-              <text fg={fg}>
-                {` ${pointer} ◆ ${q.id}  ·  ${q.domain}`}
-              </text>
+            <box key={q.id} flexDirection="column">
+              <box
+                flexDirection="row"
+                height={1}
+                backgroundColor={active ? theme.selBg : theme.bg}
+                onMouseDown={() => {
+                  setSelectedQuestionIdx(i);
+                  setExpandedQuestionId(expanded ? null : q.id);
+                }}
+              >
+                <text fg={fg}>
+                  {` ${pointer} ${arrow} ◆ ${q.id}  ·  ${q.domain}`}
+                </text>
+              </box>
+              {expanded && (
+                <box flexDirection="column" paddingLeft={6} paddingTop={1} paddingBottom={1}>
+                  <text fg={theme.fgDim} attributes={1}>{"prompt"}</text>
+                  <text fg={theme.fg}>{q.prompt}</text>
+                  {q.context && (
+                    <>
+                      <text> </text>
+                      <text fg={theme.fgDim} attributes={1}>{"context"}</text>
+                      <text fg={theme.fg}>{q.context}</text>
+                    </>
+                  )}
+                  <text> </text>
+                  <text fg={theme.fgDim} attributes={1}>{"expected decision"}</text>
+                  <text fg={theme.ok}>
+                    {q.expected_decision ?? "(no expected_decision set)"}
+                  </text>
+                  {q.expected_verdict_keywords && q.expected_verdict_keywords.length > 0 && (
+                    <text fg={theme.fgFaint}>
+                      {`keywords: ${q.expected_verdict_keywords.join(", ")}`}
+                    </text>
+                  )}
+                  {q.attachments && q.attachments.length > 0 && (
+                    <>
+                      <text> </text>
+                      <text fg={theme.fgDim} attributes={1}>{"attachments"}</text>
+                      {q.attachments.map((a) => (
+                        <text key={a} fg={theme.fgFaint}>{`  • ${a}`}</text>
+                      ))}
+                    </>
+                  )}
+                </box>
+              )}
             </box>
           );
         })}

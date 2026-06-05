@@ -7,6 +7,20 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.6.2] — 2026-06-04 · Bench questions: click to preview before running
+
+User: "On the UI, I should be able to click and see the question itself, the context, and the expected answer, even before I run the benchmark, right?"
+
+Yes — now you can. Each question in the `questions (21)` list at the top of the bench panel is click-to-expand: the row toggles open to show the prompt, context, expected decision, expected verdict keywords, and any attachments referenced. Lets you audit the canonical set without having to open every `.md` file in `$EDITOR`.
+
+### Added — Expand-on-click for the pre-run question list
+
+- Click any `◆ question-id · domain` row to show its prompt + context + expected_decision + keywords + attachments inline
+- Same `▸ → ▾` arrow affordance as result rows for consistency
+- Independent of the existing selection mechanic — the highlighted row still drives the `✎ edit highlighted` button
+
+---
+
 ## [1.6.1] — 2026-06-04 · Bench results: clean single-line rows + clickable historical drill-down
 
 User report 1: "The text on some of these benchmark results doesn't wrap correctly. When I expand the very first one and collapse it back, the text is not aligned or wrapped properly."
