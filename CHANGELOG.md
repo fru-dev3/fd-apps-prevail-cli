@@ -7,6 +7,29 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.4.1] — 2026-06-04 · Surface the Benchmark launcher
+
+User: "I don't see any button to launch the benchmark. Where is it?"
+
+The launcher shipped in v1.3.0 was real (Shift+B keyboard shortcut + a link inside the Tools panel) but neither was *visible* on the main cockpit. A new user with no shortcut memory had no way to discover it without opening Tools first.
+
+### Fixed — Added `◈ bench` chip on the banner
+
+Sits in the second row of the global defaults block, between `◇ configure` and `▸ tools`. One click opens the BenchmarkPanel overlay directly. Same accent color and styling as the existing chips so it visually belongs.
+
+```
+defaults  ⚖ Council: off  ◆ Framework: BLUF  ◇ Lens: FIRST PRINCIPLES
+          ⬡ Web: ON   ◇ configure   ◈ bench   ▸ tools
+```
+
+### Existing entry points preserved
+- **`Shift+B` keyboard shortcut** still works from anywhere
+- **Tools panel link** at the top of the Tools overlay still works
+
+No other UI change. Zero impact on existing chips / tabs / chat / sidebar.
+
+---
+
 ## [1.4.0] — 2026-06-04 · Customize the benchmark from inside the cockpit
 
 User: "Is the user able to customize the tests to the actual data in their vault so, over time, if new models are coming up, they can learn from it?"

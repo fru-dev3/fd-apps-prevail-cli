@@ -2152,6 +2152,7 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
         }}
         onOpenCouncilConfig={() => setCouncilConfigOpen(true)}
         onOpenTools={() => setToolsOpen(true)}
+        onOpenBenchmark={() => setBenchmarkOpen(true)}
         frameworkTick={frameworkTick}
         onCycleFramework={() => {
           const cur = readResponseFramework();

@@ -20,6 +20,7 @@ interface Props {
   onToggleGlobalCouncil?: () => void;
   onOpenCouncilConfig?: () => void;
   onOpenTools?: () => void;
+  onOpenBenchmark?: () => void;
   frameworkTick?: number;
   onCycleFramework?: () => void;
   onCycleLens?: () => void;
@@ -37,6 +38,7 @@ export function Branding({
   onToggleGlobalCouncil,
   onOpenCouncilConfig,
   onOpenTools,
+  onOpenBenchmark,
   onCycleFramework,
   onCycleLens,
   onCycleWeb,
@@ -85,6 +87,7 @@ export function Branding({
           onToggleGlobalCouncil={onToggleGlobalCouncil}
           onOpenCouncilConfig={onOpenCouncilConfig}
           onOpenTools={onOpenTools}
+          onOpenBenchmark={onOpenBenchmark}
           onCycleFramework={onCycleFramework}
           onCycleLens={onCycleLens}
           onCycleWeb={onCycleWeb}
@@ -278,6 +281,7 @@ function StatusColumn({
   onToggleGlobalCouncil,
   onOpenCouncilConfig,
   onOpenTools,
+  onOpenBenchmark,
   onCycleFramework,
   onCycleLens,
   onCycleWeb,
@@ -295,6 +299,7 @@ function StatusColumn({
   onToggleGlobalCouncil?: () => void;
   onOpenCouncilConfig?: () => void;
   onOpenTools?: () => void;
+  onOpenBenchmark?: () => void;
   onCycleFramework?: () => void;
   onCycleLens?: () => void;
   onCycleWeb?: () => void;
@@ -390,6 +395,9 @@ function StatusColumn({
         />
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenCouncilConfig}>
           <text fg={theme.aiAccent}>◇ configure</text>
+        </box>
+        <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenBenchmark}>
+          <text fg={theme.aiAccent} attributes={1}>◈ bench</text>
         </box>
         <box flexDirection="row" paddingLeft={1} paddingRight={1} onMouseDown={onOpenTools}>
           <text fg={theme.aiAccent} attributes={1}>▸ tools</text>
