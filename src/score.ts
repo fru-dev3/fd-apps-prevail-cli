@@ -48,6 +48,7 @@ import {
   type DomainManifest,
 } from "./manifest.ts";
 import { scanVault, resolveStatePath, stripFrontmatter } from "./vault.ts";
+import { evaluateRelevance } from "./rubrics.ts";
 import {
   detectClis,
   defaultModelFor,
@@ -74,6 +75,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 // density saturates at this many words across state+decisions+config.
 const DENSITY_TARGET_WORDS = 800;
+
+// Headline blend when a domain rubric matches: 65% structural readiness, 35%
+// domain relevance. Domains with no rubric keep the pure structural score.
+const STRUCTURAL_BLEND = 0.65;
+const RELEVANCE_BLEND = 0.35;
 
 // =============================================================================
 // Small file helpers — all swallow errors and degrade to "absent/empty" so a
@@ -478,7 +484,8 @@ export function computeContextScore(vaultPath: string, domain: string): ContextS
     config_completeness,
   };
 
-  // Weighted roll-up: sum(dim.score * weight) / 100, rounded.
+  // Weighted roll-up: sum(dim.score * weight) / 100, rounded. This is the
+  // STRUCTURAL score — domain-agnostic readiness.
   const weighted =
     breakdown.coverage.score * WEIGHTS.coverage +
     breakdown.density.score * WEIGHTS.density +
@@ -486,7 +493,25 @@ export function computeContextScore(vaultPath: string, domain: string): ContextS
     breakdown.structure.score * WEIGHTS.structure +
     breakdown.activity.score * WEIGHTS.activity +
     breakdown.config_completeness.score * WEIGHTS.config_completeness;
-  const score = clamp(weighted / 100);
+  const structural = clamp(weighted / 100);
+
+  // Domain intelligence: blend in how much of THIS domain's relevant context
+  // (a recent tax return, a health insurance card, …) is present and fresh.
+  // Only applies when a rubric matches — custom/unknown domains (and the
+  // golden-test fixtures) keep the pure structural score.
+  const textMtime = [s.stateMtime, s.newestLogMtime, s.newestJournalMtime, s.decisionsMtime]
+    .filter((m): m is number => typeof m === "number")
+    .reduce((a, b) => Math.max(a, b), 0);
+  const relevance = evaluateRelevance({
+    domain,
+    dir: s.dir,
+    stateText: s.stateText,
+    configText: s.configText,
+    textMtime: textMtime > 0 ? textMtime : null,
+  });
+  const score = relevance
+    ? clamp(STRUCTURAL_BLEND * structural + RELEVANCE_BLEND * relevance.score)
+    : structural;
 
   const missing = buildMissing(s, breakdown);
 
@@ -494,6 +519,7 @@ export function computeContextScore(vaultPath: string, domain: string): ContextS
     domain,
     score,
     breakdown,
+    relevance,
     missing,
     freshness_secs: freshness.freshnessSecs,
     assessment: null,

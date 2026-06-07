@@ -2,13 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://prevail.fru.dev/schemas/ContextScore.json",
   "title": "ContextScore",
-  "description": "The computed context-readiness score for a single domain. Produced by `prevail score <domain>`. The headline `score` is the 0-100 roll-up; `breakdown` explains it across six fixed dimensions; `missing` lists actionable gaps.",
+  "description": "The computed context-readiness score for a single domain. Produced by `prevail score <domain>`. The headline `score` is the 0-100 roll-up; `breakdown` explains the STRUCTURAL half across six fixed dimensions; `relevance` is the domain-intelligent half (how much of the context that actually matters for this domain is present and fresh); `missing` lists actionable gaps.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "domain",
     "score",
     "breakdown",
+    "relevance",
     "missing",
     "freshness_secs",
     "assessment",
@@ -73,6 +74,32 @@
           "description": "How fully manifest.json identity/config/goals/routing are filled in."
         }
       }
+    },
+    "RelevanceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "present", "stale", "severity", "detail", "recommend"],
+      "properties": {
+        "id": { "type": "string", "description": "Stable rubric item id." },
+        "label": { "type": "string", "description": "Human label, e.g. 'Most recent tax return'." },
+        "present": { "type": "boolean", "description": "Whether the item was detected in the domain." },
+        "stale": { "type": "boolean", "description": "Present but past its freshness window." },
+        "severity": { "type": "string", "enum": ["critical", "warn", "info"], "description": "How much the gap hurts." },
+        "detail": { "type": "string", "maxLength": 200, "description": "Short note, e.g. 'present · 3d old' or 'not found'." },
+        "recommend": { "type": "string", "maxLength": 300, "description": "Concrete next action to satisfy the item." }
+      }
+    },
+    "DomainRelevance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matched", "score", "detail", "items"],
+      "description": "Domain-intelligent relevance: how much of the context that actually matters for THIS domain is present and fresh, against a curated per-domain rubric (src/rubrics.ts).",
+      "properties": {
+        "matched": { "type": "string", "description": "Canonical rubric key that matched the domain, e.g. 'taxes'." },
+        "score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "0-100 domain-fit score." },
+        "detail": { "type": "string", "maxLength": 300, "description": "Short summary, e.g. '5 of 8 expected health items present (2 stale)'." },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/RelevanceItem" } }
+      }
     }
   },
   "properties": {
@@ -85,10 +112,17 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 100,
-      "description": "Headline 0-100 context-readiness score, a weighted roll-up of the six breakdown dimensions."
+      "description": "Headline 0-100 context-readiness score. When no domain rubric matches, this is the weighted roll-up of the six breakdown dimensions; when a rubric matches, it is a 65/35 blend of that structural roll-up and `relevance.score`."
     },
     "breakdown": {
       "$ref": "#/$defs/ScoreBreakdown"
+    },
+    "relevance": {
+      "oneOf": [
+        { "$ref": "#/$defs/DomainRelevance" },
+        { "type": "null" }
+      ],
+      "description": "Domain-intelligent relevance layer, or null for custom domains with no curated rubric."
     },
     "missing": {
       "type": "array",

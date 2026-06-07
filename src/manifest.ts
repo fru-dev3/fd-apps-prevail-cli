@@ -54,10 +54,35 @@ export interface MissingItem {
   kind: string;
 }
 
+// --- Domain relevance (mirrors docs/schemas/ContextScore.json#relevance) -----
+// The domain-intelligent half of the score: how much of the context that
+// actually matters for THIS domain (a recent tax return, a health insurance
+// card, …) is present and fresh. Additive — null for domains with no rubric.
+// The producer lives in src/rubrics.ts; manifest.ts only stores/round-trips it.
+
+export interface RelevanceItem {
+  id: string;
+  label: string;
+  present: boolean;
+  stale: boolean;
+  severity: string;
+  detail: string;
+  recommend: string;
+}
+
+export interface DomainRelevance {
+  matched: string;
+  score: number;
+  detail: string;
+  items: RelevanceItem[];
+}
+
 export interface ContextScore {
   domain: string;
   score: number;
   breakdown: ScoreBreakdown;
+  /** Domain-intelligent relevance layer; null when no rubric matches. */
+  relevance: DomainRelevance | null;
   missing: MissingItem[];
   freshness_secs: number;
   assessment: string | null;
@@ -269,11 +294,36 @@ function coerceContextScore(v: unknown): ContextScore | null {
             kind: str(x.kind, "file"),
           }))
       : [],
+    relevance: coerceRelevance(o.relevance),
     freshness_secs: typeof o.freshness_secs === "number" ? o.freshness_secs : 0,
     assessment: strOrNull(o.assessment),
     audit_source: strOrNull(o.audit_source),
     computed_at: str(o.computed_at, new Date().toISOString()),
     audited_at: typeof o.audited_at === "number" ? o.audited_at : null,
+  };
+}
+
+function coerceRelevance(v: unknown): DomainRelevance | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const items = Array.isArray(o.items)
+    ? o.items
+        .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+        .map((x) => ({
+          id: str(x.id, ""),
+          label: str(x.label, ""),
+          present: x.present === true,
+          stale: x.stale === true,
+          severity: str(x.severity, "info"),
+          detail: str(x.detail, ""),
+          recommend: str(x.recommend, ""),
+        }))
+    : [];
+  return {
+    matched: str(o.matched, ""),
+    score: typeof o.score === "number" ? o.score : 0,
+    detail: str(o.detail, ""),
+    items,
   };
 }
 

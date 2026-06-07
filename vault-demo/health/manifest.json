@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "health",
-    "score": 65,
+    "score": 75,
     "breakdown": {
       "coverage": {
         "score": 80,
@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 1 day ago"
+        "detail": "newest knowledge file updated 2 days ago"
       },
       "structure": {
         "score": 80,
@@ -61,10 +61,89 @@
         "kind": "config"
       }
     ],
-    "freshness_secs": 167264,
+    "relevance": {
+      "matched": "health",
+      "score": 93,
+      "detail": "7 of 8 expected health items present",
+      "items": [
+        {
+          "id": "insurance_card",
+          "label": "Health insurance plan / card",
+          "present": true,
+          "stale": false,
+          "severity": "critical",
+          "detail": "present · 2d old",
+          "recommend": "Add your health insurance plan details (carrier, member ID) — critical in an emergency."
+        },
+        {
+          "id": "deductible",
+          "label": "Deductible",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "Record your annual deductible and out-of-pocket max."
+        },
+        {
+          "id": "premium",
+          "label": "Premium",
+          "present": false,
+          "stale": false,
+          "severity": "info",
+          "detail": "not found",
+          "recommend": "Note your monthly health insurance premium."
+        },
+        {
+          "id": "pcp",
+          "label": "Primary care physician",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "Save your primary care physician's name and contact."
+        },
+        {
+          "id": "medications",
+          "label": "Medications",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present · 2d old",
+          "recommend": "List current medications and dosages."
+        },
+        {
+          "id": "allergies",
+          "label": "Allergies",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "Record any allergies — another emergency-critical fact."
+        },
+        {
+          "id": "labs",
+          "label": "Recent labs / vitals",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present · 2d old",
+          "recommend": "Add recent lab results or vitals to track trends."
+        },
+        {
+          "id": "emergency",
+          "label": "Emergency contact",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Set an emergency contact."
+        }
+      ]
+    },
+    "freshness_secs": 205638,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-06T18:42:54.857Z",
+    "computed_at": "2026-06-07T05:22:28.689Z",
     "audited_at": null
   },
   "goals": [],

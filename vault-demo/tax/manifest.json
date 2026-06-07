@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "tax",
-    "score": 60,
+    "score": 74,
     "breakdown": {
       "coverage": {
         "score": 60,
@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 2 days ago"
+        "detail": "newest knowledge file updated 3 days ago"
       },
       "structure": {
         "score": 70,
@@ -66,10 +66,80 @@
         "kind": "config"
       }
     ],
-    "freshness_secs": 222151,
+    "relevance": {
+      "matched": "taxes",
+      "score": 100,
+      "detail": "7 of 7 expected taxes items present",
+      "items": [
+        {
+          "id": "recent_return",
+          "label": "Most recent filed return",
+          "present": true,
+          "stale": false,
+          "severity": "critical",
+          "detail": "present · 3d old",
+          "recommend": "Add your most recent tax return (1040) to data/ — it anchors everything."
+        },
+        {
+          "id": "income_docs",
+          "label": "Income documents (W-2 / 1099)",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present · 3d old",
+          "recommend": "Add this year's W-2 / 1099 income documents."
+        },
+        {
+          "id": "filing_status",
+          "label": "Filing status",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Record your filing status (single / married filing jointly / etc.)."
+        },
+        {
+          "id": "quarterly",
+          "label": "Estimated quarterly payments",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present · 3d old",
+          "recommend": "Track estimated quarterly payments and due dates if you owe them."
+        },
+        {
+          "id": "deductions",
+          "label": "Deductions / credits tracked",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Log deductions and credits you're claiming so nothing is left on the table."
+        },
+        {
+          "id": "preparer",
+          "label": "CPA / preparer contact",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Save your CPA or preparer's contact details."
+        },
+        {
+          "id": "deadlines",
+          "label": "Upcoming tax deadlines",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present · 3d old",
+          "recommend": "Note the next filing and payment deadlines."
+        }
+      ]
+    },
+    "freshness_secs": 260440,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-06T18:42:54.858Z",
+    "computed_at": "2026-06-07T05:21:03.637Z",
     "audited_at": null
   },
   "goals": [],

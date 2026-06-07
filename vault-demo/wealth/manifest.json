@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "wealth",
-    "score": 58,
+    "score": 73,
     "breakdown": {
       "coverage": {
         "score": 60,
@@ -66,10 +66,71 @@
         "kind": "config"
       }
     ],
-    "freshness_secs": 264236,
+    "relevance": {
+      "matched": "wealth",
+      "score": 100,
+      "detail": "6 of 6 expected wealth items present",
+      "items": [
+        {
+          "id": "net_worth",
+          "label": "Net worth figure",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present · 3d old",
+          "recommend": "Record your current net worth — the single number this domain orbits."
+        },
+        {
+          "id": "accounts",
+          "label": "Account inventory",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "List your accounts (checking, savings, brokerage, retirement) and balances."
+        },
+        {
+          "id": "allocation",
+          "label": "Asset allocation",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present · 3d old",
+          "recommend": "Capture your target and current asset allocation."
+        },
+        {
+          "id": "savings_rate",
+          "label": "Savings rate / cash flow",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present · 3d old",
+          "recommend": "Track your savings rate or monthly cash flow."
+        },
+        {
+          "id": "statements",
+          "label": "Recent statements",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present · 3d old",
+          "recommend": "Drop in a recent account statement so figures stay current."
+        },
+        {
+          "id": "goals",
+          "label": "Financial goals with targets",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "Define financial goals with concrete dollar targets and dates."
+        }
+      ]
+    },
+    "freshness_secs": 265684,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-07T04:56:43.438Z",
+    "computed_at": "2026-06-07T05:20:50.991Z",
     "audited_at": null
   },
   "goals": [],
