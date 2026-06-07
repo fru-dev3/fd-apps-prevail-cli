@@ -47,7 +47,7 @@ import {
   type MissingItem,
   type DomainManifest,
 } from "./manifest.ts";
-import { scanVault } from "./vault.ts";
+import { scanVault, resolveStatePath, stripFrontmatter } from "./vault.ts";
 import {
   detectClis,
   defaultModelFor,
@@ -180,9 +180,12 @@ interface DomainSnapshot {
 function buildSnapshot(vaultPath: string, domain: string): DomainSnapshot {
   const dir = domainPath(vaultPath, domain);
 
-  const statePath = join(dir, "state.md");
+  // v2-aware paths (fall back to v1): _state.md || state.md;
+  // _decisions.jsonl || decisions.md. config.md stays at root in both.
+  const statePath = resolveStatePath(dir) ?? join(dir, "state.md");
   const configPath = join(dir, "config.md");
-  const decisionsPath = join(dir, "decisions.md");
+  const decisionsV2 = join(dir, "_decisions.jsonl");
+  const decisionsPath = exists(decisionsV2) ? decisionsV2 : join(dir, "decisions.md");
 
   const journalFile = join(dir, "_journal.md");
   const journalDir = join(dir, "_journal");
@@ -229,12 +232,16 @@ function buildSnapshot(vaultPath: string, domain: string): DomainSnapshot {
     logFiles,
     hasAnyLog,
     threadFiles,
-    hasSkills: listDirs(join(dir, "skills")).length > 0,
+    // v2: _skills/; v1: skills/.
+    hasSkills: listDirs(join(dir, "_skills")).length > 0 || listDirs(join(dir, "skills")).length > 0,
     hasThreads: threadFiles.length > 0,
-    hasPrior: exists(join(dir, "01_prior")),
-    hasCurrent: exists(join(dir, "00_current")),
-    hasBriefs: exists(join(dir, "02_briefs")),
-    stateText: readText(statePath),
+    // v2 moved the recency tiers under data/ and briefs into _artifacts/.
+    hasPrior: exists(join(dir, "data", "01_prior")) || exists(join(dir, "01_prior")),
+    hasCurrent: exists(join(dir, "data", "00_current")) || exists(join(dir, "00_current")),
+    hasBriefs:
+      exists(join(dir, "02_briefs")) ||
+      listFiles(join(dir, "_artifacts")).some((f) => f !== ".gitkeep"),
+    stateText: stripFrontmatter(readText(statePath)),
     configText: readText(configPath),
     decisionsText: readText(decisionsPath),
     stateMtime: mtimeMs(statePath),

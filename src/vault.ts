@@ -128,6 +128,52 @@ export function resolveDefaultVaultPath(): string {
   return candidate;
 }
 
+// ─── v1/v2 layout resolution ────────────────────────────────────────────────
+// VAULT-SPEC v2 renamed the canonical per-domain files (state.md → _state.md,
+// skills/ → _skills/, decisions.md → _decisions.jsonl, 00_current/01_prior →
+// data/, …) and detects a domain by soul.md (declared intent) rather than a
+// hand-written state.md. The CLI reads BOTH layouts until every vault migrates.
+
+/** True if a directory is a domain: declared intent (soul.md, v2) OR a snapshot
+ *  (state.md v1 / _state.md v2). */
+export function isDomainDir(domainPath: string): boolean {
+  return existsSync(join(domainPath, "soul.md"))
+    || existsSync(join(domainPath, "_state.md"))
+    || existsSync(join(domainPath, "state.md"));
+}
+
+/** The domain's current-state file: v2 `_state.md`, else v1 `state.md`, else null
+ *  (a fresh v2 domain that has intent but no derived state yet). */
+export function resolveStatePath(domainPath: string): string | null {
+  const v2 = join(domainPath, "_state.md");
+  if (existsSync(v2)) return v2;
+  const v1 = join(domainPath, "state.md");
+  if (existsSync(v1)) return v1;
+  return null;
+}
+
+/** Strip a leading YAML frontmatter block (v2 `_state.md` carries `derived_from:`
+ *  provenance) so previews/extracts see only the body. */
+export function stripFrontmatter(md: string): string {
+  if (!md.startsWith("---")) return md;
+  const close = md.indexOf("\n---", 3);
+  if (close === -1) return md;
+  const nl = md.indexOf("\n", close + 1);
+  return nl === -1 ? "" : md.slice(nl + 1);
+}
+
+/** Read the domain's state body (v2 `_state.md` || v1 `state.md`), frontmatter
+ *  stripped. Returns "" if there's no state yet. */
+export function readStateContent(domainPath: string): string {
+  const p = resolveStatePath(domainPath);
+  if (!p) return "";
+  try {
+    return stripFrontmatter(readFileSync(p, "utf8"));
+  } catch {
+    return "";
+  }
+}
+
 export function scanVault(vaultPath: string): Domain[] {
   // SECURITY: refuse to scan if the configured vault path is catastrophic
   // (/, /etc, /System, ...) — better to surface an empty domain list than
@@ -155,27 +201,48 @@ export function scanVault(vaultPath: string): Domain[] {
     if (!resolveSafeChild(vaultPath, entry.name)) continue;
 
     const domainPath = join(vaultPath, entry.name);
-    const statePath = join(domainPath, "state.md");
-    const loopsPath = join(domainPath, "open-loops.md");
-    const hasState = existsSync(statePath);
-    if (!hasState) continue;
+    // v2 detects a domain by soul.md (declared intent); v1 by state.md. The
+    // derived _state.md also counts during the transition.
+    if (!isDomainDir(domainPath)) continue;
+    const statePath = resolveStatePath(domainPath); // _state.md || state.md || null
+    const hasState = statePath !== null;
 
     let openLoopCount = 0;
-    try {
-      const stateContent = readFileSync(statePath, "utf8");
-      openLoopCount = countOpenItemsInState(stateContent);
-    } catch {}
-    if (openLoopCount === 0 && existsSync(loopsPath)) {
+    if (statePath) {
       try {
-        const content = readFileSync(loopsPath, "utf8");
-        openLoopCount = countUncheckedBoxes(content);
+        openLoopCount = countOpenItemsInState(stripFrontmatter(readFileSync(statePath, "utf8")));
       } catch {}
+    }
+    if (openLoopCount === 0) {
+      const loopsPath = join(domainPath, "open-loops.md"); // v1
+      const tasksPath = join(domainPath, "_tasks.jsonl"); // v2
+      if (existsSync(loopsPath)) {
+        try {
+          openLoopCount = countUncheckedBoxes(readFileSync(loopsPath, "utf8"));
+        } catch {}
+      } else if (existsSync(tasksPath)) {
+        try {
+          openLoopCount = readFileSync(tasksPath, "utf8")
+            .split("\n")
+            .filter((l) => l.trim())
+            .filter((l) => {
+              try {
+                const t = JSON.parse(l) as { status?: string };
+                return !!t.status && !["done", "dropped"].includes(t.status);
+              } catch {
+                return false;
+              }
+            }).length;
+        } catch {}
+      }
     }
 
     let stateMtime: number | null = null;
-    try {
-      stateMtime = statSync(statePath).mtimeMs;
-    } catch {}
+    if (statePath) {
+      try {
+        stateMtime = statSync(statePath).mtimeMs;
+      } catch {}
+    }
 
     // ADDITIVE: surface an existing manifest.json's identity, if any. Never
     // creates one; failures are swallowed so a malformed manifest can't break
@@ -318,8 +385,12 @@ function extractSkillTitle(skillFile: string, fallback: string): string {
 export function readDomainView(domain: Domain, view: ViewKey): string {
   if (view === "skills") return renderSkillsView(domain);
   if (view === "loops") return readOpenItems(domain);
+  if (view === "state") {
+    const body = readStateContent(domain.path); // _state.md || state.md
+    return body || `*No state for ${domain.name}.*`;
+  }
   const fileMap: Record<"state" | "quickstart" | "prompts", string> = {
-    state: "state.md",
+    state: "state.md", // handled above; kept for type completeness
     quickstart: "QUICKSTART.md",
     prompts: "PROMPTS.md",
   };
@@ -339,13 +410,10 @@ export function readDomainView(domain: Domain, view: ViewKey): string {
 }
 
 function readOpenItems(domain: Domain): string {
-  const statePath = join(domain.path, "state.md");
-  if (existsSync(statePath)) {
-    try {
-      const content = readFileSync(statePath, "utf8");
-      const section = extractOpenItemsSection(content);
-      if (section) return `# ${domain.name} — open items\n\n${section}`;
-    } catch {}
+  const content = readStateContent(domain.path); // _state.md || state.md
+  if (content) {
+    const section = extractOpenItemsSection(content);
+    if (section) return `# ${domain.name} — open items\n\n${section}`;
   }
   const loopsPath = join(domain.path, "open-loops.md");
   if (existsSync(loopsPath)) {
@@ -378,11 +446,7 @@ export interface DomainContext {
 
 export function buildDomainContext(domain: Domain): DomainContext {
   const updatedLabel = formatRelativeTime(domain.stateMtime);
-  const statePath = join(domain.path, "state.md");
-  let raw = "";
-  try {
-    raw = readFileSync(statePath, "utf8");
-  } catch {}
+  const raw = readStateContent(domain.path); // _state.md || state.md
   const openItems = extractOpenItems(raw).slice(0, 5);
   const statePreview = extractStateHeadline(raw, 4);
   return {
