@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "insurance",
-    "score": 57,
+    "score": 72,
     "breakdown": {
       "coverage": {
         "score": 60,
@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 2 days ago"
+        "detail": "newest knowledge file updated 3 days ago"
       },
       "structure": {
         "score": 70,
@@ -66,10 +66,71 @@
         "kind": "config"
       }
     ],
-    "freshness_secs": 188654,
+    "relevance": {
+      "matched": "insurance",
+      "score": 100,
+      "detail": "6 of 6 expected insurance items present",
+      "items": [
+        {
+          "id": "policies",
+          "label": "Policy inventory",
+          "present": true,
+          "stale": false,
+          "severity": "critical",
+          "detail": "present",
+          "recommend": "List every policy you hold (auto, home, life, health) in one place."
+        },
+        {
+          "id": "premiums",
+          "label": "Premiums",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "Record each policy's premium."
+        },
+        {
+          "id": "deductibles",
+          "label": "Deductibles",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "Record each policy's deductible."
+        },
+        {
+          "id": "limits",
+          "label": "Coverage limits",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Note coverage limits so you know if you're under-insured."
+        },
+        {
+          "id": "renewals",
+          "label": "Renewal dates",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present · 3d old",
+          "recommend": "Track renewal / expiration dates to avoid lapses."
+        },
+        {
+          "id": "agent",
+          "label": "Agent / broker contact",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Save your agent or broker's contact and the claims line."
+        }
+      ]
+    },
+    "freshness_secs": 265101,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-06T18:42:54.863Z",
+    "computed_at": "2026-06-07T15:57:02.188Z",
     "audited_at": null
   },
   "goals": [],

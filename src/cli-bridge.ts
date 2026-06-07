@@ -63,7 +63,7 @@ export function refreshOperatingManualCache(): void {
 // during the transition window. Old configs that still say `"gemini"`
 // are silently migrated to `"antigravity"` on first read (see
 // migrateLegacyCliKind in src/config.ts).
-export type CliKind = "claude" | "codex" | "antigravity" | "ollama";
+export type CliKind = "claude" | "codex" | "antigravity" | "ollama" | "openrouter";
 
 // Legacy CliKind values from earlier versions of prevAIl. Listed here as
 // a string union (NOT part of the live CliKind type) so config-migration
@@ -130,6 +130,7 @@ export const CLI_MODEL_HINT: Record<CliKind, string> = {
   codex: "e.g. gpt-5, gpt-5.4, o3 (whatever your codex install accepts)",
   ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
   antigravity: 'e.g. "Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Medium)" — run `agy models` for the full list (Antigravity now uses display names, not short ids)',
+  openrouter: "e.g. anthropic/claude-opus-4.1, openai/gpt-5.1, google/gemini-2.5-pro — any model id from openrouter.ai/models",
 };
 
 // Quick-pick chips shown in the council config bubble. Two tiers:
@@ -185,11 +186,24 @@ const OLLAMA_VERSIONS = ["llama3.1", "llama3.2", "mistral", "qwen2.5", "phi3", "
 // shows a complete `<cli> · <model>` label — without this, panelists
 // running on default models showed just `claude` / `codex` and the
 // user reported "the rest don't tell me which model is responding."
+// OpenRouter routed model ids (provider/model). One key, every model.
+export const OPENROUTER_MODELS: string[] = [
+  "anthropic/claude-opus-4.1",
+  "anthropic/claude-sonnet-4.5",
+  "openai/gpt-5.1",
+  "google/gemini-2.5-pro",
+  "x-ai/grok-4",
+  "deepseek/deepseek-chat",
+  "qwen/qwen-2.5-72b-instruct",
+  "meta-llama/llama-3.3-70b-instruct",
+];
+
 const CLI_DEFAULT_MODELS: Record<CliKind, string> = {
   claude: CLAUDE_VERSIONS[0]!,
   codex: CODEX_VERSIONS[0]!,
   antigravity: ANTIGRAVITY_VERSIONS[0]!,
   ollama: OLLAMA_DEFAULT_MODEL,
+  openrouter: OPENROUTER_MODELS[0]!,
 };
 
 export function defaultModelFor(kind: CliKind): string {
@@ -208,6 +222,7 @@ export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
   codex: CODEX_VERSIONS,
   antigravity: ANTIGRAVITY_VERSIONS,
   ollama: OLLAMA_VERSIONS,
+  openrouter: OPENROUTER_MODELS,
 };
 
 // Run `<bin> --help` and pull every quoted token that looks like a model
@@ -508,7 +523,13 @@ export async function detectOllama(): Promise<AvailableCli | null> {
 export async function detectClis(): Promise<AvailableCli[]> {
   const subprocess = detectSubprocessClis();
   const ollama = await detectOllama();
-  return ollama ? [...subprocess, ollama] : subprocess;
+  const out = ollama ? [...subprocess, ollama] : subprocess;
+  // OpenRouter is "available" iff a key is present (it's an HTTP gateway, not
+  // a binary). The desktop injects PREVAIL_OPENROUTER_KEY from the Keychain.
+  if (process.env.PREVAIL_OPENROUTER_KEY) {
+    out.push({ kind: "openrouter", bin: "https://openrouter.ai/api/v1", label: "OpenRouter" });
+  }
+  return out;
 }
 
 // Pull the actually-installed Ollama models so the model picker can offer
@@ -774,6 +795,22 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
       maxOutputChars,
     });
   }
+  if (cli.kind === "openrouter") {
+    // OpenRouter is an OpenAI-compatible HTTP gateway — one key, every model.
+    // The key arrives via PREVAIL_OPENROUTER_KEY (set by the desktop on the
+    // child; named to avoid scrubbedEnv's OPENAI_/ANTHROPIC_ strip list).
+    return runOpenAICompatChat({
+      label: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: process.env.PREVAIL_OPENROUTER_KEY ?? "",
+      model: m || OPENROUTER_MODELS[0]!,
+      prompt: framedPrompt,
+      signal,
+      onChunk,
+      maxOutputChars,
+      extraHeaders: { "HTTP-Referer": "https://prevail.sh", "X-Title": "Prevail" },
+    });
+  }
   return `(no handler for ${cli.kind})`;
   }
 }
@@ -881,6 +918,84 @@ export async function runOllamaChat(args: OllamaChatArgs): Promise<string> {
     const e = err as { name?: string; message?: string };
     if (e?.name === "AbortError") return "(cancelled)";
     return `(ollama: ${e?.message ?? "request failed"})`;
+  }
+}
+
+// Generalized OpenAI-compatible chat (OpenRouter + future direct providers).
+// Same SSE handling as runOllamaChat, plus an Authorization header and a
+// configurable label/base URL. Keeping one implementation means adding the
+// direct providers later is just a base-URL + key-account entry.
+interface OpenAICompatArgs {
+  label: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  prompt: string;
+  signal?: AbortSignal;
+  onChunk?: (delta: string) => void;
+  maxOutputChars?: number;
+  extraHeaders?: Record<string, string>;
+}
+export async function runOpenAICompatChat(args: OpenAICompatArgs): Promise<string> {
+  const { label, baseUrl, apiKey, model, prompt, signal, onChunk, maxOutputChars, extraHeaders } = args;
+  if (!apiKey) return `(${label}: no API key configured — add it in Settings → Providers)`;
+  const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const stream = !!onChunk;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${apiKey}`,
+    ...(extraHeaders ?? {}),
+  };
+  try {
+    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ model, stream, messages: [{ role: "user", content: prompt }] }), signal });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return `(${label}: HTTP ${res.status} — ${truncate(text, 200)})`;
+    }
+    if (!stream) {
+      const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
+      if (data.error?.message) return `(${label}: ${data.error.message})`;
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) return `(${label}: empty reply)`;
+      return typeof maxOutputChars === "number" && content.length > maxOutputChars
+        ? content.slice(0, maxOutputChars) + " ... (truncated at " + maxOutputChars + " chars)"
+        : content.trim();
+    }
+    if (!res.body) return `(${label}: response had no body)`;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const event = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        for (const line of event.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") continue;
+          try {
+            const j = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }>; error?: { message?: string } };
+            if (j.error?.message) return `(${label}: ${j.error.message})`;
+            const delta = j.choices?.[0]?.delta?.content;
+            if (delta) { full += delta; onChunk!(delta); }
+          } catch { /* malformed event — skip */ }
+        }
+      }
+      if (typeof maxOutputChars === "number" && full.length > maxOutputChars) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        return full.slice(0, maxOutputChars) + " ... (truncated at " + maxOutputChars + " chars)";
+      }
+    }
+    return full.trim() || `(${label}: empty reply)`;
+  } catch (err) {
+    const e = err as { name?: string; message?: string };
+    if (e?.name === "AbortError") return "(cancelled)";
+    return `(${label}: ${e?.message ?? "request failed"})`;
   }
 }
 

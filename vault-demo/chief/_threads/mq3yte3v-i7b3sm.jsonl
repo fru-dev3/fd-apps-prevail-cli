@@ -1,0 +1,2 @@
+{"id":"t-mq3yte4t-8vlpz6","parentId":null,"role":"user","cli":"ollama","model":"","content":"reply in exactly 3 words","ts":1780847827661}
+{"id":"t-mq3yte50-6eyxbn","parentId":"t-mq3yte4t-8vlpz6","role":"assistant","cli":"ollama","model":"","content":"(ollama: HTTP 404 — {\"error\":{\"message\":\"model 'llama3.1' not found\",\"type\":\"not_found_error\",\"param\":null,\"code\":null}}\n)","ts":1780847827667}

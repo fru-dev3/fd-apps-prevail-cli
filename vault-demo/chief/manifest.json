@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "chief",
-    "score": 62,
+    "score": 63,
     "breakdown": {
       "coverage": {
         "score": 80,
@@ -32,12 +32,12 @@
         "detail": "newest knowledge file updated today"
       },
       "structure": {
-        "score": 80,
-        "detail": "8 of 10 artifact kinds present (state, config, journal, logs, skills, briefs, prior, current)"
+        "score": 90,
+        "detail": "9 of 10 artifact kinds present (state, config, journal, logs, threads, skills, briefs, prior, current)"
       },
       "activity": {
-        "score": 15,
-        "detail": "3 log sessions, 0 threads (saturate at 10 each)"
+        "score": 50,
+        "detail": "3 log sessions, 7 threads (saturate at 10 each)"
       },
       "config_completeness": {
         "score": 0,
@@ -51,20 +51,58 @@
         "kind": "file"
       },
       {
-        "label": "No _threads — no recorded chat activity yet",
-        "severity": "info",
-        "kind": "structure"
-      },
-      {
         "label": "config.md is mostly unfilled — 0 of 23 config.md fields filled in",
         "severity": "info",
         "kind": "config"
       }
     ],
-    "freshness_secs": 2481,
+    "relevance": {
+      "matched": "chief",
+      "score": 56,
+      "detail": "2 of 4 expected chief items present",
+      "items": [
+        {
+          "id": "mission",
+          "label": "Mission / vision statement",
+          "present": false,
+          "stale": false,
+          "severity": "warn",
+          "detail": "not found",
+          "recommend": "Write a one-paragraph mission for your life — the north star everything else serves."
+        },
+        {
+          "id": "priorities",
+          "label": "Current top priorities / OKRs",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present · 0d old",
+          "recommend": "Record this quarter's 3-5 priorities so the agent can align every domain to them."
+        },
+        {
+          "id": "review",
+          "label": "Weekly / monthly review cadence",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present · 0d old",
+          "recommend": "Log a recurring review cadence — when you step back and reassess."
+        },
+        {
+          "id": "stakeholders",
+          "label": "Key people / stakeholders",
+          "present": false,
+          "stale": false,
+          "severity": "info",
+          "detail": "not found",
+          "recommend": "List the key people in your life and their roles."
+        }
+      ]
+    },
+    "freshness_secs": 78928,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-06T18:42:54.853Z",
+    "computed_at": "2026-06-07T15:57:02.177Z",
     "audited_at": null
   },
   "goals": [],

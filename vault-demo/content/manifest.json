@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 5 days ago"
+        "detail": "newest knowledge file updated 6 days ago"
       },
       "structure": {
         "score": 60,
@@ -76,10 +76,11 @@
         "kind": "config"
       }
     ],
-    "freshness_secs": 511050,
+    "relevance": null,
+    "freshness_secs": 587498,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-06T18:42:54.867Z",
+    "computed_at": "2026-06-07T15:57:02.190Z",
     "audited_at": null
   },
   "goals": [],

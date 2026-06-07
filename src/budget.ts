@@ -42,6 +42,7 @@ const PER_CALL_USD: Record<CliKind, number> = {
   codex: 0.004,
   antigravity: 0.003,
   ollama: 0,
+  openrouter: 0.005,
 };
 
 const PER_CALL_USD_UNKNOWN = 0.005;

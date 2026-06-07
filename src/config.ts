@@ -10,12 +10,12 @@ import type { LensSelection } from "./lens.ts";
 // config layer can't drift. Re-exported here so callers that read
 // councilClis / councilModels / councilChair from this module don't
 // need to import from two places.
-export type CliKind = "claude" | "codex" | "antigravity" | "ollama";
+export type CliKind = "claude" | "codex" | "antigravity" | "ollama" | "openrouter";
 
-export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "antigravity", "ollama"];
+export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "antigravity", "ollama", "openrouter"];
 
 export function isCliKind(s: string): s is CliKind {
-  return s === "claude" || s === "codex" || s === "antigravity" || s === "ollama";
+  return ALL_CLI_KINDS.includes(s as CliKind);
 }
 
 // 2026-06-04: Google replaced `gemini` with `agy` (Antigravity).

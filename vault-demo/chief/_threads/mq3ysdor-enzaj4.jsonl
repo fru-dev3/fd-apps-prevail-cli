@@ -1,0 +1,2 @@
+{"id":"t-mq3ysdq0-q6evyv","parentId":null,"role":"user","cli":"ollama","model":"","content":"in 5 words, what should I focus on today","ts":1780847780472}
+{"id":"t-mq3ysdqh-h3cp7l","parentId":"t-mq3ysdq0-q6evyv","role":"assistant","cli":"ollama","model":"","content":"(ollama: HTTP 404 — {\"error\":{\"message\":\"model 'llama3.1' not found\",\"type\":\"not_found_error\",\"param\":null,\"code\":null}}\n)","ts":1780847780489}

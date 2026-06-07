@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "home",
-    "score": 47,
+    "score": 63,
     "breakdown": {
       "coverage": {
         "score": 40,
@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 5 days ago"
+        "detail": "newest knowledge file updated 6 days ago"
       },
       "structure": {
         "score": 60,
@@ -71,10 +71,80 @@
         "kind": "config"
       }
     ],
-    "freshness_secs": 511050,
+    "relevance": {
+      "matched": "home",
+      "score": 92,
+      "detail": "6 of 7 expected home items present",
+      "items": [
+        {
+          "id": "address",
+          "label": "Address",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Record your home address."
+        },
+        {
+          "id": "mortgage",
+          "label": "Mortgage / lease terms",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "Capture mortgage or lease terms (rate, payment, term, landlord)."
+        },
+        {
+          "id": "value",
+          "label": "Home value",
+          "present": false,
+          "stale": false,
+          "severity": "info",
+          "detail": "not found",
+          "recommend": "Note your home's current value or recent appraisal."
+        },
+        {
+          "id": "maintenance",
+          "label": "Maintenance log",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present · 6d old",
+          "recommend": "Start a maintenance log — what was serviced and when."
+        },
+        {
+          "id": "warranties",
+          "label": "Warranties / appliances",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Inventory appliances and their warranties."
+        },
+        {
+          "id": "providers",
+          "label": "Service providers / contractors",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Save trusted service providers (plumber, electrician, etc.)."
+        },
+        {
+          "id": "insurance",
+          "label": "Home insurance policy",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present · 6d old",
+          "recommend": "Add your homeowner / renter insurance policy."
+        }
+      ]
+    },
+    "freshness_secs": 587498,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-06T18:42:54.869Z",
+    "computed_at": "2026-06-07T15:57:02.192Z",
     "audited_at": null
   },
   "goals": [],

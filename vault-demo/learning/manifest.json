@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "learning",
-    "score": 49,
+    "score": 67,
     "breakdown": {
       "coverage": {
         "score": 40,
@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 5 days ago"
+        "detail": "newest knowledge file updated 6 days ago"
       },
       "structure": {
         "score": 60,
@@ -71,10 +71,62 @@
         "kind": "config"
       }
     ],
-    "freshness_secs": 511050,
+    "relevance": {
+      "matched": "learning",
+      "score": 100,
+      "detail": "5 of 5 expected learning items present",
+      "items": [
+        {
+          "id": "goals",
+          "label": "Learning goals",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present",
+          "recommend": "Define what you're trying to learn and why."
+        },
+        {
+          "id": "in_progress",
+          "label": "Courses / books in progress",
+          "present": true,
+          "stale": false,
+          "severity": "warn",
+          "detail": "present · 6d old",
+          "recommend": "List the courses or books you're working through now."
+        },
+        {
+          "id": "skills",
+          "label": "Skills to develop",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Name the specific skills you want to build."
+        },
+        {
+          "id": "milestones",
+          "label": "Completed milestones",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present · 6d old",
+          "recommend": "Log what you've completed to see momentum."
+        },
+        {
+          "id": "resources",
+          "label": "Resources / reading list",
+          "present": true,
+          "stale": false,
+          "severity": "info",
+          "detail": "present",
+          "recommend": "Keep a running resource / reading list."
+        }
+      ]
+    },
+    "freshness_secs": 587498,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-06T18:42:54.870Z",
+    "computed_at": "2026-06-07T15:57:02.193Z",
     "audited_at": null
   },
   "goals": [],
