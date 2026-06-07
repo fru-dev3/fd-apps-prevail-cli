@@ -63,7 +63,10 @@ export function refreshOperatingManualCache(): void {
 // during the transition window. Old configs that still say `"gemini"`
 // are silently migrated to `"antigravity"` on first read (see
 // migrateLegacyCliKind in src/config.ts).
-export type CliKind = "claude" | "codex" | "antigravity" | "ollama" | "openrouter";
+// CliKind is single-sourced in config.ts; imported for local use and re-exported
+// so existing `import { CliKind } from "./cli-bridge"` sites keep working.
+import type { CliKind } from "./config.ts";
+export type { CliKind };
 
 // Legacy CliKind values from earlier versions of prevAIl. Listed here as
 // a string union (NOT part of the live CliKind type) so config-migration
