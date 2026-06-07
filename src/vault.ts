@@ -3,6 +3,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
+import { readManifest } from "./manifest.ts";
 
 export type ViewKey = "state" | "loops" | "quickstart" | "prompts" | "skills";
 
@@ -19,6 +20,22 @@ export interface Domain {
   openLoopCount: number;
   stateMtime: number | null;
   skills: DomainSkill[];
+  // ADDITIVE (Track E1): optional one-line summary lifted from the domain's
+  // manifest.json identity, when present. undefined when the domain has no
+  // manifest.json or it's unparseable — existing callers that don't read this
+  // field are unaffected. The scanner never *creates* a manifest; it only
+  // surfaces an existing one's label/summary for the sidebar.
+  manifestSummary?: ManifestSummary;
+}
+
+// Lightweight projection of manifest.json identity for the sidebar. Kept thin
+// (no scoring/heartbeat) so scanVault stays cheap; full reads go through
+// manifest.ts readManifest.
+export interface ManifestSummary {
+  label: string;
+  emoji: string;
+  summary: string;
+  archived: boolean;
 }
 
 const NON_DOMAIN_DIRS = new Set([
@@ -29,6 +46,7 @@ const NON_DOMAIN_DIRS = new Set([
   ".claude",
   ".claude-plugin",
   "node_modules",
+  "_archive",
 ]);
 
 // Importance order for the LIFE DOMAINS sidebar. Coordinators (chief, council)
@@ -159,6 +177,22 @@ export function scanVault(vaultPath: string): Domain[] {
       stateMtime = statSync(statePath).mtimeMs;
     } catch {}
 
+    // ADDITIVE: surface an existing manifest.json's identity, if any. Never
+    // creates one; failures are swallowed so a malformed manifest can't break
+    // the scan (the domain still appears on its state.md alone).
+    let manifestSummary: ManifestSummary | undefined;
+    try {
+      const m = readManifest(vaultPath, entry.name);
+      if (m) {
+        manifestSummary = {
+          label: m.identity.label,
+          emoji: m.identity.emoji,
+          summary: m.identity.summary,
+          archived: m.archived,
+        };
+      }
+    } catch {}
+
     domains.push({
       name: entry.name,
       path: domainPath,
@@ -166,6 +200,7 @@ export function scanVault(vaultPath: string): Domain[] {
       openLoopCount,
       stateMtime,
       skills: scanSkills(lifePath, vaultPath, entry.name),
+      ...(manifestSummary ? { manifestSummary } : {}),
     });
   }
 

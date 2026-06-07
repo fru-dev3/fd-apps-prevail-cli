@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prevail.fru.dev/schemas/BackupResult.json",
+  "title": "BackupResult",
+  "description": "Output of `prevail vault backup --json`. Describes a completed backup archive of the vault (or a single domain).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "archive_path", "scope", "domains", "file_count", "bytes", "created_at"],
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "description": "True if the backup completed successfully."
+    },
+    "archive_path": {
+      "type": ["string", "null"],
+      "description": "Absolute path to the written archive (e.g. a .tar.gz), or null on failure."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["vault", "domain"],
+      "description": "'vault' = full backup; 'domain' = single-domain backup (--domain X)."
+    },
+    "domains": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Domain names included in the archive."
+    },
+    "file_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of files written into the archive."
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Compressed size of the archive in bytes."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp when the archive was created."
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message when ok=false, otherwise null/absent."
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prevail.fru.dev/schemas/OnboardingRecommendation.json",
+  "title": "OnboardingRecommendation",
+  "description": "Output of `prevail onboard recommend --json`. Given the user's free-form answers (read from stdin), the engine proposes a starter set of domains to scaffold. The user then picks a subset and feeds them to `prevail onboard apply`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domains", "rationale", "generated_at"],
+  "$defs": {
+    "ProposedDomain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "label", "emoji", "summary", "reason", "recommended"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "Proposed domain key (safe directory name)."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human display name."
+        },
+        "emoji": {
+          "type": "string",
+          "description": "Suggested sidebar emoji."
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "One-line description of the proposed domain."
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Why this domain was recommended, grounded in the user's answers."
+        },
+        "recommended": {
+          "type": "boolean",
+          "description": "True if pre-selected (strong fit); false if offered but optional."
+        },
+        "starterGoals": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional starter goals to seed the domain's manifest."
+        },
+        "suggestedSkills": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional skill ids to enable on scaffold."
+        }
+      }
+    }
+  },
+  "properties": {
+    "domains": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/ProposedDomain" },
+      "description": "Proposed domains, most relevant first."
+    },
+    "rationale": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "Overall narrative explaining the recommended set."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp the recommendation was generated."
+    }
+  }
+}

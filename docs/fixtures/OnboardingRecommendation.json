@@ -1,0 +1,36 @@
+{
+  "domains": [
+    {
+      "name": "wealth",
+      "label": "Wealth",
+      "emoji": "💰",
+      "summary": "Money pulse — net worth, accounts, cash flow.",
+      "reason": "You mentioned chasing a first-million milestone and running multiple LLCs; a wealth domain anchors net-worth tracking and distributions.",
+      "recommended": true,
+      "starterGoals": ["Hit first-million net worth by Easter"],
+      "suggestedSkills": ["connect-financial-institution"]
+    },
+    {
+      "name": "business",
+      "label": "Business",
+      "emoji": "🏢",
+      "summary": "LLC operations, revenue, and compliance.",
+      "reason": "You build across fru.dev, fd-apps, and AIReadyU — a business domain keeps revenue and obligations in one place.",
+      "recommended": true,
+      "starterGoals": ["Ship AIReadyU go-to-market"],
+      "suggestedSkills": ["fd-business-review"]
+    },
+    {
+      "name": "health",
+      "label": "Health",
+      "emoji": "🩺",
+      "summary": "Body pulse — activity, weight, and appointments.",
+      "reason": "A balanced life-OS usually includes health; offered in case you want activity and weight tracking.",
+      "recommended": false,
+      "starterGoals": [],
+      "suggestedSkills": []
+    }
+  ],
+  "rationale": "Based on your answers about building several ventures and chasing a wealth milestone, the strongest starter set is Wealth + Business. Health is offered as an optional fourth pillar.",
+  "generated_at": "2026-06-06T15:00:00.000Z"
+}

@@ -1,0 +1,9 @@
+{
+  "type": "assistant",
+  "thread": "2026-06-06-wealth-01",
+  "ts": 1749225600000,
+  "domain": "wealth",
+  "role": "assistant",
+  "text": "Your net worth is up 4.2% this month, driven mostly by the brokerage account. You're on pace to clear the first-million line before Easter.",
+  "engine": "claude:opus-4-8"
+}

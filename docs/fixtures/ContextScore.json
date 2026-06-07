@@ -1,0 +1,47 @@
+{
+  "domain": "wealth",
+  "score": 78,
+  "breakdown": {
+    "coverage": {
+      "score": 90,
+      "detail": "9 of 10 expected files present; missing MEMORY.md."
+    },
+    "density": {
+      "score": 72,
+      "detail": "state.md and decisions.md are substantive; open-loops.md is thin."
+    },
+    "freshness": {
+      "score": 85,
+      "detail": "state.md updated 2 days ago."
+    },
+    "structure": {
+      "score": 80,
+      "detail": "Has headings and an Open Items section; decisions.md lacks dated entries."
+    },
+    "activity": {
+      "score": 65,
+      "detail": "4 chat turns and 3 log entries in the last 7 days."
+    },
+    "config_completeness": {
+      "score": 70,
+      "detail": "manifest identity and config filled; goals present but routing keywords empty."
+    }
+  },
+  "missing": [
+    {
+      "label": "No MEMORY.md — durable facts have nowhere to land",
+      "severity": "warn",
+      "kind": "file"
+    },
+    {
+      "label": "manifest.routing.keywords is empty",
+      "severity": "info",
+      "kind": "routing"
+    }
+  ],
+  "freshness_secs": 172800,
+  "assessment": "The wealth domain is well established: net-worth tracking and account list are current, and decisions are being logged. To reach excellent, add a MEMORY.md capturing durable facts (account institutions, target allocations) and wire routing keywords so inbound money questions land here automatically.",
+  "audit_source": "claude:opus-4-8",
+  "computed_at": "2026-06-06T14:30:00.000Z",
+  "audited_at": 1749220200000
+}

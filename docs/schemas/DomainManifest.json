@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prevail.fru.dev/schemas/DomainManifest.json",
+  "title": "DomainManifest",
+  "description": "The optional per-domain manifest.json. Absence of this file means 'manifest features off' — the domain still works on state.md alone. When present, `schema` MUST be set so migrations can run. This is an AGENT-WRITABLE file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "identity",
+    "config",
+    "context_score",
+    "goals",
+    "heartbeat",
+    "routing",
+    "sandbox",
+    "privacy",
+    "archived",
+    "archived_at"
+  ],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Manifest schema version. Current = 1. Readers MUST migrate older versions forward (see VAULT-SPEC.md migration convention)."
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "label", "emoji", "summary", "created"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical domain key — matches the directory name. Immutable once set."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human display name, e.g. 'Wealth'."
+        },
+        "emoji": {
+          "type": "string",
+          "description": "Single emoji shown in the sidebar."
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "One-line description of what this domain is for."
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO-8601 creation timestamp."
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cli", "model", "framework", "lens", "skills", "autoState"],
+      "properties": {
+        "cli": {
+          "type": "string",
+          "enum": ["claude", "codex", "antigravity", "ollama"],
+          "description": "Default engine for chat in this domain."
+        },
+        "model": {
+          "type": "string",
+          "description": "Default model id for the chosen CLI. Empty string = CLI's own default."
+        },
+        "framework": {
+          "type": ["string", "null"],
+          "description": "Default response framework id (BLUF, SCQA, ...) or null for none."
+        },
+        "lens": {
+          "type": ["string", "null"],
+          "description": "Default analytical lens id or null for none."
+        },
+        "skills": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Skill ids enabled in this domain (skills/<name>/SKILL.md)."
+        },
+        "autoState": {
+          "type": "boolean",
+          "description": "When true, chat turns auto-distill into state.md / decisions.md."
+        }
+      }
+    },
+    "context_score": {
+      "description": "Last computed context score, embedded for offline/UI use. null until first scored.",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "https://prevail.fru.dev/schemas/ContextScore.json" }
+      ]
+    },
+    "goals": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Free-text goals driving this domain. Empty array = no goals yet (penalizes config_completeness)."
+    },
+    "heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "routines"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether scheduled heartbeat routines run for this domain."
+        },
+        "routines": {
+          "type": "array",
+          "description": "Scheduled background routines (e.g. a weekly review).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "schedule"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "description": "Routine identifier / skill id to run." },
+              "schedule": { "type": "string", "minLength": 1, "description": "Cron expression or natural cadence ('weekly', 'daily 08:00')." },
+              "enabled": { "type": "boolean", "description": "Per-routine toggle. Defaults to true when omitted." }
+            }
+          }
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keywords", "channels", "default"],
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Keywords that route an inbound message to this domain."
+        },
+        "channels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Inbound channels wired to this domain (telegram, email, ...)."
+        },
+        "default": {
+          "type": "boolean",
+          "description": "True if this is the fallback domain for unrouted input."
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["open", "locked"],
+          "description": "'open' = agents may write outside the strict allow-list with confirmation; 'locked' = agents may only write agent-writable zones."
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["localOnly"],
+      "properties": {
+        "localOnly": {
+          "type": "boolean",
+          "description": "When true, this domain never leaves the machine — no cloud engines, no network tools, regardless of global flags."
+        }
+      }
+    },
+    "archived": {
+      "type": "boolean",
+      "description": "True when the domain has been archived (hidden from the active sidebar but never deleted)."
+    },
+    "archived_at": {
+      "type": ["string", "null"],
+      "description": "ISO-8601 timestamp of archival, or null if not archived."
+    }
+  }
+}

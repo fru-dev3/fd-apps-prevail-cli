@@ -1,7 +1,14 @@
 import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { appendFileSync, chmodSync, existsSync, mkdirSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+} from "node:fs";
 
 const DATA_DIR = join(homedir(), ".prevail");
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
@@ -304,4 +311,249 @@ export function formatRelativeDate(ts: number | null): string {
 
 export function makeSessionId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ---------------------------------------------------------------------------
+// JSONL chat threads — the source of truth (VAULT-SPEC §2/§4).
+//
+// Per the frozen contract, chat is persisted append-only to
+// <vault>/<domain>/_threads/<sessionId>.jsonl, ONE JSON object per line, in
+// a Pi-style branchable shape: { id, parentId, role, cli, model, content, ts }.
+// The id/parentId pair lets a transcript branch (regenerate a turn off an
+// earlier node) without rewriting history — every node names its parent.
+//
+// The existing ~/.prevail/sessions.db FTS index (persistMessage above) stays
+// as a rebuildable, LOCAL-only index. SQLite must never live in the synced
+// vault (VAULT-SPEC §4), so the JSONL in the vault is canonical and the .db
+// outside it is a cache that can be regenerated from these files.
+// ---------------------------------------------------------------------------
+
+// One persisted chat turn line. Mirrors the Pi-style branchable node shape
+// named in the E6 contract. `parentId` is null for the first turn in a thread
+// (or for a turn deliberately rooted to start a new branch).
+export interface ThreadTurn {
+  id: string;
+  parentId: string | null;
+  role: "user" | "assistant" | "system";
+  cli: string;
+  model: string;
+  content: string;
+  ts: number;
+}
+
+// Generate a thread-node id. Distinct prefix from makeSessionId so a node id
+// can never be mistaken for a session id at a glance in a JSONL dump.
+export function makeTurnId(): string {
+  return `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Path to a domain's JSONL thread file inside the vault. Lives under the
+// agent-writable _threads/ zone (VAULT-SPEC §3).
+export function threadJsonlPath(vaultPath: string, domain: string, sessionId: string): string {
+  return join(vaultPath, domain, "_threads", `${sessionId}.jsonl`);
+}
+
+function threadsDir(vaultPath: string, domain: string): string {
+  return join(vaultPath, domain, "_threads");
+}
+
+// Append a turn to <domain>/_threads/<sessionId>.jsonl, creating the
+// _threads dir on first write. This is the canonical persistence path; the
+// SQLite index is written separately via persistMessage so the two layers
+// stay decoupled and the index stays rebuildable. The sessionId (= thread
+// file name) is threaded explicitly so one domain can hold many independent
+// threads.
+//
+// `system` turns are persisted here (unlike the FTS index, which drops them)
+// because a JSONL transcript should be a faithful, replayable record of the
+// thread — branch points need every node, including system notes.
+export function writeThreadTurn(
+  vaultPath: string,
+  domain: string,
+  sessionId: string,
+  turn: ThreadTurn,
+): void {
+  try {
+    const dir = threadsDir(vaultPath, domain);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    const file = threadJsonlPath(vaultPath, domain, sessionId);
+    const isNew = !existsSync(file);
+    appendFileSync(file, JSON.stringify(turn) + "\n");
+    // SECURITY: thread transcripts contain the full conversation including
+    // anything the operator pasted. Lock to owner-only on first create, same
+    // posture as the sessions.db / prompt logs above.
+    if (isNew) tryChmod(file, 0o600);
+  } catch {}
+}
+
+// Read back a JSONL thread file as ThreadTurn[] (oldest → newest = file
+// order). Malformed lines are skipped rather than throwing so one bad line
+// can't poison the whole transcript. Returns [] if the file is absent.
+export function readThreadTurns(
+  vaultPath: string,
+  domain: string,
+  sessionId: string,
+): ThreadTurn[] {
+  const file = threadJsonlPath(vaultPath, domain, sessionId);
+  if (!existsSync(file)) return [];
+  let raw = "";
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const out: ThreadTurn[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const obj = JSON.parse(trimmed) as Partial<ThreadTurn>;
+      if (
+        typeof obj.id === "string" &&
+        typeof obj.role === "string" &&
+        typeof obj.content === "string"
+      ) {
+        out.push({
+          id: obj.id,
+          parentId: typeof obj.parentId === "string" ? obj.parentId : null,
+          role: obj.role as ThreadTurn["role"],
+          cli: typeof obj.cli === "string" ? obj.cli : "",
+          model: typeof obj.model === "string" ? obj.model : "",
+          content: obj.content,
+          ts: typeof obj.ts === "number" ? obj.ts : 0,
+        });
+      }
+    } catch {
+      /* skip malformed line */
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Back-compat: import desktop-style _threads/<slug>.md transcripts into JSONL.
+//
+// The original desktop app wrote human-readable markdown threads with blocks
+// like:
+//
+//     ## User
+//     what's my net worth?
+//
+//     ## Assistant
+//     Up 4.2% this month …
+//
+// This parses those "## Speaker" blocks into ThreadTurn lines and writes a
+// sibling <slug>.jsonl so the JSONL source-of-truth covers legacy history.
+// Lazy / idempotent: it only converts a <slug>.md when no <slug>.jsonl
+// already exists, so re-running is a no-op and a freshly-written JSONL thread
+// is never clobbered by its (possibly stale) markdown export.
+// ---------------------------------------------------------------------------
+
+// Map a markdown "## Speaker" heading to a ThreadTurn role. Unknown speakers
+// (a custom persona name, etc.) are treated as assistant so the content is
+// preserved rather than dropped.
+function roleFromSpeaker(speaker: string): ThreadTurn["role"] {
+  const s = speaker.trim().toLowerCase();
+  if (s === "user" || s === "you" || s === "me" || s === "human") return "user";
+  if (s === "system" || s === "note") return "system";
+  return "assistant";
+}
+
+// Parse the "## Speaker" blocks of a desktop markdown thread into turns.
+// Exported for testing — the parse is pure (no I/O).
+export function parseDesktopThreadMarkdown(md: string): ThreadTurn[] {
+  const lines = md.split("\n");
+  const turns: ThreadTurn[] = [];
+  let curRole: ThreadTurn["role"] | null = null;
+  let buf: string[] = [];
+  let parentId: string | null = null;
+
+  const flush = () => {
+    if (curRole === null) {
+      buf = [];
+      return;
+    }
+    const content = buf.join("\n").trim();
+    buf = [];
+    if (!content) {
+      curRole = null;
+      return;
+    }
+    const id = makeTurnId();
+    turns.push({
+      id,
+      parentId,
+      role: curRole,
+      cli: "",
+      model: "",
+      content,
+      ts: 0, // legacy markdown carried no per-turn timestamp
+    });
+    parentId = id; // linear chain — each imported turn parents the next
+    curRole = null;
+  };
+
+  for (const line of lines) {
+    const m = line.match(/^##\s+(.+?)\s*$/);
+    if (m) {
+      flush();
+      curRole = roleFromSpeaker(m[1]);
+      continue;
+    }
+    if (curRole !== null) buf.push(line);
+  }
+  flush();
+  return turns;
+}
+
+// Result of an import pass over a domain's _threads dir.
+export interface ThreadImportResult {
+  imported: string[]; // session ids (slugs) newly converted to JSONL
+  skipped: string[]; // slugs that already had a .jsonl (left untouched)
+}
+
+// Convert any desktop-style <slug>.md threads in <domain>/_threads/ that lack
+// a sibling <slug>.jsonl. Idempotent and safe to call lazily before reading a
+// thread. Returns which slugs were imported vs skipped.
+export function importDesktopThreads(
+  vaultPath: string,
+  domain: string,
+): ThreadImportResult {
+  const result: ThreadImportResult = { imported: [], skipped: [] };
+  const dir = threadsDir(vaultPath, domain);
+  if (!existsSync(dir)) return result;
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return result;
+  }
+  for (const name of entries) {
+    if (!name.endsWith(".md")) continue;
+    const slug = name.slice(0, -".md".length);
+    if (!slug) continue;
+    const jsonlPath = threadJsonlPath(vaultPath, domain, slug);
+    if (existsSync(jsonlPath)) {
+      result.skipped.push(slug);
+      continue;
+    }
+    let md = "";
+    try {
+      md = readFileSync(join(dir, name), "utf8");
+    } catch {
+      continue;
+    }
+    const turns = parseDesktopThreadMarkdown(md);
+    if (turns.length === 0) {
+      result.skipped.push(slug);
+      continue;
+    }
+    for (const turn of turns) {
+      writeThreadTurn(vaultPath, domain, slug, turn);
+    }
+    result.imported.push(slug);
+  }
+  return result;
 }

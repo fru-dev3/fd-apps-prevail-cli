@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "identity": {
+    "name": "wealth",
+    "label": "Wealth",
+    "emoji": "💰",
+    "summary": "Money pulse — net worth, accounts, cash flow, and financial decisions.",
+    "created": "2026-01-12T09:00:00.000Z"
+  },
+  "config": {
+    "cli": "claude",
+    "model": "opus-4-8",
+    "framework": "BLUF",
+    "lens": null,
+    "skills": ["wealth-op-weekly-pulse", "connect-financial-institution"],
+    "autoState": true
+  },
+  "context_score": {
+    "domain": "wealth",
+    "score": 78,
+    "breakdown": {
+      "coverage": { "score": 90, "detail": "9 of 10 expected files present; missing MEMORY.md." },
+      "density": { "score": 72, "detail": "state.md and decisions.md are substantive; open-loops.md is thin." },
+      "freshness": { "score": 85, "detail": "state.md updated 2 days ago." },
+      "structure": { "score": 80, "detail": "Has headings and an Open Items section." },
+      "activity": { "score": 65, "detail": "4 chat turns in the last 7 days." },
+      "config_completeness": { "score": 70, "detail": "Goals present but routing keywords empty." }
+    },
+    "missing": [
+      { "label": "No MEMORY.md", "severity": "warn", "kind": "file" }
+    ],
+    "freshness_secs": 172800,
+    "assessment": null,
+    "audit_source": null,
+    "computed_at": "2026-06-06T14:30:00.000Z",
+    "audited_at": null
+  },
+  "goals": [
+    "Hit first-million net worth by Easter",
+    "Keep 6-month emergency fund liquid",
+    "Track every LLC distribution monthly"
+  ],
+  "heartbeat": {
+    "enabled": true,
+    "routines": [
+      { "id": "wealth-op-weekly-pulse", "schedule": "weekly mon 08:00", "enabled": true },
+      { "id": "wealth-op-monthly-sync", "schedule": "0 9 1 * *", "enabled": true }
+    ]
+  },
+  "routing": {
+    "keywords": ["money", "net worth", "account", "invest", "cash flow"],
+    "channels": ["telegram"],
+    "default": false
+  },
+  "sandbox": {
+    "mode": "locked"
+  },
+  "privacy": {
+    "localOnly": true
+  },
+  "archived": false,
+  "archived_at": null
+}

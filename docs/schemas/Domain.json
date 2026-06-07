@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prevail.fru.dev/schemas/Domain.json",
+  "title": "Domain",
+  "description": "A scanned vault domain as emitted by `prevail domains --json`. Mirrors the `Domain` interface in src/vault.ts. A directory is a domain iff it contains state.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "path", "hasState", "openLoopCount", "stateMtime", "skills"],
+  "$defs": {
+    "DomainSkill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "path"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Skill directory name." },
+        "title": { "type": "string", "description": "Human title parsed from SKILL.md." },
+        "path": { "type": "string", "description": "Absolute path to the skill's SKILL.md." }
+      }
+    }
+  },
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Domain directory name."
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute path to the domain directory."
+    },
+    "hasState": {
+      "type": "boolean",
+      "const": true,
+      "description": "Always true for an emitted Domain — the defining property of a domain is that state.md exists."
+    },
+    "openLoopCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of unchecked open items (state.md Open Items section, else open-loops.md checkboxes)."
+    },
+    "stateMtime": {
+      "type": ["number", "null"],
+      "description": "state.md modification time in epoch milliseconds, or null if unreadable."
+    },
+    "skills": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/DomainSkill" },
+      "description": "Skills discovered under skills/<name>/SKILL.md, ordered by the cadence rank in vault.ts."
+    }
+  }
+}

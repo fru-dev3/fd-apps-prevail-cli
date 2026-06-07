@@ -25,7 +25,7 @@ interface ChatState {
   councilMode: boolean;
 }
 
-interface TelegramUpdate {
+export interface TelegramUpdate {
   update_id: number;
   message?: {
     message_id: number;
@@ -520,6 +520,26 @@ async function sendLongMessage(token: string, chatId: number, text: string): Pro
 }
 
 // --- Telegram Bot API plumbing ------------------------------------------------
+
+// =============================================================================
+// ADDITIVE (Track E8): gateway-facing primitives. These expose the existing
+// Telegram wire plumbing — config, long-poll, and send — so the generalized
+// ChannelAdapter (src/gateway/telegram-adapter.ts) can WRAP this module without
+// duplicating the Bot API logic or rewriting runTelegramDaemon. The daemon path
+// above is untouched; these are thin re-exports of the same functions it uses.
+// =============================================================================
+
+/** Long-poll Telegram for new updates from `offset`. Re-export of the daemon's
+ *  own poller for adapter reuse. */
+export function gatewayTgGetUpdates(token: string, offset: number): Promise<TelegramUpdate[]> {
+  return tgGetUpdates(token, offset);
+}
+
+/** Send a (chunked-if-long) text message. Re-export of the daemon's sender so
+ *  an adapter's send() goes through the exact same path as the daemon. */
+export function gatewayTgSend(token: string, chatId: number, text: string): Promise<void> {
+  return sendLongMessage(token, chatId, text);
+}
 
 async function tgGetUpdates(token: string, offset: number): Promise<TelegramUpdate[]> {
   const url = `${TELEGRAM_API}/bot${token}/getUpdates?offset=${offset}&timeout=30`;

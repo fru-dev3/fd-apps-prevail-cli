@@ -6,6 +6,13 @@ import { homedir } from "node:os";
 import type { Domain, ViewKey } from "./vault.ts";
 import { readResponseFramework, readWebAccess } from "./config.ts";
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
+import { resolveModelForDomain } from "./privacy.ts";
+import {
+  type BudgetCaps,
+  checkBudget,
+  estimateTurnCost,
+  recordSpend,
+} from "./budget.ts";
 
 const OPERATING_MANUAL_FILE = "AGENTS-operating.md";
 let operatingManualCache: { vaultPath: string; content: string | null } | null = null;
@@ -597,6 +604,19 @@ export interface ChatTurn {
   // that have no business returning 50KB. Undefined = no cap (today's
   // behavior).
   maxOutputChars?: number;
+  // Optional privacy + cost guard (Track E7). Entirely opt-in: when omitted
+  // (or with both fields unset) runChatTurn behaves exactly as before. When
+  // present it gates the turn BEFORE spawning the model:
+  //   - privacy.resolveModelForDomain may redirect a cloud CLI to the local
+  //     ollama engine if the domain is localOnly or globalLocalOnly is set.
+  //   - budget.checkBudget throws BudgetExceeded if the estimated cost would
+  //     breach a per-run / per-day cap; on success the spend is recorded.
+  guard?: {
+    // Global `--local-only` switch (same convention as src/chat-json.ts).
+    localOnly?: boolean;
+    // Cost caps. No caps set => budget guard is a no-op.
+    budget?: BudgetCaps;
+  };
 }
 
 const WEB_DENY_NOTE = [
@@ -616,10 +636,46 @@ function augmentManualWithWebGate(manual: string | null): string | null {
   return `${manual}\n\n${WEB_DENY_NOTE}`;
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, signal, onChunk, maxOutputChars }: ChatTurn): Promise<string> {
-  const m = model.trim();
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, signal, onChunk, maxOutputChars, guard }: ChatTurn): Promise<string> {
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
+  const domainKeyForGuard = basename(cwd);
+
+  // --- Track E7: privacy + cost guard (opt-in) -----------------------------
+  // Runs BEFORE the model is spawned. With no guard set, both checks are
+  // no-ops and the requested engine/model pass through unchanged — preserving
+  // the exact behavior every existing caller relies on.
+  //
+  // 1. Privacy: if the domain is privacy.localOnly (manifest) OR the global
+  //    --local-only switch is on, a cloud CLI request is redirected to the
+  //    local ollama engine. We mutate `cli`/`model` so the rest of this
+  //    function (arg building, spawn, reply extraction) runs against the
+  //    resolved engine without further branching.
+  // 2. Budget: estimate the turn's cost and checkBudget(); a breach throws
+  //    BudgetExceeded out of runChatTurn (callers already catch and surface
+  //    runner errors). The spend is recorded after the call completes.
+  let budgetEstimate: ReturnType<typeof estimateTurnCost> | null = null;
+  if (guard) {
+    // Privacy resolution always runs when a guard is present so manifest
+    // privacy.localOnly is honored even when the global flag is off.
+    const resolved = resolveModelForDomain(
+      vaultPath,
+      domainKeyForGuard,
+      { cli: cli.kind, model },
+      { globalLocalOnly: guard.localOnly ?? false },
+    );
+    if (resolved.cli !== cli.kind) {
+      // Redirect to the local engine. The ollama path in runChatTurn keys
+      // off cli.bin as the base URL, so swap in the ollama endpoint.
+      cli = { kind: resolved.cli, bin: OLLAMA_BASE_URL, label: "Local" };
+    }
+    model = resolved.model;
+    budgetEstimate = estimateTurnCost({ cli: cli.kind, promptChars: prompt.length });
+    // Throws BudgetExceeded if this turn would breach a per-run/per-day cap.
+    checkBudget(budgetEstimate, guard.budget);
+  }
+
+  const m = model.trim();
   // Only claude gets the manual — it has a real --append-system-prompt
   // channel that the model treats as system context (not echoed in output).
   // codex and gemini have no system-prompt flag in their CLIs, so the manual
@@ -643,6 +699,18 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
   const framework = getFramework(readResponseFramework(domainKey));
   const framedPrompt = buildFrameworkPreamble(framework) + prompt;
 
+  // Run the dispatch, then (Track E7) commit the estimated spend to the
+  // run/day ledgers. recordSpend is a no-op for free local turns and when no
+  // guard was supplied, so this preserves existing behavior. We record AFTER
+  // the call resolves so a cancelled / failed-to-spawn turn that never billed
+  // still adds to the ledger conservatively (the estimate is pre-flight; exact
+  // billing isn't available from the CLIs). Recording on the estimate keeps
+  // the per-day wall honest against a runaway loop.
+  const reply = await dispatchTurn();
+  if (budgetEstimate && guard) recordSpend(budgetEstimate, guard.budget);
+  return reply;
+
+  async function dispatchTurn(): Promise<string> {
   if (cli.kind === "claude") {
     const head = isFirst ? ["-p", framedPrompt] : ["--continue", "-p", framedPrompt];
     const args: string[] = [];
@@ -707,6 +775,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     });
   }
   return `(no handler for ${cli.kind})`;
+  }
 }
 
 interface OllamaChatArgs {

@@ -1,8 +1,15 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AppSkill, Domain } from "./vault.ts";
 import { buildDomainHeatmap } from "./heatmap.ts";
+import { computeContextScore } from "./score.ts";
+
+// Domain.path is "<vault>/<domain>"; the vault root the score engine wants is
+// its parent directory.
+function vaultRootFor(domainPath: string): string {
+  return dirname(domainPath);
+}
 
 const DATA_DIR = join(homedir(), ".prevail");
 const WATCHER_LOG = join(DATA_DIR, "watcher.jsonl");
@@ -11,7 +18,11 @@ export type ObservationKind =
   | "stale-state"
   | "loops-spike"
   | "domain-cold"
-  | "app-cold";
+  | "app-cold"
+  // ADDITIVE (Track E2): a domain whose deterministic context-readiness score
+  // is low enough to be worth flagging. Surfaced by the same dedup/log path as
+  // every other finding so it re-emerges until the user invests in the domain.
+  | "low-context-score";
 
 export interface Observation {
   ts: number;
@@ -76,6 +87,27 @@ export function runWatcher(domains: Domain[], apps: AppSkill[]): Observation[] {
       }
     }
   } catch {}
+
+  // ADDITIVE (Track E2): context-readiness watch. A domain with a present
+  // state.md but a low deterministic context score is under-built — worth a
+  // nudge to flesh it out. Reuses the score engine's pure heuristic (no LLM,
+  // no network) so the watcher pass stays cheap and side-effect-free. Wrapped
+  // so a scoring error on one domain never aborts the whole watcher run.
+  for (const d of domains) {
+    if (!d.hasState) continue;
+    try {
+      const sc = computeContextScore(vaultRootFor(d.path), d.name);
+      if (sc.score < 35) {
+        findings.push({
+          ts: now,
+          kind: "low-context-score",
+          severity: sc.score < 20 ? "warn" : "info",
+          target: d.name,
+          message: `${d.name} context score is ${sc.score}/100 — under-built; add state/decisions/config detail`,
+        });
+      }
+    } catch {}
+  }
 
   for (const a of apps) {
     if (!a.community && a.hasState && a.openLoopCount >= 5) {

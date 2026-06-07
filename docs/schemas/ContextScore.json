@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prevail.fru.dev/schemas/ContextScore.json",
+  "title": "ContextScore",
+  "description": "The computed context-readiness score for a single domain. Produced by `prevail score <domain>`. The headline `score` is the 0-100 roll-up; `breakdown` explains it across six fixed dimensions; `missing` lists actionable gaps.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "domain",
+    "score",
+    "breakdown",
+    "missing",
+    "freshness_secs",
+    "assessment",
+    "audit_source",
+    "computed_at",
+    "audited_at"
+  ],
+  "$defs": {
+    "Dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "detail"],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "0-100 sub-score for this dimension."
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Short human explanation of why this dimension scored as it did."
+        }
+      }
+    },
+    "ScoreBreakdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The six fixed scoring dimensions. The set and order are FROZEN — never add, remove, or rename a dimension without a schema-version bump.",
+      "required": [
+        "coverage",
+        "density",
+        "freshness",
+        "structure",
+        "activity",
+        "config_completeness"
+      ],
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/Dimension",
+          "description": "How many of the expected domain files exist (state.md, decisions.md, open-loops.md, MEMORY.md, manifest.json, ...)."
+        },
+        "density": {
+          "$ref": "#/$defs/Dimension",
+          "description": "How much real content the knowledge files hold vs. empty scaffolding."
+        },
+        "freshness": {
+          "$ref": "#/$defs/Dimension",
+          "description": "How recently the domain's writable knowledge was updated."
+        },
+        "structure": {
+          "$ref": "#/$defs/Dimension",
+          "description": "How well the markdown is structured (headings, Open Items section, parseable shape)."
+        },
+        "activity": {
+          "$ref": "#/$defs/Dimension",
+          "description": "Recent chat/log/journal activity volume in this domain."
+        },
+        "config_completeness": {
+          "$ref": "#/$defs/Dimension",
+          "description": "How fully manifest.json identity/config/goals/routing are filled in."
+        }
+      }
+    }
+  },
+  "properties": {
+    "domain": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Domain name (directory name under the vault root)."
+    },
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Headline 0-100 context-readiness score, a weighted roll-up of the six breakdown dimensions."
+    },
+    "breakdown": {
+      "$ref": "#/$defs/ScoreBreakdown"
+    },
+    "missing": {
+      "type": "array",
+      "description": "Actionable gaps. Empty array when the domain is fully formed.",
+      "items": { "$ref": "https://prevail.fru.dev/schemas/MissingItem.json" }
+    },
+    "freshness_secs": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Seconds since the domain's most-recently-modified writable knowledge file was touched."
+    },
+    "assessment": {
+      "type": ["string", "null"],
+      "maxLength": 4000,
+      "description": "Optional LLM-written narrative assessment. null when the score is purely heuristic (no --audit was run)."
+    },
+    "audit_source": {
+      "type": ["string", "null"],
+      "description": "Identifier of the engine that produced the LLM `assessment` (e.g. 'claude:opus-4-8'). null when no audit ran."
+    },
+    "computed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp when the heuristic score was computed."
+    },
+    "audited_at": {
+      "type": ["number", "null"],
+      "description": "Epoch milliseconds when the LLM audit ran, or null if never audited."
+    }
+  }
+}

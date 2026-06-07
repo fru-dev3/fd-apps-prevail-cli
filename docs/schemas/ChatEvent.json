@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prevail.fru.dev/schemas/ChatEvent.json",
+  "title": "ChatEvent",
+  "description": "A single NDJSON event emitted on the `prevail chat --json` stream. One JSON object per line (newline-delimited JSON). The same shape is appended to the durable per-domain transcript at _threads/<id>.jsonl. Consumers MUST tolerate unknown event `type` values for forward compatibility.",
+  "type": "object",
+  "required": ["type", "thread", "ts"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["start", "user", "delta", "assistant", "tool", "usage", "error", "done"],
+      "description": "Event kind. 'start' opens the turn; 'delta' carries a streamed text chunk; 'assistant' is the finalized reply; 'usage' reports token spend; 'done' closes the turn; 'error' reports failure."
+    },
+    "thread": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Thread id this event belongs to (maps to _threads/<thread>.jsonl)."
+    },
+    "ts": {
+      "type": "number",
+      "description": "Epoch milliseconds when the event was emitted."
+    },
+    "domain": {
+      "type": "string",
+      "description": "Domain the chat is scoped to. Present on 'start'."
+    },
+    "role": {
+      "type": "string",
+      "enum": ["user", "assistant", "system", "tool"],
+      "description": "Speaker role. Present on 'user' / 'assistant' / 'tool' events."
+    },
+    "text": {
+      "type": "string",
+      "description": "Text payload. On 'delta' this is the incremental chunk; on 'assistant'/'user' it is the full message."
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Tool-call detail. Present on 'tool' events.",
+      "properties": {
+        "name": { "type": "string" },
+        "input": {},
+        "output": {}
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Token accounting. Present on 'usage' events.",
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "cost_usd": { "type": "number", "minimum": 0 }
+      }
+    },
+    "engine": {
+      "type": "string",
+      "description": "Engine that produced the reply, e.g. 'claude:opus-4-8'. Present on 'start' or 'assistant'."
+    },
+    "error": {
+      "type": "string",
+      "description": "Error message. Present only on 'error' events."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "error" } } },
+      "then": { "required": ["error"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "delta" } } },
+      "then": { "required": ["text"] }
+    }
+  ]
+}

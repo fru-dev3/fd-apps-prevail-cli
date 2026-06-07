@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prevail.fru.dev/schemas/MissingItem.json",
+  "title": "MissingItem",
+  "description": "A single gap surfaced by the context-scoring engine: something a well-formed domain SHOULD have but doesn't yet. Rendered as an actionable to-do in the onboarding / score UI.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["label", "severity", "kind"],
+  "properties": {
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Human-readable description of what is missing, e.g. 'No goals defined in manifest.json'."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warn", "critical"],
+      "description": "How much this gap hurts the score. critical = score-capping; warn = meaningful penalty; info = nice-to-have."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "file",
+        "section",
+        "config",
+        "goal",
+        "freshness",
+        "skill",
+        "routing",
+        "structure"
+      ],
+      "description": "Category of the gap, used by the UI to group and to deep-link the fix."
+    }
+  }
+}

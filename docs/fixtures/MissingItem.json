@@ -1,0 +1,5 @@
+{
+  "label": "No goals defined in manifest.json",
+  "severity": "warn",
+  "kind": "goal"
+}

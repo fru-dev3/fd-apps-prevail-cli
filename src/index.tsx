@@ -34,6 +34,20 @@ interface Args {
   vaultArgs: string[];
   upgrade: boolean;
   upgradeArgs: string[];
+  manifest: boolean;
+  manifestArgs: string[];
+  chat: boolean;
+  chatArgs: string[];
+  score: boolean;
+  scoreArgs: string[];
+  onboard: boolean;
+  onboardArgs: string[];
+  heartbeat: boolean;
+  heartbeatArgs: string[];
+  gateway: boolean;
+  gatewayArgs: string[];
+  domains: boolean;
+  domainsArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -62,6 +76,20 @@ function parseArgs(argv: string[]): Args {
   let vaultArgs: string[] = [];
   let upgrade = false;
   let upgradeArgs: string[] = [];
+  let manifest = false;
+  let manifestArgs: string[] = [];
+  let chat = false;
+  let chatArgs: string[] = [];
+  let score = false;
+  let scoreArgs: string[] = [];
+  let onboard = false;
+  let onboardArgs: string[] = [];
+  let heartbeat = false;
+  let heartbeatArgs: string[] = [];
+  let gateway = false;
+  let gatewayArgs: string[] = [];
+  let domains = false;
+  let domainsArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -109,6 +137,34 @@ function parseArgs(argv: string[]): Args {
       vault = true;
       vaultArgs = argv.slice(i + 1);
       break;
+    } else if (a === "manifest") {
+      manifest = true;
+      manifestArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "chat") {
+      chat = true;
+      chatArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "score") {
+      score = true;
+      scoreArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "onboard") {
+      onboard = true;
+      onboardArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "heartbeat") {
+      heartbeat = true;
+      heartbeatArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "gateway") {
+      gateway = true;
+      gatewayArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "domains") {
+      domains = true;
+      domainsArgs = argv.slice(i + 1);
+      break;
     } else if (a === "upgrade" || a === "update" || a === "self-update") {
       upgrade = true;
       upgradeArgs = argv.slice(i + 1);
@@ -149,6 +205,20 @@ function parseArgs(argv: string[]): Args {
     vaultArgs,
     upgrade,
     upgradeArgs,
+    manifest,
+    manifestArgs,
+    chat,
+    chatArgs,
+    score,
+    scoreArgs,
+    onboard,
+    onboardArgs,
+    heartbeat,
+    heartbeatArgs,
+    gateway,
+    gatewayArgs,
+    domains,
+    domainsArgs,
   };
 }
 
@@ -170,6 +240,27 @@ USAGE
                               parent-check: refuses non-TTY / unknown parents — bypass with --unsafe-detach
   prevail bench [...]         run the public council benchmark suite
   prevail vault [...]         prune old logs, snapshot/restore the vault
+                              archive/restore/list-archived domains (--json)
+  prevail manifest get|set <domain> --json
+                              read/merge a domain's manifest (engine JSON API)
+  prevail chat --domain <d> --json
+                              stream one chat turn as NDJSON (engine JSON API)
+  prevail score <domain> [--audit] --json
+                              compute a domain's context-readiness score
+  prevail score --all --json  score every domain + life-readiness roll-up
+  prevail score history <domain> --json
+                              append-only score history ([{ts,score}])
+  prevail onboard recommend --json
+                              propose a starter domain set (answers JSON on stdin)
+  prevail onboard apply --json
+                              scaffold the picked domains (picks JSON on stdin)
+  prevail heartbeat install --json
+                              install OS scheduler hooks for domain heartbeats
+  prevail heartbeat status --json
+                              report heartbeat install + routine state
+  prevail gateway status --json
+                              report channel adapters + deterministic per-domain routing
+  prevail domains --json      list life domains in the vault (engine JSON API)
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
   prevail upgrade [...]       self-update from the latest GitHub release
                               flags: --check (no prompt) --force (no confirm) --pre (include prereleases)
@@ -1045,6 +1136,135 @@ async function connectorsCommand(args: string[]): Promise<void> {
   process.exit(1);
 }
 
+// --- JSON command helpers -------------------------------------------------
+//
+// The `manifest` / `vault archive|restore|list-archived` commands all break out
+// of the global arg loop before it parses --vault/--json, so they pull those
+// flags out of their own sub-args here. Positional (non-flag) tokens are
+// returned separately so callers can read e.g. the <domain> argument.
+interface JsonSubArgs {
+  positionals: string[];
+  json: boolean;
+  vaultPath: string | null;
+  localOnly: boolean;
+}
+
+function parseJsonSubArgs(args: string[], vaultOverride: string | null): JsonSubArgs {
+  const positionals: string[] = [];
+  let json = false;
+  let vaultPath = vaultOverride;
+  let localOnly = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") json = true;
+    else if (a === "--local-only") localOnly = true;
+    else if (a === "--vault" || a === "-d") {
+      const next = args[i + 1];
+      if (next) {
+        vaultPath = resolve(process.cwd(), next);
+        i++;
+      }
+    } else if (a.startsWith("--vault=")) {
+      vaultPath = resolve(process.cwd(), a.slice("--vault=".length));
+    } else if (!a.startsWith("-")) {
+      positionals.push(a);
+    }
+  }
+  return { positionals, json, vaultPath, localOnly };
+}
+
+// Write the frozen error envelope from docs/ENGINE-JSON-API.md to stdout and
+// exit non-zero. JSON mode only — callers fall back to console.error otherwise.
+function emitJsonError(message: string, code: string): never {
+  process.stdout.write(`${JSON.stringify({ ok: false, error: message, code })}\n`);
+  process.exit(1);
+}
+
+// Deep-merge a partial manifest (from stdin) onto the existing one. Plain
+// objects merge recursively; arrays and scalars from the patch replace the
+// base. Used by `manifest set` per the JSON API contract.
+function deepMerge<T>(base: T, patch: unknown): T {
+  if (
+    patch === null ||
+    typeof patch !== "object" ||
+    Array.isArray(patch) ||
+    base === null ||
+    typeof base !== "object" ||
+    Array.isArray(base)
+  ) {
+    return (patch === undefined ? base : (patch as T));
+  }
+  const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(patch as Record<string, unknown>)) {
+    out[k] = deepMerge((out[k] as unknown) ?? null, v);
+  }
+  return out as T;
+}
+
+async function readJsonStdin(): Promise<unknown> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Uint8Array);
+  const text = Buffer.concat(chunks).toString("utf8").trim();
+  if (!text) return {};
+  return JSON.parse(text);
+}
+
+async function manifestCommand(args: string[], vaultOverride: string | null): Promise<void> {
+  const sub = args[0];
+  const rest = parseJsonSubArgs(args.slice(1), vaultOverride);
+  const cfg = readConfig();
+  const vault = rest.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  const domain = rest.positionals[0];
+
+  if (sub !== "get" && sub !== "set") {
+    if (rest.json) emitJsonError(`unknown manifest subcommand: ${sub ?? "(none)"}`, "BAD_SUBCOMMAND");
+    console.error("usage:");
+    console.error("  prevail manifest get <domain> --json");
+    console.error("  prevail manifest set <domain> --json   (body on stdin)");
+    process.exit(1);
+  }
+  if (!domain) {
+    if (rest.json) emitJsonError("missing required argument: <domain>", "MISSING_ARG");
+    console.error(`usage: prevail manifest ${sub} <domain> --json`);
+    process.exit(1);
+  }
+  if (!rest.json) {
+    console.error("manifest get/set require --json (machine-only command).");
+    process.exit(1);
+  }
+  if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+
+  const { ensureManifest, writeManifest } = await import("./manifest.ts");
+
+  if (sub === "get") {
+    try {
+      const m = ensureManifest(vault, domain);
+      process.stdout.write(`${JSON.stringify(m)}\n`);
+    } catch (err) {
+      emitJsonError((err as Error).message, "MANIFEST_GET_FAILED");
+    }
+    return;
+  }
+
+  // sub === "set"
+  let patch: unknown;
+  try {
+    patch = await readJsonStdin();
+  } catch (err) {
+    emitJsonError(`invalid JSON on stdin: ${(err as Error).message}`, "BAD_JSON");
+  }
+  try {
+    const existing = ensureManifest(vault, domain);
+    const merged = deepMerge(existing, patch);
+    writeManifest(vault, domain, merged);
+    // Re-read so we echo the normalized, schema-stamped result.
+    const result = ensureManifest(vault, domain);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } catch (err) {
+    emitJsonError((err as Error).message, "MANIFEST_SET_FAILED");
+  }
+}
+
 async function vaultCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const {
     pruneLog,
@@ -1062,6 +1282,50 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   if (!sub) {
     printVaultHelp();
     process.exit(1);
+  }
+
+  // JSON engine subcommands (archive / restore / list-archived) — defined by
+  // docs/ENGINE-JSON-API.md. They read --vault/--json from their own sub-args
+  // and emit the frozen error envelope on failure.
+  if (sub === "archive" || sub === "restore" || sub === "list-archived") {
+    const { archiveDomain, restoreDomain, listArchived } = await import("./vault-ops.ts");
+    const rest = parseJsonSubArgs(args.slice(1), vaultOverride);
+    const jsonVault = rest.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+    if (!rest.json) {
+      console.error(`prevail vault ${sub} is a machine-only command — pass --json.`);
+      process.exit(1);
+    }
+    if (!existsSync(jsonVault)) emitJsonError(`vault path not found: ${jsonVault}`, "VAULT_NOT_FOUND");
+
+    if (sub === "list-archived") {
+      try {
+        process.stdout.write(`${JSON.stringify(listArchived(jsonVault))}\n`);
+      } catch (err) {
+        emitJsonError((err as Error).message, "LIST_ARCHIVED_FAILED");
+      }
+      return;
+    }
+
+    const domain = rest.positionals[0];
+    if (!domain) emitJsonError("missing required argument: <domain>", "MISSING_ARG");
+
+    if (sub === "archive") {
+      try {
+        await archiveDomain(jsonVault, domain);
+        process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+      } catch (err) {
+        emitJsonError((err as Error).message, "ARCHIVE_FAILED");
+      }
+      return;
+    }
+    // sub === "restore"
+    try {
+      restoreDomain(jsonVault, domain);
+      process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+    } catch (err) {
+      emitJsonError((err as Error).message, "RESTORE_FAILED");
+    }
+    return;
   }
 
   if (sub === "prune") {
@@ -1118,24 +1382,32 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
 
   if (sub === "backup") {
     let output: string | null = null;
+    let asJson = false;
     for (let i = 1; i < args.length; i++) {
       const a = args[i];
       const v = args[i + 1];
-      if ((a === "--output" || a === "-o") && v) {
+      if (a === "--json") asJson = true;
+      else if ((a === "--output" || a === "-o") && v) {
         output = resolve(process.cwd(), v);
         i++;
       }
     }
     if (!output) output = defaultBackupPath();
     if (!existsSync(vault)) {
+      if (asJson) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
       console.error(`vault path not found: ${vault}`);
       process.exit(1);
     }
-    console.log(`backing up ${vault} → ${output}…`);
+    if (!asJson) console.log(`backing up ${vault} → ${output}…`);
     try {
       const r = await backupVault({ vaultPath: vault, outputPath: output });
-      console.log(`✓ wrote ${r.archivePath} (${formatBytes(r.bytes)})`);
+      if (asJson) {
+        process.stdout.write(`${JSON.stringify({ ok: true, ...r })}\n`);
+      } else {
+        console.log(`✓ wrote ${r.archivePath} (${formatBytes(r.bytes)})`);
+      }
     } catch (err) {
+      if (asJson) emitJsonError((err as Error).message, "BACKUP_FAILED");
       console.error(`backup failed: ${(err as Error).message}`);
       process.exit(1);
     }
@@ -1220,6 +1492,9 @@ function printVaultHelp(): void {
   console.error("  prevail vault backup [--output <path>]  default: ~/prevail-backup-<date>.tar.gz");
   console.error("  prevail vault restore <archive>         interactive confirm prompt");
   console.error("  prevail vault verify [--verbose]        re-hash logged entries against _log/.shasum");
+  console.error("  prevail vault archive <domain> --json   archive a domain (engine JSON API)");
+  console.error("  prevail vault restore <domain> --json   un-archive a domain (engine JSON API)");
+  console.error("  prevail vault list-archived --json      list archived domain names");
 }
 
 async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
@@ -1408,6 +1683,135 @@ function promptYesNo(question: string): Promise<boolean> {
   });
 }
 
+// --- Wave 2 engine commands (score / onboard / heartbeat) -----------------
+//
+// These mirror the manifest/vault/chat JSON-API pattern: they break out of the
+// global arg loop before --vault/--json are parsed, so each resolves the vault
+// default (override → config → bundled demo) and hands the post-subcommand args
+// to the engine module, which emits the frozen JSON contract on stdout (or the
+// error envelope) and returns a process exit code.
+
+function resolveVault(vaultOverride: string | null): string {
+  const cfg = readConfig();
+  return vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+}
+
+// `prevail score <domain> [--audit] --json` / `score --all --json` /
+// `score history <domain> --json`
+async function scoreCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const { scoreCommand: runScore } = await import("./score.ts");
+  return runScore(args, resolveVault(vaultOverride));
+}
+
+// `prevail onboard recommend --json` (answers JSON on stdin) /
+// `prevail onboard apply --json` (picks JSON on stdin)
+async function onboardCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const sub = args[0];
+  const rest = args.slice(1);
+  const vault = resolveVault(vaultOverride);
+  const { onboardRecommendCommand, onboardApplyCommand } = await import("./onboard.ts");
+  if (sub === "recommend") return onboardRecommendCommand(rest, vault);
+  if (sub === "apply") return onboardApplyCommand(rest, vault);
+  // Unknown/missing subcommand. Honor --json with the frozen error envelope.
+  if (args.includes("--json")) {
+    emitJsonError(`unknown onboard subcommand: ${sub ?? "(none)"}`, "BAD_SUBCOMMAND");
+  }
+  console.error("usage:");
+  console.error("  prevail onboard recommend --json   (answers JSON on stdin)");
+  console.error("  prevail onboard apply --json       (picks JSON on stdin)");
+  return 1;
+}
+
+// `prevail heartbeat install --json` / `prevail heartbeat status --json`
+async function heartbeatCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const sub = args[0];
+  const rest = parseJsonSubArgs(args.slice(1), vaultOverride);
+  const vault = rest.vaultPath ?? resolveVault(vaultOverride);
+
+  if (sub !== "install" && sub !== "status") {
+    if (rest.json) emitJsonError(`unknown heartbeat subcommand: ${sub ?? "(none)"}`, "BAD_SUBCOMMAND");
+    console.error("usage:");
+    console.error("  prevail heartbeat install --json");
+    console.error("  prevail heartbeat status --json");
+    return 1;
+  }
+  if (!rest.json) {
+    console.error(`prevail heartbeat ${sub} is a machine-only command — pass --json.`);
+    return 1;
+  }
+  if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+
+  const { handleInstall, handleStatus } = await import("./heartbeat.ts");
+  try {
+    const result = sub === "install" ? handleInstall(vault) : handleStatus(vault);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return 0;
+  } catch (err) {
+    emitJsonError((err as Error).message, sub === "install" ? "INSTALL_FAILED" : "STATUS_FAILED");
+  }
+}
+
+// `prevail gateway status --json` — machine-only deterministic routing status.
+// Pure read: scans the vault + manifests, reports configured channels and the
+// per-domain routing keywords. No adapters started, no model called.
+async function gatewayCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const sub = args[0];
+  const rest = parseJsonSubArgs(args.slice(1), vaultOverride);
+  const vault = rest.vaultPath ?? resolveVault(vaultOverride);
+
+  if (sub !== "status") {
+    if (rest.json) emitJsonError(`unknown gateway subcommand: ${sub ?? "(none)"}`, "BAD_SUBCOMMAND");
+    console.error("usage:");
+    console.error("  prevail gateway status --json");
+    return 1;
+  }
+  if (!rest.json) {
+    console.error("prevail gateway status is a machine-only command — pass --json.");
+    return 1;
+  }
+  if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+
+  const { gatewayStatusCommand } = await import("./gateway/gateway.ts");
+  try {
+    const result = gatewayStatusCommand(vault);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return 0;
+  } catch (err) {
+    emitJsonError((err as Error).message, "STATUS_FAILED");
+  }
+}
+
+// `prevail domains --json` — machine-only list of life domains in the vault.
+// Pure read: returns the scanVault projection (name, path, hasState, summary).
+async function domainsCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const rest = parseJsonSubArgs(args, vaultOverride);
+  const vault = rest.vaultPath ?? resolveVault(vaultOverride);
+
+  if (!rest.json) {
+    console.error("prevail domains is a machine-only command — pass --json.");
+    return 1;
+  }
+  if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+
+  const { scanVault } = await import("./vault.ts");
+  try {
+    const domains = scanVault(vault).map((d) => ({
+      name: d.name,
+      path: d.path,
+      hasState: d.hasState,
+      openLoopCount: d.openLoopCount,
+      stateMtime: d.stateMtime,
+      summary: d.manifestSummary?.summary ?? "",
+      label: d.manifestSummary?.label ?? d.name,
+      emoji: d.manifestSummary?.emoji ?? "",
+    }));
+    process.stdout.write(`${JSON.stringify(domains)}\n`);
+    return 0;
+  } catch (err) {
+    emitJsonError((err as Error).message, "DOMAINS_FAILED");
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   if (args.help) {
@@ -1453,6 +1857,35 @@ async function main() {
   if (args.vault) {
     await vaultCommand(args.vaultArgs, args.vaultPath);
     return;
+  }
+  if (args.manifest) {
+    await manifestCommand(args.manifestArgs, args.vaultPath);
+    return;
+  }
+  if (args.chat) {
+    const { chatJsonCommand } = await import("./chat-json.ts");
+    const code = await chatJsonCommand(args.chatArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.score) {
+    const code = await scoreCommand(args.scoreArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.onboard) {
+    const code = await onboardCommand(args.onboardArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.heartbeat) {
+    const code = await heartbeatCommand(args.heartbeatArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.gateway) {
+    const code = await gatewayCommand(args.gatewayArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.domains) {
+    const code = await domainsCommand(args.domainsArgs, args.vaultPath);
+    process.exit(code);
   }
   if (args.daemon) {
     await daemonCommand(args.daemonArgs, args.vaultPath);

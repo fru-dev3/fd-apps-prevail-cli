@@ -17,12 +17,15 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
+
+import { readManifest, writeManifest } from "./manifest.ts";
 
 // ─────────────────────────────────────────────────────────────────────────
 // parseDuration — "30d", "12h", "1y", "7d12h" → milliseconds
@@ -513,4 +516,215 @@ function entryIdToDateKey(id: string): string | null {
   const m = id.match(/^(\d{4})(\d{2})(\d{2})-\d{4}$/);
   if (!m) return null;
   return `${m[1]}-${m[2]}-${m[3]}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// archiveDomain / restoreDomain / listArchived — move a domain in and out of
+// <vault>/_archive/ and flip its manifest's `archived` flag.
+//
+// The contract (TRACK E4):
+//   - _archive/ is a NON-domain directory: the scanner must never treat it as
+//     a domain or recurse into it. See the NOTE below — as of this writing
+//     NON_DOMAIN_DIRS in src/vault.ts does NOT list "_archive", so it would
+//     be skipped only because it has no top-level state.md. Adding "_archive"
+//     to NON_DOMAIN_DIRS is recommended belt-and-suspenders (it's owned by the
+//     vault.ts track, so it's flagged here rather than edited).
+//   - archiveDomain takes a per-domain backup BEFORE moving anything, then
+//     relocates <vault>/<domain>/ → <vault>/_archive/<domain>/, then sets the
+//     manifest's archived=true + archived_at=now (written in the new location).
+//   - restoreDomain moves it back and clears the archived flag.
+//   - listArchived returns the archived domain names under _archive/.
+//
+// NOTE on _archive exclusion from domain scans: a domain dir keeps its own
+// state.md after the move, so the live folder <vault>/<domain>/state.md is
+// gone (good — it disappears from the active sidebar). The relocated copy now
+// lives at <vault>/_archive/<domain>/state.md. Because the scanner only looks
+// at the vault's IMMEDIATE children, the only thing it would see is the
+// "_archive" directory itself — which has no top-level state.md and so is not
+// a domain. It is therefore already excluded by the domain rule; listing it in
+// NON_DOMAIN_DIRS would make that explicit + cheaper.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const ARCHIVE_DIR = "_archive";
+
+export interface ArchiveResult {
+  domain: string;
+  from: string;
+  to: string;
+  backup: BackupResult;
+}
+
+export interface RestoreDomainResult {
+  domain: string;
+  from: string;
+  to: string;
+}
+
+function archiveRoot(vaultPath: string): string {
+  return join(resolve(vaultPath), ARCHIVE_DIR);
+}
+
+// Reject domain names that could escape the vault when joined (path
+// separators, "..", null bytes, absolute fragments). Domain names come from
+// the CLI here, not readdirSync, so this guard is load-bearing.
+function assertSafeDomainName(domain: string): void {
+  if (
+    typeof domain !== "string" ||
+    domain.length === 0 ||
+    domain.includes("/") ||
+    domain.includes("\\") ||
+    domain.includes("\0") ||
+    domain === "." ||
+    domain === ".."
+  ) {
+    throw new Error(`invalid domain name: ${JSON.stringify(domain)}`);
+  }
+}
+
+/**
+ * Archive a domain: back it up, then move <vault>/<domain>/ into
+ * <vault>/_archive/<domain>/ and set archived=true + archived_at=now in its
+ * manifest. Never deletes data. Throws if the domain doesn't exist or an
+ * archived copy already exists.
+ */
+export async function archiveDomain(
+  vaultPath: string,
+  domain: string,
+): Promise<ArchiveResult> {
+  assertSafeDomainName(domain);
+  const vault = resolve(vaultPath);
+  const from = join(vault, domain);
+  if (!existsSync(from)) {
+    throw new Error(`archiveDomain: domain not found: ${from}`);
+  }
+  if (!statSync(from).isDirectory()) {
+    throw new Error(`archiveDomain: not a directory: ${from}`);
+  }
+  const root = archiveRoot(vault);
+  const to = join(root, domain);
+  if (existsSync(to)) {
+    throw new Error(`archiveDomain: already archived: ${to}`);
+  }
+
+  // BEFORE moving, take a backup of this domain. The whole vault tarball is
+  // overkill for a single-domain archive, so we back up just the domain
+  // subtree, named after the domain + date.
+  const backupOut = defaultDomainBackupPath(domain);
+  const backup = await backupDomain({ vaultPath: vault, domain, outputPath: backupOut });
+
+  // Move the domain into _archive/ (create the archive root if needed).
+  if (!existsSync(root)) mkdirSync(root, { recursive: true });
+  renameSync(from, to);
+
+  // Flip the manifest flag IN THE NEW LOCATION. readManifest/writeManifest
+  // operate relative to a vault root + domain, so we treat _archive as the
+  // "vault root" for this domain.
+  setArchivedFlag(root, domain, true, new Date().toISOString());
+
+  return { domain, from, to, backup };
+}
+
+/**
+ * Restore an archived domain: move it back from <vault>/_archive/<domain>/ to
+ * <vault>/<domain>/ and clear the archived flag. Throws if no archived copy
+ * exists or a live domain of the same name is already present.
+ */
+export function restoreDomain(
+  vaultPath: string,
+  domain: string,
+): RestoreDomainResult {
+  assertSafeDomainName(domain);
+  const vault = resolve(vaultPath);
+  const root = archiveRoot(vault);
+  const from = join(root, domain);
+  if (!existsSync(from)) {
+    throw new Error(`restoreDomain: not archived: ${from}`);
+  }
+  const to = join(vault, domain);
+  if (existsSync(to)) {
+    throw new Error(`restoreDomain: a live domain already exists at ${to}`);
+  }
+
+  // Clear the flag while the domain is still in _archive/ (so the on-disk
+  // manifest is correct before the move), then relocate it back to the vault
+  // root.
+  setArchivedFlag(root, domain, false, null);
+  renameSync(from, to);
+
+  return { domain, from, to };
+}
+
+/**
+ * List the names of archived domains (immediate subdirectories of
+ * <vault>/_archive/). Returns [] when nothing is archived.
+ */
+export function listArchived(vaultPath: string): string[] {
+  const root = archiveRoot(vaultPath);
+  if (!existsSync(root)) return [];
+  const out: string[] = [];
+  for (const name of safeReaddir(root)) {
+    if (isDir(join(root, name))) out.push(name);
+  }
+  out.sort((a, b) => a.localeCompare(b));
+  return out;
+}
+
+// Set/clear archived + archived_at on a domain's manifest. If no manifest
+// exists yet, this is a no-op for the flag (a manifest-less domain has no
+// archived state to track) — the move itself is what hides/shows it.
+function setArchivedFlag(
+  baseRoot: string,
+  domain: string,
+  archived: boolean,
+  archivedAt: string | null,
+): void {
+  const m = readManifest(baseRoot, domain);
+  if (!m) return;
+  m.archived = archived;
+  m.archived_at = archivedAt;
+  writeManifest(baseRoot, domain, m);
+}
+
+// Default per-domain backup filename, e.g. ~/prevail-archive-wealth-2026-06-06.tar.gz
+export function defaultDomainBackupPath(domain: string, now: Date = new Date()): string {
+  const stamp = now.toISOString().slice(0, 10);
+  return join(homedir(), `prevail-archive-${domain}-${stamp}.tar.gz`);
+}
+
+// Back up a single domain subtree to a tar.gz. Mirrors backupVault's tar
+// posture (array argv, no shell, exclude secrets) but scopes the archive to
+// just <vault>/<domain>/.
+export interface BackupDomainArgs {
+  vaultPath: string;
+  domain: string;
+  outputPath: string;
+}
+
+export async function backupDomain(args: BackupDomainArgs): Promise<BackupResult> {
+  assertSafeDomainName(args.domain);
+  const vault = resolve(args.vaultPath);
+  const domainPath = join(vault, args.domain);
+  if (!existsSync(domainPath)) {
+    throw new Error(`backupDomain: domain not found: ${domainPath}`);
+  }
+  const out = resolve(args.outputPath);
+  const outDir = resolve(out, "..");
+  if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+
+  const argv: string[] = ["-czf", out];
+  for (const ex of BACKUP_EXCLUDES) {
+    argv.push("--exclude", ex);
+  }
+  // -C <vault> <domain> → archive contains a single top-level "<domain>/"
+  // entry, so it restores cleanly relative to any vault root.
+  argv.push("-C", vault, args.domain);
+
+  const proc = Bun.spawn(["tar", ...argv], { stdout: "pipe", stderr: "pipe" });
+  const code = await proc.exited;
+  if (code !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`tar failed (exit ${code}): ${stderr.trim()}`);
+  }
+  const bytes = statSync(out).size;
+  return { archivePath: out, bytes };
 }
