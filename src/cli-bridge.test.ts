@@ -5,6 +5,7 @@ import {
   extractCodexReply,
   extractGeminiReply,
   runOllamaChat,
+  runOpenAICompatChat,
 } from "./cli-bridge.ts";
 
 describe("buildCliArgs", () => {
@@ -144,6 +145,77 @@ describe("buildCliArgs", () => {
       expect(pIdx).toBeGreaterThanOrEqual(0);
       expect(args[pIdx + 1]).toBe(PROMPT);
     });
+  });
+});
+
+describe("runOpenAICompatChat (OpenRouter + direct providers)", () => {
+  test("no API key returns a string error, doesn't throw or call out", async () => {
+    const r = await runOpenAICompatChat({
+      label: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "",
+      model: "anthropic/claude-opus-4.1",
+      prompt: "hi",
+    });
+    expect(typeof r).toBe("string");
+    expect(r).toContain("no API key");
+  });
+
+  test("sends Authorization bearer + extra headers, parses non-stream reply", async () => {
+    let seenAuth: string | null = null;
+    let seenTitle: string | null = null;
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        seenAuth = req.headers.get("authorization");
+        seenTitle = req.headers.get("x-title");
+        return new Response(JSON.stringify({ choices: [{ message: { content: "pong" } }] }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    try {
+      const r = await runOpenAICompatChat({
+        label: "openrouter",
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        apiKey: "sk-test-123",
+        model: "x/y",
+        prompt: "ping",
+        extraHeaders: { "X-Title": "Prevail" },
+      });
+      expect(r).toBe("pong");
+      expect(seenAuth).toBe("Bearer sk-test-123");
+      expect(seenTitle).toBe("Prevail");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("accumulates SSE deltas via onChunk (stream path)", async () => {
+    const sse = 'data: {"choices":[{"delta":{"content":"he"}}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":"llo"}}]}\n\n' +
+      "data: [DONE]\n\n";
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+      },
+    });
+    try {
+      const chunks: string[] = [];
+      const r = await runOpenAICompatChat({
+        label: "openrouter",
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        apiKey: "sk-test",
+        model: "x/y",
+        prompt: "hi",
+        onChunk: (d) => chunks.push(d),
+      });
+      expect(chunks).toEqual(["he", "llo"]);
+      expect(r).toBe("hello");
+    } finally {
+      server.stop(true);
+    }
   });
 });
 
