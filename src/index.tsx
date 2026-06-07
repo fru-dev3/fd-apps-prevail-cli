@@ -857,6 +857,16 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  // Tolerant domain-filter match: case-insensitive, comma-separated (so
+  // "Wealth, Tax" works), and substring-lenient. A question matches if any
+  // filter token equals or is contained in (or contains) its domain.
+  function matchesDomainFilter(qDomain: string, filterValue: string): boolean {
+    const tokens = filterValue.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+    if (tokens.length === 0) return true;
+    const d = qDomain.toLowerCase();
+    return tokens.some((t) => d === t || d.includes(t) || t.includes(d));
+  }
+
   if (sub === "run-canonical" || (sub === "run" && args.includes("--canonical"))) {
     // Personal canonical run: fire each <vault>/benchmark/questions/*.md
     // at the target CLI (or council, when --council is passed) and
@@ -886,10 +896,11 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       else if (a === "--council") { useCouncil = true; }
     }
     let filtered = questions;
-    if (domain) filtered = filtered.filter((q) => q.domain === domain);
+    if (domain) filtered = filtered.filter((q) => matchesDomainFilter(q.domain, domain));
     if (questionId) filtered = filtered.filter((q) => q.id === questionId);
     if (filtered.length === 0) {
-      console.error("no questions matched the filter");
+      const avail = [...new Set(questions.map((q) => q.domain))].sort().join(", ");
+      console.error(`no questions matched "${domain ?? questionId}". Available domains: ${avail || "(none)"}`);
       process.exit(1);
     }
     const { detectClis } = await import("./cli-bridge.ts");
@@ -944,7 +955,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       const a = args[i];
       const v = args[i + 1];
       if (a === "--domain" && v) {
-        filtered = filtered.filter((q) => q.domain === v);
+        filtered = filtered.filter((q) => matchesDomainFilter(q.domain, v));
         i++;
       } else if (a === "--question" && v) {
         filtered = filtered.filter((q) => q.id === v);
@@ -952,7 +963,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       }
     }
     if (filtered.length === 0) {
-      console.error("no questions matched the filter");
+      const avail = [...new Set(questions.map((q) => q.domain))].sort().join(", ");
+      console.error(`no questions matched the filter. Available domains: ${avail || "(none)"}`);
       process.exit(1);
     }
     const today = new Date().toISOString().slice(0, 10);
