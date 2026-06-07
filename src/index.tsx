@@ -784,6 +784,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     const { scoreRun, runsDir } = await import("./canonical-bench.ts");
     let runName: string | null = null;
     let noJudge = false;
+    let scoreAll = false;
+    let rescore = false;
     let judgeCliKind: string | null = null;
     let judgeModel: string | null = null;
     for (let i = 1; i < args.length; i++) {
@@ -791,6 +793,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       const v = args[i + 1];
       if (a === "--run" && v) { runName = v; i++; }
       else if (a === "--no-judge") noJudge = true;
+      else if (a === "--all") scoreAll = true;
+      else if (a === "--rescore") rescore = true;
       else if (a === "--judge-cli" && v) { judgeCliKind = v; i++; }
       else if (a === "--judge-model" && v) { judgeModel = v; i++; }
     }
@@ -799,17 +803,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       console.error(`no runs found under ${root}. run \`prevail bench run --canonical\` first.`);
       process.exit(1);
     }
-    const candidates = readdirSync(root).sort().reverse();
-    const targetName = runName ?? candidates[0];
-    if (!targetName) {
-      console.error("no runs found.");
-      process.exit(1);
-    }
-    const runDir = join(root, targetName);
-    if (!existsSync(join(runDir, "results.json"))) {
-      console.error(`${runDir} has no results.json — was this run interrupted?`);
-      process.exit(1);
-    }
+    // Resolve the judge engine once (shared across --all).
     let judgeCli;
     if (!noJudge) {
       const { detectClis } = await import("./cli-bridge.ts");
@@ -821,6 +815,44 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         console.error("no CLI available to act as judge. install one or pass --no-judge.");
         process.exit(1);
       }
+    }
+    // --all: score every run dir that has results.json but no score.json
+    // (or all of them with --rescore). Robust for multi-model batches where
+    // "latest by name" would pick the wrong run.
+    if (scoreAll) {
+      const dirs = readdirSync(root)
+        .map((n) => join(root, n))
+        .filter((d) => existsSync(join(d, "results.json")))
+        .filter((d) => rescore || !existsSync(join(d, "score.json")));
+      if (dirs.length === 0) {
+        console.log("nothing to score — every run already has a score.json (use --rescore to redo).");
+        return;
+      }
+      for (const runDir of dirs) {
+        console.log(`scoring ${runDir.split("/").pop()}${judgeCli ? ` · judge: ${judgeCli.kind}` : " · keyword-only"}…`);
+        const result = await scoreRun({
+          vaultPath: vault,
+          runDir,
+          judgeCli,
+          judgeModel: judgeModel ?? undefined,
+          onProgress: (id) => process.stdout.write(`  ${id}…\r`),
+        });
+        console.log("");
+        console.log(`  ✓ ${result.questionScores.length} q · judge ${result.judge_avg ?? "—"}/10 · kw ${result.keyword_avg ?? "—"}%`);
+      }
+      console.log(`✓ scored ${dirs.length} run${dirs.length === 1 ? "" : "s"}`);
+      return;
+    }
+    const candidates = readdirSync(root).sort().reverse();
+    const targetName = runName ?? candidates[0];
+    if (!targetName) {
+      console.error("no runs found.");
+      process.exit(1);
+    }
+    const runDir = join(root, targetName);
+    if (!existsSync(join(runDir, "results.json"))) {
+      console.error(`${runDir} has no results.json — was this run interrupted?`);
+      process.exit(1);
     }
     console.log(`scoring ${targetName}${judgeCli ? ` · judge: ${judgeCli.kind}` : " · keyword-only"}…`);
     const result = await scoreRun({
