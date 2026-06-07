@@ -105,6 +105,7 @@ These items derive from a strategic comparison against Nous Research's Hermes Ag
 - [ ] **P4.4 — i18n key extraction** — no translation yet, just refactor `theme.ts` strings into a keyed lookup so future translation is cheap. Effort: 2 hours.
 - [ ] **P4.5 — VHS demo recording for README hero** — `brew install vhs`, write `demo.tape`, ship `demo.gif`. Use the Charm tool even before any framework migration. Effort: half a day.
 - [ ] **P4.6 — Replace `markdown-lite.tsx` with `glow` shell-out** — better rendering for free until proper `glamour` port. Effort: half a day.
+- [ ] **P4.7 — Usage & cost (shadow) tracking** — append-only `_meta/usage.jsonl` ledger of per-turn tokens + estimated cost (reported counts where the CLI emits them, char/4 fallback), a `prevail usage --by day|domain|model|session` query command, and a desktop "Usage" dashboard tab (not a popup) showing shadow cost over time, by domain, and by model. Even on CLI subscriptions — answers "what is this costing me, and where." Generalizes `src/council-cost.ts` into a per-model pricing table. Full design: [docs/USAGE-COST-PLAN.md](docs/USAGE-COST-PLAN.md). Effort: ~3–4 days (phased). (requested by Fru 2026-06-07)
 
 ### P5 — RELEASE & MARKETING (do after P1 + P2 ship)
 
