@@ -2,7 +2,7 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { resolve, join } from "node:path";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { App } from "./app.tsx";
 import { FirstRunWizard } from "./wizard.tsx";
@@ -30,6 +30,8 @@ interface Args {
   mcpUnsafeDetach: boolean;
   bench: boolean;
   benchArgs: string[];
+  usage: boolean;
+  usageArgs: string[];
   vault: boolean;
   vaultArgs: string[];
   upgrade: boolean;
@@ -72,6 +74,8 @@ function parseArgs(argv: string[]): Args {
   let mcpUnsafeDetach = false;
   let bench = false;
   let benchArgs: string[] = [];
+  let usage = false;
+  let usageArgs: string[] = [];
   let vault = false;
   let vaultArgs: string[] = [];
   let upgrade = false;
@@ -132,6 +136,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "bench") {
       bench = true;
       benchArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "usage") {
+      usage = true;
+      usageArgs = argv.slice(i + 1);
       break;
     } else if (a === "vault") {
       vault = true;
@@ -201,6 +209,8 @@ function parseArgs(argv: string[]): Args {
     mcpUnsafeDetach,
     bench,
     benchArgs,
+    usage,
+    usageArgs,
     vault,
     vaultArgs,
     upgrade,
@@ -699,6 +709,77 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
   console.error("  prevail briefing remove <id>");
   console.error("  prevail briefing run <id>");
   process.exit(1);
+}
+
+// usage — token & shadow-cost accounting (P4.7). Reads/writes the vault-scoped
+// usage ledger and emits aggregations the desktop dashboard renders.
+//   prevail usage record '<json>'           append one turn (used by front-ends)
+//   prevail usage [--json]                   raw ledger (default: pretty totals)
+//   prevail usage --by day|domain|model|session|cli|surface [--since 7d] [--json]
+async function usageCommand(args: string[], vaultOverride: string | null): Promise<void> {
+  const { recordUsage, readUsage, aggregateUsage, parseSince } = await import("./usage.ts");
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+
+  const sub = args[0];
+
+  if (sub === "record") {
+    // The JSON payload may be the next arg or read from stdin.
+    let payload = args[1];
+    if (!payload) {
+      try { payload = readFileSync(0, "utf8"); } catch { payload = ""; }
+    }
+    let input: Record<string, unknown>;
+    try {
+      input = JSON.parse(payload || "{}");
+    } catch {
+      console.error("usage record: expected a JSON object (arg or stdin)");
+      process.exit(1);
+    }
+    if (!input.session || !input.cli) {
+      console.error("usage record: 'session' and 'cli' are required");
+      process.exit(1);
+    }
+    const entry = recordUsage(vault, input as never);
+    process.stdout.write(JSON.stringify(entry) + "\n");
+    return;
+  }
+
+  // Parse query flags.
+  let by: string | null = null;
+  let since: string | undefined;
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--by" && args[i + 1]) { by = args[i + 1]!; i++; }
+    else if (a === "--since" && args[i + 1]) { since = args[i + 1]!; i++; }
+    else if (a === "--json") json = true;
+  }
+  const sinceMs = parseSince(since) ?? undefined;
+  const entries = readUsage(vault, sinceMs);
+
+  const VALID = new Set(["day", "domain", "model", "session", "cli", "surface"]);
+  if (by && VALID.has(by)) {
+    const report = aggregateUsage(entries, by as "day" | "domain" | "model" | "session" | "cli" | "surface", sinceMs);
+    if (json) {
+      process.stdout.write(JSON.stringify(report) + "\n");
+      return;
+    }
+    console.log(`usage by ${by}${since ? ` (since ${since})` : ""} — ~$${report.total.est_cost_usd.toFixed(4)} across ${report.total.calls} calls\n`);
+    for (const b of report.buckets) {
+      console.log(`  ~$${b.est_cost_usd.toFixed(4).padStart(9)}  ${String(b.calls).padStart(4)} calls  ${(b.input_tokens + b.output_tokens).toLocaleString().padStart(10)} tok  ${b.key}`);
+    }
+    return;
+  }
+
+  // Default: raw ledger or a quick total.
+  if (json) {
+    process.stdout.write(JSON.stringify(entries) + "\n");
+    return;
+  }
+  const total = aggregateUsage(entries, "model", sinceMs).total;
+  console.log(`usage${since ? ` (since ${since})` : ""}: ~$${total.est_cost_usd.toFixed(4)} shadow cost across ${total.calls} calls, ${(total.input_tokens + total.output_tokens).toLocaleString()} tokens.`);
+  console.log("slice it: prevail usage --by day|domain|model|session [--since 7d] [--json]");
 }
 
 async function benchCommand(args: string[], vaultOverride: string | null): Promise<void> {
@@ -1896,6 +1977,10 @@ async function main() {
   }
   if (args.bench) {
     await benchCommand(args.benchArgs, args.vaultPath);
+    return;
+  }
+  if (args.usage) {
+    await usageCommand(args.usageArgs, args.vaultPath);
     return;
   }
   if (args.vault) {

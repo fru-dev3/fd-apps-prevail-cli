@@ -1,0 +1,2 @@
+{"ts":1780811905500,"day":"2026-06-07","session":"s1","domain":"wealth","surface":"chat","cli":"claude","model":"opus","input_tokens":1200,"output_tokens":600,"token_source":"reported","est_cost_usd":0.063,"billed":false}
+{"ts":1780811905700,"day":"2026-06-07","session":"s1","domain":"health","surface":"chat","cli":"ollama","model":"llama3.2","input_tokens":3000,"output_tokens":3000,"token_source":"reported","est_cost_usd":0,"billed":false}
