@@ -216,6 +216,27 @@ const REDACT_RULES: RedactRule[] = [
     re: /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g,
     placeholder: "[REDACTED_IP]",
   },
+  {
+    // API keys / tokens by common prefix (OpenAI sk-, Stripe, GitHub ghp_,
+    // Slack xoxb/xoxp, AWS AKIA…). Catches secrets before they leave the
+    // device or land in the intent ledger.
+    label: "api_key",
+    re: /\b(?:sk|pk|rk|ghp|gho|ghs|xoxb|xoxp|AKIA)[-_][A-Za-z0-9-_]{12,}\b/g,
+    placeholder: "[REDACTED_KEY]",
+  },
+  {
+    // Bearer tokens.
+    label: "bearer",
+    re: /\bBearer\s+[A-Za-z0-9._-]{12,}/gi,
+    placeholder: "Bearer [REDACTED_KEY]",
+  },
+    {
+    // key=value / "key": "value" secret assignments. Replace the whole
+    // assignment (the redacter uses a function replacer, so no $1 capture).
+    label: "secret_assignment",
+    re: /(?:api[_-]?key|token|secret|password)"?\s*[:=]\s*"?[A-Za-z0-9._-]{8,}/gi,
+    placeholder: "[REDACTED_KEY]",
+  },
 ];
 
 // Redact and report what was scrubbed. The credit-card rule runs BEFORE the
