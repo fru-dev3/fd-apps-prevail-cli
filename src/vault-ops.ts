@@ -176,6 +176,8 @@ function safeReaddir(p: string): string[] {
 export interface BackupArgs {
   vaultPath: string;
   outputPath: string;
+  // When set, back up only this one domain folder (scope = "domain").
+  domain?: string;
   // Override for tests so we don't poke at the real ~/.prevail.
   prevailHome?: string;
 }
@@ -183,6 +185,49 @@ export interface BackupArgs {
 export interface BackupResult {
   archivePath: string;
   bytes: number;
+  // Number of files (not directories) inside the produced archive.
+  fileCount: number;
+  // Domain folders covered by this backup.
+  domains: string[];
+  scope: "vault" | "domain";
+  createdAt: string;
+}
+
+// Immediate child folders of a vault that are real life-domains: not the
+// agent-derived/underscore dirs, hidden dirs, or known non-domain dirs.
+// Mirrors the desktop scanner's NON_DOMAIN_DIRS so counts line up.
+const NON_DOMAIN_DIRS = new Set([
+  "benchmark", "apps", "node_modules", "_archive", "_scratch",
+]);
+function listDomainDirs(vault: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(vault);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => !n.startsWith(".") && !n.startsWith("_") && !NON_DOMAIN_DIRS.has(n))
+    .filter((n) => {
+      try {
+        return statSync(join(vault, n)).isDirectory();
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+}
+
+// Count the non-directory entries inside a gzipped tarball.
+async function countArchiveFiles(archivePath: string): Promise<number> {
+  try {
+    const proc = Bun.spawn(["tar", "-tzf", archivePath], { stdout: "pipe", stderr: "pipe" });
+    const out = await new Response(proc.stdout).text();
+    await proc.exited;
+    return out.split("\n").filter((l) => l.trim().length > 0 && !l.endsWith("/")).length;
+  } catch {
+    return 0;
+  }
 }
 
 // Anything matching these glob-ish patterns is excluded from the tarball.
@@ -222,12 +267,26 @@ export async function backupVault(args: BackupArgs): Promise<BackupResult> {
   // we use a simpler approach — stage paths through symlink-free relative
   // includes by giving tar two `-C dir name` pairs in sequence.
 
-  // First: do we have anything safe to include from ~/.prevail/?
+  // Scope: a single domain folder, or the whole vault.
+  const scope: "vault" | "domain" = args.domain ? "domain" : "vault";
+  let domains: string[];
   const stagePaths: { cwd: string; name: string }[] = [];
-  // Vault contents always go in.
-  stagePaths.push({ cwd: resolve(vault, ".."), name: basename(vault) });
-  // Safe ~/.prevail/ children — config.json and sessions.db only.
-  if (existsSync(prevailHome)) {
+  if (args.domain) {
+    const domainDir = join(vault, args.domain);
+    if (!existsSync(domainDir)) {
+      throw new Error(`backupVault: domain not found: ${args.domain}`);
+    }
+    // Stage just <vault>/<domain> so the archive holds vault/<domain>/…
+    stagePaths.push({ cwd: vault, name: args.domain });
+    domains = [args.domain];
+  } else {
+    // Vault contents always go in.
+    stagePaths.push({ cwd: resolve(vault, ".."), name: basename(vault) });
+    domains = listDomainDirs(vault);
+  }
+  // Safe ~/.prevail/ children — config.json and sessions.db only. Whole-vault
+  // backups only; a single-domain backup stays scoped to that domain.
+  if (!args.domain && existsSync(prevailHome)) {
     const cfg = join(prevailHome, "config.json");
     if (existsSync(cfg)) {
       stagePaths.push({ cwd: prevailHome, name: "config.json" });
@@ -261,7 +320,8 @@ export async function backupVault(args: BackupArgs): Promise<BackupResult> {
   }
 
   const bytes = statSync(out).size;
-  return { archivePath: out, bytes };
+  const fileCount = await countArchiveFiles(out);
+  return { archivePath: out, bytes, fileCount, domains, scope, createdAt: new Date().toISOString() };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -726,5 +786,6 @@ export async function backupDomain(args: BackupDomainArgs): Promise<BackupResult
     throw new Error(`tar failed (exit ${code}): ${stderr.trim()}`);
   }
   const bytes = statSync(out).size;
-  return { archivePath: out, bytes };
+  const fileCount = await countArchiveFiles(out);
+  return { archivePath: out, bytes, fileCount, domains: [args.domain], scope: "domain", createdAt: new Date().toISOString() };
 }

@@ -184,8 +184,11 @@ describe("runOpenAICompatChat (OpenRouter + direct providers)", () => {
         extraHeaders: { "X-Title": "Prevail" },
       });
       expect(r).toBe("pong");
-      expect(seenAuth).toBe("Bearer sk-test-123");
-      expect(seenTitle).toBe("Prevail");
+      // Cast: these are only assigned inside the server callback, so TS's
+      // control-flow narrows them back to the `null` initializer at this sync
+      // use site. The cast restores the declared type for the matcher.
+      expect(seenAuth as string | null).toBe("Bearer sk-test-123");
+      expect(seenTitle as string | null).toBe("Prevail");
     } finally {
       server.stop(true);
     }

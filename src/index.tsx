@@ -1508,12 +1508,16 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   if (sub === "backup") {
     let output: string | null = null;
     let asJson = false;
+    let domain: string | null = null;
     for (let i = 1; i < args.length; i++) {
       const a = args[i];
       const v = args[i + 1];
       if (a === "--json") asJson = true;
       else if ((a === "--output" || a === "-o") && v) {
         output = resolve(process.cwd(), v);
+        i++;
+      } else if (a === "--domain" && v) {
+        domain = v;
         i++;
       }
     }
@@ -1523,13 +1527,22 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
       console.error(`vault path not found: ${vault}`);
       process.exit(1);
     }
-    if (!asJson) console.log(`backing up ${vault} → ${output}…`);
+    if (!asJson) console.log(`backing up ${domain ? `${vault}/${domain}` : vault} → ${output}…`);
     try {
-      const r = await backupVault({ vaultPath: vault, outputPath: output });
+      const r = await backupVault({ vaultPath: vault, outputPath: output, domain: domain ?? undefined });
       if (asJson) {
-        process.stdout.write(`${JSON.stringify({ ok: true, ...r })}\n`);
+        // Emit snake_case keys to match the desktop's BackupResult contract.
+        process.stdout.write(`${JSON.stringify({
+          ok: true,
+          archive_path: r.archivePath,
+          bytes: r.bytes,
+          file_count: r.fileCount,
+          domains: r.domains,
+          scope: r.scope,
+          created_at: r.createdAt,
+        })}\n`);
       } else {
-        console.log(`✓ wrote ${r.archivePath} (${formatBytes(r.bytes)})`);
+        console.log(`✓ wrote ${r.archivePath} (${formatBytes(r.bytes)}, ${r.fileCount} files)`);
       }
     } catch (err) {
       if (asJson) emitJsonError((err as Error).message, "BACKUP_FAILED");
