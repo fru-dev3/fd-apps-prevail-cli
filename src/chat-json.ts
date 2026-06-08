@@ -317,6 +317,11 @@ export async function chatJsonCommand(
     message = await readStdin();
   }
 
+  // Bunker Mode (set by the desktop via PREVAIL_BUNKER=1): force local-only as
+  // a defense-in-depth backstop, independent of the --local-only flag, so the
+  // engine can never dispatch to a cloud provider while the app is locked down.
+  if (process.env.PREVAIL_BUNKER === "1") localOnly = true;
+
   return runChatJson({
     vaultPath,
     domain,
