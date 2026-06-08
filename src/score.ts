@@ -417,44 +417,45 @@ function isFilledConfigValue(value: string): boolean {
 function buildMissing(s: DomainSnapshot, breakdown: ScoreBreakdown): MissingItem[] {
   const out: MissingItem[] = [];
 
-  // Canonical files (coverage). state.md absence is structural (critical).
+  // Canonical files (coverage). Phrased as plain, actionable coaching — what to
+  // DO, not the file mechanics. Severity/kind drive the UI and are unchanged.
   if (!s.hasState) {
-    out.push({ label: "No state.md — this directory isn't a recognized domain", severity: "critical", kind: "file" });
+    out.push({ label: "This folder isn't an active domain yet — add a state.md to turn it on", severity: "critical", kind: "file" });
   }
   if (!s.hasConfig) {
-    out.push({ label: "No config.md — nowhere to record human key:value settings", severity: "warn", kind: "file" });
+    out.push({ label: "Capture the key facts for this area — accounts, targets, contacts, dates", severity: "warn", kind: "file" });
   }
   if (!s.hasDecisions) {
-    out.push({ label: "No decisions.md — decisions aren't being logged", severity: "warn", kind: "file" });
+    out.push({ label: "No decisions recorded yet — log the choices you make so they stick and shape future advice", severity: "warn", kind: "file" });
   }
   if (!s.hasJournal) {
-    out.push({ label: "No _journal — distilled facts have nowhere to land", severity: "info", kind: "file" });
+    out.push({ label: "No journal yet — it builds itself as you chat (turn on Memory & Context)", severity: "info", kind: "file" });
   }
   if (!s.hasAnyLog) {
-    out.push({ label: "No _log/*.md — no operational history recorded", severity: "info", kind: "file" });
+    out.push({ label: "No saved sessions yet — your conversations will build a history here", severity: "info", kind: "file" });
   }
 
   // density
   if (breakdown.density.score < 40) {
-    out.push({ label: "Knowledge files are thin — add real content to state/decisions/config", severity: "warn", kind: "section" });
+    out.push({ label: "Thin on real content — add your actual documents (statements, records, plans) so advice can be specific", severity: "warn", kind: "section" });
   }
 
   // freshness
   if (breakdown.freshness.score <= 25) {
-    out.push({ label: `Knowledge is stale — ${breakdown.freshness.detail}`, severity: "warn", kind: "freshness" });
+    out.push({ label: `Out of date — ${breakdown.freshness.detail}; add or refresh something recent`, severity: "warn", kind: "freshness" });
   }
 
   // structure
   if (!s.hasSkills) {
-    out.push({ label: "No skills/ — no domain-scoped skills defined", severity: "info", kind: "skill" });
+    out.push({ label: "No reusable skills yet — Prevail will suggest some as patterns emerge", severity: "info", kind: "skill" });
   }
   if (!s.hasThreads) {
-    out.push({ label: "No _threads — no recorded chat activity yet", severity: "info", kind: "structure" });
+    out.push({ label: "No conversations yet — start a chat to build real context", severity: "info", kind: "structure" });
   }
 
   // config completeness
   if (s.hasConfig && breakdown.config_completeness.score < 50) {
-    out.push({ label: `config.md is mostly unfilled — ${breakdown.config_completeness.detail}`, severity: "info", kind: "config" });
+    out.push({ label: `Key details still missing — ${breakdown.config_completeness.detail}; fill in the important fields`, severity: "info", kind: "config" });
   }
 
   return out;
