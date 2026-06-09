@@ -50,6 +50,24 @@ interface Args {
   gatewayArgs: string[];
   domains: boolean;
   domainsArgs: string[];
+  council: boolean;
+  councilArgs: string[];
+  decisions: boolean;
+  decisionsArgs: string[];
+  memory: boolean;
+  memoryArgs: string[];
+  frameworks: boolean;
+  frameworksArgs: string[];
+  lenses: boolean;
+  lensesArgs: string[];
+  surface: boolean;
+  surfaceArgs: string[];
+  modes: boolean;
+  modesArgs: string[];
+  privacy: boolean;
+  privacyArgs: string[];
+  search: boolean;
+  searchArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -94,6 +112,24 @@ function parseArgs(argv: string[]): Args {
   let gatewayArgs: string[] = [];
   let domains = false;
   let domainsArgs: string[] = [];
+  let council = false;
+  let councilArgs: string[] = [];
+  let decisions = false;
+  let decisionsArgs: string[] = [];
+  let memory = false;
+  let memoryArgs: string[] = [];
+  let frameworks = false;
+  let frameworksArgs: string[] = [];
+  let lenses = false;
+  let lensesArgs: string[] = [];
+  let surface = false;
+  let surfaceArgs: string[] = [];
+  let modes = false;
+  let modesArgs: string[] = [];
+  let privacy = false;
+  let privacyArgs: string[] = [];
+  let search = false;
+  let searchArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -173,6 +209,42 @@ function parseArgs(argv: string[]): Args {
       domains = true;
       domainsArgs = argv.slice(i + 1);
       break;
+    } else if (a === "council") {
+      council = true;
+      councilArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "decisions" || a === "decision") {
+      decisions = true;
+      decisionsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "memory") {
+      memory = true;
+      memoryArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "frameworks" || a === "framework") {
+      frameworks = true;
+      frameworksArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "lenses" || a === "lens") {
+      lenses = true;
+      lensesArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "surface" || a === "insights") {
+      surface = true;
+      surfaceArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "modes" || a === "mode") {
+      modes = true;
+      modesArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "privacy") {
+      privacy = true;
+      privacyArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "search") {
+      search = true;
+      searchArgs = argv.slice(i + 1);
+      break;
     } else if (a === "upgrade" || a === "update" || a === "self-update") {
       upgrade = true;
       upgradeArgs = argv.slice(i + 1);
@@ -229,6 +301,24 @@ function parseArgs(argv: string[]): Args {
     gatewayArgs,
     domains,
     domainsArgs,
+    council,
+    councilArgs,
+    decisions,
+    decisionsArgs,
+    memory,
+    memoryArgs,
+    frameworks,
+    frameworksArgs,
+    lenses,
+    lensesArgs,
+    surface,
+    surfaceArgs,
+    modes,
+    modesArgs,
+    privacy,
+    privacyArgs,
+    search,
+    searchArgs,
   };
 }
 
@@ -245,10 +335,12 @@ USAGE
   prevail telegram [...]      configure the Telegram bot bridge
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
+                              (connectors list --json for the machine list)
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
                               auth: clients must send Authorization: prevail-<token> from ~/.prevail/mcp.json
                               parent-check: refuses non-TTY / unknown parents — bypass with --unsafe-detach
   prevail bench [...]         run the public council benchmark suite
+                              (bench list --json for the machine question list)
   prevail vault [...]         prune old logs, snapshot/restore the vault
                               archive/restore/list-archived domains (--json)
   prevail manifest get|set <domain> --json
@@ -271,6 +363,28 @@ USAGE
   prevail gateway status --json
                               report channel adapters + deterministic per-domain routing
   prevail domains --json      list life domains in the vault (engine JSON API)
+  prevail council run --domain <d> --json
+                              fan a prompt across the panel + chair; stream NDJSON;
+                              flags: --quorum N --lens <id|all|off> --framework <id|off>
+                                     --cli claude,codex,… --local-only --message "…"
+                              the verdict is persisted to <domain>/_decisions.jsonl
+  prevail council feedback --id <decisionId> --rating up|down|clear [--note "…"] --json
+                              rate a recorded verdict (feeds the learning loop)
+  prevail decisions [list] [<domain>] --json [--limit N]
+                              read the domain's decision log, newest-first
+  prevail memory read [<domain>] --json
+                              distilled long-term memory (_memory.md) for a domain
+  prevail surface [<domain>] --json [--force]
+                              proactive questions + next actions (cached 6h)
+  prevail frameworks list --json / prevail lenses list --json
+                              the response-framework / cognitive-lens catalogs
+  prevail modes get|set [<domain>] --json
+                              per-domain turn dials: --web --save --serendipity
+                                                     --auto --framework --lens
+  prevail privacy get|set --json [--bunker on|off]
+                              read/set Bunker Mode (global local-only switch)
+  prevail search <query> --json [--limit N]
+                              full-text search across indexed chat history
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
   prevail upgrade [...]       self-update from the latest GitHub release
                               flags: --check (no prompt) --force (no confirm) --pre (include prereleases)
@@ -791,6 +905,20 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
 
   if (!sub || sub === "list" || sub === "ls") {
     const questions = loadQuestions();
+    if (args.includes("--json")) {
+      process.stdout.write(
+        `${JSON.stringify(
+          questions.map((q) => ({
+            id: q.id,
+            domain: q.domain,
+            stakes: q.stakes,
+            verifiable: q.verifiable,
+            prompt: q.prompt,
+          })),
+        )}\n`,
+      );
+      return;
+    }
     if (questions.length === 0) {
       console.log("no bench questions found. drop them under bench/questions/<domain>/<id>.md");
       return;
@@ -1127,6 +1255,19 @@ async function connectorsCommand(args: string[]): Promise<void> {
   const apps = scanCommunityApps();
   const sub = args[0];
   if (!sub || sub === "list" || sub === "ls") {
+    if (args.includes("--json")) {
+      process.stdout.write(
+        `${JSON.stringify(
+          apps.map((a) => ({
+            id: a.id,
+            title: a.title,
+            integration: a.integration ?? "manual",
+            path: a.path,
+          })),
+        )}\n`,
+      );
+      return;
+    }
     if (apps.length === 0) {
       console.log("no connectors found. drop a manifest.json into ~/.prevail/apps/<id>/");
       return;
@@ -1950,6 +2091,219 @@ async function domainsCommand(args: string[], vaultOverride: string | null): Pro
   }
 }
 
+// Lightweight flag parser for the small machine commands below: collects
+// positionals, `--flag value` / `--flag=value` pairs, and bare `--json`.
+// Value-less flags (those that never take an argument) are listed in `bools`.
+function parseKvArgs(
+  args: string[],
+  vaultOverride: string | null,
+  bools: string[] = [],
+): { positionals: string[]; json: boolean; vaultPath: string | null; flags: Record<string, string> } {
+  const positionals: string[] = [];
+  const flags: Record<string, string> = {};
+  let json = false;
+  let vaultPath = vaultOverride;
+  const boolSet = new Set(["--json", "--local-only", ...bools]);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") {
+      json = true;
+    } else if (a === "--vault" || a === "-d") {
+      const next = args[i + 1];
+      if (next) {
+        vaultPath = resolve(process.cwd(), next);
+        i++;
+      }
+    } else if (a.startsWith("--vault=")) {
+      vaultPath = resolve(process.cwd(), a.slice("--vault=".length));
+    } else if (a.startsWith("--") && a.includes("=")) {
+      flags[a.slice(2, a.indexOf("="))] = a.slice(a.indexOf("=") + 1);
+    } else if (a.startsWith("--")) {
+      const key = a.slice(2);
+      if (boolSet.has(a)) {
+        flags[key] = "true";
+      } else {
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          flags[key] = next;
+          i++;
+        } else {
+          flags[key] = "true";
+        }
+      }
+    } else {
+      positionals.push(a);
+    }
+  }
+  return { positionals, json, vaultPath, flags };
+}
+
+// `prevail decisions [list|read] [<domain>] --json [--limit N]` — read the
+// domain's append-only decision log newest-first (vault root = General).
+async function decisionsCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const head = args[0];
+  const body = head === "list" || head === "read" ? args.slice(1) : args;
+  const { positionals, json, vaultPath, flags } = parseKvArgs(body, vaultOverride);
+  const vault = vaultPath ?? resolveVault(vaultOverride);
+  if (!json) {
+    console.error("prevail decisions is a machine-only command — pass --json.");
+    return 1;
+  }
+  if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+  const domain = positionals[0];
+  const general = !domain || domain === "general" || domain === "__general__";
+  const limit = flags.limit ? Number.parseInt(flags.limit, 10) : undefined;
+  const { readDecisions } = await import("./decisions.ts");
+  try {
+    const out = readDecisions(vault, general ? null : domain, Number.isNaN(limit) ? undefined : limit);
+    process.stdout.write(`${JSON.stringify(out)}\n`);
+    return 0;
+  } catch (err) {
+    emitJsonError((err as Error).message, "DECISIONS_FAILED");
+  }
+}
+
+// `prevail memory read [<domain>] --json` — the distilled long-term memory
+// (`<domain>/_memory.md`; vault root for General). { domain, text }.
+async function memoryCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const head = args[0];
+  const body = head === "read" ? args.slice(1) : args;
+  const { positionals, json, vaultPath } = parseKvArgs(body, vaultOverride);
+  const vault = vaultPath ?? resolveVault(vaultOverride);
+  if (!json) {
+    console.error("prevail memory is a machine-only command — pass --json.");
+    return 1;
+  }
+  if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+  const domain = positionals[0];
+  const general = !domain || domain === "general" || domain === "__general__";
+  const { domainDir } = await import("./decisions.ts");
+  const file = join(domainDir(vault, general ? null : domain), "_memory.md");
+  let text = "";
+  try {
+    if (existsSync(file)) text = readFileSync(file, "utf8");
+  } catch (err) {
+    emitJsonError((err as Error).message, "MEMORY_READ_FAILED");
+  }
+  process.stdout.write(`${JSON.stringify({ domain: domain ?? "general", text })}\n`);
+  return 0;
+}
+
+// `prevail frameworks list --json` — the response-framework catalog.
+async function frameworksCommand(args: string[]): Promise<number> {
+  const json = args.includes("--json");
+  if (!json) {
+    console.error("prevail frameworks is a machine-only command — pass --json.");
+    return 1;
+  }
+  const { FRAMEWORKS } = await import("./framework.ts");
+  const out = FRAMEWORKS.map((f) => ({ id: f.id, label: f.label, blurb: f.blurb }));
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+  return 0;
+}
+
+// `prevail lenses list --json` — the cognitive-lens catalog.
+async function lensesCommand(args: string[]): Promise<number> {
+  const json = args.includes("--json");
+  if (!json) {
+    console.error("prevail lenses is a machine-only command — pass --json.");
+    return 1;
+  }
+  const { LENSES } = await import("./lens.ts");
+  const out = LENSES.map((l) => ({ id: l.id, label: l.label, blurb: l.blurb }));
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+  return 0;
+}
+
+// `prevail modes get|set [<domain>] --json` — read/write the per-domain turn
+// dials (web/save/serendipity/auto + framework/lens). Set flags:
+//   --web allow|deny  --save on|off  --serendipity on|off
+//   --auto off|suggest|auto  --framework <id>|off  --lens <id>|all|off
+async function modesCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const sub = args[0];
+  const body = sub === "get" || sub === "set" ? args.slice(1) : args;
+  const { positionals, json, flags } = parseKvArgs(body, vaultOverride);
+  if (!json) {
+    console.error("prevail modes is a machine-only command — pass --json.");
+    return 1;
+  }
+  const domain = positionals[0];
+  const domainKey = !domain || domain === "general" || domain === "__general__" ? undefined : domain;
+  const cfg = await import("./config.ts");
+  const fw = await import("./framework.ts");
+  const ln = await import("./lens.ts");
+
+  if (sub === "set") {
+    if (flags.web === "allow" || flags.web === "deny") cfg.setWebAccess(flags.web);
+    if (flags.save === "on" || flags.save === "off") cfg.setCheckpoint(flags.save === "on", domainKey);
+    if (flags.serendipity === "on" || flags.serendipity === "off")
+      cfg.setSerendipity(flags.serendipity === "on", domainKey);
+    if (flags.auto === "off" || flags.auto === "suggest" || flags.auto === "auto")
+      cfg.setAutoCouncil(flags.auto, domainKey);
+    if (flags.framework !== undefined) {
+      const v = flags.framework;
+      cfg.setResponseFramework(v === "off" || v === "" ? null : fw.isFrameworkId(v) ? v : null, domainKey);
+    }
+    if (flags.lens !== undefined) {
+      const v = flags.lens;
+      const sel = v === "off" || v === "" ? null : v === "all" ? "all" : ln.isLensId(v) ? v : null;
+      cfg.setResponseLens(sel, domainKey);
+    }
+  }
+
+  const out = {
+    domain: domain ?? "general",
+    web: cfg.readWebAccess(),
+    save: cfg.readCheckpoint(domainKey),
+    serendipity: cfg.readSerendipity(domainKey),
+    auto: cfg.readAutoCouncil(domainKey),
+    framework: cfg.resolveResponseFramework(domainKey),
+    lens: cfg.resolveResponseLens(domainKey),
+  };
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+  return 0;
+}
+
+// `prevail privacy get|set --json [--bunker on|off]` — Bunker Mode (local-only)
+// is a persisted, global flag. Frontends read it to decide whether to pass
+// --local-only on every engine call (the desktop sets PREVAIL_BUNKER).
+async function privacyCommand(args: string[]): Promise<number> {
+  const sub = args[0];
+  const body = sub === "get" || sub === "set" ? args.slice(1) : args;
+  const { json, flags } = parseKvArgs(body, null);
+  if (!json) {
+    console.error("prevail privacy is a machine-only command — pass --json.");
+    return 1;
+  }
+  const cfg = await import("./config.ts");
+  if (sub === "set" && (flags.bunker === "on" || flags.bunker === "off")) {
+    cfg.setBunker(flags.bunker === "on");
+  }
+  process.stdout.write(`${JSON.stringify({ bunker: cfg.readBunker() })}\n`);
+  return 0;
+}
+
+// `prevail search <query> --json [--limit N]` — full-text search across the
+// indexed chat history (the FTS5 index in ~/.prevail/sessions.db).
+async function searchCommand(args: string[]): Promise<number> {
+  const { positionals, json, flags } = parseKvArgs(args, null);
+  if (!json) {
+    console.error("prevail search is a machine-only command — pass --json.");
+    return 1;
+  }
+  const query = positionals.join(" ").trim();
+  if (!query) emitJsonError("missing search query", "MISSING_ARG");
+  const limit = flags.limit ? Number.parseInt(flags.limit, 10) : 20;
+  const { searchMessages } = await import("./session.ts");
+  try {
+    const hits = searchMessages(query, Number.isNaN(limit) ? 20 : limit);
+    process.stdout.write(`${JSON.stringify(hits)}\n`);
+    return 0;
+  } catch (err) {
+    emitJsonError((err as Error).message, "SEARCH_FAILED");
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   if (args.help) {
@@ -2027,6 +2381,44 @@ async function main() {
   }
   if (args.domains) {
     const code = await domainsCommand(args.domainsArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.council) {
+    const { councilCommand } = await import("./council-json.ts");
+    const code = await councilCommand(args.councilArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.decisions) {
+    const code = await decisionsCommand(args.decisionsArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.memory) {
+    const code = await memoryCommand(args.memoryArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.frameworks) {
+    const code = await frameworksCommand(args.frameworksArgs);
+    process.exit(code);
+  }
+  if (args.lenses) {
+    const code = await lensesCommand(args.lensesArgs);
+    process.exit(code);
+  }
+  if (args.surface) {
+    const { surfaceCommand } = await import("./surface.ts");
+    const code = await surfaceCommand(args.surfaceArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.modes) {
+    const code = await modesCommand(args.modesArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.privacy) {
+    const code = await privacyCommand(args.privacyArgs);
+    process.exit(code);
+  }
+  if (args.search) {
+    const code = await searchCommand(args.searchArgs);
     process.exit(code);
   }
   if (args.daemon) {

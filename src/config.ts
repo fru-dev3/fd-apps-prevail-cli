@@ -100,6 +100,11 @@ export interface UserConfig {
   // to silently routing through runCouncil instead. "off" disables.
   autoCouncil?: "off" | "suggest" | "auto";
   domainAutoCouncil?: Record<string, "off" | "suggest" | "auto">;
+  // Bunker Mode — a persisted, global privacy switch. When on, frontends pass
+  // --local-only on every engine call and the engine forces local-only as a
+  // backstop, so no prompt ever reaches a cloud provider. Mirrors the desktop's
+  // PREVAIL_BUNKER. Off (missing) by default. Read/written via readBunker/setBunker.
+  bunker?: boolean;
   // Hard cap on the number of CLI calls a single /council turn can fire.
   // panelists × lens fanout count must be <= this number, or the turn
   // refuses with a friendly error. Default 16 — covers 4 CLIs × 4 lenses,
@@ -270,6 +275,20 @@ function writeCouncilModels(
 
 export function readWebAccess(): "allow" | "deny" {
   return readConfig()?.webAccess ?? "allow";
+}
+
+// Bunker Mode (global local-only privacy switch). Off by default.
+export function readBunker(): boolean {
+  return readConfig()?.bunker ?? false;
+}
+
+export function setBunker(on: boolean): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const next = { ...cfg };
+  if (on) next.bunker = true;
+  else delete next.bunker;
+  writeConfig(next);
 }
 
 export function setWebAccess(mode: "allow" | "deny"): void {

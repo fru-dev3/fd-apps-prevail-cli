@@ -7,6 +7,27 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.7.0] — 2026-06-08 · Engine JSON API expansion — council, decisions, surface, modes & privacy go machine-readable
+
+The engine is the shared seam under all three frontends (CLI cockpit, desktop, TUI). The desktop had pulled ahead because much of its surface was implemented in-app against raw vault files; this release moves that logic **into the engine** as `--json`/NDJSON commands so every frontend reaches parity through one contract — and so adding a command benefits all three at once.
+
+### Added — new engine JSON commands
+
+- **`council run --domain X --json`** — the council orchestrator now lives in the engine. Fans the prompt across the configured panel in parallel, streams each panelist + the chair's synthesis as NDJSON, and persists the verdict to `<domain>/_decisions.jsonl` so the council learns. Supports `--quorum N` (stop once N panelists answer — a stuck panelist can no longer block the verdict), `--lens`, `--framework`, `--cli`, and `--local-only` (Bunker council on local engines).
+- **`council feedback --id <decisionId> --rating up|down|clear --json`** — rate a recorded verdict; feeds the learning loop.
+- **`decisions list [<domain>] --json [--limit N]`** — read the append-only decision log, newest first.
+- **`memory read [<domain>] --json`** — the distilled long-term memory (`_memory.md`).
+- **`surface [<domain>] --json [--force]`** — proactive questions + next actions, cached 6h (local under Bunker).
+- **`frameworks list --json`** · **`lenses list --json`** — the response-framework / cognitive-lens catalogs.
+- **`modes get|set [<domain>] --json`** — per-domain turn dials (web/save/serendipity/auto + framework/lens).
+- **`privacy get|set --json [--bunker on|off]`** — Bunker Mode as a persisted global switch.
+- **`search <query> --json`** — full-text search across indexed chat history.
+- `--json` added to **`bench list`** and **`connectors list`** (machine listings).
+
+All shapes are documented in `docs/ENGINE-JSON-API.md`. The decision store (`_decisions.jsonl`) matches the desktop's format byte-for-byte, so the CLI, desktop, and TUI read and write one set of files interchangeably. The TUI now drives council, modes, privacy, decisions, memory, surface, and search entirely through these commands (its old client-side council orchestration is gone).
+
+---
+
 ## [1.6.5] — 2026-06-05 · Revert medium tier — wide layout preserved on any non-tiny screen
 
 User: "You need to keep the layout like this. You changed it without asking me."

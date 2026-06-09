@@ -95,6 +95,22 @@ export async function runCouncilOneShot(args: {
   // MCP) can update the right bubble. Chair synthesis chunks come back
   // with panelistIdx === -1.
   onPanelistChunk?: (panelistIdx: number, delta: string) => void;
+  // Fired once, right after the panel × lens fanout is resolved into the
+  // concrete job list — BEFORE any model call. Lets a machine consumer
+  // (council --json) emit a `start` event that names every panelist by its
+  // stream index, so later delta/done events can be attributed correctly.
+  onJobsResolved?: (jobs: { idx: number; cli: string; model: string; lens: string | null }[]) => void;
+  // Fired as each panelist job settles (success OR failure/timeout/abort).
+  onPanelistDone?: (panelistIdx: number, result: { ok: boolean; ms: number }) => void;
+  // Fired right before the chair synthesis call begins.
+  onChairStart?: (chairLabel: string) => void;
+  // QUORUM. When set (and < the number of jobs), the council stops waiting for
+  // stragglers once this many jobs have produced a USABLE reply: the remaining
+  // in-flight panelists are aborted and synthesis proceeds with what's in. This
+  // is the engine-level "Summarize now" — a single stuck panelist can never
+  // block the verdict. Aborted panelists settle as not-ok and are reported via
+  // onPanelistDone so the UI can mark them skipped.
+  quorum?: number;
   // Vault root for memory recall. When set AND an embedder is available,
   // the top-k semantically-similar prior decisions are prepended to the
   // panelist prompt as a <context> block. Disabled (or no embedder) = no
@@ -172,12 +188,40 @@ export async function runCouncilOneShot(args: {
     }
   }
 
+  // Announce the resolved job list before any model call so a machine
+  // consumer can attribute later delta/done events by stream index.
+  args.onJobsResolved?.(
+    jobs.map((j, idx) => ({
+      idx,
+      cli: j.cli.kind,
+      model: j.model,
+      lens: j.lens?.id ?? null,
+    })),
+  );
+
+  // Quorum plumbing. We chain an internal AbortController off the caller's
+  // signal so we can abort stragglers ourselves once quorum is met without
+  // disturbing the caller's cancel semantics. quorum<=0 or >= jobs disables it.
+  const quorum = args.quorum && args.quorum > 0 && args.quorum < jobs.length ? args.quorum : 0;
+  const internalAbort = new AbortController();
+  if (args.signal) {
+    if (args.signal.aborted) internalAbort.abort();
+    else args.signal.addEventListener("abort", () => internalAbort.abort(), { once: true });
+  }
+  const jobSignal = quorum ? internalAbort.signal : args.signal;
+  let goodSoFar = 0;
+  const isUsable = (reply: string) => !(reply.startsWith("(") && reply.includes("error"));
+
   // Fan out in parallel. Each job runs in a separate runChatTurn —
   // shared abort signal means a single cancel kills the whole batch.
   const panel: PanelResult[] = await Promise.all(
     jobs.map(async (j, idx) => {
       const start = Date.now();
       const label = `${j.cli.label}${j.model ? `·${j.model}` : ""}${j.lens ? ` [${j.lens.label}]` : ""}`;
+      const finish = (ok: boolean, reply: string): PanelResult => {
+        args.onPanelistDone?.(idx, { ok, ms: Date.now() - start });
+        return { cli: j.cli, model: j.model, lens: j.lens, ok, reply, ms: Date.now() - start };
+      };
       try {
         const reply = await withTimeout(
           runChatTurn({
@@ -187,7 +231,7 @@ export async function runCouncilOneShot(args: {
             model: j.model,
             isFirst: true,
             bare: true,
-            signal: args.signal,
+            signal: jobSignal,
             onChunk: args.onPanelistChunk
               ? (delta) => args.onPanelistChunk!(idx, delta)
               : undefined,
@@ -195,23 +239,16 @@ export async function runCouncilOneShot(args: {
           PANELIST_TIMEOUT_MS,
           label,
         );
-        return {
-          cli: j.cli,
-          model: j.model,
-          lens: j.lens,
-          ok: !reply.startsWith("(") || !reply.includes("error"),
-          reply,
-          ms: Date.now() - start,
-        };
+        const ok = isUsable(reply);
+        // Quorum: count usable replies; once we hit the threshold, abort the
+        // rest so a slow/stuck panelist can't hold up synthesis.
+        if (ok && quorum) {
+          goodSoFar += 1;
+          if (goodSoFar >= quorum) internalAbort.abort();
+        }
+        return finish(ok, reply);
       } catch (err) {
-        return {
-          cli: j.cli,
-          model: j.model,
-          lens: j.lens,
-          ok: false,
-          reply: `(error: ${(err as Error).message})`,
-          ms: Date.now() - start,
-        };
+        return finish(false, `(error: ${(err as Error).message})`);
       }
     }),
   );
@@ -316,6 +353,7 @@ export async function runCouncilOneShot(args: {
       `## Verdict\n` +
       `Two lines. Line 1 starts with "VERDICT:" + one sentence giving the decisive call. Line 2 starts with "Why:" + one sentence tying the call back to panelists by name.`;
 
+  args.onChairStart?.(chairLabel);
   try {
     const verdict = await withTimeout(
       runChatTurn({
