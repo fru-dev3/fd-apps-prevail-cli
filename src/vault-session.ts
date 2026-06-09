@@ -12,9 +12,9 @@
 // vreadFile at a read site cannot change behavior for a plaintext vault. That's
 // what makes the migration safe to land incrementally.
 
-import { readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { decryptText } from "./vault-crypto.ts";
+import { decryptText, encryptText } from "./vault-crypto.ts";
 
 let sessionDek: Buffer | null = null;
 let sessionEncrypted = false;
@@ -60,4 +60,40 @@ export function vreadFile(path: string): string {
   const raw = readFileSync(path, "utf8");
   if (!sessionEncrypted || !sessionDek) return raw;
   return decryptText(sessionDek, raw);
+}
+
+/**
+ * Write a vault file, encrypting the whole content when the session vault is
+ * encrypted. Passthrough (== writeFileSync) otherwise. The write-side twin of
+ * vreadFile for full-overwrite saves (state, manifest, journal rewrites).
+ */
+export function vwriteFile(path: string, content: string): void {
+  if (!sessionEncrypted || !sessionDek) {
+    writeFileSync(path, content);
+    return;
+  }
+  writeFileSync(path, encryptText(sessionDek, content));
+}
+
+/**
+ * Append a line to an append-only ledger (usage/intents/decisions). You can't
+ * append to an AES-GCM blob, so under encryption this is read-modify-write:
+ * decrypt the whole file, append, re-encrypt. Plain append otherwise. Single
+ * user / low contention, so the RMW cost is acceptable; concurrent writers
+ * would need a lock (noted for the activation pass).
+ */
+export function vappendLine(path: string, line: string): void {
+  if (!sessionEncrypted || !sessionDek) {
+    appendFileSync(path, line);
+    return;
+  }
+  let current = "";
+  if (existsSync(path)) {
+    try {
+      current = decryptText(sessionDek, readFileSync(path, "utf8"));
+    } catch {
+      current = "";
+    }
+  }
+  writeFileSync(path, encryptText(sessionDek, current + line));
 }
