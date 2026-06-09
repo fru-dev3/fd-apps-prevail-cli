@@ -1,0 +1,52 @@
+{
+  "schema": "prevail.pack/v1",
+  "name": "Freelancer / Consultant",
+  "version": "1.0.0",
+  "description": "Run a one-person business: clients, irregular income, taxes, and a pipeline that never goes empty.",
+  "domains": [
+    {
+      "slug": "clients",
+      "title": "Clients",
+      "soul": "# Clients\n\nActive engagements, deliverables, and who owes whom what. Keep projects on track and relationships warm; protect your reputation and your time.\n",
+      "goals": "# Goals\n\n- Hit every deliverable deadline\n- Keep a healthy pipeline of next work\n- Follow up on outstanding invoices promptly\n",
+      "config": "# Config\n\nactive_clients: \nrate: \n",
+      "prompts": [
+        "What client deliverables are due this week and what is the next action on each?",
+        "Which invoices are outstanding and who should I follow up with?"
+      ]
+    },
+    {
+      "slug": "wealth",
+      "title": "Money",
+      "soul": "# Money\n\nIrregular income smoothed into a stable life. Separate business and personal, pay yourself consistently, and keep a buffer for slow months.\n",
+      "goals": "# Goals\n\n- Maintain a buffer covering 3-6 slow months\n- Pay yourself a steady amount despite lumpy income\n- Set aside taxes from every payment\n",
+      "config": "# Config\n\nmonthly_draw: \nbuffer_target: \ntax_set_aside_pct: \n",
+      "prompts": [
+        "Given this month's income, how much can I safely pay myself and set aside for taxes?",
+        "Is my buffer healthy enough to cover a slow stretch?"
+      ]
+    },
+    {
+      "slug": "tax",
+      "title": "Taxes",
+      "soul": "# Taxes\n\nSelf-employment taxes, quarterly estimates, deductible expenses, and clean records for your accountant. Stay ahead so tax season is boring.\n",
+      "goals": "# Goals\n\n- Make quarterly estimated payments on time\n- Track deductible expenses as they happen\n- Keep clean records year-round\n",
+      "config": "# Config\n\nestimated_payment_schedule: quarterly\nbusiness_structure: \n",
+      "prompts": [
+        "What is my next estimated tax payment and when is it due?",
+        "Which recent expenses are deductible and how should I categorize them?"
+      ]
+    },
+    {
+      "slug": "calendar",
+      "title": "Calendar",
+      "soul": "# Calendar\n\nProject deadlines, client calls, and the business-development time that is easy to skip when you are busy delivering. Balance the work and the pipeline.\n",
+      "goals": "# Goals\n\n- Protect time for business development every week\n- Keep deadlines visible 7 days out\n- Avoid overcommitting across concurrent projects\n",
+      "config": "# Config\n\nworking_hours: \nbizdev_block_target_per_week: 1\n",
+      "prompts": [
+        "Give me my week: client deadlines, calls, and one block for finding next work.",
+        "Am I overcommitted across my active projects this week?"
+      ]
+    }
+  ]
+}

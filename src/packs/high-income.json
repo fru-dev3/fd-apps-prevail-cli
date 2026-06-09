@@ -1,0 +1,52 @@
+{
+  "schema": "prevail.pack/v1",
+  "name": "High-Income Individual",
+  "version": "1.0.0",
+  "description": "Optimize a complex financial life: investments, taxes, equity, estate, and the calendar to keep it all on track.",
+  "domains": [
+    {
+      "slug": "wealth",
+      "title": "Wealth",
+      "soul": "# Wealth\n\nInvestments, net worth, and allocation across accounts. Keep the portfolio aligned with targets, rebalance deliberately, and watch concentration risk.\n",
+      "goals": "# Goals\n\n- Keep allocation within target bands; rebalance when drift exceeds 5%\n- Track net worth across all accounts monthly\n- Avoid over-concentration in any single position\n",
+      "config": "# Config\n\ntarget_allocation: \nrebalance_threshold_pct: 5\n",
+      "prompts": [
+        "Has my allocation drifted past its target bands, and what should I rebalance?",
+        "Summarize my net worth across accounts and the month-over-month change."
+      ]
+    },
+    {
+      "slug": "tax",
+      "title": "Taxes",
+      "soul": "# Taxes\n\nA complex tax picture: estimated payments, capital gains, equity events, and strategies (loss harvesting, charitable, retirement). Plan year-round, not in April.\n",
+      "goals": "# Goals\n\n- Make estimated payments on time and accurately\n- Plan around equity vesting and large gains before year-end\n- Capture tax-loss harvesting opportunities\n",
+      "config": "# Config\n\nestimated_payment_schedule: quarterly\nadvisor_contact: \n",
+      "prompts": [
+        "What tax-planning moves should I consider before year-end given my income and equity?",
+        "Estimate my quarterly payment and flag any equity events that change it."
+      ]
+    },
+    {
+      "slug": "estate",
+      "title": "Estate",
+      "soul": "# Estate\n\nWills, trusts, beneficiaries, and powers of attorney. Keep documents current and beneficiaries aligned as life changes; nobody should have to guess.\n",
+      "goals": "# Goals\n\n- Keep estate documents reviewed and current\n- Verify beneficiary designations match the plan\n- Ensure powers of attorney and directives are in place\n",
+      "config": "# Config\n\nestate_attorney_contact: \nlast_review_date: \n",
+      "prompts": [
+        "When were my estate documents last reviewed and what needs updating?",
+        "Do my beneficiary designations match my current wishes?"
+      ]
+    },
+    {
+      "slug": "calendar",
+      "title": "Calendar",
+      "soul": "# Calendar\n\nThe schedule that keeps a demanding professional and financial life coordinated: deadlines, advisor meetings, vesting dates, and protected personal time.\n",
+      "goals": "# Goals\n\n- Never miss a financial or tax deadline\n- Keep regular advisor and review cadences\n- Protect personal time despite a full schedule\n",
+      "config": "# Config\n\nreview_cadence: \nkey_dates: \n",
+      "prompts": [
+        "What financial deadlines and review meetings are coming in the next 30 days?",
+        "Build my week and protect time for the priorities that matter most."
+      ]
+    }
+  ]
+}

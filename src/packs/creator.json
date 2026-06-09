@@ -1,0 +1,52 @@
+{
+  "schema": "prevail.pack/v1",
+  "name": "Creator / Brand",
+  "version": "1.0.0",
+  "description": "Build an audience and a business around it: content, brand, money, and the calendar that keeps you shipping.",
+  "domains": [
+    {
+      "slug": "content",
+      "title": "Content",
+      "soul": "# Content\n\nThe pipeline from idea to published: what is in progress, what performed, and what to make next. Ship consistently and learn from what lands.\n",
+      "goals": "# Goals\n\n- Keep a backlog of ideas so you are never starting from zero\n- Publish on a consistent cadence\n- Review what performed and double down on it\n",
+      "config": "# Config\n\nplatforms: \npublish_cadence: \n",
+      "prompts": [
+        "What should I make next based on what has performed well?",
+        "Plan my content pipeline for the next two weeks from my idea backlog."
+      ]
+    },
+    {
+      "slug": "brand",
+      "title": "Brand",
+      "soul": "# Brand\n\nHow you show up: voice, partnerships, and reputation. Keep deals and mentions tracked, and protect the brand as it grows.\n",
+      "goals": "# Goals\n\n- Track partnership and sponsorship conversations\n- Keep brand voice consistent across platforms\n- Watch mentions and respond to what matters\n",
+      "config": "# Config\n\nbrand_voice: \nactive_partnerships: \n",
+      "prompts": [
+        "What partnership conversations are open and what is the next step on each?",
+        "Are there brand mentions I should be responding to?"
+      ]
+    },
+    {
+      "slug": "wealth",
+      "title": "Money",
+      "soul": "# Money\n\nIrregular creator income across multiple streams: ad revenue, sponsorships, products. Smooth it, separate business and personal, and plan for taxes.\n",
+      "goals": "# Goals\n\n- Understand income by stream and what is growing\n- Keep a buffer for lumpy months\n- Set aside taxes from every payment\n",
+      "config": "# Config\n\nincome_streams: \nbuffer_target: \n",
+      "prompts": [
+        "Break down my income by stream and tell me what is growing.",
+        "How much should I set aside for taxes from this month's earnings?"
+      ]
+    },
+    {
+      "slug": "calendar",
+      "title": "Calendar",
+      "soul": "# Calendar\n\nPublish dates, collaborations, and the deep-work time to actually create. Keep shipping without burning out.\n",
+      "goals": "# Goals\n\n- Protect creation time every week\n- Keep publish dates and collaborations on track\n- Build in recovery so you do not burn out\n",
+      "config": "# Config\n\npublish_schedule: \ncreation_block_target_per_week: 3\n",
+      "prompts": [
+        "Give me my week: publish dates, collaborations, and protected creation blocks.",
+        "Am I leaving enough recovery time so I do not burn out this month?"
+      ]
+    }
+  ]
+}
