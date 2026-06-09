@@ -831,7 +831,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
 //   prevail usage [--json]                   raw ledger (default: pretty totals)
 //   prevail usage --by day|domain|model|session|cli|surface [--since 7d] [--json]
 async function usageCommand(args: string[], vaultOverride: string | null): Promise<void> {
-  const { recordUsage, readUsage, aggregateUsage, parseSince } = await import("./usage.ts");
+  const { recordUsage, readUsage, aggregateUsage, parseSince, filterByDomain } = await import("./usage.ts");
   const cfg = readConfig();
   const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
 
@@ -862,15 +862,20 @@ async function usageCommand(args: string[], vaultOverride: string | null): Promi
   // Parse query flags.
   let by: string | null = null;
   let since: string | undefined;
+  let domain: string | null = null;
   let json = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--by" && args[i + 1]) { by = args[i + 1]!; i++; }
     else if (a === "--since" && args[i + 1]) { since = args[i + 1]!; i++; }
+    else if (a === "--domain" && args[i + 1]) { domain = args[i + 1]!; i++; }
     else if (a === "--json") json = true;
   }
   const sinceMs = parseSince(since) ?? undefined;
-  const entries = readUsage(vault, sinceMs);
+  let entries = readUsage(vault, sinceMs);
+  // Optional per-domain scope (for the domain-level Usage tab). Applied before
+  // any aggregation so totals + buckets are all domain-scoped.
+  if (domain) entries = filterByDomain(entries, domain);
 
   const VALID = new Set(["day", "domain", "model", "session", "cli", "surface"]);
   if (by && VALID.has(by)) {
@@ -893,7 +898,7 @@ async function usageCommand(args: string[], vaultOverride: string | null): Promi
   }
   const total = aggregateUsage(entries, "model", sinceMs).total;
   console.log(`usage${since ? ` (since ${since})` : ""}: ~$${total.est_cost_usd.toFixed(4)} shadow cost across ${total.calls} calls, ${(total.input_tokens + total.output_tokens).toLocaleString()} tokens.`);
-  console.log("slice it: prevail usage --by day|domain|model|session [--since 7d] [--json]");
+  console.log("slice it: prevail usage --by day|domain|model|session [--domain <slug>] [--since 7d] [--json]");
 }
 
 async function benchCommand(args: string[], vaultOverride: string | null): Promise<void> {

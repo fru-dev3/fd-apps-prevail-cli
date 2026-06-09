@@ -232,6 +232,18 @@ function bucketKey(e: UsageEntry, by: UsageDimension): string {
   }
 }
 
+// Scope a set of entries to a single domain before aggregating — powers the
+// per-domain Usage tab. `domain` matches `e.domain` case-insensitively; the
+// sentinels none/general/(none)/__general__ all select the unscoped (null)
+// bucket so "General" usage is addressable too.
+export function filterByDomain(entries: UsageEntry[], domain: string): UsageEntry[] {
+  const want = domain.trim().toLowerCase();
+  const isNone = want === "(none)" || want === "none" || want === "general" || want === "__general__";
+  return entries.filter((e) =>
+    isNone ? e.domain == null : (e.domain ?? "").toLowerCase() === want,
+  );
+}
+
 export function aggregateUsage(entries: UsageEntry[], by: UsageDimension, sinceMs?: number): UsageReport {
   const map = new Map<string, UsageBucket>();
   const total: UsageBucket = { key: "__total__", calls: 0, input_tokens: 0, output_tokens: 0, est_cost_usd: 0, billed_cost_usd: 0 };
