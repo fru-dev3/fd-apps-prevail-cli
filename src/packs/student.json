@@ -1,0 +1,53 @@
+{
+  "schema": "prevail.pack/v1",
+  "name": "Student",
+  "version": "1.0.0",
+  "description": "Stay on top of coursework, money, and the early career build. Domains for learning, finances, calendar, and career.",
+  "domains": [
+    {
+      "slug": "learning",
+      "title": "Learning",
+      "soul": "# Learning\n\nCourses, deadlines, and what you actually understand vs. what you have only seen. Turn lectures and readings into durable knowledge, not just notes.\n",
+      "goals": "# Goals\n\n- Never miss an assignment deadline\n- Review hard topics before exams, not the night before\n- Keep a running list of concepts I do not yet understand\n",
+      "config": "# Config\n\nschool: \nterm: \ncourses: \n",
+      "prompts": [
+        "What assignments and exams are due in the next two weeks, ranked by urgency?",
+        "Quiz me on the concepts I marked as not-yet-understood.",
+        "Turn my notes from this week into a short study summary."
+      ]
+    },
+    {
+      "slug": "wealth",
+      "title": "Money",
+      "soul": "# Money\n\nTuition, loans, income, and spending on a tight budget. Build good habits now: track where it goes, avoid avoidable debt, start saving even small amounts.\n",
+      "goals": "# Goals\n\n- Stay within a monthly budget\n- Understand my loans and their terms\n- Start an emergency buffer, however small\n",
+      "config": "# Config\n\nmonthly_budget: \nloan_servicer: \n",
+      "prompts": [
+        "Help me build a realistic monthly budget from my income and fixed costs.",
+        "Explain my student loans in plain language: balance, rate, and when payments start."
+      ]
+    },
+    {
+      "slug": "calendar",
+      "title": "Calendar",
+      "soul": "# Calendar\n\nClasses, deadlines, work shifts, and a life outside of all of it. Keep the schedule realistic and protect time to actually study.\n",
+      "goals": "# Goals\n\n- See the week ahead every Sunday\n- Protect study blocks before big deadlines\n- Avoid scheduling conflicts between work and class\n",
+      "config": "# Config\n\nclass_schedule: \nwork_schedule: \n",
+      "prompts": [
+        "Give me a preview of this week: classes, deadlines, and study blocks.",
+        "Find conflicts between my work shifts and my coursework this week."
+      ]
+    },
+    {
+      "slug": "career",
+      "title": "Career",
+      "soul": "# Career\n\nThe early build: internships, skills, a portfolio, and the network you start now. Small consistent steps compound over four years.\n",
+      "goals": "# Goals\n\n- Apply to internships before deadlines\n- Build one portfolio-worthy project per term\n- Reach out to one new contact each month\n",
+      "config": "# Config\n\ntarget_roles: \nportfolio_link: \n",
+      "prompts": [
+        "What should I be doing this term to be ready for internship applications?",
+        "Help me draft an outreach message to someone working in a role I want."
+      ]
+    }
+  ]
+}

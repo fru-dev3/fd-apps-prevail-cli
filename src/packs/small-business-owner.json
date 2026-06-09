@@ -1,0 +1,53 @@
+{
+  "schema": "prevail.pack/v1",
+  "name": "Small Business Owner",
+  "version": "1.0.0",
+  "description": "Run the business and your own finances without dropping either. Domains for the company, cashflow, taxes, customers, and your calendar.",
+  "domains": [
+    {
+      "slug": "business",
+      "title": "Business",
+      "soul": "# Business\n\nThe company: what it sells, who it serves, and the decisions that keep it healthy. Track revenue, runway, hiring, and the handful of bets that matter this quarter.\n",
+      "goals": "# Goals\n\n- Keep at least 6 months of runway in the bank\n- Know this quarter's top 3 priorities and protect time for them\n- Review key metrics weekly, not when something breaks\n",
+      "config": "# Config\n\nbusiness_name: \nentity_type: \nfiscal_year_end: \nkey_metrics: revenue, runway, gross_margin\n",
+      "prompts": [
+        "What are my top 3 business priorities this quarter and what is the next action on each?",
+        "Review my cashflow: what is my runway and what is the biggest risk to it?",
+        "Draft a weekly metrics review from the numbers in this domain."
+      ]
+    },
+    {
+      "slug": "wealth",
+      "title": "Cashflow & Wealth",
+      "soul": "# Cashflow & Wealth\n\nThe money flowing through the business and into your own accounts. Separate the two cleanly; pay yourself deliberately; plan for taxes before they are due.\n",
+      "goals": "# Goals\n\n- Pay yourself a consistent draw / salary\n- Set aside taxes every month, not in April\n- Build a personal emergency fund separate from the business\n",
+      "config": "# Config\n\ntax_set_aside_pct: \npersonal_emergency_target: \n",
+      "prompts": [
+        "How much should I set aside for taxes this month based on revenue?",
+        "Am I paying myself sustainably given the business's runway?"
+      ]
+    },
+    {
+      "slug": "tax",
+      "title": "Taxes",
+      "soul": "# Taxes\n\nEverything tax: estimated payments, deadlines, deductible expenses, and the documents your accountant will ask for. Never miss a deadline; never overpay.\n",
+      "goals": "# Goals\n\n- Make quarterly estimated payments on time\n- Keep deductible expenses categorized as they happen\n- Have clean books before year-end, not after\n",
+      "config": "# Config\n\nbusiness_structure: \nestimated_payment_schedule: quarterly\naccountant_contact: \n",
+      "prompts": [
+        "What tax deadlines are coming in the next 60 days and what do I owe?",
+        "Which of my recent expenses are likely deductible and how should I categorize them?"
+      ]
+    },
+    {
+      "slug": "calendar",
+      "title": "Calendar",
+      "soul": "# Calendar\n\nYour time across the business and your life. Protect deep-work blocks, watch meeting load, and surface deadlines before they become emergencies.\n",
+      "goals": "# Goals\n\n- Keep meeting load under 40% of working hours\n- Protect at least two deep-work blocks a week\n- See deadlines 7 days out, every week\n",
+      "config": "# Config\n\nworking_hours: \nfocus_block_target_per_week: 2\n",
+      "prompts": [
+        "Build my weekly preview: deadlines, meeting load, and one focus recommendation.",
+        "Where are the conflicts between business commitments and personal time this week?"
+      ]
+    }
+  ]
+}

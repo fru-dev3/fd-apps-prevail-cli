@@ -1,0 +1,52 @@
+{
+  "schema": "prevail.pack/v1",
+  "name": "Family",
+  "version": "1.0.0",
+  "description": "Run a household without the mental load living only in one person's head. Domains for home, health, money, calendar, and the kids.",
+  "domains": [
+    {
+      "slug": "home",
+      "title": "Home",
+      "soul": "# Home\n\nThe house and everything that keeps it running: maintenance, warranties, contractors, and the recurring tasks that are easy to forget until they break.\n",
+      "goals": "# Goals\n\n- Stay ahead of seasonal maintenance\n- Keep warranty and contractor info in one place\n- Budget for repairs before they are urgent\n",
+      "config": "# Config\n\nhome_type: \nyear_built: \nmaintenance_reserve_monthly: \n",
+      "prompts": [
+        "What home maintenance is due this season and what is the cost?",
+        "Who did we use last time for this repair and is it under warranty?"
+      ]
+    },
+    {
+      "slug": "health",
+      "title": "Health",
+      "soul": "# Health\n\nThe family's appointments, prescriptions, insurance, and follow-ups. Make sure nothing medical falls through the cracks for anyone.\n",
+      "goals": "# Goals\n\n- No missed appointments or lapsed prescriptions\n- Know each person's providers and coverage\n- Track follow-ups until they are actually done\n",
+      "config": "# Config\n\ninsurance_provider: \nprimary_care_contacts: \n",
+      "prompts": [
+        "What medical appointments or refills are coming up for the family?",
+        "Summarize our insurance coverage in plain language."
+      ]
+    },
+    {
+      "slug": "wealth",
+      "title": "Money",
+      "soul": "# Money\n\nThe household budget, savings, and the big goals: emergency fund, college, retirement. Keep spending aligned with what the family actually values.\n",
+      "goals": "# Goals\n\n- Keep a funded emergency reserve\n- Save consistently toward the family's big goals\n- Review the budget monthly, together\n",
+      "config": "# Config\n\nmonthly_budget: \nemergency_fund_target: \nsavings_goals: \n",
+      "prompts": [
+        "How are we tracking against our savings goals this month?",
+        "Where did our spending drift from the budget and why?"
+      ]
+    },
+    {
+      "slug": "calendar",
+      "title": "Calendar",
+      "soul": "# Calendar\n\nEveryone's schedule in one view: school, work, activities, and appointments. Catch conflicts before they happen and share the load.\n",
+      "goals": "# Goals\n\n- See the whole family's week at a glance\n- Catch scheduling conflicts early\n- Balance commitments so no one is overloaded\n",
+      "config": "# Config\n\nfamily_members: \nrecurring_activities: \n",
+      "prompts": [
+        "Give me the family's week ahead and flag any conflicts.",
+        "What needs a parent's time this week that we have not planned for?"
+      ]
+    }
+  ]
+}

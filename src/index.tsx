@@ -32,6 +32,8 @@ interface Args {
   benchArgs: string[];
   usage: boolean;
   usageArgs: string[];
+  pack: boolean;
+  packArgs: string[];
   vault: boolean;
   vaultArgs: string[];
   upgrade: boolean;
@@ -94,6 +96,8 @@ function parseArgs(argv: string[]): Args {
   let benchArgs: string[] = [];
   let usage = false;
   let usageArgs: string[] = [];
+  let pack = false;
+  let packArgs: string[] = [];
   let vault = false;
   let vaultArgs: string[] = [];
   let upgrade = false;
@@ -176,6 +180,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "usage") {
       usage = true;
       usageArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "pack" || a === "packs") {
+      pack = true;
+      packArgs = argv.slice(i + 1);
       break;
     } else if (a === "vault") {
       vault = true;
@@ -283,6 +291,8 @@ function parseArgs(argv: string[]): Args {
     benchArgs,
     usage,
     usageArgs,
+    pack,
+    packArgs,
     vault,
     vaultArgs,
     upgrade,
@@ -908,6 +918,81 @@ async function usageCommand(args: string[], vaultOverride: string | null): Promi
   const total = aggregateUsage(entries, "model", sinceMs).total;
   console.log(`usage${since ? ` (since ${since})` : ""}: ~$${total.est_cost_usd.toFixed(4)} shadow cost across ${total.calls} calls, ${(total.input_tokens + total.output_tokens).toLocaleString()} tokens.`);
   console.log("slice it: prevail usage --by day|domain|model|session [--domain <slug>] [--since 7d] [--json]");
+}
+
+// Role packages — list / import / export portable persona bundles
+// (prevail.pack/v1). See pack.ts.
+async function packCommand(args: string[], vaultOverride: string | null): Promise<void> {
+  const { parsePack, applyPack, exportPack, listBundledPacks, bundledPackText } =
+    await import("./pack.ts");
+  const { readFileSync, existsSync } = await import("node:fs");
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  const sub = args[0];
+  const asJson = args.includes("--json");
+
+  if (!sub || sub === "list" || sub === "ls") {
+    const packs = listBundledPacks();
+    if (asJson) {
+      process.stdout.write(
+        JSON.stringify(packs.map((p) => ({
+          file: p.file,
+          name: p.pack.name,
+          version: p.pack.version,
+          description: p.pack.description ?? null,
+          domains: p.pack.domains.map((d) => d.slug),
+        }))) + "\n",
+      );
+      return;
+    }
+    if (packs.length === 0) { console.log("no bundled packs found."); return; }
+    console.log(`${packs.length} bundled pack${packs.length === 1 ? "" : "s"}:`);
+    for (const { pack } of packs) {
+      console.log(`  ${pack.name} (v${pack.version}) — ${pack.domains.map((d) => d.slug).join(", ")}`);
+    }
+    return;
+  }
+
+  if (sub === "import") {
+    // The argument may be a path to a .json pack OR a bundled pack name/file.
+    const ref = args[1];
+    if (!ref) { console.error("usage: prevail pack import <file.json|bundled-name> [--overwrite]"); process.exit(1); }
+    const overwrite = args.includes("--overwrite");
+    let text: string | null = null;
+    if (existsSync(ref)) {
+      text = readFileSync(ref, "utf8");
+    } else {
+      // Resolve against bundled packs by file name or pack name.
+      text = bundledPackText(ref);
+    }
+    if (text == null) {
+      const msg = `pack not found: ${ref}`;
+      if (asJson) process.stdout.write(JSON.stringify({ error: msg }) + "\n");
+      else console.error(msg);
+      process.exit(1);
+    }
+    try {
+      const result = applyPack(vault, parsePack(text), { overwrite });
+      if (asJson) process.stdout.write(JSON.stringify(result) + "\n");
+      else console.log(`imported into ${vault}: created [${result.created.join(", ")}]${result.skipped.length ? `, skipped existing [${result.skipped.join(", ")}]` : ""}`);
+    } catch (e) {
+      if (asJson) process.stdout.write(JSON.stringify({ error: String(e) }) + "\n");
+      else console.error(`pack import failed: ${e}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (sub === "export") {
+    const nameIdx = args.indexOf("--name");
+    const name = nameIdx >= 0 && args[nameIdx + 1] ? args[nameIdx + 1]! : "My Vault";
+    const out = exportPack(vault, name);
+    process.stdout.write(JSON.stringify(out, null, asJson ? 0 : 2) + "\n");
+    return;
+  }
+
+  console.error(`unknown pack subcommand: ${sub} (try: list | import | export)`);
+  process.exit(1);
 }
 
 async function benchCommand(args: string[], vaultOverride: string | null): Promise<void> {
@@ -2395,6 +2480,10 @@ async function main() {
   }
   if (args.usage) {
     await usageCommand(args.usageArgs, args.vaultPath);
+    return;
+  }
+  if (args.pack) {
+    await packCommand(args.packArgs, args.vaultPath);
     return;
   }
   if (args.vault) {
