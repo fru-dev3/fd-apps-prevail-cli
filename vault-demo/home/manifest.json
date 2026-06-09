@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "home",
-    "score": 63,
+    "score": 60,
     "breakdown": {
       "coverage": {
         "score": 40,
@@ -28,8 +28,8 @@
         "detail": "320 words across state/decisions/config (target 800 for full marks)"
       },
       "freshness": {
-        "score": 100,
-        "detail": "newest knowledge file updated 6 days ago"
+        "score": 80,
+        "detail": "newest knowledge file updated 7 days ago"
       },
       "structure": {
         "score": 60,
@@ -109,7 +109,7 @@
           "present": true,
           "stale": false,
           "severity": "info",
-          "detail": "present · 6d old",
+          "detail": "present · 7d old",
           "recommend": "Start a maintenance log — what was serviced and when."
         },
         {
@@ -136,15 +136,15 @@
           "present": true,
           "stale": false,
           "severity": "warn",
-          "detail": "present · 6d old",
+          "detail": "present · 7d old",
           "recommend": "Add your homeowner / renter insurance policy."
         }
       ]
     },
-    "freshness_secs": 587498,
+    "freshness_secs": 607544,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-07T15:57:02.192Z",
+    "computed_at": "2026-06-07T21:31:08.279Z",
     "audited_at": null
   },
   "goals": [],

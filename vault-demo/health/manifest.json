@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 2 days ago"
+        "detail": "newest knowledge file updated 3 days ago"
       },
       "structure": {
         "score": 80,
@@ -72,7 +72,7 @@
           "present": true,
           "stale": false,
           "severity": "critical",
-          "detail": "present · 2d old",
+          "detail": "present · 3d old",
           "recommend": "Add your health insurance plan details (carrier, member ID) — critical in an emergency."
         },
         {
@@ -108,7 +108,7 @@
           "present": true,
           "stale": false,
           "severity": "warn",
-          "detail": "present · 2d old",
+          "detail": "present · 3d old",
           "recommend": "List current medications and dosages."
         },
         {
@@ -126,7 +126,7 @@
           "present": true,
           "stale": false,
           "severity": "info",
-          "detail": "present · 2d old",
+          "detail": "present · 3d old",
           "recommend": "Add recent lab results or vitals to track trends."
         },
         {
@@ -140,10 +140,10 @@
         }
       ]
     },
-    "freshness_secs": 243712,
+    "freshness_secs": 263758,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-07T15:57:02.182Z",
+    "computed_at": "2026-06-07T21:31:08.263Z",
     "audited_at": null
   },
   "goals": [],

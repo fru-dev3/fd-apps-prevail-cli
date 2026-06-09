@@ -136,10 +136,10 @@
         }
       ]
     },
-    "freshness_secs": 298598,
+    "freshness_secs": 318644,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-07T15:57:02.183Z",
+    "computed_at": "2026-06-07T21:31:08.264Z",
     "audited_at": null
   },
   "goals": [],

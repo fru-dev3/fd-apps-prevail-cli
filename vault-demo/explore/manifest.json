@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "explore",
-    "score": 55,
+    "score": 52,
     "breakdown": {
       "coverage": {
         "score": 40,
@@ -28,8 +28,8 @@
         "detail": "344 words across state/decisions/config (target 800 for full marks)"
       },
       "freshness": {
-        "score": 100,
-        "detail": "newest knowledge file updated 6 days ago"
+        "score": 80,
+        "detail": "newest knowledge file updated 7 days ago"
       },
       "structure": {
         "score": 60,
@@ -109,7 +109,7 @@
           "present": true,
           "stale": false,
           "severity": "info",
-          "detail": "present · 6d old",
+          "detail": "present · 7d old",
           "recommend": "Note activities or experiences you want to try."
         },
         {
@@ -123,10 +123,10 @@
         }
       ]
     },
-    "freshness_secs": 587498,
+    "freshness_secs": 607544,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-07T15:57:02.194Z",
+    "computed_at": "2026-06-07T21:31:08.282Z",
     "audited_at": null
   },
   "goals": [],

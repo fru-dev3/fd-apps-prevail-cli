@@ -17,7 +17,7 @@
   },
   "context_score": {
     "domain": "chief",
-    "score": 63,
+    "score": 64,
     "breakdown": {
       "coverage": {
         "score": 80,
@@ -29,15 +29,15 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated today"
+        "detail": "newest knowledge file updated 1 day ago"
       },
       "structure": {
         "score": 90,
         "detail": "9 of 10 artifact kinds present (state, config, journal, logs, threads, skills, briefs, prior, current)"
       },
       "activity": {
-        "score": 50,
-        "detail": "3 log sessions, 7 threads (saturate at 10 each)"
+        "score": 65,
+        "detail": "3 log sessions, 12 threads (saturate at 10 each)"
       },
       "config_completeness": {
         "score": 0,
@@ -76,7 +76,7 @@
           "present": true,
           "stale": false,
           "severity": "warn",
-          "detail": "present · 0d old",
+          "detail": "present · 1d old",
           "recommend": "Record this quarter's 3-5 priorities so the agent can align every domain to them."
         },
         {
@@ -85,7 +85,7 @@
           "present": true,
           "stale": false,
           "severity": "info",
-          "detail": "present · 0d old",
+          "detail": "present · 1d old",
           "recommend": "Log a recurring review cadence — when you step back and reassess."
         },
         {
@@ -99,10 +99,10 @@
         }
       ]
     },
-    "freshness_secs": 78928,
+    "freshness_secs": 98974,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-07T15:57:02.177Z",
+    "computed_at": "2026-06-07T21:31:08.256Z",
     "audited_at": null
   },
   "goals": [],
