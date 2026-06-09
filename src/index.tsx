@@ -34,6 +34,8 @@ interface Args {
   usageArgs: string[];
   pack: boolean;
   packArgs: string[];
+  appmode: boolean;
+  appmodeArgs: string[];
   vault: boolean;
   vaultArgs: string[];
   upgrade: boolean;
@@ -98,6 +100,8 @@ function parseArgs(argv: string[]): Args {
   let usageArgs: string[] = [];
   let pack = false;
   let packArgs: string[] = [];
+  let appmode = false;
+  let appmodeArgs: string[] = [];
   let vault = false;
   let vaultArgs: string[] = [];
   let upgrade = false;
@@ -184,6 +188,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "pack" || a === "packs") {
       pack = true;
       packArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "appmode") {
+      appmode = true;
+      appmodeArgs = argv.slice(i + 1);
       break;
     } else if (a === "vault") {
       vault = true;
@@ -293,6 +301,8 @@ function parseArgs(argv: string[]): Args {
     usageArgs,
     pack,
     packArgs,
+    appmode,
+    appmodeArgs,
     vault,
     vaultArgs,
     upgrade,
@@ -2415,6 +2425,25 @@ async function privacyCommand(args: string[]): Promise<number> {
   return 0;
 }
 
+// `prevail appmode get|set --json [--mode demo|production]` — the demo vs
+// production flag. Frontends read it to show the demo badge and gate the
+// switch-to-production flow. Machine-only (JSON).
+async function appmodeCommand(args: string[]): Promise<number> {
+  const sub = args[0];
+  const body = sub === "get" || sub === "set" ? args.slice(1) : args;
+  const { json, flags } = parseKvArgs(body, null);
+  if (!json) {
+    console.error("prevail appmode is a machine-only command — pass --json.");
+    return 1;
+  }
+  const cfg = await import("./config.ts");
+  if (sub === "set" && (flags.mode === "demo" || flags.mode === "production")) {
+    cfg.setAppMode(flags.mode);
+  }
+  process.stdout.write(`${JSON.stringify({ mode: cfg.readAppMode() })}\n`);
+  return 0;
+}
+
 // `prevail search <query> --json [--limit N]` — full-text search across the
 // indexed chat history (the FTS5 index in ~/.prevail/sessions.db).
 async function searchCommand(args: string[]): Promise<number> {
@@ -2485,6 +2514,9 @@ async function main() {
   if (args.pack) {
     await packCommand(args.packArgs, args.vaultPath);
     return;
+  }
+  if (args.appmode) {
+    process.exit(await appmodeCommand(args.appmodeArgs));
   }
   if (args.vault) {
     await vaultCommand(args.vaultArgs, args.vaultPath);

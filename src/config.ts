@@ -105,6 +105,12 @@ export interface UserConfig {
   // backstop, so no prompt ever reaches a cloud provider. Mirrors the desktop's
   // PREVAIL_BUNKER. Off (missing) by default. Read/written via readBunker/setBunker.
   bunker?: boolean;
+  // App mode: "demo" (exploring the synthetic sample vault) vs "production"
+  // (the user's real vault). Drives the demo badge + the switch-to-production
+  // flow. Missing = "production" so existing real vaults are never mislabeled;
+  // the first-launch demo flow sets "demo" explicitly. Read/written via
+  // readAppMode/setAppMode.
+  appMode?: "demo" | "production";
   // Hard cap on the number of CLI calls a single /council turn can fire.
   // panelists × lens fanout count must be <= this number, or the turn
   // refuses with a friendly error. Default 16 — covers 4 CLIs × 4 lenses,
@@ -289,6 +295,20 @@ export function setBunker(on: boolean): void {
   if (on) next.bunker = true;
   else delete next.bunker;
   writeConfig(next);
+}
+
+export type AppMode = "demo" | "production";
+
+/** Effective app mode. Missing = "production" so real vaults are never
+ *  mislabeled; the first-launch demo flow sets "demo" explicitly. */
+export function readAppMode(): AppMode {
+  return readConfig()?.appMode === "demo" ? "demo" : "production";
+}
+
+export function setAppMode(mode: AppMode): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  writeConfig({ ...cfg, appMode: mode });
 }
 
 export function setWebAccess(mode: "allow" | "deny"): void {
