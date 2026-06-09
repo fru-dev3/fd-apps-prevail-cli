@@ -2471,27 +2471,30 @@ async function lockCommand(args: string[]): Promise<number> {
     process.stdout.write(`${JSON.stringify({ set: lock.isLockSet() })}\n`);
     return 0;
   }
+  // For verify/set/clear the JSON {ok} field IS the contract — a wrong passcode
+  // or validation failure is a normal result, not an execution error, so we
+  // always exit 0 (a non-zero exit would make a calling process treat
+  // "wrong passcode" as a spawn failure).
   if (sub === "set") {
     const pass = readStdin();
     try {
       await lock.setPasscode(pass, new Date().toISOString());
       process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
-      return 0;
     } catch (e) {
       process.stdout.write(`${JSON.stringify({ ok: false, error: String(e) })}\n`);
-      return 1;
     }
+    return 0;
   }
   if (sub === "verify") {
     const ok = await lock.verifyPasscode(readStdin());
     process.stdout.write(`${JSON.stringify({ ok })}\n`);
-    return ok ? 0 : 1;
+    return 0;
   }
   if (sub === "clear") {
     // Require the current passcode to authorize removal.
     if (!(await lock.verifyPasscode(readStdin()))) {
       process.stdout.write(`${JSON.stringify({ ok: false, error: "wrong passcode" })}\n`);
-      return 1;
+      return 0;
     }
     lock.clearLock();
     process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
