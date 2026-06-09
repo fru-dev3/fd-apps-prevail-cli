@@ -8,6 +8,7 @@ import {
   parseSince,
   rateFor,
   summarizeAll,
+  type RecordUsageInput,
   type UsageEntry,
 } from "./usage.ts";
 
@@ -26,7 +27,7 @@ describe("pricing", () => {
   });
 });
 
-function entry(over: Partial<UsageEntry>): UsageEntry {
+function entry(over: Partial<RecordUsageInput>): UsageEntry {
   return buildEntry({
     session: "s1",
     cli: "claude",
@@ -34,7 +35,7 @@ function entry(over: Partial<UsageEntry>): UsageEntry {
     inputTokens: 100,
     outputTokens: 100,
     ...over,
-  } as never);
+  });
 }
 
 describe("aggregateUsage", () => {

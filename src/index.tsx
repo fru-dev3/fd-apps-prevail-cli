@@ -1564,6 +1564,39 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     process.exit(1);
   }
 
+  // `vault embed [--from <src>]` — copy the active (or given) vault into the
+  // app-owned location ~/.prevail/vault and repoint config there. Non-
+  // destructive: the source is left in place. Shared by the desktop "Move vault
+  // into the app" action and the CLI.
+  if (sub === "embed" || sub === "migrate") {
+    const { migrateVaultToEmbedded, embeddedVaultPath } = await import("./vault-embed.ts");
+    let from = vault;
+    const fromIdx = args.indexOf("--from");
+    if (fromIdx >= 0 && args[fromIdx + 1]) from = args[fromIdx + 1]!;
+    const asJson = args.includes("--json");
+    try {
+      const r = migrateVaultToEmbedded(from, embeddedVaultPath());
+      // Point config at the embedded vault so every surface uses it next launch.
+      if (r.ok) {
+        const { writeConfig } = await import("./config.ts");
+        writeConfig({ ...(cfg ?? {}), vaultPath: r.dest } as never);
+      }
+      if (asJson) {
+        process.stdout.write(JSON.stringify(r) + "\n");
+      } else if (r.alreadyEmbedded) {
+        console.log(`vault is already embedded at ${r.dest}`);
+      } else {
+        console.log(`embedded ${r.copied}/${r.sourceFiles} files into ${r.dest}${r.ok ? "" : "  (verify mismatch!)"}`);
+        console.log(`source left intact at ${from}`);
+      }
+    } catch (e) {
+      if (asJson) process.stdout.write(JSON.stringify({ error: String(e) }) + "\n");
+      else console.error(`vault embed failed: ${e}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // JSON engine subcommands (archive / restore / list-archived) — defined by
   // docs/ENGINE-JSON-API.md. They read --vault/--json from their own sub-args
   // and emit the frozen error envelope on failure.
