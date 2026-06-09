@@ -70,6 +70,15 @@ export function open(key: Buffer, blob: SealedBlob): Buffer {
   return Buffer.concat([decipher.update(ct), decipher.final()]);
 }
 
+// A second, independent way to recover the DEK: the same DEK wrapped under a key
+// derived from a one-time RECOVERY CODE. Lets a user who forgets their passcode
+// still decrypt their vault (and set a new passcode) instead of losing the data.
+export interface RecoveryWrap {
+  salt: string; // base64 — for the recovery KEK
+  wrappedDek: SealedBlob;
+  check: SealedBlob;
+}
+
 export interface Keyring {
   schema: typeof KEYRING_SCHEMA;
   kdf: "scrypt";
@@ -78,6 +87,7 @@ export interface Keyring {
   // A verifier so we can reject a wrong passcode cleanly (rather than only via a
   // downstream GCM failure): encrypt a known constant under the KEK.
   check: SealedBlob;
+  recovery?: RecoveryWrap; // optional one-time recovery-code path
   createdAt: string;
 }
 
@@ -97,6 +107,60 @@ export function createKeyring(passcode: string, createdAt: string): { keyring: K
     createdAt,
   };
   return { keyring, dek };
+}
+
+// Generate a human-friendly one-time recovery code: 4 groups of 5 Crockford
+// base32 chars (no I/L/O/U), e.g. "K7QFP-3M9XR-NPQ4T-7VWXZ". 20 chars ~= 100
+// bits of code space — ample for a recovery secret.
+const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+export function generateRecoveryCode(): string {
+  const bytes = randomBytes(20); // 160 bits
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    out += B32[bytes[i]! % 32];
+    if ((i + 1) % 5 === 0 && i !== bytes.length - 1) out += "-";
+  }
+  return out;
+}
+
+/** Wrap an existing DEK under a recovery code (added to a keyring at setup). */
+export function wrapForRecovery(recoveryCode: string, dek: Buffer): RecoveryWrap {
+  const salt = randomBytes(16);
+  const rk = deriveKey(recoveryCode, salt);
+  return {
+    salt: salt.toString("base64"),
+    wrappedDek: seal(rk, dek),
+    check: seal(rk, CHECK_CONSTANT),
+  };
+}
+
+/** Create a keyring that can be unlocked by EITHER the passcode or a freshly
+ *  generated recovery code (returned once, never stored in plaintext). */
+export function createKeyringWithRecovery(
+  passcode: string,
+  createdAt: string,
+): { keyring: Keyring; dek: Buffer; recoveryCode: string } {
+  const { keyring, dek } = createKeyring(passcode, createdAt);
+  const recoveryCode = generateRecoveryCode();
+  keyring.recovery = wrapForRecovery(recoveryCode, dek);
+  return { keyring, dek, recoveryCode };
+}
+
+/** Recover the DEK using the recovery code. Throws if it doesn't match. */
+export function unwrapDekWithRecovery(recoveryCode: string, keyring: Keyring): Buffer {
+  if (!keyring.recovery) throw new Error("this keyring has no recovery code set");
+  const rk = deriveKey(recoveryCode, Buffer.from(keyring.recovery.salt, "base64"));
+  const got = (() => {
+    try {
+      return open(rk, keyring.recovery.check);
+    } catch {
+      return Buffer.alloc(0);
+    }
+  })();
+  if (got.length !== CHECK_CONSTANT.length || !timingSafeEqual(got, CHECK_CONSTANT)) {
+    throw new Error("wrong recovery code");
+  }
+  return open(rk, keyring.recovery.wrappedDek);
 }
 
 /** True if `passcode` unlocks this keyring (constant-time on the check value). */

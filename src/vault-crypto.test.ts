@@ -2,13 +2,16 @@ import { describe, expect, it } from "bun:test";
 
 import {
   createKeyring,
+  createKeyringWithRecovery,
   decryptText,
   deriveKey,
   encryptText,
+  generateRecoveryCode,
   open,
   rewrapKeyring,
   seal,
   unwrapDek,
+  unwrapDekWithRecovery,
   verifyKeyringPasscode,
 } from "./vault-crypto.ts";
 import { randomBytes } from "node:crypto";
@@ -65,6 +68,28 @@ describe("keyring (envelope encryption)", () => {
     expect(unwrapDek("new pass", rewrapped).equals(dek)).toBe(true);
     // Salt rotated.
     expect(rewrapped.salt).not.toBe(keyring.salt);
+  });
+});
+
+describe("recovery code", () => {
+  it("generates a grouped, readable code with no ambiguous chars", () => {
+    const code = generateRecoveryCode();
+    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{5}(-[0-9A-HJKMNP-TV-Z]{5}){3}$/);
+    expect(code).not.toMatch(/[ILOU]/); // Crockford base32 excludes these
+  });
+
+  it("recovers the SAME DEK as the passcode, and rejects a wrong code", () => {
+    const { keyring, dek, recoveryCode } = createKeyringWithRecovery("my pass", "2026-06-09T00:00:00Z");
+    // Passcode and recovery code both yield the same DEK.
+    expect(unwrapDek("my pass", keyring).equals(dek)).toBe(true);
+    expect(unwrapDekWithRecovery(recoveryCode, keyring).equals(dek)).toBe(true);
+    // A wrong recovery code is rejected.
+    expect(() => unwrapDekWithRecovery("WRONG-CODE-HERE-XXXXX-YYYYY-ZZZZZ", keyring)).toThrow(/wrong recovery code/);
+  });
+
+  it("a keyring without recovery throws on recovery unwrap", () => {
+    const { keyring } = createKeyring("pw", "2026-06-09T00:00:00Z");
+    expect(() => unwrapDekWithRecovery("anything", keyring)).toThrow(/no recovery code/);
   });
 });
 
