@@ -134,7 +134,7 @@ describe("checkForUpdate", () => {
     const fetcher = (url: string) => {
       // Rewrite the github URL onto our local stub.
       const rewritten = url.replace(
-        "https://api.github.com/repos/fru-dev3/prevail",
+        "https://api.github.com/repos/fru-dev3/prevail-cli",
         baseUrl,
       );
       return fetch(rewritten);
@@ -151,7 +151,7 @@ describe("checkForUpdate", () => {
   test("falls back to /releases when --pre is requested", async () => {
     const fetcher = (url: string) => {
       const rewritten = url.replace(
-        "https://api.github.com/repos/fru-dev3/prevail",
+        "https://api.github.com/repos/fru-dev3/prevail-cli",
         baseUrl,
       );
       return fetch(rewritten);

@@ -36,7 +36,7 @@ import { pipeline } from "node:stream/promises";
 import { VERSION } from "./version.ts";
 
 const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/fru-dev3/prevail/releases";
+  "https://api.github.com/repos/fru-dev3/prevail-cli/releases";
 const GITHUB_LATEST_URL = `${GITHUB_RELEASES_URL}/latest`;
 
 export interface UpdateInfo {

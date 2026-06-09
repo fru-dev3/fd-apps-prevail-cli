@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REPO="${PREVAIL_REPO:-fru-dev3/prevail}"
+REPO="${PREVAIL_REPO:-fru-dev3/prevail-cli}"
 BIN_DIR="${PREVAIL_BIN_DIR:-$HOME/.local/bin}"
 DATA_DIR="${PREVAIL_DATA_DIR:-$HOME/.prevail}"
 VERSION="${PREVAIL_VERSION:-latest}"

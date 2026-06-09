@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/fru-dev3/prevail/releases"><img src="https://img.shields.io/github/v/release/fru-dev3/prevail?color=C4A35A&label=release" alt="release"/></a>
+  <a href="https://github.com/fru-dev3/prevail-cli/releases"><img src="https://img.shields.io/github/v/release/fru-dev3/prevail-cli?color=C4A35A&label=release" alt="release"/></a>
   <a href="#install"><img src="https://img.shields.io/badge/install-curl%20%7C%20bash-3CD8FF" alt="install"/></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-bun%20single%20binary-C4A35A" alt="bun"/></a>
   <a href="https://opentui.com"><img src="https://img.shields.io/badge/tui-OpenTUI-3CD8FF" alt="OpenTUI"/></a>
@@ -63,7 +63,7 @@
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fru-dev3/prevail/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fru-dev3/prevail-cli/main/scripts/install.sh | bash
 prevail
 ```
 
@@ -185,7 +185,7 @@ A terminal with UTF-8 + true-color is required. Tested on iTerm2, kitty, alacrit
 ## Docs · changelog · roadmap
 
 - [**CHANGELOG**](./CHANGELOG.md) — what shipped in each tag
-- [**Releases**](https://github.com/fru-dev3/prevail/releases) — pre-built binaries
+- [**Releases**](https://github.com/fru-dev3/prevail-cli/releases) — pre-built binaries
 - [**Demo vault**](./vault-demo) — synthetic "Alex Rivera" persona
 - [**Connector architecture**](./docs/connector-architecture.md) — auth probes, OAuth runner, manual recipes
 - [**Threat model**](./docs/threat-model.md) — long-form threat model + worked example

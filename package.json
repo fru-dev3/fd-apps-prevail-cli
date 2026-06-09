@@ -5,10 +5,10 @@
   "type": "module",
   "private": false,
   "license": "MIT",
-  "homepage": "https://github.com/fru-dev3/prevail",
+  "homepage": "https://github.com/fru-dev3/prevail-cli",
   "repository": {
     "type": "git",
-    "url": "https://github.com/fru-dev3/prevail.git"
+    "url": "https://github.com/fru-dev3/prevail-cli.git"
   },
   "keywords": [
     "tui",
