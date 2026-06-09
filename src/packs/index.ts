@@ -7,11 +7,14 @@ import type { PrevailPack } from "../pack.ts";
 import creator from "./creator.json";
 import family from "./family.json";
 import freelancer from "./freelancer.json";
+import general from "./general.json";
 import highIncome from "./high-income.json";
 import smallBusinessOwner from "./small-business-owner.json";
 import student from "./student.json";
 
 export const BUNDLED_PACKS: { file: string; pack: PrevailPack }[] = [
+  // General first — the broad starting point most people want.
+  { file: "general.json", pack: general as PrevailPack },
   { file: "small-business-owner.json", pack: smallBusinessOwner as PrevailPack },
   { file: "family.json", pack: family as PrevailPack },
   { file: "student.json", pack: student as PrevailPack },

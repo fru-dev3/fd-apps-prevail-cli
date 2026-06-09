@@ -1,0 +1,80 @@
+{
+  "schema": "prevail.pack/v1",
+  "name": "General",
+  "version": "1.0.0",
+  "description": "A solid starting point for anyone. The everyday life domains most people need: money, taxes, health, insurance, travel, and a calendar to tie it together.",
+  "domains": [
+    {
+      "slug": "wealth",
+      "title": "Money & Wealth",
+      "soul": "# Money & Wealth\n\nYour whole financial picture in one place: income, spending, savings, debt, and what you're building toward. The goal is calm clarity, not spreadsheets you never open.\n",
+      "goals": "# Goals\n\n- Know your monthly cashflow: what comes in, what goes out\n- Keep an emergency fund of 3 to 6 months of expenses\n- Pay down high-interest debt, then invest the difference\n- Review your money once a month, on a set day\n",
+      "config": "# Config\n\nmonthly_income: \nemergency_fund_target: \nbiggest_financial_goal: \nmonthly_review_day: \n",
+      "prompts": [
+        "Help me build a simple monthly budget from my income and expenses.",
+        "What should I do first: pay off debt or start investing?",
+        "How big should my emergency fund be, and how do I get there?"
+      ]
+    },
+    {
+      "slug": "tax",
+      "title": "Taxes",
+      "soul": "# Taxes\n\nEverything tax in one calm place: deadlines, documents, deductions, and what you owe or are owed. Never scramble in April again.\n",
+      "goals": "# Goals\n\n- Know your filing deadlines before they arrive\n- Keep tax documents in one place as they come in\n- Track deductible expenses through the year, not at the end\n- Avoid surprises: estimate what you'll owe ahead of time\n",
+      "config": "# Config\n\nfiling_status: \nstate: \nhas_side_income: \naccountant_contact: \n",
+      "prompts": [
+        "What tax deadlines and documents should I be aware of this year?",
+        "Which of my expenses might be tax deductible?",
+        "Help me estimate whether I'll owe taxes or get a refund."
+      ]
+    },
+    {
+      "slug": "health",
+      "title": "Health",
+      "soul": "# Health\n\nYour energy, fitness, sleep, and the appointments that keep you well. Small consistent habits, tracked simply, beat heroic plans you abandon.\n",
+      "goals": "# Goals\n\n- Stay current on checkups, dental, and screenings\n- Build one sustainable movement habit you actually keep\n- Protect your sleep: a consistent bedtime and wake time\n- Notice patterns: energy, stress, and what drives them\n",
+      "config": "# Config\n\nprimary_doctor: \nlast_checkup: \nmovement_goal: \nsleep_target_hours: \n",
+      "prompts": [
+        "Help me set up a simple, sustainable weekly movement routine.",
+        "What health checkups or screenings am I due for at my age?",
+        "I've been low on energy. Help me figure out what might be driving it."
+      ]
+    },
+    {
+      "slug": "insurance",
+      "title": "Insurance",
+      "soul": "# Insurance\n\nThe policies that protect you: health, auto, home or renters, and life. Know what you're covered for, what you're paying, and where the gaps are.\n",
+      "goals": "# Goals\n\n- Keep an inventory of every policy: what it covers and what it costs\n- Review coverage once a year and after big life changes\n- Close the dangerous gaps (liability, health, income protection)\n- Know how to file a claim before you need to\n",
+      "config": "# Config\n\nhealth_plan: \nauto_policy: \nhome_or_renters_policy: \nlife_policy: \nannual_review_month: \n",
+      "prompts": [
+        "Help me take an inventory of my insurance and spot any gaps.",
+        "Am I over-insured or under-insured anywhere I should fix?",
+        "Walk me through how to file a claim for a recent incident."
+      ]
+    },
+    {
+      "slug": "travel",
+      "title": "Travel",
+      "soul": "# Travel\n\nTrips you're planning and trips you dream about. Keep destinations, budgets, bookings, and packing in one place so travel is exciting, not stressful.\n",
+      "goals": "# Goals\n\n- Keep a running list of places you want to go\n- Plan trips against a real budget, not a guess\n- Track bookings and confirmations so nothing is lost\n- Have a reusable packing checklist ready to go\n",
+      "config": "# Config\n\nnext_trip: \ntravel_budget: \npassport_expiry: \nloyalty_programs: \n",
+      "prompts": [
+        "Help me plan my next trip within a set budget.",
+        "Build me a reusable packing checklist for a week-long trip.",
+        "What should I book first and what can wait for my upcoming trip?"
+      ]
+    },
+    {
+      "slug": "calendar",
+      "title": "Calendar",
+      "soul": "# Calendar\n\nWhat's coming up across every part of your life, in one view. Deadlines, appointments, birthdays, renewals, and the time you protect for what matters.\n",
+      "goals": "# Goals\n\n- See the week and month ahead at a glance\n- Never miss a deadline, renewal, or important date\n- Protect blocks of time for your real priorities\n- Review the week ahead every Sunday\n",
+      "config": "# Config\n\nweekly_review_day: Sunday\nkey_recurring_dates: \nprotected_time_blocks: \n",
+      "prompts": [
+        "What's coming up this week that I should prepare for?",
+        "Help me set up a simple Sunday weekly-review routine.",
+        "What recurring dates and renewals should I never miss?"
+      ]
+    }
+  ]
+}
