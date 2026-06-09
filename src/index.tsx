@@ -2512,13 +2512,30 @@ async function privacyCommand(args: string[]): Promise<number> {
 // switch-to-production flow. Machine-only (JSON).
 async function appmodeCommand(args: string[]): Promise<number> {
   const sub = args[0];
-  const body = sub === "get" || sub === "set" ? args.slice(1) : args;
-  const { json, flags } = parseKvArgs(body, null);
+  const body = sub === "get" || sub === "set" || sub === "init" || sub === "mark-demo" ? args.slice(1) : args;
+  const { json, flags, vaultPath } = parseKvArgs(body, null);
   if (!json) {
     console.error("prevail appmode is a machine-only command — pass --json.");
     return 1;
   }
   const cfg = await import("./config.ts");
+  // `appmode init` — prepare a clean production workspace and switch to it.
+  // Optional --vault <path> (default: embedded ~/.prevail/vault) and
+  // --clear-demo <path> (only emptied if it carries the demo marker).
+  if (sub === "init") {
+    const prod = await import("./production.ts");
+    const res = prod.initProduction({ vault: vaultPath ?? undefined, clearDemo: flags["clear-demo"] });
+    process.stdout.write(`${JSON.stringify(res)}\n`);
+    return 0;
+  }
+  // `appmode mark-demo --vault <path>` — drop the demo marker so a later
+  // production switch can safely clear this sandbox.
+  if (sub === "mark-demo") {
+    const prod = await import("./production.ts");
+    if (vaultPath) prod.markDemoVault(vaultPath);
+    process.stdout.write(`${JSON.stringify({ ok: !!vaultPath })}\n`);
+    return 0;
+  }
   if (sub === "set" && (flags.mode === "demo" || flags.mode === "production")) {
     cfg.setAppMode(flags.mode);
   }
