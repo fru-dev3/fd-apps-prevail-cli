@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 3 days ago"
+        "detail": "newest knowledge file updated 4 days ago"
       },
       "structure": {
         "score": 70,
@@ -46,31 +46,31 @@
     },
     "missing": [
       {
-        "label": "No decisions.md — decisions aren't being logged",
+        "label": "No decisions recorded yet — log the choices you make so they stick and shape future advice",
         "severity": "warn",
         "kind": "file"
       },
       {
-        "label": "No _journal — distilled facts have nowhere to land",
+        "label": "No journal yet — it builds itself as you chat (turn on Memory & Context)",
         "severity": "info",
         "kind": "file"
       },
       {
-        "label": "No _threads — no recorded chat activity yet",
+        "label": "No conversations yet — start a chat to build real context",
         "severity": "info",
         "kind": "structure"
       },
       {
-        "label": "config.md is mostly unfilled — 0 of 32 config.md fields filled in",
+        "label": "Key details still missing — 0 of 32 config.md fields filled in; fill in the important fields",
         "severity": "info",
         "kind": "config"
       }
     ],
     "relevance": null,
-    "freshness_secs": 291281,
+    "freshness_secs": 423550,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-07T21:31:08.268Z",
+    "computed_at": "2026-06-09T10:15:36.992Z",
     "audited_at": null
   },
   "goals": [],

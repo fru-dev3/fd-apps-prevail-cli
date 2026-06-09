@@ -16,9 +16,9 @@
 // rebuildable. Lives in the vault (not ~/.prevail) because by-domain roll-ups
 // are the whole point and domains are vault-scoped.
 
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 
-import { vreadFile } from "./vault-session.ts";
+import { vappendLine, vreadFile } from "./vault-session.ts";
 import { dirname, join, resolve } from "node:path";
 
 // =============================================================================
@@ -169,7 +169,7 @@ export function recordUsage(vaultPath: string, input: RecordUsageInput): UsageEn
   try {
     const dir = dirname(file);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    appendFileSync(file, JSON.stringify(entry) + "\n");
+    vappendLine(file, JSON.stringify(entry) + "\n");
     return entry;
   } catch {
     return null;

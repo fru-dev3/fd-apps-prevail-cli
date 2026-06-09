@@ -11,9 +11,9 @@
 // desktop byte-for-byte so the CLI, the TUI, and the desktop app all read and
 // write the SAME file interchangeably.
 
-import { appendFileSync, existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 
-import { vreadFile } from "./vault-session.ts";
+import { vappendLine, vreadFile, vwriteFile } from "./vault-session.ts";
 import { join, resolve } from "node:path";
 
 // A domain name is "safe" if it's a single path segment with no traversal.
@@ -76,7 +76,7 @@ export function appendDecision(
     type: record.type ?? "decision",
     ...record,
   };
-  appendFileSync(decisionsFile(vaultPath, domain), `${JSON.stringify(full)}\n`);
+  vappendLine(decisionsFile(vaultPath, domain), `${JSON.stringify(full)}\n`);
   return full;
 }
 
@@ -120,7 +120,7 @@ export function setDecisionFeedback(
   const file = decisionsFile(vaultPath, domain);
   if (!existsSync(file)) return false;
   const records: DecisionRecord[] = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of vreadFile(file).split("\n")) {
     const t = line.trim();
     if (!t) continue;
     try {
@@ -140,6 +140,6 @@ export function setDecisionFeedback(
   }
   if (!found) return false;
   // Preserve on-disk order (oldest → newest).
-  writeFileSync(file, `${records.map((r) => JSON.stringify(r)).join("\n")}\n`);
+  vwriteFile(file, `${records.map((r) => JSON.stringify(r)).join("\n")}\n`);
   return true;
 }

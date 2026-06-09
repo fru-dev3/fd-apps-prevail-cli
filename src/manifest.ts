@@ -2,15 +2,13 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   renameSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { CliKind } from "./config.ts";
-import { vreadFile } from "./vault-session.ts";
+import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { isCliKind } from "./config.ts";
 import { isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
 
@@ -514,7 +512,7 @@ export function writeManifest(vaultPath: string, domain: string, m: DomainManife
   const normalized = coerceManifest(m as unknown, domain);
   const json = `${JSON.stringify(normalized, null, 2)}\n`;
   const tmp = join(dir, `.manifest.json.${process.pid}.${Date.now()}.tmp`);
-  writeFileSync(tmp, json);
+  vwriteFile(tmp, json);
   try {
     chmodSync(tmp, 0o644);
   } catch {
@@ -544,7 +542,7 @@ export function ensureManifest(vaultPath: string, domain: string): DomainManifes
   if (existing) {
     // Idempotent: persist the forward-migrated shape only if it changed on
     // disk (schema bump or normalization). Cheap compare via serialization.
-    const onDisk = readFileSync(manifestPath(vaultPath, domain), "utf8");
+    const onDisk = vreadFile(manifestPath(vaultPath, domain));
     const normalized = `${JSON.stringify(existing, null, 2)}\n`;
     if (onDisk !== normalized) writeManifest(vaultPath, domain, existing);
     return existing;
@@ -571,5 +569,5 @@ function seedMemory(vaultPath: string, domain: string): void {
     "> standing preferences. Agents read this for context and append new durable facts here.",
     "",
   ].join("\n");
-  writeFileSync(file, body);
+  vwriteFile(file, body);
 }

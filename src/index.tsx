@@ -1702,6 +1702,78 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  // Vault encryption (F4 Phase 1). Passcode is read from STDIN, never argv.
+  //   encrypt: create/load keyring, encrypt the vault in place, SELF-VERIFY by
+  //            reading it back, and AUTO-ROLLBACK (decrypt) if verification fails
+  //            — so a wiring gap can never leave the vault unreadable.
+  //   decrypt: unlock with the passcode and restore plaintext.
+  //   unlock:  return the DEK (base64) for the host to hold + pass to the engine
+  //            via PREVAIL_VAULT_KEY on subsequent calls.
+  if (sub === "encrypt" || sub === "decrypt" || sub === "unlock") {
+    const asJson = args.includes("--json");
+    const readStdin = (): string => {
+      try { return readFileSync(0, "utf8").replace(/\r?\n$/, ""); } catch { return ""; }
+    };
+    const passcode = readStdin();
+    const crypto = await import("./vault-crypto.ts");
+    const ops = await import("./vault-encrypt-ops.ts");
+    const session = await import("./vault-session.ts");
+    const out = (o: Record<string, unknown>) => process.stdout.write(JSON.stringify(o) + "\n");
+    try {
+      if (sub === "unlock") {
+        const kr = ops.loadKeyring();
+        if (!kr) { out({ ok: false, error: "vault is not encrypted" }); return; }
+        if (!crypto.verifyKeyringPasscode(passcode, kr)) { out({ ok: false, error: "wrong passcode" }); return; }
+        out({ ok: true, key: crypto.unwrapDek(passcode, kr).toString("base64") });
+        return;
+      }
+      if (sub === "decrypt") {
+        const kr = ops.loadKeyring();
+        if (!kr) { out({ ok: false, error: "vault is not encrypted" }); return; }
+        if (!crypto.verifyKeyringPasscode(passcode, kr)) { out({ ok: false, error: "wrong passcode" }); return; }
+        const dek = crypto.unwrapDek(passcode, kr);
+        const r = ops.decryptVaultInPlace(vault, dek);
+        out({ ok: true, files: r.files });
+        return;
+      }
+      // encrypt
+      if (passcode.length < 4) { out({ ok: false, error: "passcode must be at least 4 characters" }); return; }
+      if (ops.isVaultEncrypted(vault)) { out({ ok: false, error: "vault is already encrypted" }); return; }
+      // Baseline: how many domains read in the clear, to verify against later.
+      const { scanVault } = await import("./vault.ts");
+      const before = scanVault(vault).length;
+      // New keyring (with recovery code) unless one already exists.
+      let dek: Buffer;
+      let recoveryCode: string | undefined;
+      const existing = ops.loadKeyring();
+      if (existing) {
+        if (!crypto.verifyKeyringPasscode(passcode, existing)) { out({ ok: false, error: "wrong passcode" }); return; }
+        dek = crypto.unwrapDek(passcode, existing);
+      } else {
+        const created = crypto.createKeyringWithRecovery(passcode, new Date().toISOString());
+        dek = created.dek;
+        recoveryCode = created.recoveryCode;
+        ops.saveKeyring(created.keyring);
+      }
+      ops.encryptVaultInPlace(vault, dek);
+      // SELF-VERIFY: read the vault back through the session decryptor.
+      session.setVaultSession(dek, true);
+      const after = scanVault(vault).length;
+      session.setVaultSession(null, false);
+      if (after < before) {
+        // Roll back — encryption made the vault less readable than before.
+        ops.decryptVaultInPlace(vault, dek);
+        out({ ok: false, error: `verification failed (${after}/${before} domains readable) — rolled back, vault left plaintext` });
+        return;
+      }
+      out({ ok: true, files: before, recoveryCode: recoveryCode ?? null, verified: `${after}/${before} domains` });
+    } catch (e) {
+      out({ ok: false, error: String(e) });
+      process.exit(1);
+    }
+    return;
+  }
+
   // JSON engine subcommands (archive / restore / list-archived) — defined by
   // docs/ENGINE-JSON-API.md. They read --vault/--json from their own sub-args
   // and emit the frozen error envelope on failure.

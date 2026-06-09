@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+
+import { vwriteFile } from "./vault-session.ts";
 import { join } from "node:path";
 import type { ChatMsg } from "./chat-pane.tsx";
 import type { Domain } from "./vault.ts";
@@ -135,7 +137,7 @@ export function writeDistilledSkill(domain: Domain, skillBody: string): WriteRes
   }
   try {
     mkdirSync(skillDir, { recursive: true });
-    writeFileSync(skillFile, skillBody);
+    vwriteFile(skillFile, skillBody);
     return {
       ok: true,
       path: skillFile,

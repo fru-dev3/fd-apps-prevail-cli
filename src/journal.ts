@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+
+import { vappendLine } from "./vault-session.ts";
 import { join } from "node:path";
 
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
@@ -143,7 +145,7 @@ function appendBullet(
   text: string,
 ): void {
   try {
-    if (!existsSync(file)) appendFileSync(file, `# ${header}\n\n`);
+    if (!existsSync(file)) vappendLine(file, `# ${header}\n\n`);
     const date = dayKey(ts);
     const time = timeKey(ts);
     // Backlink: `_log/<date>.md#<time>` — a reader (or a future CLI command)
@@ -151,7 +153,7 @@ function appendBullet(
     // honor it as a real anchor, but the path is greppable and that's
     // what matters.
     const line = `- ${date} ${time} · ${text}  · [src](../_log/${date}.md)\n`;
-    appendFileSync(file, line);
+    vappendLine(file, line);
   } catch {
     /* silent best-effort */
   }
@@ -195,7 +197,7 @@ export async function distillTurnToJournal(args: DistillArgs): Promise<void> {
     const factsFile = join(dir, "facts.md");
     if (!existsSync(factsFile)) {
       try {
-        appendFileSync(
+        vappendLine(
           factsFile,
           `# ${args.domainPath.split("/").pop() ?? "domain"} · facts\n\n`,
         );

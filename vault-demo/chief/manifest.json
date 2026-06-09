@@ -29,7 +29,7 @@
       },
       "freshness": {
         "score": 100,
-        "detail": "newest knowledge file updated 1 day ago"
+        "detail": "newest knowledge file updated 2 days ago"
       },
       "structure": {
         "score": 90,
@@ -37,7 +37,7 @@
       },
       "activity": {
         "score": 65,
-        "detail": "3 log sessions, 12 threads (saturate at 10 each)"
+        "detail": "3 log sessions, 15 threads (saturate at 10 each)"
       },
       "config_completeness": {
         "score": 0,
@@ -46,12 +46,12 @@
     },
     "missing": [
       {
-        "label": "No decisions.md — decisions aren't being logged",
+        "label": "No decisions recorded yet — log the choices you make so they stick and shape future advice",
         "severity": "warn",
         "kind": "file"
       },
       {
-        "label": "config.md is mostly unfilled — 0 of 23 config.md fields filled in",
+        "label": "Key details still missing — 0 of 23 config.md fields filled in; fill in the important fields",
         "severity": "info",
         "kind": "config"
       }
@@ -76,7 +76,7 @@
           "present": true,
           "stale": false,
           "severity": "warn",
-          "detail": "present · 1d old",
+          "detail": "present · 2d old",
           "recommend": "Record this quarter's 3-5 priorities so the agent can align every domain to them."
         },
         {
@@ -85,7 +85,7 @@
           "present": true,
           "stale": false,
           "severity": "info",
-          "detail": "present · 1d old",
+          "detail": "present · 2d old",
           "recommend": "Log a recurring review cadence — when you step back and reassess."
         },
         {
@@ -99,10 +99,10 @@
         }
       ]
     },
-    "freshness_secs": 98974,
+    "freshness_secs": 231243,
     "assessment": null,
     "audit_source": null,
-    "computed_at": "2026-06-07T21:31:08.256Z",
+    "computed_at": "2026-06-09T10:15:36.985Z",
     "audited_at": null
   },
   "goals": [],

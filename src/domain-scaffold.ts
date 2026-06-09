@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+
+import { vwriteFile } from "./vault-session.ts";
 import { join } from "node:path";
 
 export interface ScaffoldResult {
@@ -18,11 +20,11 @@ export function scaffoldDomain(vaultPath: string, rawName: string): ScaffoldResu
     for (const sub of ["00_current", "01_prior", "02_briefs"]) {
       mkdirSync(join(dir, sub), { recursive: true });
     }
-    writeFileSync(join(dir, "state.md"), defaultState(name));
-    writeFileSync(join(dir, "open-loops.md"), defaultOpenLoops(name));
-    writeFileSync(join(dir, "config.md"), defaultConfig(name));
-    writeFileSync(join(dir, "QUICKSTART.md"), defaultQuickstart(name));
-    writeFileSync(join(dir, "PROMPTS.md"), defaultPrompts(name));
+    vwriteFile(join(dir, "state.md"), defaultState(name));
+    vwriteFile(join(dir, "open-loops.md"), defaultOpenLoops(name));
+    vwriteFile(join(dir, "config.md"), defaultConfig(name));
+    vwriteFile(join(dir, "QUICKSTART.md"), defaultQuickstart(name));
+    vwriteFile(join(dir, "PROMPTS.md"), defaultPrompts(name));
     return { ok: true, message: `created ${name}`, path: dir };
   } catch (err) {
     return { ok: false, message: (err as Error).message };
@@ -48,7 +50,7 @@ export function scaffoldSkill(
   if (existsSync(dir)) return { ok: false, message: `skill ${name} already exists` };
   try {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "SKILL.md"), defaultSkill(name, domainName));
+    vwriteFile(join(dir, "SKILL.md"), defaultSkill(name, domainName));
     return { ok: true, message: `created skill ${name}`, path: dir };
   } catch (err) {
     return { ok: false, message: (err as Error).message };
@@ -98,10 +100,10 @@ export function scaffoldApp(vaultPath: string, rawName: string): ScaffoldResult 
   try {
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(dir, "skills"), { recursive: true });
-    writeFileSync(join(dir, "state.md"), defaultAppState(name));
-    writeFileSync(join(dir, "open-loops.md"), defaultOpenLoops(name));
-    writeFileSync(join(dir, "QUICKSTART.md"), defaultQuickstart(name));
-    writeFileSync(join(dir, "PROMPTS.md"), defaultPrompts(name));
+    vwriteFile(join(dir, "state.md"), defaultAppState(name));
+    vwriteFile(join(dir, "open-loops.md"), defaultOpenLoops(name));
+    vwriteFile(join(dir, "QUICKSTART.md"), defaultQuickstart(name));
+    vwriteFile(join(dir, "PROMPTS.md"), defaultPrompts(name));
     return { ok: true, message: `created app ${name}`, path: dir };
   } catch (err) {
     return { ok: false, message: (err as Error).message };

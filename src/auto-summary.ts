@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { vappendLine, vreadFile } from "./vault-session.ts";
 import { parseVerdict } from "./verdict-parser.ts";
 import { encodeMeta, defaultRetroDue } from "./calibration.ts";
 import { indexEntry } from "./memory.ts";
@@ -63,10 +64,10 @@ export function writeTurnSummary(args: TurnSummaryArgs): void {
     if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
     file = join(logDir, dayKey(args.ts) + ".md");
     if (!existsSync(file)) {
-      appendFileSync(file, `# ${dayKey(args.ts)}\n`);
+      vappendLine(file, `# ${dayKey(args.ts)}\n`);
     }
     const entry = renderEntry(args);
-    appendFileSync(file, entry);
+    vappendLine(file, entry);
     headerLine = entry.split("\n").find((l) => l.startsWith("## ")) ?? "";
     // Tamper-evident sidecar: alongside the .md log, append one line to
     // _log/.shasum recording <entry-id> <sha256-of-entry>. The verify
@@ -77,7 +78,7 @@ export function writeTurnSummary(args: TurnSummaryArgs): void {
       const sha = createHash("sha256").update(entry).digest("hex");
       const id = entryId(args.ts);
       const shasumFile = join(logDir, ".shasum");
-      appendFileSync(shasumFile, `${id} ${sha}\n`);
+      vappendLine(shasumFile, `${id} ${sha}\n`);
     } catch {
       // best-effort — never break the user's chat
     }
@@ -221,7 +222,7 @@ export function readTodayLog(domainPath: string, ts = Date.now()): string | null
   const file = join(domainPath, "_log", dayKey(ts) + ".md");
   if (!existsSync(file)) return null;
   try {
-    return readFileSync(file, "utf8");
+    return vreadFile(file);
   } catch {
     return null;
   }

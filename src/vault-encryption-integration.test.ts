@@ -15,7 +15,9 @@ import { createKeyring } from "./vault-crypto.ts";
 import { encryptVaultInPlace, decryptVaultInPlace } from "./vault-encrypt-ops.ts";
 import { setVaultSession } from "./vault-session.ts";
 import { scanVault } from "./vault.ts";
-import { readUsage } from "./usage.ts";
+import { readUsage, recordUsage } from "./usage.ts";
+import { appendDecision, readDecisions } from "./decisions.ts";
+import { readFileSync } from "node:fs";
 
 function makeVault(): string {
   const dir = mkdtempSync(join(TEST_ROOT, ".prevail-encint-"));
@@ -62,6 +64,30 @@ describe("encrypted-vault read integration", () => {
     const domains = scanVault(dir);
     expect(domains.map((d) => d.name)).toContain("health");
     expect(readUsage(dir).length).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("WIRED WRITES (recordUsage, appendDecision) encrypt on disk and read back", () => {
+    const dir = makeVault();
+    const { dek } = createKeyring("pw1234", "2026-06-09T00:00:00Z");
+    encryptVaultInPlace(dir, dek);
+    setVaultSession(dek, true);
+
+    // Write through the real engine functions while the session is encrypted.
+    recordUsage(dir, { session: "s", domain: "health", cli: "claude", model: "opus", inputTokens: 10, outputTokens: 5 });
+    appendDecision(dir, "health", { id: "d1", question: "rebalance?", choice: "yes" } as never);
+
+    // On disk these are ciphertext (no plaintext leak).
+    expect(readFileSync(join(dir, "_meta", "usage.jsonl"), "utf8")).not.toContain('"claude"');
+    expect(readFileSync(join(dir, "health", "_decisions.jsonl"), "utf8")).not.toContain("rebalance");
+
+    // But the wired readers decrypt them back. The seed had 1 usage entry;
+    // the new append makes 2 — proving the encrypted append round-tripped.
+    const usage = readUsage(dir);
+    expect(usage.length).toBe(2);
+    const decisions = readDecisions(dir, "health");
+    expect(decisions.some((d) => d.id === "d1")).toBe(true);
+
     rmSync(dir, { recursive: true, force: true });
   });
 
