@@ -17,6 +17,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # Stage 1: build + package each platform on its native runner, then hand the
+  # tarball up as a workflow artifact. Crucially, NO job touches the GitHub
+  # release here — when all four matrix legs raced to create/upload the same
+  # release (action-gh-release), uploads collided and assets were silently
+  # dropped (v1.6.5 shipped only 2 of 4 platforms). Splitting publish into a
+  # single downstream job removes the race entirely.
   build:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -69,7 +75,34 @@ jobs:
           tar -czf "prevail-${VERSION}-${{ matrix.target }}.tar.gz" prevail vault-demo AGENTS-operating.md
           ls -la
 
-      - uses: softprops/action-gh-release@v2
+      - name: upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: dist/prevail-*.tar.gz
+          name: prevail-${{ matrix.target }}
+          path: dist/prevail-*.tar.gz
+          if-no-files-found: error
+
+  # Stage 2: one job, after ALL builds succeed, downloads every platform tarball
+  # and publishes a single release with all four assets in one call. `needs:
+  # build` means a build failure on any platform blocks the release outright
+  # (better a loud no-release you rerun than a silent partial one).
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: list artifacts
+        run: ls -la artifacts
+
+      - name: publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/prevail-*.tar.gz
+          fail_on_unmatched_files: true
           generate_release_notes: true
