@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+
+import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { join } from "node:path";
 import { scanVault, type Domain } from "./vault.ts";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
@@ -42,7 +44,7 @@ export function loadBriefings(vaultPath: string): BriefingEntry[] {
   const f = briefingsFilePath(vaultPath);
   if (!existsSync(f)) return [];
   try {
-    const parsed = JSON.parse(readFileSync(f, "utf8")) as BriefingFile;
+    const parsed = JSON.parse(vreadFile(f)) as BriefingFile;
     return Array.isArray(parsed.briefings) ? parsed.briefings : [];
   } catch {
     return [];
@@ -50,7 +52,7 @@ export function loadBriefings(vaultPath: string): BriefingEntry[] {
 }
 
 export function saveBriefings(vaultPath: string, briefings: BriefingEntry[]): void {
-  writeFileSync(briefingsFilePath(vaultPath), JSON.stringify({ briefings }, null, 2));
+  vwriteFile(briefingsFilePath(vaultPath), JSON.stringify({ briefings }, null, 2));
 }
 
 export function makeBriefingId(): string {
