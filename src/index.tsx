@@ -831,7 +831,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
 //   prevail usage [--json]                   raw ledger (default: pretty totals)
 //   prevail usage --by day|domain|model|session|cli|surface [--since 7d] [--json]
 async function usageCommand(args: string[], vaultOverride: string | null): Promise<void> {
-  const { recordUsage, readUsage, aggregateUsage, parseSince, filterByDomain } = await import("./usage.ts");
+  const { recordUsage, readUsage, aggregateUsage, parseSince, filterByDomain, summarizeAll } = await import("./usage.ts");
   const cfg = readConfig();
   const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
 
@@ -872,9 +872,18 @@ async function usageCommand(args: string[], vaultOverride: string | null): Promi
     else if (a === "--json") json = true;
   }
   const sinceMs = parseSince(since) ?? undefined;
-  let entries = readUsage(vault, sinceMs);
+  const allEntries = readUsage(vault, sinceMs);
+
+  // `summary` — one combined multi-dimension roll-up for a stats dashboard.
+  // Always JSON (it's a machine surface). Honors --domain / --since.
+  if (sub === "summary") {
+    process.stdout.write(JSON.stringify(summarizeAll(allEntries, sinceMs, domain)) + "\n");
+    return;
+  }
+
   // Optional per-domain scope (for the domain-level Usage tab). Applied before
   // any aggregation so totals + buckets are all domain-scoped.
+  let entries = allEntries;
   if (domain) entries = filterByDomain(entries, domain);
 
   const VALID = new Set(["day", "domain", "model", "session", "cli", "surface"]);

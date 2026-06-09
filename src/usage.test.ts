@@ -7,6 +7,7 @@ import {
   filterByDomain,
   parseSince,
   rateFor,
+  summarizeAll,
   type UsageEntry,
 } from "./usage.ts";
 
@@ -93,6 +94,32 @@ describe("filterByDomain", () => {
   it("scoped aggregation only counts that domain", () => {
     const r = aggregateUsage(filterByDomain(entries, "tax"), "model");
     expect(r.total.calls).toBe(1);
+  });
+});
+
+describe("summarizeAll", () => {
+  const ts = Date.parse("2026-06-01T12:00:00Z");
+  const entries: UsageEntry[] = [
+    entry({ ts, domain: "tax", cli: "claude", model: "opus" }),
+    entry({ ts: ts + 86400000, domain: "tax", cli: "codex", model: "gpt-5" }),
+    entry({ ts, domain: "health", cli: "claude", model: "opus" }),
+  ];
+
+  it("returns every dimension in one call", () => {
+    const s = summarizeAll(entries);
+    expect(s.total.calls).toBe(3);
+    expect(s.by_day.length).toBe(2);
+    expect(s.by_cli.map((b) => b.key).sort()).toEqual(["claude", "codex"]);
+    expect(s.by_model.length).toBe(2);
+    expect(s.by_domain.map((b) => b.key).sort()).toEqual(["health", "tax"]);
+  });
+
+  it("scopes the whole roll-up to one domain", () => {
+    const s = summarizeAll(entries, undefined, "tax");
+    expect(s.domain).toBe("tax");
+    expect(s.total.calls).toBe(2);
+    expect(s.by_domain.length).toBe(1);
+    expect(s.by_domain[0]!.key).toBe("tax");
   });
 });
 

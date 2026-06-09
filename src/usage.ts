@@ -268,6 +268,37 @@ export function aggregateUsage(entries: UsageEntry[], by: UsageDimension, sinceM
   return { by, since: sinceMs ?? null, total: round(total), buckets };
 }
 
+// A one-shot, multi-dimension roll-up — everything a stats dashboard needs in a
+// single call, so a front-end (desktop / web / tui) doesn't fan out one query
+// per dimension. Optionally scoped to a single domain (the per-domain Usage
+// tab). `by_day` is the over-time series; the rest rank by cost desc.
+export interface UsageSummaryAll {
+  since: number | null;
+  domain: string | null;
+  total: UsageBucket;
+  by_day: UsageBucket[];
+  by_cli: UsageBucket[];
+  by_model: UsageBucket[];
+  by_domain: UsageBucket[];
+}
+
+export function summarizeAll(
+  entries: UsageEntry[],
+  sinceMs?: number,
+  domain?: string | null,
+): UsageSummaryAll {
+  const scoped = domain ? filterByDomain(entries, domain) : entries;
+  return {
+    since: sinceMs ?? null,
+    domain: domain ?? null,
+    total: aggregateUsage(scoped, "model", sinceMs).total,
+    by_day: aggregateUsage(scoped, "day", sinceMs).buckets,
+    by_cli: aggregateUsage(scoped, "cli", sinceMs).buckets,
+    by_model: aggregateUsage(scoped, "model", sinceMs).buckets,
+    by_domain: aggregateUsage(scoped, "domain", sinceMs).buckets,
+  };
+}
+
 // Parse a relative --since like "7d", "24h", "30m", or an ISO date / epoch ms.
 export function parseSince(s: string | undefined, now: number = Date.now()): number | null {
   if (!s) return null;
