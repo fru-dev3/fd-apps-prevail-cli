@@ -13,11 +13,24 @@
 // what makes the migration safe to land incrementally.
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { decryptText, encryptText } from "./vault-crypto.ts";
 
 let sessionDek: Buffer | null = null;
 let sessionEncrypted = false;
+// When set, only paths under this root are encrypted/decrypted — so a module
+// that writes OUTSIDE the vault (e.g. a connector skill output to an arbitrary
+// path) is never wrongly encrypted. Null = treat every path as in-vault (the
+// back-compat default used by unit tests that operate on a single temp vault).
+let sessionVaultRoot: string | null = null;
+
+function inVault(path: string): boolean {
+  if (!sessionVaultRoot) return true;
+  const root = resolve(sessionVaultRoot);
+  const p = resolve(path);
+  return p === root || p.startsWith(root + "/");
+}
 
 /** Initialize from the environment (called once at engine startup). */
 export function initVaultSession(env: NodeJS.ProcessEnv = process.env): void {
@@ -35,12 +48,17 @@ export function initVaultSession(env: NodeJS.ProcessEnv = process.env): void {
   // An explicit flag lets a host say "this vault is encrypted" even before a key
   // is supplied (so reads fail loudly rather than returning ciphertext).
   if (env.PREVAIL_VAULT_ENCRYPTED === "1") sessionEncrypted = true;
+  // The encrypted vault's root — only paths under it are transformed.
+  sessionVaultRoot = env.PREVAIL_VAULT_ROOT && env.PREVAIL_VAULT_ROOT.length > 0
+    ? env.PREVAIL_VAULT_ROOT
+    : null;
 }
 
-/** Test/host hook: set the session key directly. */
-export function setVaultSession(dek: Buffer | null, encrypted: boolean): void {
+/** Test/host hook: set the session key directly (optional vault root). */
+export function setVaultSession(dek: Buffer | null, encrypted: boolean, vaultRoot: string | null = null): void {
   sessionDek = dek;
   sessionEncrypted = encrypted;
+  sessionVaultRoot = vaultRoot;
 }
 
 export function vaultSessionDek(): Buffer | null {
@@ -58,7 +76,7 @@ export function isVaultSessionEncrypted(): boolean {
  */
 export function vreadFile(path: string): string {
   const raw = readFileSync(path, "utf8");
-  if (!sessionEncrypted || !sessionDek) return raw;
+  if (!sessionEncrypted || !sessionDek || !inVault(path)) return raw;
   return decryptText(sessionDek, raw);
 }
 
@@ -68,7 +86,7 @@ export function vreadFile(path: string): string {
  * vreadFile for full-overwrite saves (state, manifest, journal rewrites).
  */
 export function vwriteFile(path: string, content: string): void {
-  if (!sessionEncrypted || !sessionDek) {
+  if (!sessionEncrypted || !sessionDek || !inVault(path)) {
     writeFileSync(path, content);
     return;
   }
@@ -83,7 +101,7 @@ export function vwriteFile(path: string, content: string): void {
  * would need a lock (noted for the activation pass).
  */
 export function vappendLine(path: string, line: string): void {
-  if (!sessionEncrypted || !sessionDek) {
+  if (!sessionEncrypted || !sessionDek || !inVault(path)) {
     appendFileSync(path, line);
     return;
   }

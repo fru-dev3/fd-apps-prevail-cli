@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, chmodSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { vappendLine, vreadFile, vwriteFile } from "./vault-session.ts";
 import { homedir } from "node:os";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
 import type { AppSkill } from "./vault.ts";
@@ -77,7 +78,7 @@ export function loadSkillsForConnector(app: AppSkill): SkillSpec[] {
     // Skip non-markdown + the connector's SKILL.md overview file.
     if (!f.endsWith(".md") || f === "SKILL.md") continue;
     try {
-      const raw = readFileSync(join(skillsDir, f), "utf8");
+      const raw = vreadFile(join(skillsDir, f));
       const spec = parseSkillFile(raw, join(skillsDir, f), app);
       if (spec) out.push(spec);
     } catch {
@@ -473,13 +474,13 @@ function writeOutput(absPath: string, kind: SkillOutput["kind"], content: string
   const dir = dirname(absPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   if (kind === "append") {
-    appendFileSync(absPath, content.endsWith("\n") ? content : content + "\n");
+    vappendLine(absPath, content.endsWith("\n") ? content : content + "\n");
   } else if (kind === "markdown") {
     const stamp = new Date().toISOString().slice(0, 16);
     const block = `\n\n## ${stamp}\n\n${content}\n`;
-    appendFileSync(absPath, block);
+    vappendLine(absPath, block);
   } else {
-    writeFileSync(absPath, content);
+    vwriteFile(absPath, content);
   }
   try { chmodSync(absPath, 0o600); } catch { /* best-effort */ }
 }
@@ -525,5 +526,5 @@ export function logSkillRun(skill: SkillSpec, result: SkillRunResult): void {
     `- outputs: ${result.outputsWritten.length === 0 ? "(none)" : result.outputsWritten.map((p) => p.replace(homedir(), "~")).join(", ")}`,
     "",
   ].join("\n");
-  appendFileSync(file, line);
+  vappendLine(file, line);
 }

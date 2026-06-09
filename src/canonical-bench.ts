@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { vreadFile, vwriteFile } from "./vault-session.ts";
 
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
@@ -120,7 +121,7 @@ function extractSection(body: string, heading: string): string | undefined {
 
 export function readQuestion(filePath: string): CanonicalQuestion | null {
   let raw = "";
-  try { raw = readFileSync(filePath, "utf8"); } catch { return null; }
+  try { raw = vreadFile(filePath); } catch { return null; }
   const { fields, body } = parseFrontmatter(raw);
   const id = typeof fields.id === "string" ? fields.id : null;
   const domain = typeof fields.domain === "string" ? fields.domain : null;
@@ -225,7 +226,7 @@ export function writeDraftQuestion(args: SeedDraftArgs): string {
   fm.push("");
   fm.push(args.notes ?? "<FILL IN: what you actually decided, and why. Real-world outcome if known.>");
   fm.push("");
-  writeFileSync(path, fm.join("\n"));
+  vwriteFile(path, fm.join("\n"));
   return path;
 }
 
@@ -300,7 +301,7 @@ function buildQuestionPrompt(q: CanonicalQuestion, vaultPath: string): string {
       const full = join(dir, rel);
       let content = "";
       try {
-        content = readFileSync(full, "utf8");
+        content = vreadFile(full);
       } catch {
         content = `(could not read attachment: ${rel})`;
       }
@@ -467,10 +468,10 @@ export function writeRunDirectory(args: {
     md.push("---");
     md.push("");
   }
-  writeFileSync(join(dir, "results.md"), md.join("\n"));
+  vwriteFile(join(dir, "results.md"), md.join("\n"));
   // results.json — machine-readable mirror for `bench score` to load
   // without re-parsing markdown.
-  writeFileSync(
+  vwriteFile(
     join(dir, "results.json"),
     JSON.stringify(args.records, null, 2),
   );
@@ -592,7 +593,7 @@ export interface ScoreArgs {
 
 export async function scoreRun(args: ScoreArgs): Promise<RunScore> {
   const jsonFile = join(args.runDir, "results.json");
-  const raw = readFileSync(jsonFile, "utf8");
+  const raw = vreadFile(jsonFile);
   const records: CanonicalRunRecord[] = JSON.parse(raw);
   const questionScores: QuestionScore[] = [];
   for (const r of records) {
@@ -625,7 +626,7 @@ export async function scoreRun(args: ScoreArgs): Promise<RunScore> {
     keyword_avg: avg(kScores),
     judge_avg: avg(jScores),
   };
-  writeFileSync(join(args.runDir, "score.json"), JSON.stringify(result, null, 2));
+  vwriteFile(join(args.runDir, "score.json"), JSON.stringify(result, null, 2));
   // Markdown scoreboard alongside the json for grep/PR review.
   const md: string[] = [];
   md.push(`# score · ${result.label}`);
@@ -638,7 +639,7 @@ export async function scoreRun(args: ScoreArgs): Promise<RunScore> {
   for (const q of questionScores) {
     md.push(`| ${q.id} | ${q.domain} | ${q.keyword_score ?? "—"} | ${q.judge_score ?? "—"} | ${q.judge_rationale ?? ""} |`);
   }
-  writeFileSync(join(args.runDir, "score.md"), md.join("\n"));
+  vwriteFile(join(args.runDir, "score.md"), md.join("\n"));
   return result;
 }
 
@@ -661,7 +662,7 @@ export function buildLeaderboard(vaultPath: string): LeaderboardEntry[] {
     const scoreFile = join(dir, "score.json");
     if (!existsSync(scoreFile)) continue;
     try {
-      const data: RunScore = JSON.parse(readFileSync(scoreFile, "utf8"));
+      const data: RunScore = JSON.parse(vreadFile(scoreFile));
       out.push({
         label: data.label,
         runDir: data.runDir,
@@ -692,8 +693,8 @@ export function loadRunForInspection(runDir: string): {
   const scoreFile = join(runDir, "score.json");
   if (!existsSync(resultsFile) || !existsSync(scoreFile)) return null;
   try {
-    const records: CanonicalRunRecord[] = JSON.parse(readFileSync(resultsFile, "utf8"));
-    const score: RunScore = JSON.parse(readFileSync(scoreFile, "utf8"));
+    const records: CanonicalRunRecord[] = JSON.parse(vreadFile(resultsFile));
+    const score: RunScore = JSON.parse(vreadFile(scoreFile));
     return { records, score };
   } catch {
     return null;
@@ -718,7 +719,7 @@ export function seedFromLatestCouncil(
   for (const f of files) {
     const file = join(logDir, f);
     let content = "";
-    try { content = readFileSync(file, "utf8"); } catch { continue; }
+    try { content = vreadFile(file); } catch { continue; }
     // Match the LAST council section in the file (most recent verdict).
     const sectionRe = /##\s+\d{1,2}:\d{2}\s+·\s+⚖[^\n]*\n([\s\S]*?)(?=^##\s|\Z)/gm;
     let lastMatch: RegExpExecArray | null = null;

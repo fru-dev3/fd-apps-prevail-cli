@@ -49,6 +49,30 @@ describe("vwriteFile / vreadFile round-trip", () => {
   });
 });
 
+describe("path-awareness (only encrypt under the vault root)", () => {
+  it("leaves files OUTSIDE the vault root untouched even when encrypted", () => {
+    const root = mkdtempSync(join(tmpdir(), "prevail-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "prevail-out-"));
+    const { dek } = createKeyring("pw", "2026-06-09T00:00:00Z");
+    setVaultSession(dek, true, root);
+
+    const inFile = join(root, "in.md");
+    const outFile = join(outside, "out.md");
+    vwriteFile(inFile, "vault note\n");
+    vwriteFile(outFile, "external note\n");
+
+    // In-vault is ciphertext; outside is left as plaintext (passthrough).
+    expect(readFileSync(inFile, "utf8")).not.toContain("vault note");
+    expect(readFileSync(outFile, "utf8")).toBe("external note\n");
+    // And reads honor the same boundary.
+    expect(vreadFile(inFile)).toBe("vault note\n");
+    expect(vreadFile(outFile)).toBe("external note\n");
+
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+});
+
 describe("vappendLine (encrypted = read-modify-write)", () => {
   it("accumulates lines that decrypt to the full ledger", () => {
     const { dek } = createKeyring("pw", "2026-06-09T00:00:00Z");

@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, } from "node:fs";
+import { readdirSync, existsSync, mkdirSync, } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { detectClis } from "./cli-bridge.ts";
@@ -56,7 +57,7 @@ export function loadQuestions(): BenchQuestion[] {
         const filePath = join(domainDir, f);
         let raw: string;
         try {
-          raw = readFileSync(filePath, "utf8");
+          raw = vreadFile(filePath);
         } catch {
           continue;
         }
@@ -188,7 +189,7 @@ export function writeBenchResult(result: BenchResult, outputDir: string): string
     lines.push(p.reply);
     lines.push("");
   }
-  writeFileSync(file, lines.join("\n"));
+  vwriteFile(file, lines.join("\n"));
   return file;
 }
 
@@ -208,7 +209,7 @@ export function writeBenchSummary(results: BenchResult[], outputDir: string, run
       `| ${r.question.id} | ${r.question.domain} | ${r.question.stakes} | ${r.successfulPanelists}/${r.panelCount} | ${r.chairLabel} | ${r.divergenceFlagged ? "🔀" : "—"} | ${(r.msTotal / 1000).toFixed(1)}s |`,
     );
   }
-  writeFileSync(file, lines.join("\n"));
+  vwriteFile(file, lines.join("\n"));
   return file;
 }
 

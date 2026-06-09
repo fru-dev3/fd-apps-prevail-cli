@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readdirSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { vreadFile, vwriteFile } from "./vault-session.ts";
 
 // Calibration loop — "council vs. yourself". Before fanning out to the
 // panel, the user records their gut take in one line. The log entry stores
@@ -98,7 +99,7 @@ export function listPendingRetrospectives(domainPath: string, now = Date.now()):
     const file = join(dir, name);
     let content: string;
     try {
-      content = readFileSync(file, "utf8");
+      content = vreadFile(file);
     } catch {
       continue;
     }
@@ -133,7 +134,7 @@ export function recordOutcome(domainPath: string, id: string, outcome: string): 
     const file = join(dir, name);
     let content: string;
     try {
-      content = readFileSync(file, "utf8");
+      content = vreadFile(file);
     } catch {
       continue;
     }
@@ -147,7 +148,7 @@ export function recordOutcome(domainPath: string, id: string, outcome: string): 
       break;
     }
     if (changed) {
-      writeFileSync(file, lines.join("\n"));
+      vwriteFile(file, lines.join("\n"));
       return true;
     }
   }
@@ -173,7 +174,7 @@ export function computeCalibration(domainPath: string): CalibrationStats {
     if (!name.endsWith(".md")) continue;
     let content: string;
     try {
-      content = readFileSync(join(dir, name), "utf8");
+      content = vreadFile(join(dir, name));
     } catch {
       continue;
     }
@@ -248,5 +249,5 @@ export function writeCalibrationReport(domainPath: string): void {
       : `${stats.pending} decision${stats.pending === 1 ? "" : "s"} past their 90-day mark. Run \`/calibration pending\` to record outcomes.`,
   ].join("\n");
   if (!existsSync(domainPath)) mkdirSync(domainPath, { recursive: true });
-  writeFileSync(file, body);
+  vwriteFile(file, body);
 }
