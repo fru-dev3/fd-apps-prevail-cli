@@ -16,7 +16,9 @@
 // rebuildable. Lives in the vault (not ~/.prevail) because by-domain roll-ups
 // are the whole point and domains are vault-scoped.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+
+import { vreadFile } from "./vault-session.ts";
 import { dirname, join, resolve } from "node:path";
 
 // =============================================================================
@@ -179,7 +181,7 @@ export function readUsage(vaultPath: string, sinceMs?: number): UsageEntry[] {
   if (!existsSync(file)) return [];
   let raw: string;
   try {
-    raw = readFileSync(file, "utf8");
+    raw = vreadFile(file);
   } catch {
     return [];
   }

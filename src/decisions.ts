@@ -12,6 +12,8 @@
 // write the SAME file interchangeably.
 
 import { appendFileSync, existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+
+import { vreadFile } from "./vault-session.ts";
 import { join, resolve } from "node:path";
 
 // A domain name is "safe" if it's a single path segment with no traversal.
@@ -88,7 +90,7 @@ export function readDecisions(
   if (!existsSync(file)) return [];
   let text = "";
   try {
-    text = readFileSync(file, "utf8");
+    text = vreadFile(file);
   } catch {
     return [];
   }

@@ -1,4 +1,6 @@
-import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readdirSync, writeFileSync, existsSync } from "node:fs";
+
+import { vreadFile } from "./vault-session.ts";
 import { join } from "node:path";
 import { OLLAMA_BASE_URL } from "./cli-bridge.ts";
 
@@ -126,7 +128,7 @@ export async function recall(args: {
       const path = join(logDir, f);
       let content: string;
       try {
-        content = readFileSync(path, "utf8");
+        content = vreadFile(path);
       } catch {
         continue;
       }
@@ -194,7 +196,7 @@ export async function indexEntry(args: {
   if (!vec) return false;
   let content: string;
   try {
-    content = readFileSync(args.filePath, "utf8");
+    content = vreadFile(args.filePath);
   } catch {
     return false;
   }

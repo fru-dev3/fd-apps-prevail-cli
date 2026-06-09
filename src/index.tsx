@@ -2526,6 +2526,11 @@ async function searchCommand(args: string[]): Promise<number> {
 }
 
 async function main() {
+  // Pick up an encrypted-vault session key (base64 DEK in PREVAIL_VAULT_KEY,
+  // supplied by the host) before any vault read happens. No key / plaintext
+  // vault = pure passthrough, so this is a no-op for the common case.
+  const { initVaultSession } = await import("./vault-session.ts");
+  initVaultSession();
   const args = parseArgs(process.argv);
   if (args.help) {
     printHelp();

@@ -10,3 +10,4 @@ bun.lockb
 # Local bench run outputs (one folder per run). The canonical questions
 # and attachments are committed; the per-run reply transcripts are not.
 vault-demo/benchmark/runs/
+.prevail-encint-*

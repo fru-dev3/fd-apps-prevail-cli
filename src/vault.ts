@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
+import { readdirSync, statSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
+import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
@@ -168,7 +169,7 @@ export function readStateContent(domainPath: string): string {
   const p = resolveStatePath(domainPath);
   if (!p) return "";
   try {
-    return stripFrontmatter(readFileSync(p, "utf8"));
+    return stripFrontmatter(vreadFile(p));
   } catch {
     return "";
   }
@@ -210,7 +211,7 @@ export function scanVault(vaultPath: string): Domain[] {
     let openLoopCount = 0;
     if (statePath) {
       try {
-        openLoopCount = countOpenItemsInState(stripFrontmatter(readFileSync(statePath, "utf8")));
+        openLoopCount = countOpenItemsInState(stripFrontmatter(vreadFile(statePath)));
       } catch {}
     }
     if (openLoopCount === 0) {
@@ -218,11 +219,11 @@ export function scanVault(vaultPath: string): Domain[] {
       const tasksPath = join(domainPath, "_tasks.jsonl"); // v2
       if (existsSync(loopsPath)) {
         try {
-          openLoopCount = countUncheckedBoxes(readFileSync(loopsPath, "utf8"));
+          openLoopCount = countUncheckedBoxes(vreadFile(loopsPath));
         } catch {}
       } else if (existsSync(tasksPath)) {
         try {
-          openLoopCount = readFileSync(tasksPath, "utf8")
+          openLoopCount = vreadFile(tasksPath)
             .split("\n")
             .filter((l) => l.trim())
             .filter((l) => {
@@ -347,7 +348,7 @@ function scanSkills(lifePath: string, vaultPath: string, domain: string): Domain
       // domain's skill count. Cheap inline scan — only the first ~10
       // lines of SKILL.md matter for the type tag.
       try {
-        const head = readFileSync(skillFile, "utf8").slice(0, 400);
+        const head = vreadFile(skillFile).slice(0, 400);
         if (/^\s*type:\s*app\s*$/m.test(head)) continue;
       } catch {
         /* unreadable — treat as a real skill, fall through */
@@ -373,7 +374,7 @@ function scanSkills(lifePath: string, vaultPath: string, domain: string): Domain
 
 function extractSkillTitle(skillFile: string, fallback: string): string {
   try {
-    const raw = readFileSync(skillFile, "utf8");
+    const raw = vreadFile(skillFile);
     const m = raw.match(/^#\s+(.+?)\s*$/m);
     if (m) return m[1].trim();
     const fm = raw.match(/^name:\s*(.+?)\s*$/m);
@@ -403,7 +404,7 @@ export function readDomainView(domain: Domain, view: ViewKey): string {
     return `*No ${filename} for ${domain.name}.*`;
   }
   try {
-    return readFileSync(file, "utf8");
+    return vreadFile(file);
   } catch (err) {
     return `*Failed to read ${file}: ${(err as Error).message}*`;
   }
@@ -418,7 +419,7 @@ function readOpenItems(domain: Domain): string {
   const loopsPath = join(domain.path, "open-loops.md");
   if (existsSync(loopsPath)) {
     try {
-      return readFileSync(loopsPath, "utf8");
+      return vreadFile(loopsPath);
     } catch {}
   }
   return `*No open items for ${domain.name}.*`;
@@ -671,7 +672,7 @@ export function scanCommunityApps(): AppSkill[] {
       if (!existsSync(manifestPath) || !existsSync(skillPath)) continue;
       let manifestRaw: unknown;
       try {
-        manifestRaw = JSON.parse(readFileSync(manifestPath, "utf8"));
+        manifestRaw = JSON.parse(vreadFile(manifestPath));
       } catch {
         continue;
       }
@@ -725,7 +726,7 @@ function readConnector(root: string): ConnectorState {
   let notes = "";
   const connectionMd = join(root, "connection.md");
   if (existsSync(connectionMd)) {
-    try { notes = readFileSync(connectionMd, "utf8").trim(); } catch {}
+    try { notes = vreadFile(connectionMd).trim(); } catch {}
   }
   let status: ConnectorStatus = "not-configured";
   let lastSuccessTs: number | null = null;
@@ -733,7 +734,7 @@ function readConnector(root: string): ConnectorState {
   const statusJson = join(root, "connection-status.json");
   if (existsSync(statusJson)) {
     try {
-      const raw = JSON.parse(readFileSync(statusJson, "utf8"));
+      const raw = JSON.parse(vreadFile(statusJson));
       if (raw && typeof raw === "object") {
         if (typeof raw.status === "string" &&
             ["connected", "not-configured", "expired", "error"].includes(raw.status)) {
@@ -775,14 +776,14 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
     let stateMtime: number | null = null;
     if (hasState) {
       try {
-        const content = readFileSync(statePath, "utf8");
+        const content = vreadFile(statePath);
         stateMtime = statSync(statePath).mtimeMs;
         openLoopCount = countOpenItemsInState(content);
       } catch {}
     }
     if (openLoopCount === 0 && existsSync(loopsPath)) {
       try {
-        const content = readFileSync(loopsPath, "utf8");
+        const content = vreadFile(loopsPath);
         openLoopCount = countUncheckedBoxes(content);
       } catch {}
     }
@@ -846,7 +847,7 @@ function extractAppTitle(appPath: string, fallback: string): string {
   const statePath = join(appPath, "state.md");
   if (existsSync(statePath)) {
     try {
-      const content = readFileSync(statePath, "utf8");
+      const content = vreadFile(statePath);
       const m = content.match(/^#\s+(.+?)\s*$/m);
       if (m) return m[1].split("—")[0].trim() || fallback;
     } catch {}
@@ -858,7 +859,7 @@ function extractAppDescription(appPath: string): string {
   const statePath = join(appPath, "state.md");
   if (!existsSync(statePath)) return "";
   try {
-    const content = readFileSync(statePath, "utf8");
+    const content = vreadFile(statePath);
     const lines = content.split("\n");
     for (const line of lines) {
       const trimmed = line.trim();
@@ -876,7 +877,7 @@ function extractAppDomains(appPath: string): string[] {
   const statePath = join(appPath, "state.md");
   if (!existsSync(statePath)) return [];
   try {
-    const content = readFileSync(statePath, "utf8");
+    const content = vreadFile(statePath);
     const m = content.match(/^\*\*Used by domains?:\*\*\s*(.+)$/im);
     if (m) {
       return m[1]
@@ -894,7 +895,7 @@ export function scanApps(vaultPath: string): AppSkill[] {
 
 function extractDescription(skillFile: string): string {
   try {
-    const raw = readFileSync(skillFile, "utf8");
+    const raw = vreadFile(skillFile);
     const fm = raw.match(/^---\s*\n([\s\S]*?)\n---/);
     if (!fm) return "";
     const block = fm[1];
@@ -911,7 +912,7 @@ export function readAppSkill(app: AppSkill): string {
   const skillPath = join(app.path, "SKILL.md");
   if (existsSync(skillPath)) {
     try {
-      return readFileSync(skillPath, "utf8");
+      return vreadFile(skillPath);
     } catch (err) {
       return `*Failed to read ${skillPath}: ${(err as Error).message}*`;
     }
@@ -935,7 +936,7 @@ export function readAppView(app: AppSkill, view: ViewKey): string {
     return `*No ${fileMap[view]} for ${app.id}.*`;
   }
   try {
-    return readFileSync(file, "utf8");
+    return vreadFile(file);
   } catch (err) {
     return `*Failed to read ${file}: ${(err as Error).message}*`;
   }
@@ -945,7 +946,7 @@ function readAppOpenItems(app: AppSkill): string {
   const statePath = join(app.path, "state.md");
   if (existsSync(statePath)) {
     try {
-      const content = readFileSync(statePath, "utf8");
+      const content = vreadFile(statePath);
       const section = extractOpenItemsSection(content);
       if (section) return `# ${app.id} — open items\n\n${section}`;
     } catch {}
@@ -953,7 +954,7 @@ function readAppOpenItems(app: AppSkill): string {
   const loopsPath = join(app.path, "open-loops.md");
   if (existsSync(loopsPath)) {
     try {
-      return readFileSync(loopsPath, "utf8");
+      return vreadFile(loopsPath);
     } catch {}
   }
   return `*No open items for ${app.id}.*`;
@@ -984,7 +985,7 @@ export function buildAppContext(app: AppSkill): AppContext {
   const statePath = join(app.path, "state.md");
   let raw = "";
   try {
-    raw = readFileSync(statePath, "utf8");
+    raw = vreadFile(statePath);
   } catch {}
   const openItems = extractOpenItems(raw).slice(0, 5);
   const statePreview = extractStateHeadline(raw, 4);

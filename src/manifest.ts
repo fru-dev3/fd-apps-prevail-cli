@@ -10,6 +10,7 @@ import {
 import { dirname, join } from "node:path";
 
 import type { CliKind } from "./config.ts";
+import { vreadFile } from "./vault-session.ts";
 import { isCliKind } from "./config.ts";
 import { isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
 
@@ -432,7 +433,7 @@ function readConfigMdHints(dir: string): ConfigMdHints {
   if (!existsSync(file)) return {};
   let raw = "";
   try {
-    raw = readFileSync(file, "utf8");
+    raw = vreadFile(file);
   } catch {
     return {};
   }
@@ -493,7 +494,7 @@ export function readManifest(vaultPath: string, domain: string): DomainManifest 
   if (!existsSync(file)) return null;
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, "utf8"));
+    raw = JSON.parse(vreadFile(file));
   } catch {
     return null;
   }
