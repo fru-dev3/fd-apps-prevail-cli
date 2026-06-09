@@ -36,6 +36,8 @@ interface Args {
   packArgs: string[];
   appmode: boolean;
   appmodeArgs: string[];
+  lock: boolean;
+  lockArgs: string[];
   vault: boolean;
   vaultArgs: string[];
   upgrade: boolean;
@@ -102,6 +104,8 @@ function parseArgs(argv: string[]): Args {
   let packArgs: string[] = [];
   let appmode = false;
   let appmodeArgs: string[] = [];
+  let lock = false;
+  let lockArgs: string[] = [];
   let vault = false;
   let vaultArgs: string[] = [];
   let upgrade = false;
@@ -192,6 +196,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "appmode") {
       appmode = true;
       appmodeArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "lock") {
+      lock = true;
+      lockArgs = argv.slice(i + 1);
       break;
     } else if (a === "vault") {
       vault = true;
@@ -303,6 +311,8 @@ function parseArgs(argv: string[]): Args {
     packArgs,
     appmode,
     appmodeArgs,
+    lock,
+    lockArgs,
     vault,
     vaultArgs,
     upgrade,
@@ -2444,6 +2454,53 @@ async function appmodeCommand(args: string[]): Promise<number> {
   return 0;
 }
 
+// `prevail lock status|set|verify|clear --json` — app passcode gate (Phase 0).
+// The passcode is read from STDIN (never argv, so it can't leak into the
+// process list or shell history). Machine-only (JSON).
+async function lockCommand(args: string[]): Promise<number> {
+  const sub = args[0];
+  if (!args.includes("--json")) {
+    console.error("prevail lock is a machine-only command — pass --json.");
+    return 1;
+  }
+  const lock = await import("./lock.ts");
+  const readStdin = (): string => {
+    try { return readFileSync(0, "utf8").replace(/\r?\n$/, ""); } catch { return ""; }
+  };
+  if (sub === "status") {
+    process.stdout.write(`${JSON.stringify({ set: lock.isLockSet() })}\n`);
+    return 0;
+  }
+  if (sub === "set") {
+    const pass = readStdin();
+    try {
+      await lock.setPasscode(pass, new Date().toISOString());
+      process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+      return 0;
+    } catch (e) {
+      process.stdout.write(`${JSON.stringify({ ok: false, error: String(e) })}\n`);
+      return 1;
+    }
+  }
+  if (sub === "verify") {
+    const ok = await lock.verifyPasscode(readStdin());
+    process.stdout.write(`${JSON.stringify({ ok })}\n`);
+    return ok ? 0 : 1;
+  }
+  if (sub === "clear") {
+    // Require the current passcode to authorize removal.
+    if (!(await lock.verifyPasscode(readStdin()))) {
+      process.stdout.write(`${JSON.stringify({ ok: false, error: "wrong passcode" })}\n`);
+      return 1;
+    }
+    lock.clearLock();
+    process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+    return 0;
+  }
+  console.error(`unknown lock subcommand: ${sub} (status | set | verify | clear)`);
+  return 1;
+}
+
 // `prevail search <query> --json [--limit N]` — full-text search across the
 // indexed chat history (the FTS5 index in ~/.prevail/sessions.db).
 async function searchCommand(args: string[]): Promise<number> {
@@ -2517,6 +2574,9 @@ async function main() {
   }
   if (args.appmode) {
     process.exit(await appmodeCommand(args.appmodeArgs));
+  }
+  if (args.lock) {
+    process.exit(await lockCommand(args.lockArgs));
   }
   if (args.vault) {
     await vaultCommand(args.vaultArgs, args.vaultPath);
