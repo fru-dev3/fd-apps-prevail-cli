@@ -36,6 +36,8 @@ interface Args {
   packArgs: string[];
   appmode: boolean;
   appmodeArgs: string[];
+  models: boolean;
+  modelsArgs: string[];
   lock: boolean;
   lockArgs: string[];
   vault: boolean;
@@ -104,6 +106,8 @@ function parseArgs(argv: string[]): Args {
   let packArgs: string[] = [];
   let appmode = false;
   let appmodeArgs: string[] = [];
+  let models = false;
+  let modelsArgs: string[] = [];
   let lock = false;
   let lockArgs: string[] = [];
   let vault = false;
@@ -196,6 +200,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "appmode") {
       appmode = true;
       appmodeArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "models") {
+      models = true;
+      modelsArgs = argv.slice(i + 1);
       break;
     } else if (a === "lock") {
       lock = true;
@@ -311,6 +319,8 @@ function parseArgs(argv: string[]): Args {
     packArgs,
     appmode,
     appmodeArgs,
+    models,
+    modelsArgs,
     lock,
     lockArgs,
     vault,
@@ -2510,6 +2520,22 @@ async function privacyCommand(args: string[]): Promise<number> {
 // `prevail appmode get|set --json [--mode demo|production]` — the demo vs
 // production flag. Frontends read it to show the demo badge and gate the
 // switch-to-production flow. Machine-only (JSON).
+// `prevail models <provider> --json` — live model discovery for a provider
+// (ollama/lmstudio/openrouter query a real catalog; others return []). Lets the
+// desktop refresh its model list so newly released models appear without a code
+// change. Machine-only (JSON).
+async function modelsCommand(args: string[]): Promise<number> {
+  const provider = args.find((a) => !a.startsWith("--")) ?? "";
+  if (!args.includes("--json")) {
+    console.error("prevail models is a machine-only command — pass --json.");
+    return 1;
+  }
+  const { discoverModels } = await import("./models.ts");
+  const found = await discoverModels(provider);
+  process.stdout.write(`${JSON.stringify({ provider, models: found })}\n`);
+  return 0;
+}
+
 async function appmodeCommand(args: string[]): Promise<number> {
   const sub = args[0];
   const body = sub === "get" || sub === "set" || sub === "init" || sub === "mark-demo" ? args.slice(1) : args;
@@ -2671,6 +2697,9 @@ async function main() {
   }
   if (args.appmode) {
     process.exit(await appmodeCommand(args.appmodeArgs));
+  }
+  if (args.models) {
+    process.exit(await modelsCommand(args.modelsArgs));
   }
   if (args.lock) {
     process.exit(await lockCommand(args.lockArgs));
