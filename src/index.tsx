@@ -2563,7 +2563,10 @@ async function appmodeCommand(args: string[]): Promise<number> {
     return 0;
   }
   if (sub === "set" && (flags.mode === "demo" || flags.mode === "production")) {
-    cfg.setAppMode(flags.mode);
+    // Pass the optional --vault through so a first-launch `set --mode demo`
+    // (when no config exists yet) seeds the config pointed at the real seeded
+    // sandbox rather than the bundled default.
+    cfg.setAppMode(flags.mode, vaultPath ?? undefined);
   }
   process.stdout.write(`${JSON.stringify({ mode: cfg.readAppMode() })}\n`);
   return 0;
