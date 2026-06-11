@@ -305,9 +305,17 @@ export function readAppMode(): AppMode {
   return readConfig()?.appMode === "demo" ? "demo" : "production";
 }
 
-export function setAppMode(mode: AppMode): void {
+export function setAppMode(mode: AppMode, vaultPath?: string): void {
   const cfg = readConfig();
-  if (!cfg) return;
+  if (!cfg) {
+    // First launch: no config on disk yet. The demo flow MUST be able to set
+    // "demo" here (see readAppMode's contract) — silently dropping the write
+    // left a fresh install stuck reporting "production", so the demo badge
+    // never appeared. Seed a minimal config carrying the mode, preferring the
+    // caller's vault (the seeded sandbox) and falling back to the bundled demo.
+    writeConfig({ vaultPath: vaultPath ?? bundledDemoVaultPath(), createdAt: new Date().toISOString(), appMode: mode });
+    return;
+  }
   writeConfig({ ...cfg, appMode: mode });
 }
 
@@ -499,7 +507,12 @@ export function setAutoCouncil(mode: AutoCouncilMode, domainKey?: string): void 
 }
 
 export function configDir(): string {
-  return join(homedir(), ".prevail");
+  // PREVAIL_CONFIG_DIR is the test seam: Node's os.homedir() is cached at
+  // process start, so mutating HOME mid-process can't reroute config. Honored
+  // here so the whole config layer (readConfig/writeConfig/setAppMode) is
+  // redirectable — matching how mcp-config already treats this env var.
+  const override = process.env.PREVAIL_CONFIG_DIR;
+  return override && override.length > 0 ? override : join(homedir(), ".prevail");
 }
 
 export function configFile(): string {
