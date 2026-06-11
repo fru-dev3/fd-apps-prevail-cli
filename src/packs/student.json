@@ -2,8 +2,20 @@
   "schema": "prevail.pack/v1",
   "name": "Student",
   "version": "1.0.0",
-  "description": "Stay on top of coursework, money, and the early career build. Domains for learning, finances, calendar, and career.",
+  "description": "Stay on top of coursework, money, and the early career build. Learning, finances, calendar, career, and a chief command center.",
   "domains": [
+    {
+      "slug": "chief",
+      "title": "Chief",
+      "soul": "# Chief\n\nYour life command center. One place to hold the whole picture, set daily focus, and make sure nothing slips between the other domains.\n",
+      "goals": "# Goals\n\n- Run a weekly review every Sunday\n- Keep the top 3 priorities visible every day\n- Zero dropped commitments across domains\n",
+      "config": "# Config\n\nweekly_review_day: \ndaily_planning_time: \ntop_priority: \n",
+      "prompts": [
+        "Give me a quick brief on what matters most across my life right now.",
+        "What are the top 3 things I should focus on this week?",
+        "Run my weekly review: wins, open items, and what to carry forward."
+      ]
+    },
     {
       "slug": "learning",
       "title": "Learning",
