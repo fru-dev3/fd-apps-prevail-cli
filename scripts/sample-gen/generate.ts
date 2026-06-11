@@ -128,7 +128,7 @@ const D: Record<string, DomainContent> = {
       `college_529: ${usd(A.college529.balance)} (${A.college529.beneficiary})`,
       "",
       "## Property & debt",
-      `home: ${usd(W.home.marketValue)} (mortgage ${usd(W.home.mortgage.balance)} @ ${(W.home.mortgage.rate * 100).toFixed(2)}%, ${W.home.mortgage.lender})`,
+      `homestead: ${usd(W.home.marketValue)} (mortgage ${usd(W.home.mortgage.balance)} @ ${(W.home.mortgage.rate * 100).toFixed(2)}%, ${W.home.mortgage.lender})`,
       `auto_loan: ${W.vehicles[0].desc} — ${usd(W.vehicles[0].loanBalance)} @ ${(W.vehicles[0].rate! * 100).toFixed(1)}%`,
       "",
       "## International",
@@ -302,7 +302,7 @@ const D: Record<string, DomainContent> = {
     ].join("\n"),
   },
 
-  home: {
+  homestead: {
     title: "Home",
     soul: "A calm, well-run home base — small upkeep over big repairs, and decisions made before things break, not after.",
     goals: [
@@ -332,7 +332,7 @@ const D: Record<string, DomainContent> = {
       `The house came with a ${P.home.hvac.unit} that's near the end of its life. A ${usd(P.home.hvac.replacementQuote)} quote is in hand. The call is replace-now versus wait — and it ripples outward: it's the summer's main capital decision (see wealth) and the kind of thing the homeowner's carrier cares about at the September renewal (see insurance).`,
       "",
       "## Open Items",
-      ...crossItems("home"),
+      ...crossItems("homestead"),
       "- [ ] Get a second HVAC quote to compare",
       "- [ ] Finish the office repaint this month",
     ].join("\n"),
@@ -424,7 +424,7 @@ const D: Record<string, DomainContent> = {
     state: [
       `**Currently:** CBM coursework`,
       `**Books this year:** ${P.learning.books.readThisYear} of ${P.learning.books.target}`,
-      `**At home:** ${P.learning.personal}`,
+      `**At homestead:** ${P.learning.personal}`,
       "",
       "## Where things stand",
       `The CBM credential is the work-relevant one — it's the box to check before the Area Manager conversation (see career), and the coursework is about 60% done. On the lighter side, ${P.learning.books.readThisYear} of ${P.learning.books.target} books, and weekend Spanish reading with ${hh.child.name.split(" ")[0]} that's as much about keeping Lima close as it is about literacy.`,

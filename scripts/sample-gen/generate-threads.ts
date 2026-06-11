@@ -468,7 +468,7 @@ Umbrella policies work by sitting on top of your existing auto and homeowner's p
 writeThread({
   id: "2026-06-06_hvac-decision",
   title: "Replace the HVAC now or wait?",
-  domain: "home",
+  domain: "homestead",
   created: "2026-06-06T19:00:00Z",
   updated: "2026-06-06T19:22:00Z",
   turns: [

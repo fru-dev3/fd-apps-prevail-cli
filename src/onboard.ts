@@ -218,12 +218,12 @@ function catalog(): Record<string, RubricSpec> {
         ["review cycle", ""],
       ]),
     },
-    home: {
-      name: "home",
-      label: "Home",
+    homestead: {
+      name: "homestead",
+      label: "Homestead",
       emoji: "🏠",
       summary: "Household — maintenance, utilities, logistics.",
-      reason: "Home keeps household logistics — maintenance, utilities, and recurring chores — from slipping.",
+      reason: "Homestead keeps household logistics — maintenance, utilities, and recurring chores — from slipping.",
       starterGoals: ["List recurring home tasks"],
       suggestedSkills: [],
       state: stateBody(
@@ -415,13 +415,13 @@ export function recommendDomains(answers: OnboardingAnswers | null | undefined):
       : "Career is offered for primary-income tracking even if you're not currently W-2.",
   );
 
-  // Home: pre-selected when they own property; offered otherwise.
+  // Homestead: pre-selected when they own property; offered otherwise.
   push(
-    "home",
+    "homestead",
     ownsProperty,
     ownsProperty
-      ? "You own property — home keeps household maintenance, utilities, and logistics in order."
-      : "Home is offered for household logistics — maintenance, utilities, and recurring chores.",
+      ? "You own property — homestead keeps household maintenance, utilities, and logistics in order."
+      : "Homestead is offered for household logistics — maintenance, utilities, and recurring chores.",
   );
 
   // Records: offered by default; pre-selected only if the user asked for it.

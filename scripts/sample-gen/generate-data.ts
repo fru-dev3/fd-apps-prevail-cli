@@ -274,7 +274,7 @@ writeFileSync(
 // ── home ──────────────────────────────────────────────────────────────────────
 
 writeFileSync(
-  join(OUT, "home", "data", "maintenance-log.csv"),
+  join(OUT, "homestead", "data", "maintenance-log.csv"),
   csv([
     ["date", "item", "status", "cost_quoted", "cost_actual", "vendor", "notes"],
     ["2026-06-08", "HVAC replacement (2016 Carrier)", "quoted — decision pending", "6850", "", "Aire Serv Austin", "Near end of life; replace before July peak"],
