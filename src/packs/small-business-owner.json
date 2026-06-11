@@ -2,8 +2,32 @@
   "schema": "prevail.pack/v1",
   "name": "Small Business Owner",
   "version": "1.0.0",
-  "description": "Run the business and your own finances without dropping either. Domains for the company, cashflow, taxes, customers, and your calendar.",
+  "description": "Run the business and your own finances without dropping either. Business, money, taxes, calendar, career growth, and a chief command center.",
   "domains": [
+    {
+      "slug": "chief",
+      "title": "Chief",
+      "soul": "# Chief\n\nYour life command center. One place to hold the whole picture, set daily focus, and make sure nothing slips between the other domains.\n",
+      "goals": "# Goals\n\n- Run a weekly review every Sunday\n- Keep the top 3 priorities visible every day\n- Zero dropped commitments across domains\n",
+      "config": "# Config\n\nweekly_review_day: \ndaily_planning_time: \ntop_priority: \n",
+      "prompts": [
+        "Give me a quick brief on what matters most across my life right now.",
+        "What are the top 3 things I should focus on this week?",
+        "Run my weekly review: wins, open items, and what to carry forward."
+      ]
+    },
+    {
+      "slug": "career",
+      "title": "Career",
+      "soul": "# Career\n\nGrow deliberately — the next role, the skills to get there, and the relationships that open doors. Know where you're going and map the steps.\n",
+      "goals": "# Goals\n\n- Have a clear next role in mind\n- Add one relevant skill per quarter\n- Grow your network intentionally, not reactively\n",
+      "config": "# Config\n\ncurrent_role: \ntarget_role: \ntop_skill_to_develop: \n",
+      "prompts": [
+        "Where am I in my career trajectory and what's the next move?",
+        "Help me prep for my upcoming performance review.",
+        "What skills should I build to reach the next level?"
+      ]
+    },
     {
       "slug": "business",
       "title": "Business",
