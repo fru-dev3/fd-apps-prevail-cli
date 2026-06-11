@@ -30,7 +30,7 @@ const SEED_DOMAINS = [
   "vision",
   "intel",
   "learning",
-  "home",
+  "homestead",
   "social",
   "records",
   "estate",

@@ -70,7 +70,7 @@ const DOMAIN_PRIORITY: readonly string[] = [
   "brand",        // personal + biz brand
   "content",      // content production
   "social",       // relationships
-  "home",         // household
+  "homestead",    // household
   "learning",     // skill building
   "explore",      // exploration / opportunities
   "intel",        // info gathering

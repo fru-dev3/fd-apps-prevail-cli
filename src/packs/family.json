@@ -31,7 +31,7 @@
     {
       "slug": "career",
       "title": "Career",
-      "soul": "# Career\n\nGrow deliberately — the next role, the skills to get there, and the relationships that open doors. Know where you're going and map the steps.\n",
+      "soul": "# Career\n\nGrow deliberately \u2014 the next role, the skills to get there, and the relationships that open doors. Know where you're going and map the steps.\n",
       "goals": "# Goals\n\n- Have a clear next role in mind\n- Add one relevant skill per quarter\n- Grow your network intentionally, not reactively\n",
       "config": "# Config\n\ncurrent_role: \ntarget_role: \ntop_skill_to_develop: \n",
       "prompts": [
@@ -41,9 +41,9 @@
       ]
     },
     {
-      "slug": "home",
-      "title": "Home",
-      "soul": "# Home\n\nThe house and everything that keeps it running: maintenance, warranties, contractors, and the recurring tasks that are easy to forget until they break.\n",
+      "slug": "homestead",
+      "title": "Homestead",
+      "soul": "# Homestead\n\nThe house and everything that keeps it running: maintenance, warranties, contractors, and the recurring tasks that are easy to forget until they break.\n",
       "goals": "# Goals\n\n- Stay ahead of seasonal maintenance\n- Keep warranty and contractor info in one place\n- Budget for repairs before they are urgent\n",
       "config": "# Config\n\nhome_type: \nyear_built: \nmaintenance_reserve_monthly: \n",
       "prompts": [

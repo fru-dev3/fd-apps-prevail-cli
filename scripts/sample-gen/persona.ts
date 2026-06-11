@@ -174,7 +174,7 @@ export const PERSONA = {
   // The connective tissue that makes "combine health + wealth" (etc.) pay off.
   // The generator drops references to these into each linked domain's _state.md.
   crossDomain: [
-    { id: "hvac", summary: "Replace the 2016 HVAC ($6,850) before summer", links: ["wealth", "home", "insurance"] },
+    { id: "hvac", summary: "Replace the 2016 HVAC ($6,850) before summer", links: ["wealth", "homestead", "insurance"] },
     { id: "rsu-vest", summary: "RSU vest 2026-08-15 ($6,180 gross)", links: ["career", "wealth", "tax"] },
     { id: "fbar", summary: "BCP foreign account ($11,000) → FBAR filing required", links: ["tax", "wealth"] },
     { id: "maya", summary: "Maya (3): 529, child tax credit, term-life beneficiary, preschool recital Sat", links: ["wealth", "tax", "insurance", "calendar"] },
@@ -184,7 +184,7 @@ export const PERSONA = {
   ],
 
   // Domains the generator will emit (core 7 + 4 extras).
-  domains: ["chief", "career", "wealth", "tax", "health", "fitness", "insurance", "home", "travel", "calendar", "learning"] as const,
+  domains: ["chief", "career", "wealth", "tax", "health", "fitness", "insurance", "homestead", "travel", "calendar", "learning"] as const,
 
   generatedAt: "2026-06-10",
 } as const;
