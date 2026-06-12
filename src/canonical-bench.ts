@@ -716,6 +716,87 @@ export function buildLeaderboard(vaultPath: string): LeaderboardEntry[] {
   });
 }
 
+// Aggregate every scored run into a public model x domain matrix for the
+// website Prevail Benchmark. One run = one model (from meta.json, else the
+// run label); each question carries its domain, so per-cell averages fall out.
+export interface PublicResults {
+  schema: string;
+  synthetic: true;
+  generated_at: string;
+  domains: string[];
+  models: { key: string; cli: string | null; model: string | null; label: string }[];
+  // matrix[modelKey][domain] = { judge_avg, keyword_avg, n }
+  matrix: Record<string, Record<string, { judge_avg: number | null; keyword_avg: number | null; n: number }>>;
+  leaderboard: { key: string; label: string; judge_avg: number | null; keyword_avg: number | null; questions: number }[];
+}
+
+export function buildPublicResults(vaultPath: string, generatedAt: string): PublicResults {
+  const root = runsDir(vaultPath);
+  const domainsSet = new Set<string>();
+  const models: PublicResults["models"] = [];
+  const matrix: PublicResults["matrix"] = {};
+  const leaderboard: PublicResults["leaderboard"] = [];
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root)) {
+      const dir = join(root, entry);
+      const scoreFile = join(dir, "score.json");
+      if (!existsSync(scoreFile)) continue;
+      let data: RunScore;
+      try { data = JSON.parse(vreadFile(scoreFile)) as RunScore; } catch { continue; }
+      // Identify the model from meta.json when present, else the label.
+      let cli: string | null = null;
+      let model: string | null = null;
+      const metaPath = join(dir, "meta.json");
+      if (existsSync(metaPath)) {
+        try {
+          const m = JSON.parse(vreadFile(metaPath)) as { cli?: string | null; model?: string | null; council?: boolean };
+          cli = m.cli ?? null; model = m.model ?? null;
+          if (m.council) { cli = "council"; model = null; }
+        } catch { /* fall back to label */ }
+      }
+      const key = cli ? `${cli}${model ? `:${model}` : ""}` : data.label;
+      const label = cli ? `${cli}${model ? ` ${model}` : ""}` : data.label;
+      if (!matrix[key]) {
+        matrix[key] = {};
+        models.push({ key, cli, model, label });
+      }
+      // Per-domain accumulation for this run.
+      const byDomain: Record<string, { j: number[]; k: number[] }> = {};
+      for (const q of data.questionScores) {
+        domainsSet.add(q.domain);
+        const b = (byDomain[q.domain] ??= { j: [], k: [] });
+        if (q.judge_score !== null) b.j.push(q.judge_score);
+        if (q.keyword_score !== null) b.k.push(q.keyword_score);
+      }
+      const mean = (xs: number[]): number | null => xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100 : null;
+      for (const [dom, b] of Object.entries(byDomain)) {
+        const prev = matrix[key][dom];
+        // Newest run wins per cell (runs are processed in dir order; keep the
+        // one with more data, else overwrite — drift history lives in dated files).
+        const cell = { judge_avg: mean(b.j), keyword_avg: mean(b.k), n: b.j.length || b.k.length };
+        if (!prev || cell.n >= prev.n) matrix[key][dom] = cell;
+      }
+      leaderboard.push({ key, label, judge_avg: data.judge_avg, keyword_avg: data.keyword_avg, questions: data.questionScores.length });
+    }
+  }
+  // Best entry per model key for the leaderboard.
+  const bestByKey = new Map<string, PublicResults["leaderboard"][number]>();
+  for (const e of leaderboard) {
+    const cur = bestByKey.get(e.key);
+    if (!cur || (e.judge_avg ?? -1) > (cur.judge_avg ?? -1)) bestByKey.set(e.key, e);
+  }
+  const lb = [...bestByKey.values()].sort((a, b) => (b.judge_avg ?? -1) - (a.judge_avg ?? -1));
+  return {
+    schema: "prevail.benchmark/v1",
+    synthetic: true,
+    generated_at: generatedAt,
+    domains: [...domainsSet].sort(),
+    models,
+    matrix,
+    leaderboard: lb,
+  };
+}
+
 // Load a single saved run for inspection — used when the user clicks
 // a leaderboard row to drill into a historical run's per-question
 // results without re-running.
