@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { readManifest, writeManifest } from "./manifest.ts";
 
@@ -354,7 +354,15 @@ export async function restoreVault(args: RestoreArgs): Promise<void> {
   // intermediate dirs but the parent must exist when we pass -C.
   if (!existsSync(target)) mkdirSync(target, { recursive: true });
 
-  const proc = Bun.spawn(["tar", "-xzf", archive, "-C", target], {
+  // backupVault stores the vault under a top-level "<vaultname>/" entry
+  // (staged from the parent dir), plus ~/.prevail/config.json + sessions.db
+  // at the archive root. So we extract into the PARENT of the target: the
+  // "<vaultname>/" subtree lands back in place, and for embedded/demo vaults
+  // (whose parent IS ~/.prevail) the root files restore correctly too.
+  // Extracting into the target itself would double-nest (target/<vaultname>/…).
+  const extractDir = dirname(target);
+  if (!existsSync(extractDir)) mkdirSync(extractDir, { recursive: true });
+  const proc = Bun.spawn(["tar", "-xzf", archive, "-C", extractDir], {
     stdout: "pipe",
     stderr: "pipe",
   });
