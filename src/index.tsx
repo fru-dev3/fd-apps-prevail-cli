@@ -2156,12 +2156,14 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   }
 
   if (sub === "restore") {
-    const archive = args[1];
+    const asJson = args.includes("--json");
+    const archive = args.find((a, i) => i >= 1 && !a.startsWith("--"));
     if (!archive) {
+      if (asJson) emitJsonError("usage: prevail vault restore <archive>", "MISSING_ARG");
       console.error("usage: prevail vault restore <archive>");
       process.exit(1);
     }
-    if (!existsSync(vault)) {
+    if (!existsSync(vault) && !asJson) {
       // The target may not exist yet — restore will create it. But warn
       // the user so they don't accidentally extract into the wrong place.
       console.log(`note: target vault ${vault} does not exist; will be created.`);
@@ -2171,8 +2173,10 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         archivePath: resolve(process.cwd(), archive),
         targetVaultPath: vault,
       });
-      console.log(`✓ restored into ${vault}`);
+      if (asJson) process.stdout.write(`${JSON.stringify({ ok: true, vault })}\n`);
+      else console.log(`✓ restored into ${vault}`);
     } catch (err) {
+      if (asJson) emitJsonError((err as Error).message, "RESTORE_FAILED");
       console.error(`restore failed: ${(err as Error).message}`);
       process.exit(1);
     }
