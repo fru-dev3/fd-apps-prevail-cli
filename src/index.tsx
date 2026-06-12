@@ -1362,48 +1362,41 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   }
 
   if (sub === "suggest") {
-    // AI-draft canonical questions from a domain's recorded context.
-    // Usage: prevail bench suggest --domain <name> [--count <n>] [--cli <kind>] [--model <id>]
+    // AI-draft canonical questions from each domain's own context.
+    // Usage: prevail bench suggest --domain <name|all|a,b,c> [--count <n>] [--cli <kind>] [--model <id>]
     const { writeDraftQuestion, ensureScaffold } = await import("./canonical-bench.ts");
     const { detectClis } = await import("./cli-bridge.ts");
-    const { existsSync: exists, readFileSync: readFile } = await import("node:fs");
+    const { existsSync: exists, readFileSync: readFile, readdirSync: readDir } = await import("node:fs");
     const { join } = await import("node:path");
 
-    let domain: string | null = null;
+    let domainArg: string | null = null;
     let count = 3;
     let cliKind: string | null = null;
     let model: string | null = null;
     for (let i = 1; i < args.length; i++) {
       const a = args[i];
       const v = args[i + 1];
-      if (a === "--domain" && v) { domain = v.toLowerCase(); i++; }
+      if (a === "--domain" && v) { domainArg = v.toLowerCase(); i++; }
       else if (a === "--count" && v) { count = Math.max(1, Math.min(10, parseInt(v, 10) || 3)); i++; }
       else if (a === "--cli" && v) { cliKind = v; i++; }
       else if (a === "--model" && v) { model = v; i++; }
     }
-    if (!domain) {
-      console.error("usage: prevail bench suggest --domain <name> [--count <n>] [--cli <kind>] [--model <id>]");
+    if (!domainArg) {
+      console.error("usage: prevail bench suggest --domain <name|all|a,b,c> [--count <n>] [--cli <kind>] [--model <id>]");
       process.exit(1);
     }
-    const domainDir = join(vault, domain);
-    if (!exists(domainDir)) {
-      console.error(`domain directory not found: ${domainDir}`);
-      process.exit(1);
-    }
-    const readCtx = (file: string, max: number): string => {
-      try {
-        const p = join(domainDir, file);
-        if (!exists(p)) return "";
-        const t = readFile(p, "utf8");
-        return t.length > max ? t.slice(0, max) + "\n…(truncated)" : t;
-      } catch { return ""; }
-    };
-    const stateCtx = readCtx("_state.md", 3000) || readCtx("state.md", 3000);
-    const goalsCtx = readCtx("goals.md", 1500);
-    const configCtx = readCtx("config.md", 800);
-    if (!stateCtx) {
-      console.error(`no recorded context found for domain "${domain}" (_state.md missing). Run a council or chat in this domain first to build context.`);
-      process.exit(1);
+
+    // Resolve the domain list: "all" = every vault domain; csv also works.
+    let domains: string[];
+    if (domainArg === "all") {
+      const { scanVault } = await import("./vault.ts");
+      domains = scanVault(vault).map((d) => d.name.toLowerCase());
+      if (domains.length === 0) {
+        console.error("no domains found in vault");
+        process.exit(1);
+      }
+    } else {
+      domains = domainArg.split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
     }
 
     const clis = await detectClis();
@@ -1412,76 +1405,131 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       console.error("no AI CLI available. Install claude, codex, or another supported CLI first.");
       process.exit(1);
     }
+    console.log(`using ${cli.kind}${model ? ` (${model})` : " (default model)"} to draft ${count} question${count === 1 ? "" : "s"} per domain, ${domains.length} domain${domains.length === 1 ? "" : "s"}`);
 
     const { runChatTurn } = await import("./cli-bridge.ts");
-    const prompt = [
-      `You are helping build a personal canonical benchmark for the "${domain}" life domain.`,
-      `Based on the context below, generate exactly ${count} high-quality benchmark question${count === 1 ? "" : "s"}.`,
-      "",
-      "Each question must be something this person would actually ask their AI council — grounded in their real situation, open-ended enough to reveal model quality, and answerable with a clear recommendation.",
-      "",
-      "REQUIRED OUTPUT: a single JSON object, no preamble, no markdown fences, no explanation.",
-      `Shape: {"questions":[{"prompt":"...","expected_decision":"...","expected_verdict_keywords":["kw1","kw2","kw3"]},...]}`,
-      "",
-      "Fields:",
-      `- prompt: the question as the user would type it (1-3 sentences, specific to their situation)`,
-      `- expected_decision: one short sentence — what a good answer SHOULD recommend`,
-      `- expected_verdict_keywords: 2-4 substrings a correct answer must contain (lowercase)`,
-      "",
-      `=== ${domain}/_state.md ===`,
-      stateCtx,
-      ...(goalsCtx ? ["", `=== ${domain}/goals.md ===`, goalsCtx] : []),
-      ...(configCtx ? ["", `=== ${domain}/config.md ===`, configCtx] : []),
-    ].join("\n");
-
-    let raw = "";
-    try {
-      raw = await runChatTurn({ prompt, cwd: domainDir, cli, model: model ?? "", isFirst: true });
-    } catch (e) {
-      console.error(`LLM call failed: ${e}`);
-      process.exit(1);
-    }
-
-    // Parse response — strip fences, find JSON
-    let text = raw.trim();
-    const fence = text.match(/```(?:json)?\s*\n([\s\S]*?)```/);
-    if (fence) text = fence[1].trim();
-    const start = text.indexOf("{");
-    if (start < 0) {
-      console.error("could not parse LLM response as JSON");
-      process.exit(1);
-    }
-    let parsed: { questions?: unknown[] } | null = null;
-    try { parsed = JSON.parse(text.slice(start)) as typeof parsed; } catch {}
-    if (!parsed || !Array.isArray(parsed.questions) || parsed.questions.length === 0) {
-      console.error("LLM returned no questions. Try again or increase context.");
-      process.exit(1);
-    }
-
     ensureScaffold(vault);
-    const written: string[] = [];
-    for (const q of parsed.questions) {
-      if (!q || typeof q !== "object") continue;
-      const qo = q as Record<string, unknown>;
-      const qPrompt = typeof qo.prompt === "string" ? qo.prompt.trim() : "";
-      if (!qPrompt) continue;
-      const path = writeDraftQuestion({
-        vaultPath: vault,
-        domain,
-        prompt: qPrompt,
-        expected_decision: typeof qo.expected_decision === "string" ? qo.expected_decision : undefined,
-        expected_verdict_keywords: Array.isArray(qo.expected_verdict_keywords)
-          ? (qo.expected_verdict_keywords as unknown[]).filter((k) => typeof k === "string") as string[]
-          : undefined,
-      });
-      written.push(path);
-      console.log(`wrote: ${path}`);
+    let totalWritten = 0;
+    let okDomains = 0;
+    const failures: string[] = [];
+
+    for (const domain of domains) {
+      const domainDir = join(vault, domain);
+      if (!exists(domainDir)) {
+        failures.push(`${domain}: domain directory not found`);
+        continue;
+      }
+      const readCtx = (file: string, max: number): string => {
+        try {
+          const p = join(domainDir, file);
+          if (!exists(p)) return "";
+          const t = readFile(p, "utf8");
+          return t.length > max ? t.slice(0, max) + "\n…(truncated)" : t;
+        } catch { return ""; }
+      };
+      // Context: recorded state when there is one, plus (or, for a fresh
+      // domain, instead) whatever the domain does have on disk. A domain
+      // with no chats yet can still get sensible starter questions from its
+      // goals/config/soul.
+      let threadCtx = "";
+      try {
+        const tdir = join(domainDir, "_threads");
+        if (exists(tdir)) {
+          const mds = readDir(tdir).filter((f) => f.endsWith(".md")).sort();
+          const latest = mds[mds.length - 1];
+          if (latest) {
+            const t = readFile(join(tdir, latest), "utf8");
+            threadCtx = t.length > 2000 ? t.slice(0, 2000) + "\n…(truncated)" : t;
+          }
+        }
+      } catch { /* no threads */ }
+      const sections = ([
+        ["_state.md", readCtx("_state.md", 3000) || readCtx("state.md", 3000)],
+        ["goals.md", readCtx("goals.md", 1500)],
+        ["config.md", readCtx("config.md", 800)],
+        ["soul.md", readCtx("soul.md", 800)],
+        ["_tasks.md", readCtx("_tasks.md", 800)],
+        ["_memory.md", readCtx("_memory.md", 1200)],
+        ["latest thread", threadCtx],
+      ] as [string, string][]).filter(([, t]) => t);
+      if (sections.length === 0) {
+        failures.push(`${domain}: nothing to draft from (no state, goals, config, soul, tasks, or threads)`);
+        continue;
+      }
+
+      const prompt = [
+        `You are helping build a personal canonical benchmark for the "${domain}" life domain.`,
+        `Based on the context below, generate exactly ${count} high-quality benchmark question${count === 1 ? "" : "s"}.`,
+        "",
+        "Each question must be something this person would actually ask their AI council — grounded in their real situation, open-ended enough to reveal model quality, and answerable with a clear recommendation.",
+        "",
+        "REQUIRED OUTPUT: a single JSON object, no preamble, no markdown fences, no explanation.",
+        `Shape: {"questions":[{"prompt":"...","expected_decision":"...","expected_verdict_keywords":["kw1","kw2","kw3"]},...]}`,
+        "",
+        "Fields:",
+        `- prompt: the question as the user would type it (1-3 sentences, specific to their situation)`,
+        `- expected_decision: one short sentence — what a good answer SHOULD recommend`,
+        `- expected_verdict_keywords: 2-4 substrings a correct answer must contain (lowercase)`,
+        ...sections.flatMap(([name, text]) => ["", `=== ${domain}/${name} ===`, text]),
+      ].join("\n");
+
+      console.log(`${domain}: drafting…`);
+      let raw = "";
+      try {
+        raw = await runChatTurn({ prompt, cwd: domainDir, cli, model: model ?? "", isFirst: true });
+      } catch (e) {
+        failures.push(`${domain}: LLM call failed: ${e}`);
+        continue;
+      }
+
+      // Parse response — strip fences, find JSON
+      let text = raw.trim();
+      const fence = text.match(/```(?:json)?\s*\n([\s\S]*?)```/);
+      if (fence) text = fence[1].trim();
+      const startIdx = text.indexOf("{");
+      if (startIdx < 0) {
+        failures.push(`${domain}: could not parse LLM response as JSON`);
+        continue;
+      }
+      let parsed: { questions?: unknown[] } | null = null;
+      try { parsed = JSON.parse(text.slice(startIdx)) as typeof parsed; } catch {}
+      if (!parsed || !Array.isArray(parsed.questions) || parsed.questions.length === 0) {
+        failures.push(`${domain}: LLM returned no questions`);
+        continue;
+      }
+
+      let written = 0;
+      for (const q of parsed.questions) {
+        if (!q || typeof q !== "object") continue;
+        const qo = q as Record<string, unknown>;
+        const qPrompt = typeof qo.prompt === "string" ? qo.prompt.trim() : "";
+        if (!qPrompt) continue;
+        const path = writeDraftQuestion({
+          vaultPath: vault,
+          domain,
+          prompt: qPrompt,
+          expected_decision: typeof qo.expected_decision === "string" ? qo.expected_decision : undefined,
+          expected_verdict_keywords: Array.isArray(qo.expected_verdict_keywords)
+            ? (qo.expected_verdict_keywords as unknown[]).filter((k) => typeof k === "string") as string[]
+            : undefined,
+        });
+        written++;
+        console.log(`  wrote: ${path}`);
+      }
+      if (written === 0) {
+        failures.push(`${domain}: no valid questions found in LLM response`);
+        continue;
+      }
+      totalWritten += written;
+      okDomains++;
     }
-    if (written.length === 0) {
-      console.error("no valid questions found in LLM response");
+
+    for (const f of failures) console.error(`failed: ${f}`);
+    if (totalWritten === 0) {
+      console.error("no questions drafted");
       process.exit(1);
     }
-    console.log(`\ndrafted ${written.length} question${written.length === 1 ? "" : "s"} for ${domain}. Review expected_decision + keywords before running.`);
+    console.log(`\ndrafted ${totalWritten} question${totalWritten === 1 ? "" : "s"} across ${okDomains} domain${okDomains === 1 ? "" : "s"}. Review expected_decision + keywords before running.`);
     return;
   }
 
