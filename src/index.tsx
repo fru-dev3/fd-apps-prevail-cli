@@ -1226,6 +1226,28 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  if (sub === "export-results") {
+    // Public Prevail Benchmark export: model x domain matrix + leaderboard.
+    const { buildPublicResults } = await import("./canonical-bench.ts");
+    let output: string | null = null;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      if ((a === "--output" || a === "-o") && args[i + 1]) { output = resolve(process.cwd(), args[i + 1]); i++; }
+    }
+    // Stamp time outside the pure builder (kept deterministic for tests).
+    const results = buildPublicResults(vault, new Date().toISOString());
+    const json = JSON.stringify(results, null, 2);
+    if (output) {
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      mkdirSync(join(output, ".."), { recursive: true });
+      writeFileSync(output, json + "\n");
+      console.error(`wrote ${results.models.length} models x ${results.domains.length} domains -> ${output}`);
+    } else {
+      process.stdout.write(json + "\n");
+    }
+    return;
+  }
+
   if (sub === "leaderboard" || sub === "lb") {
     const { buildLeaderboard } = await import("./canonical-bench.ts");
     const entries = buildLeaderboard(vault);
