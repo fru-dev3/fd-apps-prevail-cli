@@ -1145,13 +1145,31 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     let judgeCli;
     if (!noJudge) {
       const { detectClis } = await import("./cli-bridge.ts");
-      const allClis = await detectClis();
-      judgeCli = judgeCliKind
-        ? allClis.find((c) => c.kind === judgeCliKind)
-        : allClis.find((c) => c.kind === "claude") ?? allClis[0];
-      if (!judgeCli) {
-        console.error("no CLI available to act as judge. install one or pass --no-judge.");
-        process.exit(1);
+      let allClis = await detectClis();
+      // Bunker Mode: the judge is an LLM call too. Only a local judge may run;
+      // with none available, degrade to the mechanical keyword pass instead of
+      // failing the whole scoring run.
+      if (process.env.PREVAIL_BUNKER === "1") {
+        const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+        if (judgeCliKind && !LOCAL_CLIS.has(judgeCliKind)) {
+          console.error(`Blocked by Bunker Mode: judge ${judgeCliKind} is a cloud provider. Using keyword scoring only.`);
+          judgeCliKind = null;
+          noJudge = true;
+        }
+        allClis = allClis.filter((c) => LOCAL_CLIS.has(c.kind));
+        if (!noJudge && allClis.length === 0) {
+          console.error("Blocked by Bunker Mode: no local judge available. Using keyword scoring only.");
+          noJudge = true;
+        }
+      }
+      if (!noJudge) {
+        judgeCli = judgeCliKind
+          ? allClis.find((c) => c.kind === judgeCliKind)
+          : allClis.find((c) => c.kind === "claude") ?? allClis[0];
+        if (!judgeCli) {
+          console.error("no CLI available to act as judge. install one or pass --no-judge.");
+          process.exit(1);
+        }
       }
     }
     // --all: score every run dir that has results.json but no score.json
@@ -1274,10 +1292,29 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       process.exit(1);
     }
     const { detectClis } = await import("./cli-bridge.ts");
-    const allClis = await detectClis();
+    let allClis = await detectClis();
     if (allClis.length === 0) {
       console.error("no CLIs detected — install claude / codex / gemini / ollama first");
       process.exit(1);
+    }
+    // Bunker Mode (PREVAIL_BUNKER=1, set by the desktop): benchmarks may only
+    // run local providers. A cloud target is REFUSED, never silently switched:
+    // a benchmark that quietly swaps models would lie about what it measured.
+    const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+    if (process.env.PREVAIL_BUNKER === "1") {
+      if (useCouncil) {
+        console.error("Blocked by Bunker Mode: council benchmarks convene cloud models. Turn Bunker Mode off, or run a local model instead.");
+        process.exit(1);
+      }
+      if (targetCliKind && !LOCAL_CLIS.has(targetCliKind)) {
+        console.error(`Blocked by Bunker Mode: ${targetCliKind} is a cloud provider. Pick a local model (ollama, lmstudio, mlx).`);
+        process.exit(1);
+      }
+      allClis = allClis.filter((c) => LOCAL_CLIS.has(c.kind));
+      if (allClis.length === 0) {
+        console.error("Blocked by Bunker Mode: no local model provider is running. Start Ollama (or LM Studio / MLX) first.");
+        process.exit(1);
+      }
     }
     const targetCli = useCouncil
       ? undefined
@@ -1399,7 +1436,20 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       domains = domainArg.split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
     }
 
-    const clis = await detectClis();
+    let clis = await detectClis();
+    // Bunker Mode: drafting is an LLM call; only local providers may run.
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+      if (cliKind && !LOCAL_CLIS.has(cliKind)) {
+        console.error(`Blocked by Bunker Mode: ${cliKind} is a cloud provider. Pick a local model (ollama, lmstudio, mlx).`);
+        process.exit(1);
+      }
+      clis = clis.filter((c) => LOCAL_CLIS.has(c.kind));
+      if (clis.length === 0) {
+        console.error("Blocked by Bunker Mode: no local model provider is running. Start Ollama (or LM Studio / MLX) first.");
+        process.exit(1);
+      }
+    }
     const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
     if (!cli) {
       console.error("no AI CLI available. Install claude, codex, or another supported CLI first.");
