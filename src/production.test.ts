@@ -1,10 +1,15 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, afterAll } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initProduction, markDemoVault, isDemoVault, DEMO_MARKER } from "./production.ts";
 
 // Work under cwd (os.tmpdir() = /var is a forbidden vault prefix elsewhere).
 const ROOT = join(process.cwd(), `tmp-prod-test-${process.pid}`);
+
+// Isolate the engine config so initProduction()'s setAppMode write never
+// touches the real ~/.prevail/config.json (it did, polluting it).
+const PREV_CFG = process.env.PREVAIL_CONFIG_DIR;
+process.env.PREVAIL_CONFIG_DIR = join(ROOT, "_cfg");
 
 function seed(dir: string) {
   mkdirSync(join(dir, "health"), { recursive: true });
@@ -14,9 +19,13 @@ function seed(dir: string) {
 
 beforeEach(() => {
   rmSync(ROOT, { recursive: true, force: true });
-  mkdirSync(ROOT, { recursive: true });
+  mkdirSync(join(ROOT, "_cfg"), { recursive: true });
 });
 afterEach(() => rmSync(ROOT, { recursive: true, force: true }));
+afterAll(() => {
+  if (PREV_CFG === undefined) delete process.env.PREVAIL_CONFIG_DIR;
+  else process.env.PREVAIL_CONFIG_DIR = PREV_CFG;
+});
 
 describe("production transition", () => {
   test("marks and detects a demo vault", () => {
