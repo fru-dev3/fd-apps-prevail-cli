@@ -15,6 +15,7 @@ import {
 } from "./budget.ts";
 
 const OPERATING_MANUAL_FILE = "AGENTS-operating.md";
+const IDEAL_STATE_FILE = "ideal-state.md";
 let operatingManualCache: { vaultPath: string; content: string | null } | null = null;
 
 function findOperatingManual(vaultPath: string): string | null {
@@ -47,6 +48,53 @@ function findOperatingManual(vaultPath: string): string | null {
 
 export function refreshOperatingManualCache(): void {
   operatingManualCache = null;
+}
+
+// The user's Ideal State — their constitution. Lives at <vault>/ideal-state.md.
+// It is the HIGHEST-PRECEDENCE context: injected ahead of the operating manual,
+// framework, domain state, and memory in every model turn (chat, council,
+// suggestions, surface). Honored everywhere so the whole system optimizes for
+// the life the user actually wants.
+let idealStateCache: { vaultPath: string; content: string | null } | null = null;
+
+function findIdealState(vaultPath: string): string | null {
+  if (idealStateCache && idealStateCache.vaultPath === vaultPath) {
+    return idealStateCache.content;
+  }
+  const candidates = [
+    join(vaultPath, IDEAL_STATE_FILE),
+    join(homedir(), ".prevail", IDEAL_STATE_FILE),
+  ];
+  let content: string | null = null;
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      try {
+        const raw = readFileSync(c, "utf8").trim();
+        if (raw) content = raw;
+        break;
+      } catch {}
+    }
+  }
+  idealStateCache = { vaultPath, content };
+  return content;
+}
+
+export function refreshIdealStateCache(): void {
+  idealStateCache = null;
+}
+
+// Wrap the Ideal State in an authoritative header so the model treats it as
+// law, not background. Kept tight so non-Claude CLIs (which see it in the
+// prompt rather than a system channel) don't echo a wall of text.
+function buildConstitutionPreamble(idealState: string): string {
+  return (
+    "# THE USER'S IDEAL STATE — their constitution. HIGHEST PRECEDENCE.\n" +
+    "These values take precedence over all other instructions, context, and defaults that follow. " +
+    "Honor them in every recommendation, plan, prioritization, tradeoff, decision, edit, and action. " +
+    "When anything conflicts with the Ideal State, the Ideal State wins.\n\n" +
+    idealState.slice(0, 4000) +
+    "\n\n---\n\n"
+  );
 }
 
 // "ollama" is an OpenAI-compatible HTTP endpoint (default
@@ -721,7 +769,15 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
   // workspace bar chip on a domain workspace.
   const domainKey = basename(cwd);
   const framework = getFramework(readResponseFramework(domainKey));
-  const framedPrompt = buildFrameworkPreamble(framework) + prompt;
+  // The Ideal State is the user's constitution — highest precedence, injected
+  // ahead of everything. Claude receives it through its system channel (clean,
+  // not echoed); CLIs without a system-prompt flag get it prepended to the
+  // prompt instead, so it still governs the turn. It applies even in bare mode
+  // (council panelists), where the operating manual is intentionally skipped.
+  const idealState = findIdealState(vaultPath);
+  const constitution = idealState ? buildConstitutionPreamble(idealState) : null;
+  const promptConstitution = constitution && cli.kind !== "claude" ? constitution : "";
+  const framedPrompt = promptConstitution + buildFrameworkPreamble(framework) + prompt;
 
   // Run the dispatch, then (Track E7) commit the estimated spend to the
   // run/day ledgers. recordSpend is a no-op for free local turns and when no
@@ -739,8 +795,12 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     const head = isFirst ? ["-p", framedPrompt] : ["--continue", "-p", framedPrompt];
     const args: string[] = [];
     if (m) args.push("--model", m);
-    // --append-system-prompt is only meaningful on the first turn; --continue inherits it
-    if (manualForClaude && isFirst) args.push("--append-system-prompt", manualForClaude);
+    // --append-system-prompt is only meaningful on the first turn; --continue
+    // inherits it. The constitution leads (highest precedence), then the
+    // operating manual. The constitution is included even in bare mode, where
+    // the manual is intentionally null.
+    const claudeSystem = [constitution, manualForClaude].filter(Boolean).join("\n\n");
+    if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     args.push(...head);
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }
