@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import { resolve, join } from "node:path";
+import { resolve, join, basename } from "node:path";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { App } from "./app.tsx";
@@ -2015,7 +2015,9 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   // JSON engine subcommands (archive / restore / list-archived) — defined by
   // docs/ENGINE-JSON-API.md. They read --vault/--json from their own sub-args
   // and emit the frozen error envelope on failure.
-  if (sub === "archive" || sub === "restore" || sub === "list-archived") {
+  const restoreArg = sub === "restore" ? args.find((a, i) => i >= 1 && !a.startsWith("--")) : undefined;
+  const isArchiveFileRestore = !!restoreArg && (restoreArg.endsWith(".tar.gz") || restoreArg.endsWith(".tgz"));
+  if ((sub === "archive" || sub === "restore" || sub === "list-archived") && !isArchiveFileRestore) {
     const { archiveDomain, restoreDomain, listArchived } = await import("./vault-ops.ts");
     const rest = parseJsonSubArgs(args.slice(1), vaultOverride);
     const jsonVault = rest.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
@@ -2168,10 +2170,14 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
       // the user so they don't accidentally extract into the wrong place.
       console.log(`note: target vault ${vault} does not exist; will be created.`);
     }
+    const force = args.includes("--force") || args.includes("-f");
     try {
       await restoreVault({
         archivePath: resolve(process.cwd(), archive),
         targetVaultPath: vault,
+        // --force (or --json) skips the interactive type-the-name guard; the
+        // desktop shows its own confirm dialog before calling this.
+        ...(force || asJson ? { confirm: async () => basename(resolve(vault)) } : {}),
       });
       if (asJson) process.stdout.write(`${JSON.stringify({ ok: true, vault })}\n`);
       else console.log(`✓ restored into ${vault}`);
