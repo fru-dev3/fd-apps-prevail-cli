@@ -5,6 +5,7 @@ import { detectClis, runChatTurn } from "./cli-bridge.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
+import { vappendLine } from "./vault-session.ts";
 import { VERSION } from "./version.ts";
 import { mcpConfigPath, readOrCreateMcpToken } from "./mcp-config.ts";
 
@@ -424,14 +425,29 @@ async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<
     isFirst: true,
     bare: true,
   });
+  const ts = Date.now();
   writeTurnSummary({
     domainPath: domain.path,
     userPrompt: prompt,
     assistantReply: reply,
     cliLabel: model ? `${cli.label}·${model} (via mcp)` : `${cli.label} (via mcp)`,
-    ts: Date.now(),
+    ts,
     kind: "chat",
   });
+  // Append an intent so the distiller picks up MCP-driven chats too — the same
+  // self-learning loop the desktop and Telegram feed. Best-effort, never fatal.
+  try {
+    const rec = JSON.stringify({
+      kind: "intent",
+      ts,
+      source: "mcp",
+      domain: domain.name,
+      cli: cli.kind,
+      model: model || null,
+      message: prompt,
+    });
+    vappendLine(join(domain.path, "_intents.jsonl"), `${rec}\n`);
+  } catch { /* intent logging is best-effort */ }
   return reply;
 }
 
