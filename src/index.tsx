@@ -1272,6 +1272,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     let questionId: string | null = null;
     let targetCliKind: string | null = null;
     let targetModel: string | null = null;
+    let batchId: string | null = null;
+    let batchLabel: string | null = null;
     let useCouncil = false;
     for (let i = 1; i < args.length; i++) {
       const a = args[i];
@@ -1281,6 +1283,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       else if (a === "--question" && v) { questionId = v; i++; }
       else if (a === "--cli" && v) { targetCliKind = v; i++; }
       else if (a === "--model" && v) { targetModel = v; i++; }
+      else if (a === "--batch" && v) { batchId = v; i++; }
+      else if (a === "--batch-label" && v) { batchLabel = v; i++; }
       else if (a === "--council") { useCouncil = true; }
     }
     let filtered = questions;
@@ -1343,6 +1347,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       records,
       targetCli,
       targetModel: targetModel ?? undefined,
+      batchId: batchId ?? undefined,
+      batchLabel: batchLabel ?? undefined,
     });
     const ok = records.filter((r) => r.ok).length;
     console.log("");

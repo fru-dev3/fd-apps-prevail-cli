@@ -429,12 +429,40 @@ export function writeRunDirectory(args: {
   ts?: number;
   targetCli?: AvailableCli;
   targetModel?: string;
+  batchId?: string;
+  batchLabel?: string;
 }): string {
   const ts = args.ts ?? Date.now();
   ensureScaffold(args.vaultPath);
-  const label = `${dayKey(ts)}_${runLabel(args)}`;
-  const dir = join(runsDir(args.vaultPath), label);
+  let label = `${dayKey(ts)}_${runLabel(args)}`;
+  let dir = join(runsDir(args.vaultPath), label);
+  // Same model rerun on the same day must be a NEW run, never a reuse of the
+  // existing directory (whose stale score.json made `score --all` skip it, so
+  // a rerun looked instantly "finished" with the old numbers).
+  if (existsSync(dir)) {
+    const d = new Date(ts);
+    const hms = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join("-");
+    label = `${label}_${hms}`;
+    dir = join(runsDir(args.vaultPath), label);
+  }
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  // Run metadata: the desktop reruns and labels from this instead of parsing
+  // the directory name (which now carries a dedupe time suffix on reruns).
+  vwriteFile(
+    join(dir, "meta.json"),
+    JSON.stringify({
+      cli: args.targetCli?.kind ?? null,
+      model: args.targetModel ?? null,
+      council: !args.targetCli,
+      ts,
+    }, null, 2),
+  );
+  // Batch membership: model runs launched together share one batch id so the
+  // UI can group and rerun them as a unit. (--batch was accepted and silently
+  // dropped before this; batch.json never existed.)
+  if (args.batchId) {
+    vwriteFile(join(dir, "batch.json"), JSON.stringify({ id: args.batchId, label: args.batchLabel ?? null }, null, 2));
+  }
   // results.md — one section per question with the reply, timing, and
   // any error. Greppable, PR-able, the source of truth for `bench score`.
   const md: string[] = [];
