@@ -32,6 +32,9 @@ import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
 export interface CanonicalQuestion {
   id: string;
   domain: string;
+  /** Archived questions are kept for the historical runs that used them,
+   *  but excluded from new runs and the active list. */
+  archived?: boolean;
   prompt: string;
   context?: string;
   notes?: string;
@@ -130,6 +133,7 @@ export function readQuestion(filePath: string): CanonicalQuestion | null {
   return {
     id,
     domain,
+    archived: typeof fields.archived === "string" ? fields.archived === "true" : undefined,
     prompt,
     context: extractSection(body, "Context"),
     notes: extractSection(body, "Notes"),
@@ -152,7 +156,7 @@ export function listQuestions(vaultPath: string): CanonicalQuestion[] {
   for (const entry of readdirSync(dir)) {
     if (!entry.endsWith(".md")) continue;
     const q = readQuestion(join(dir, entry));
-    if (q) out.push(q);
+    if (q && !q.archived) out.push(q);
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -201,6 +205,8 @@ export function writeDraftQuestion(args: SeedDraftArgs): string {
   const fm: string[] = ["---"];
   fm.push(`id: ${id}`);
   fm.push(`domain: ${args.domain}`);
+  fm.push(`created: ${dayKey(Date.now())}`);
+  fm.push(`source: ai`);
   if (args.council !== undefined) fm.push(`council: ${args.council}`);
   if (args.expected_decision) {
     fm.push(`expected_decision: ${escapeYaml(args.expected_decision)}`);
