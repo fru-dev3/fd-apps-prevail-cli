@@ -64,6 +64,20 @@ describe("app mode", () => {
     expect(cfg?.appMode).toBe("demo");
   });
 
+  test("setAppMode follows a caller-supplied vault on an existing config", () => {
+    writeConfig({
+      vaultPath: "/demo/sandbox",
+      createdAt: new Date().toISOString(),
+      appMode: "demo",
+    });
+    // The production switch names the real vault — config must follow it,
+    // or CLI/scheduled runs without --vault keep reading the demo sandbox.
+    setAppMode("production", "/real/vault");
+    const cfg = readConfig();
+    expect(cfg?.vaultPath).toBe("/real/vault");
+    expect(cfg?.appMode).toBe("production");
+  });
+
   test("round-trips back to production", () => {
     setAppMode("demo");
     expect(readAppMode()).toBe("demo");
