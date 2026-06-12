@@ -382,7 +382,9 @@ async function defaultStdinConfirm(prompt: string): Promise<string> {
 
 // Convenience used by the CLI: default backup filename.
 export function defaultBackupPath(now: Date = new Date()): string {
-  const stamp = now.toISOString().slice(0, 10);
+  // Date + time, so backing up several times a day yields distinct archives
+  // instead of silently targeting the same file.
+  const stamp = now.toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "");
   return join(homedir(), `prevail-backup-${stamp}.tar.gz`);
 }
 
@@ -747,7 +749,7 @@ function setArchivedFlag(
 
 // Default per-domain backup filename, e.g. ~/prevail-archive-wealth-2026-06-06.tar.gz
 export function defaultDomainBackupPath(domain: string, now: Date = new Date()): string {
-  const stamp = now.toISOString().slice(0, 10);
+  const stamp = now.toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "");
   return join(homedir(), `prevail-archive-${domain}-${stamp}.tar.gz`);
 }
 
