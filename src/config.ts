@@ -316,7 +316,11 @@ export function setAppMode(mode: AppMode, vaultPath?: string): void {
     writeConfig({ vaultPath: vaultPath ?? bundledDemoVaultPath(), createdAt: new Date().toISOString(), appMode: mode });
     return;
   }
-  writeConfig({ ...cfg, appMode: mode });
+  // When the caller names a vault, follow it. Dropping it here left
+  // config.vaultPath at the demo sandbox after a production switch, so
+  // anything resolving the vault from config (CLI/scheduled runs without
+  // --vault) kept reading demo data.
+  writeConfig({ ...cfg, appMode: mode, ...(vaultPath ? { vaultPath } : {}) });
 }
 
 export function setWebAccess(mode: "allow" | "deny"): void {

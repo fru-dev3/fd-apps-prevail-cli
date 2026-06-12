@@ -75,6 +75,6 @@ export function initProduction(opts: { vault?: string; clearDemo?: string }): Pr
     }
   }
 
-  setAppMode("production");
+  setAppMode("production", vault);
   return { ok: true, vault, created, demoCleared, refusedClear };
 }
