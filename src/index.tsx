@@ -1713,6 +1713,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     const { loadSkillsForConnector } = await import("./connector-skills.ts");
     const skills = loadSkillsForConnector(app);
+    if (args.includes("--json")) {
+      process.stdout.write(`${JSON.stringify(skills.map((s) => ({ id: s.id, runner: s.runner, trigger: s.trigger ?? "on-demand" })))}\n`);
+      return;
+    }
     if (skills.length === 0) {
       console.log(`${app.title} has no skill files under ${app.path}/skills/`);
       return;
