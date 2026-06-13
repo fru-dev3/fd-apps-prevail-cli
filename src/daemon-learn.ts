@@ -11,7 +11,13 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
-import { vreadFile, vwriteFile, vappendLine } from "./vault-session.ts";
+import { vreadFile, vwriteFile, vappendLine, vreadTail, vrotateLedgerPrefix } from "./vault-session.ts";
+
+// Ledger hygiene: rotate _intents.jsonl once it grows past this, always keeping
+// a recent tail (so the daily skillgen/taskgen readers still see fresh activity)
+// and only ever archiving the already-distilled prefix.
+const LEDGER_ROTATE_BYTES = 4 * 1024 * 1024;
+const LEDGER_KEEP_TAIL_BYTES = 512 * 1024;
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
 
 export interface LearnConfig {
@@ -212,11 +218,16 @@ function appendDecisions(dir: string, decisions: unknown[]): void {
 async function distillDir(dir: string, vaultPath: string, cfg: LearnConfig): Promise<number> {
   const ledger = join(dir, "_intents.jsonl");
   if (!existsSync(ledger)) return 0;
-  const cursor = readCursor(dir);
-  const rawStr = vreadFile(ledger);
-  const rawBytes = Buffer.from(rawStr, "utf8");
-  if (cursor.byte_offset >= rawBytes.length) return 0;
-  const newSlice = rawBytes.slice(cursor.byte_offset).toString("utf8");
+  let cursor = readCursor(dir);
+  // Memory-safe read: only the bytes past the cursor, never the whole ledger.
+  const { slice: newSlice, total } = vreadTail(ledger, cursor.byte_offset);
+  // Rotation/truncation safety: if the ledger shrank below our cursor (an
+  // archive pass, by us or another process), restart from the new beginning.
+  if (total < cursor.byte_offset) {
+    writeCursor(dir, { ...cursor, byte_offset: 0 });
+    return 0;
+  }
+  if (!newSlice) return 0;
   const { records, bytes } = planDistill(newSlice, cfg.protectedRecent);
   if (records.length === 0) return 0;
   const activity = renderActivity(records);
@@ -258,14 +269,36 @@ async function distillDir(dir: string, vaultPath: string, cfg: LearnConfig): Pro
   if (parsed.decisions.length) appendDecisions(dir, parsed.decisions);
 
   // Advance cursor ONLY after the successful write.
-  writeCursor(dir, {
+  cursor = {
     byte_offset: cursor.byte_offset + bytes,
     lines_distilled: cursor.lines_distilled + records.length,
     last_run_ts: Math.floor(Date.now() / 1000),
     last_run_ok: true,
     last_error: null,
-  });
+  };
+  writeCursor(dir, cursor);
+  maybeRotateLedger(dir, cursor);
   return records.length;
+}
+
+// Keep _intents.jsonl bounded on disk (and small enough that an encrypted-vault
+// read-modify-write stays cheap). Only fires once the ledger is large, only
+// archives the prefix the distiller has already consumed, always keeps a recent
+// tail, and decrements the cursor by exactly what was removed. Best-effort:
+// any failure leaves the ledger untouched.
+function maybeRotateLedger(dir: string, cursor: Cursor): void {
+  const ledger = join(dir, "_intents.jsonl");
+  let size = 0;
+  try { size = statSync(ledger).size; } catch { return; }
+  if (size < LEDGER_ROTATE_BYTES) return;
+  try {
+    const removed = vrotateLedgerPrefix(
+      ledger, join(dir, "_intents.archive.jsonl"), cursor.byte_offset, LEDGER_KEEP_TAIL_BYTES,
+    );
+    if (removed > 0) {
+      writeCursor(dir, { ...cursor, byte_offset: Math.max(0, cursor.byte_offset - removed) });
+    }
+  } catch { /* leave the ledger as-is on any error */ }
 }
 
 function safeRead(p: string): string {
