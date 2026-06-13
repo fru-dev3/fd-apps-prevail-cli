@@ -391,3 +391,68 @@ export async function runSkillMcp(
     try { child.kill(); } catch { /* already gone */ }
   }
 }
+
+// Guard against SSRF for remote (a2a) connectors: https only, no localhost /
+// private / link-local hosts.
+export function isUnsafeRemoteUrl(raw: string): boolean {
+  let u: URL;
+  try { u = new URL(raw); } catch { return true; }
+  if (u.protocol !== "https:") return true;
+  const h = u.hostname.toLowerCase();
+  if (h === "localhost" || h === "::1" || h.endsWith(".localhost")) return true;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h)) return true;
+  return false;
+}
+
+// a2a runner. Calls a tool on a REMOTE MCP server over HTTPS JSON-RPC and
+// ingests the text result. Frontmatter:
+//   runner: a2a
+//   mcp_url: https://mcp.example.com/rpc
+//   tool: search
+//   args: '{"q":"${input.q}"}'    (optional JSON, templated)
+//   save: out.md                  (optional; relative to the connector's data/)
+export async function runSkillA2a(
+  skill: SkillSpec,
+  inputs: Record<string, unknown>,
+  opts: SkillRunOpts = {},
+): Promise<SkillRunResult> {
+  const started = Date.now();
+  const url = typeof skill.extra?.mcp_url === "string" ? skill.extra.mcp_url : "";
+  const tool = typeof skill.extra?.tool === "string" ? skill.extra.tool : "";
+  if (!url || !tool) return { ok: false, message: `a2a skill "${skill.id}" needs mcp_url + tool`, outputsWritten: [], durationMs: 0 };
+  if (isUnsafeRemoteUrl(url)) return { ok: false, message: `refusing unsafe a2a url: ${url.slice(0, 60)}`, outputsWritten: [], durationMs: 0 };
+  let argsObj: unknown = {};
+  if (typeof skill.extra?.args === "string" && skill.extra.args.trim()) {
+    try { argsObj = JSON.parse(await substituteFull(skill.extra.args, skill, inputs, opts)); }
+    catch (e) { return { ok: false, message: `a2a args not valid JSON: ${e}`, outputsWritten: [], durationMs: 0 }; }
+  }
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (typeof skill.extra?.auth_header === "string") {
+    try { const idx = skill.extra.auth_header.indexOf(":"); if (idx > 0) headers[skill.extra.auth_header.slice(0, idx).trim()] = await substituteFull(skill.extra.auth_header.slice(idx + 1).trim(), skill, inputs, opts); } catch { /* skip */ }
+  }
+  let text = "";
+  try {
+    const ctl = new AbortController();
+    const killer = setTimeout(() => ctl.abort(), DEFAULT_TIMEOUT_MS);
+    opts.signal?.addEventListener("abort", () => ctl.abort(), { once: true });
+    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: argsObj } }), signal: ctl.signal });
+    clearTimeout(killer);
+    if (!res.ok) return { ok: false, message: `a2a HTTP ${res.status}`, outputsWritten: [], durationMs: Date.now() - started };
+    const body = (await res.text()).slice(0, MAX_CAPTURE);
+    let parsed: { error?: unknown; result?: { content?: { type?: string; text?: string }[] } };
+    try { parsed = JSON.parse(body); } catch { return { ok: false, message: "a2a response not JSON", outputsWritten: [], durationMs: Date.now() - started }; }
+    if (parsed.error) return { ok: false, message: `a2a error: ${JSON.stringify(parsed.error).slice(0, 200)}`, outputsWritten: [], durationMs: Date.now() - started };
+    const content = parsed.result?.content;
+    text = Array.isArray(content) ? content.filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text).join("\n") : JSON.stringify(parsed.result ?? {});
+  } catch (e) { return { ok: false, message: `a2a request failed: ${e}`, outputsWritten: [], durationMs: Date.now() - started }; }
+
+  const written: string[] = [];
+  const saveTpl = typeof skill.extra?.save === "string" ? skill.extra.save : skill.outputs[0]?.path;
+  if (saveTpl && text) {
+    const rel = await substituteFull(saveTpl, skill, inputs, opts);
+    const abs = safeOutputPath(skill.connectorDir, rel);
+    if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
+  }
+  return { ok: true, message: extractSummary(text) || `${tool} ok`, summary: extractSummary(text), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
+}
