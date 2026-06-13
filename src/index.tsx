@@ -1785,6 +1785,47 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     return;
   }
+  if (sub === "add") {
+    // prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b [--json]
+    const flag = (name: string): string | undefined => {
+      const i = args.indexOf(name);
+      return i >= 0 ? args[i + 1] : undefined;
+    };
+    const id = flag("--id");
+    const title = flag("--title") ?? id;
+    const integration = (flag("--integration") ?? "manual") as "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
+    const domains = (flag("--domains") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (!id) {
+      console.error("usage: prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b");
+      process.exit(1);
+    }
+    const { scaffoldCommunityApp } = await import("./vault.ts");
+    const r = scaffoldCommunityApp({ id, title: title!, integration, domains });
+    if (args.includes("--json")) {
+      process.stdout.write(`${JSON.stringify(r)}\n`);
+      process.exit(r.ok ? 0 : 1);
+    }
+    if (r.ok) console.log(`added connector "${id}" at ${r.path}`);
+    else { console.error(r.error); process.exit(1); }
+    return;
+  }
+  if (sub === "sync") {
+    const id = args[1];
+    if (!id) { console.error("usage: prevail connectors sync <id> [--vault <path>]"); process.exit(1); }
+    const vflag = args.indexOf("--vault");
+    const { readConfig } = await import("./config.ts");
+    const { resolveDefaultVaultPath } = await import("./vault.ts");
+    const vault = (vflag >= 0 ? args[vflag + 1] : undefined) ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
+    const { syncApp } = await import("./daemon-sync.ts");
+    const r = await syncApp({ vaultPath: vault!, tickSec: 60, maxRunsPerTick: 1 }, id);
+    if (args.includes("--json")) {
+      process.stdout.write(`${JSON.stringify(r)}\n`);
+      process.exit(0);
+    }
+    if (r.ok) console.log(`synced ${id}: ${r.artifacts} artifact(s) routed`);
+    else { console.error(`sync ${id} failed: ${r.error}`); process.exit(1); }
+    return;
+  }
   console.error(`unknown connectors subcommand: ${sub}\n`);
   console.error("usage:");
   console.error("  prevail connectors list");
@@ -1792,6 +1833,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
   console.error("  prevail connectors oauth <id>");
   console.error("  prevail connectors skills <id>                       — list runnable skills");
   console.error("  prevail connectors run <id> <skill> [--input k=v]   — execute a skill");
+  console.error("  prevail connectors add --id <id> --title <t> --integration <type> --domains a,b");
+  console.error("  prevail connectors sync <id> [--vault <path>]       — sync one app now");
   process.exit(1);
 }
 

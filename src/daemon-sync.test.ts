@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  syncOnce, refreshToCron, globMatch, readSyncState, looksLikeSecretFile,
+  syncOnce, syncApp, refreshToCron, globMatch, readSyncState, looksLikeSecretFile,
   type SyncConfig,
 } from "./daemon-sync.ts";
 
@@ -123,6 +123,15 @@ describe("syncOnce (pattern-agnostic end to end)", () => {
     await syncOnce(CFG);
     const again = await syncOnce(CFG);
     expect(again.ran).toBe(0);
+  });
+
+  test("syncApp runs one app on demand (ignores schedule) and routes", async () => {
+    const r = await syncApp(CFG, "demo-bank");
+    expect(r.ok).toBe(true);
+    const ledger = readFileSync(join(VAULT, "wealth", "_intents.jsonl"), "utf8");
+    expect(ledger).toContain("demo-bank");
+    const missing = await syncApp(CFG, "no-such-app");
+    expect(missing.ok).toBe(false);
   });
 
   test("copy routes place artifacts into <domain>/imports with sidecar, secrets filtered", async () => {
