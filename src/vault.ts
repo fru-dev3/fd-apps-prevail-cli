@@ -545,6 +545,37 @@ export interface AppSkill {
   // integration === "oauth". Read by oauth-flow.ts. Opaque here for the
   // same dep-isolation reason.
   oauth?: unknown;
+  // --- autonomous-sync fields (manifest-driven; all optional) ---
+  // When/how the sync daemon refreshes this connector. `every` accepts
+  // "hourly" | "<N>h" | "daily" | "weekly"; `at` an HH:MM; `on` a weekday
+  // (weekly only); `skill` names the skill to run (defaults to the first
+  // skill whose trigger is "refresh").
+  refresh?: AppRefresh;
+  // What the connector may DO on the user's behalf. Enforced in the api
+  // runner per op class: read ops always allowed; draft ops need >= "draft";
+  // send/act ops need "act". Default "read-only".
+  autonomy?: AppAutonomy;
+  // Human-meaningful account identity for multi-instance connectors
+  // (gmail-personal vs gmail-estate): shown in every UI row.
+  account?: { label: string; address?: string };
+  // Routing: which artifacts/records land in which domain. When absent,
+  // one summary intent record goes to every domain in domains[].
+  routes?: AppRoute[];
+}
+
+export interface AppRefresh {
+  every: string; // "hourly" | "2h".."23h" | "daily" | "weekly"
+  at?: string;   // "HH:MM"
+  on?: string;   // "mon".."sun" (weekly)
+  skill?: string;
+}
+
+export type AppAutonomy = "read-only" | "draft" | "act";
+
+export interface AppRoute {
+  match: string;  // glob-ish path filter under the connector dir, e.g. "data/attachments/**/*.pdf"
+  domain: string;
+  copy?: boolean; // also copy matched files into <vault>/<domain>/imports/
 }
 
 export type ConnectorStatus = "connected" | "not-configured" | "expired" | "error";
@@ -614,6 +645,54 @@ interface CoercedManifest {
   connection?: string;
   authCheck?: unknown;
   oauth?: unknown;
+  refresh?: AppRefresh;
+  autonomy?: AppAutonomy;
+  account?: { label: string; address?: string };
+  routes?: AppRoute[];
+}
+
+const VALID_AUTONOMY = new Set(["read-only", "draft", "act"]);
+
+// Defensive coercion for the sync-layer manifest fields. Same philosophy as
+// coerceCommunityManifest: a hostile or malformed block degrades to undefined,
+// never throws, never escapes its caps.
+function coerceRefresh(v: unknown): AppRefresh | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const every = typeof o.every === "string" ? o.every.trim().toLowerCase().slice(0, 16) : "";
+  if (!/^(hourly|([2-9]|1[0-9]|2[0-3])h|daily|weekly)$/.test(every)) return undefined;
+  const at = typeof o.at === "string" && /^\d{1,2}:\d{2}$/.test(o.at.trim()) ? o.at.trim() : undefined;
+  const on = typeof o.on === "string" && /^(mon|tue|wed|thu|fri|sat|sun)$/i.test(o.on.trim()) ? o.on.trim().toLowerCase() : undefined;
+  const skill = typeof o.skill === "string" && /^[a-z0-9_-]+$/i.test(o.skill.trim()) ? o.skill.trim() : undefined;
+  return { every, at, on, skill };
+}
+
+function coerceAutonomy(v: unknown): AppAutonomy | undefined {
+  return typeof v === "string" && VALID_AUTONOMY.has(v) ? (v as AppAutonomy) : undefined;
+}
+
+function coerceAccount(v: unknown): { label: string; address?: string } | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const label = typeof o.label === "string" ? o.label.trim().slice(0, 48) : "";
+  if (!label) return undefined;
+  const address = typeof o.address === "string" ? o.address.trim().slice(0, 128) : undefined;
+  return { label, address };
+}
+
+function coerceRoutes(v: unknown): AppRoute[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: AppRoute[] = [];
+  for (const r of v.slice(0, 32)) {
+    if (!r || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    const match = typeof o.match === "string" ? o.match.trim().slice(0, 256) : "";
+    const domain = typeof o.domain === "string" && /^[a-z0-9 _-]+$/i.test(o.domain.trim()) ? o.domain.trim() : "";
+    // match must stay inside the connector dir: no absolute paths, no traversal.
+    if (!match || !domain || match.startsWith("/") || match.includes("..")) continue;
+    out.push({ match, domain, copy: o.copy === true });
+  }
+  return out.length ? out : undefined;
 }
 
 function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManifest {
@@ -649,6 +728,10 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     // it can validate each kind's specific subfields.
     authCheck: typeof o.auth_check === "object" && o.auth_check !== null ? o.auth_check : undefined,
     oauth: typeof o.oauth === "object" && o.oauth !== null ? o.oauth : undefined,
+    refresh: coerceRefresh(o.refresh),
+    autonomy: coerceAutonomy(o.autonomy),
+    account: coerceAccount(o.account),
+    routes: coerceRoutes(o.routes),
   };
 }
 
@@ -705,6 +788,10 @@ export function scanCommunityApps(): AppSkill[] {
         configured: conn.configured,
         authCheck: m.authCheck,
         oauth: m.oauth,
+        refresh: m.refresh,
+        autonomy: m.autonomy,
+        account: m.account,
+        routes: m.routes,
       });
     }
   }
