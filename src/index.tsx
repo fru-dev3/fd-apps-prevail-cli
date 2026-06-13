@@ -930,7 +930,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
     const activeChannels = [...new Set([...(entry.channels ?? []), ...extraChannels])];
     const hooks = await buildBriefingHooks(vault, activeChannels);
 
-    const r = await runBriefing({ ...entry, channels: activeChannels }, vault, hooks);
+    const r = await runBriefing({ ...entry, channels: activeChannels }, vault, undefined, undefined, hooks);
     if (r.error) {
       console.error(`error: ${r.error}`);
       process.exit(1);
@@ -1743,6 +1743,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
             refresh: a.refresh ?? null,
             autonomy: a.autonomy ?? null,
             community: a.community,
+            connections: a.connections ?? null,
           })),
         )}\n`,
       );
