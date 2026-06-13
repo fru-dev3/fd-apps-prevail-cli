@@ -561,6 +561,20 @@ export interface AppSkill {
   // Routing: which artifacts/records land in which domain. When absent,
   // one summary intent record goes to every domain in domains[].
   routes?: AppRoute[];
+  // Ordered list of connection strategies. The engine probes each in order
+  // and activates the first one that passes its auth_check. When present,
+  // takes precedence over the top-level auth_check. Each entry may override
+  // which skill is run via its own `skill` field.
+  connections?: AppConnection[];
+}
+
+// One entry in the `connections` priority list. The engine tries them
+// in order; the first whose auth_check passes becomes `active_connection`.
+export interface AppConnection {
+  kind: string;          // "mcp" | "oauth" | "cli" | "a2a" | "api" | "manual"
+  description?: string;
+  auth_check?: unknown;  // same shape as AppSkill.authCheck
+  skill?: string;        // override refresh.skill for this connection type
 }
 
 export interface AppRefresh {
@@ -649,6 +663,7 @@ interface CoercedManifest {
   autonomy?: AppAutonomy;
   account?: { label: string; address?: string };
   routes?: AppRoute[];
+  connections?: AppConnection[];
 }
 
 const VALID_AUTONOMY = new Set(["read-only", "draft", "act"]);
@@ -695,6 +710,23 @@ function coerceRoutes(v: unknown): AppRoute[] | undefined {
   return out.length ? out : undefined;
 }
 
+function coerceConnections(v: unknown): AppConnection[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const VALID_KINDS = new Set(["mcp", "oauth", "cli", "a2a", "api", "manual", "browser"]);
+  const out: AppConnection[] = [];
+  for (const item of v.slice(0, 8)) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const kind = typeof o.kind === "string" && VALID_KINDS.has(o.kind) ? o.kind : "";
+    if (!kind) continue;
+    const description = typeof o.description === "string" ? o.description.trim().slice(0, 256) : undefined;
+    const auth_check = typeof o.auth_check === "object" && o.auth_check !== null ? o.auth_check : undefined;
+    const skill = typeof o.skill === "string" && /^[a-z0-9_-]+$/i.test(o.skill.trim()) ? o.skill.trim() : undefined;
+    out.push({ kind, description, auth_check, skill });
+  }
+  return out.length ? out : undefined;
+}
+
 function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManifest {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const str = (v: unknown, cap: number, fallback: string): string => {
@@ -732,6 +764,7 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     autonomy: coerceAutonomy(o.autonomy),
     account: coerceAccount(o.account),
     routes: coerceRoutes(o.routes),
+    connections: coerceConnections(o.connections),
   };
 }
 
@@ -792,6 +825,7 @@ export function scanCommunityApps(): AppSkill[] {
         autonomy: m.autonomy,
         account: m.account,
         routes: m.routes,
+        connections: m.connections,
       });
     }
   }

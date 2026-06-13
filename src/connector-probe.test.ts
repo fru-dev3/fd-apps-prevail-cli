@@ -107,3 +107,63 @@ describe("probeConnector — no auth_check declared", () => {
     expect(r.fixHint).toMatch(/auth_check/);
   });
 });
+
+describe("probeConnector — connections[] priority list", () => {
+  test("picks first passing connection and returns its kind as activeConnection", async () => {
+    process.env.MULTI_CONN_KEY = "present";
+    try {
+      const app: AppSkill = {
+        ...fakeApp("multi-conn"),
+        connections: [
+          {
+            kind: "mcp",
+            auth_check: { kind: "env-keys", env_keys: ["DEFINITELY_MISSING_KEY_XYZ"] },
+            skill: "sync-mcp",
+          },
+          {
+            kind: "oauth",
+            auth_check: { kind: "env-keys", env_keys: ["MULTI_CONN_KEY"] },
+            skill: "sync-oauth",
+          },
+          {
+            kind: "cli",
+            auth_check: { kind: "env-keys", env_keys: ["ANOTHER_MISSING_KEY"] },
+            skill: "sync-cli",
+          },
+        ],
+      };
+      const r = await probeConnector(app, null);
+      expect(r.ok).toBe(true);
+      expect(r.activeConnection).toBe("oauth");
+    } finally {
+      delete process.env.MULTI_CONN_KEY;
+    }
+  });
+
+  test("returns not-configured when no connection passes", async () => {
+    const app: AppSkill = {
+      ...fakeApp("multi-conn-fail"),
+      connections: [
+        { kind: "mcp", auth_check: { kind: "env-keys", env_keys: ["MISSING_A"] } },
+        { kind: "cli", auth_check: { kind: "env-keys", env_keys: ["MISSING_B"] } },
+      ],
+    };
+    const r = await probeConnector(app, null);
+    expect(r.ok).toBe(false);
+    expect(r.activeConnection).toBeUndefined();
+  });
+
+  test("falls back to top-level auth_check when connections is absent", async () => {
+    process.env.FALLBACK_CONN_KEY = "yes";
+    try {
+      const r = await probeConnector(fakeApp("fallback"), {
+        kind: "env-keys",
+        env_keys: ["FALLBACK_CONN_KEY"],
+      });
+      expect(r.ok).toBe(true);
+      expect(r.activeConnection).toBeUndefined();
+    } finally {
+      delete process.env.FALLBACK_CONN_KEY;
+    }
+  });
+});

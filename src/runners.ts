@@ -317,7 +317,10 @@ export async function runSkillMcp(
   opts: SkillRunOpts = {},
 ): Promise<SkillRunResult> {
   const started = Date.now();
-  const cmd = typeof skill.extra?.mcp_command === "string" ? skill.extra.mcp_command : "";
+  const rawCmd = typeof skill.extra?.mcp_command === "string" ? skill.extra.mcp_command : "";
+  // Resolve ${env.X} references so connector manifests can point mcp_command
+  // to an env var (e.g. ${env.GMAIL_MCP_COMMAND}) without hardcoding a binary.
+  const cmd = rawCmd.includes("${") ? await substituteFull(rawCmd, skill, inputs, opts) : rawCmd;
   const tool = typeof skill.extra?.tool === "string" ? skill.extra.tool : "";
   if (!cmd || !tool) {
     return { ok: false, message: `mcp skill "${skill.id}" needs mcp_command + tool`, outputsWritten: [], durationMs: 0 };

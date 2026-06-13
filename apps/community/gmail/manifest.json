@@ -1,11 +1,43 @@
 {
   "id": "gmail",
   "name": "Gmail",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pull recent threads, important mail, and attachments from Gmail into the email domain so briefings and chats are grounded in what's actually in your inbox.",
   "domains": ["email"],
   "integration": "oauth",
-  "connection": "Authorize once with `prevail connectors oauth gmail` (OAuth 2.0 + PKCE; the refresh token is saved to ~/.prevail/connectors/gmail/auth/refresh.token, chmod 0600). Provide your own Google OAuth app via GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Read-only Gmail scope.",
+  "connection": "Three connection strategies are supported, tried in priority order: (1) MCP — install an MCP Gmail server (e.g. npx @modelcontextprotocol/server-gmail) and set GMAIL_MCP_COMMAND; (2) OAuth — run `prevail connectors oauth gmail` once (PKCE, saves refresh token to ~/.prevail/connectors/gmail/auth/refresh.token); (3) CLI — install GAM (Google Apps Manager) and authenticate with `gam oauth create`.",
+  "connections": [
+    {
+      "kind": "mcp",
+      "description": "Local Gmail MCP stdio server. Install via: npm install -g @modelcontextprotocol/server-gmail. Set GMAIL_MCP_COMMAND to the server command.",
+      "auth_check": {
+        "kind": "env-keys",
+        "env_keys": ["GMAIL_MCP_COMMAND"]
+      },
+      "skill": "sync-inbox-mcp"
+    },
+    {
+      "kind": "oauth",
+      "description": "Direct Gmail REST API via OAuth 2.0 PKCE. Run: prevail connectors oauth gmail",
+      "auth_check": {
+        "kind": "file-exists",
+        "paths": ["~/.prevail/connectors/gmail/auth/refresh.token"]
+      },
+      "skill": "sync-inbox"
+    },
+    {
+      "kind": "cli",
+      "description": "GAM (Google Apps Manager) CLI. Install: https://github.com/GAM-team/GAM. Auth: gam oauth create",
+      "auth_check": {
+        "kind": "command",
+        "command": "gam",
+        "args": ["version"],
+        "timeout_ms": 3000,
+        "success_exit_codes": [0]
+      },
+      "skill": "sync-inbox-cli"
+    }
+  ],
   "oauth": {
     "provider": "google",
     "client_id_env": "GOOGLE_CLIENT_ID",
@@ -20,7 +52,7 @@
     "kind": "file-exists",
     "paths": ["~/.prevail/connectors/gmail/auth/refresh.token"]
   },
-  "refresh": {"every": "daily", "at": "06:30", "skill": "sync-inbox"},
+  "refresh": {"every": "daily", "at": "06:30"},
   "autonomy": "read-only",
   "account": {"label": "primary"},
   "homepage": "https://mail.google.com",

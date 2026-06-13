@@ -52,11 +52,47 @@ export interface ProbeResult {
   missing?: string[];
   fixHint?: string;
   ts: number;
+  // When the app declares a `connections` priority list, this is the `kind`
+  // of the first connection whose auth_check passed.
+  activeConnection?: string;
 }
 
 // Top-level entry point — read the manifest, dispatch to the right kind.
+// If the app has a `connections` priority list, each entry is tried in order;
+// the first passing one becomes `activeConnection` in the result. Falls back
+// to the single top-level `auth_check` for backwards-compatible manifests.
 export async function probeConnector(app: AppSkill, spec: AuthCheckSpec | null): Promise<ProbeResult> {
   const ts = Date.now();
+
+  // Multi-strategy: try each connection in priority order; first pass wins.
+  if (app.connections && app.connections.length > 0) {
+    for (const conn of app.connections) {
+      if (!conn.auth_check) continue;
+      let result: ProbeResult;
+      try {
+        result = await probeConnector({ ...app, connections: undefined }, conn.auth_check as AuthCheckSpec);
+      } catch {
+        continue;
+      }
+      if (result.ok) {
+        return { ...result, activeConnection: conn.kind };
+      }
+    }
+    // None passed — return the failure from the first entry that has an auth_check.
+    const first = app.connections.find((c) => c.auth_check);
+    if (first) {
+      const r = await probeConnector({ ...app, connections: undefined }, first.auth_check as AuthCheckSpec);
+      return { ...r, activeConnection: undefined };
+    }
+    return {
+      ok: false,
+      status: "not-configured",
+      message: "no configured connection found (tried all entries in connections[])",
+      fixHint: `configure one of the connection strategies for ${app.id}`,
+      ts,
+    };
+  }
+
   if (!spec) {
     // No auth_check declared in manifest. Surface as "we don't know how to
     // test this" rather than green-checking it.
