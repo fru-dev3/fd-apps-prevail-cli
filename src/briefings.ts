@@ -27,10 +27,19 @@ export interface BriefingEntry {
   // the verdict to every allow-listed chat_id (so a family-shared bot can
   // ping multiple people). "both" does both.
   deliver: "log" | "telegram" | "both";
+  // Extra delivery channels beyond log/telegram. Each routes through a hook the
+  // caller supplies (wired to a connected email/drive app); inert if no hook.
+  channels?: ("email" | "drive")[];
   enabled: boolean;
   last_run: number | null;
   created_at: number;
 }
+
+// Pluggable delivery for the extensible channels. The caller (desktop/daemon)
+// wires these to a connected app (e.g. the gmail connector for email). Each
+// returns a short receipt string. Absent hook → that channel is skipped.
+export type DeliveryFn = (subject: string, body: string) => Promise<string>;
+export interface DeliveryHooks { email?: DeliveryFn; drive?: DeliveryFn }
 
 interface BriefingFile {
   briefings: BriefingEntry[];
@@ -64,8 +73,46 @@ export interface BriefingResult {
   ts: number;
   domain: string;
   output: string; // verdict (council) or reply (single)
-  delivered: { log: boolean; telegram: number };
+  delivered: { log: boolean; telegram: number; channels?: Record<string, string> };
   error?: string;
+}
+
+// Route a finished briefing to every configured channel. Pure of the model
+// step (output is already computed), so it's unit-testable with mock hooks.
+export async function deliverBriefing(
+  entry: BriefingEntry,
+  output: string,
+  ts: number,
+  cliLabel: string,
+  domainPath: string,
+  deliverTelegram?: TelegramDelivery,
+  hooks?: DeliveryHooks,
+): Promise<{ log: boolean; telegram: number; channels?: Record<string, string> }> {
+  const delivered: { log: boolean; telegram: number; channels?: Record<string, string> } = { log: false, telegram: 0 };
+  if (entry.deliver === "log" || entry.deliver === "both") {
+    writeTurnSummary({
+      domainPath,
+      userPrompt: `[scheduled briefing · ${entry.name}] ${entry.prompt}`,
+      assistantReply: output,
+      cliLabel,
+      ts,
+      kind: entry.mode === "council" ? "council-verdict" : "chat",
+    });
+    delivered.log = true;
+  }
+  if ((entry.deliver === "telegram" || entry.deliver === "both") && deliverTelegram) {
+    const header = `🔔 ${entry.name}  ·  ${entry.domain}\n\n`;
+    try { delivered.telegram = await deliverTelegram(header + output); }
+    catch { /* never fail a briefing on a delivery hiccup */ }
+  }
+  const subject = `${entry.name} · ${entry.domain}`;
+  for (const ch of entry.channels ?? []) {
+    const hook = hooks?.[ch];
+    if (!hook) { (delivered.channels ??= {})[ch] = "skipped (no connector)"; continue; }
+    try { (delivered.channels ??= {})[ch] = await hook(subject, output); }
+    catch (e) { (delivered.channels ??= {})[ch] = `error: ${e instanceof Error ? e.message : e}`; }
+  }
+  return delivered;
 }
 
 // Optional Telegram delivery hook — passed in by the daemon so briefings
@@ -79,6 +126,7 @@ export async function runBriefing(
   vaultPath: string,
   deliverTelegram?: TelegramDelivery,
   signal?: AbortSignal,
+  hooks?: DeliveryHooks,
 ): Promise<BriefingResult> {
   const ts = Date.now();
   const domains = scanVault(vaultPath);
@@ -153,27 +201,7 @@ export async function runBriefing(
     };
   }
 
-  const delivered = { log: false, telegram: 0 };
-  if (entry.deliver === "log" || entry.deliver === "both") {
-    writeTurnSummary({
-      domainPath: domain.path,
-      userPrompt: `[scheduled briefing · ${entry.name}] ${entry.prompt}`,
-      assistantReply: output,
-      cliLabel,
-      ts,
-      kind: entry.mode === "council" ? "council-verdict" : "chat",
-    });
-    delivered.log = true;
-  }
-  if ((entry.deliver === "telegram" || entry.deliver === "both") && deliverTelegram) {
-    const header = `🔔 ${entry.name}  ·  ${entry.domain}\n\n`;
-    try {
-      delivered.telegram = await deliverTelegram(header + output);
-    } catch {
-      // Logged elsewhere; never fail the briefing just because Telegram
-      // is unreachable.
-    }
-  }
+  const delivered = await deliverBriefing(entry, output, ts, cliLabel, domain.path, deliverTelegram, hooks);
 
   return { id: entry.id, ts, domain: entry.domain, output, delivered };
 }
