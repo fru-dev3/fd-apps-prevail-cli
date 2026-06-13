@@ -14,8 +14,8 @@
 // the connector dir, ===SUMMARY=== extraction, cursor updates returned (never
 // written directly — the sync daemon owns sync-state.json).
 
-import { mkdirSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
-import { dirname, relative } from "node:path";
+import { mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from "node:fs";
+import { dirname, relative, join } from "node:path";
 import { spawn } from "node:child_process";
 import type { SkillSpec, SkillRunResult, SkillRunOpts } from "./connector-skills.ts";
 import { substitute, safeOutputPath, buildSkillEnv } from "./connector-skills.ts";
@@ -455,4 +455,74 @@ export async function runSkillA2a(
     if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
   }
   return { ok: true, message: extractSummary(text) || `${tool} ok`, summary: extractSummary(text), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
+}
+
+// browser runner. Read-only page scrape via Playwright, which the USER installs
+// themselves (`npm i -g playwright && npx playwright install chromium`) — same
+// "bring your own tool" model as the cli runner. No heavy dep is added to the
+// engine; if Playwright isn't present the run fails gracefully. Frontmatter:
+//   runner: browser
+//   url: https://example.com/account            (http/https; templated)
+//   selector: "#statements"                      (optional; innerText of match)
+//   save: page.txt                               (optional; relative to data/)
+// A FIXED driver script (no user code) is spawned via `node`; url/selector are
+// passed as env (never interpolated into code).
+export async function runSkillBrowser(
+  skill: SkillSpec,
+  inputs: Record<string, unknown>,
+  opts: SkillRunOpts = {},
+): Promise<SkillRunResult> {
+  const started = Date.now();
+  const urlTpl = typeof skill.extra?.url === "string" ? skill.extra.url : "";
+  if (!urlTpl) return { ok: false, message: `browser skill "${skill.id}" needs a url: field`, outputsWritten: [], durationMs: 0 };
+  let url: string; let selector = "";
+  try {
+    url = await substituteFull(urlTpl, skill, inputs, opts);
+    if (typeof skill.extra?.selector === "string") selector = await substituteFull(skill.extra.selector, skill, inputs, opts);
+  } catch (e) { return { ok: false, message: String(e instanceof Error ? e.message : e), outputsWritten: [], durationMs: 0 }; }
+  if (!/^https?:\/\//.test(url)) return { ok: false, message: `browser url must be http(s): ${url.slice(0, 40)}`, outputsWritten: [], durationMs: 0 };
+
+  // Fixed driver: imports playwright (optional), navigates read-only, prints
+  // {text} or {error} as one JSON line. url/selector come from env, never code.
+  const driver = [
+    "const out=(o)=>{process.stdout.write(JSON.stringify(o)+'\\n');};",
+    "let pw; try { pw = await import('playwright'); } catch { out({error:'playwright not installed — run: npm i -g playwright && npx playwright install chromium'}); process.exit(0); }",
+    "try {",
+    "  const b = await pw.chromium.launch({ headless: true });",
+    "  const p = await b.newPage();",
+    "  await p.goto(process.env.PV_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });",
+    "  const sel = process.env.PV_SELECTOR;",
+    "  const text = sel ? await p.locator(sel).first().innerText() : await p.evaluate(() => document.body.innerText);",
+    "  await b.close();",
+    "  out({ text: String(text).slice(0, 500000) });",
+    "} catch (e) { out({ error: String(e && e.message || e) }); }",
+  ].join("\n");
+  const tmp = join(skill.connectorDir, `.browser-driver-${process.pid}-${Date.now()}.mjs`);
+  let text = "";
+  try {
+    mkdirSync(dirname(tmp), { recursive: true });
+    writeFileSync(tmp, driver);
+    const res = await new Promise<{ code: number | null; out: string }>((resolve) => {
+      const child = spawn("node", [tmp], { env: { ...buildSkillEnv(skill), PV_URL: url, PV_SELECTOR: selector }, stdio: ["ignore", "pipe", "ignore"] });
+      let o = ""; child.stdout!.on("data", (d: Buffer) => { o += d.toString(); });
+      const killer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } resolve({ code: null, out: o }); }, 45000);
+      opts.signal?.addEventListener("abort", () => { try { child.kill(); } catch { /* gone */ } }, { once: true });
+      child.on("error", () => { clearTimeout(killer); resolve({ code: -1, out: o }); });
+      child.on("close", (code) => { clearTimeout(killer); resolve({ code, out: o }); });
+    });
+    let parsed: { text?: string; error?: string } = {};
+    const line = res.out.trim().split("\n").filter(Boolean).pop() ?? "";
+    try { parsed = JSON.parse(line); } catch { parsed = { error: res.code === -1 ? "node not found (install Node to use the browser runner)" : `no output (exit ${res.code})` }; }
+    if (parsed.error) return { ok: false, message: parsed.error.slice(0, 200), outputsWritten: [], durationMs: Date.now() - started };
+    text = parsed.text ?? "";
+  } finally { try { rmSync(tmp, { force: true }); } catch { /* ignore */ } }
+
+  const written: string[] = [];
+  const saveTpl = typeof skill.extra?.save === "string" ? skill.extra.save : skill.outputs[0]?.path;
+  if (saveTpl && text) {
+    const rel = await substituteFull(saveTpl, skill, inputs, opts);
+    const abs = safeOutputPath(skill.connectorDir, rel);
+    if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
+  }
+  return { ok: true, message: extractSummary(text) || `scraped ${url.slice(0, 50)}`, summary: extractSummary(text), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
 }
