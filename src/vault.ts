@@ -1,4 +1,4 @@
-import { readdirSync, statSync, existsSync } from "node:fs";
+import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
@@ -1088,4 +1088,46 @@ export function formatRelativeTime(mtimeMs: number | null): string {
   if (diff < 30 * day) return `${Math.floor(diff / day)}d ago`;
   if (diff < 365 * day) return `${Math.floor(diff / (30 * day))}mo ago`;
   return `${Math.floor(diff / (365 * day))}y ago`;
+}
+
+// Scaffold a new community app under ~/.prevail/apps/<id>/ from a catalog
+// pick: a manifest.json + SKILL.md + connection.md. The app then shows up in
+// scanCommunityApps() and the desktop's Connected view, "not-configured" until
+// the user authenticates it. Never overwrites an existing app.
+export function scaffoldCommunityApp(opts: {
+  id: string;
+  title: string;
+  integration: "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
+  domains: string[];
+  connection?: string;
+}): { ok: boolean; path?: string; error?: string } {
+  const id = opts.id.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) {
+    return { ok: false, error: `invalid app id "${opts.id}" (use lowercase letters, digits, hyphens)` };
+  }
+  const base = process.env.PREVAIL_APPS_DIR || join(homedir(), ".prevail", "apps");
+  const root = join(base, id);
+  if (existsSync(root)) return { ok: false, error: `app "${id}" already exists at ${root}` };
+  // Map a connector pattern to the manifest integration vocabulary.
+  const integ = opts.integration === "cli" ? "manual" : opts.integration; // cli runs as a skill, not an auth integration
+  const domains = (opts.domains ?? []).filter(Boolean);
+  try {
+    mkdirSync(join(root, "skills"), { recursive: true });
+    const manifest = {
+      id,
+      name: opts.title,
+      description: `${opts.title} connector (scaffolded from the catalog).`,
+      domains,
+      integration: integ,
+      connection: opts.connection ?? `Connect ${opts.title}, then this app syncs into ${domains.join(", ") || "its domains"}.`,
+      // No auth_check / refresh yet: the user wires those when they connect.
+    };
+    writeFileSync(join(root, "manifest.json"), JSON.stringify(manifest, null, 2));
+    writeFileSync(join(root, "SKILL.md"), `# ${opts.title}\n\n${manifest.connection}\n`);
+    writeFileSync(join(root, "connection.md"), `# Connecting ${opts.title}\n\nIntegration: ${integ}\nDomains: ${domains.join(", ") || "(none yet)"}\n\nAdd an auth_check + refresh block to manifest.json and a skill under skills/ to enable syncing.\n`);
+    writeFileSync(join(root, "connection-status.json"), JSON.stringify({ status: "not-configured" }, null, 2));
+    return { ok: true, path: root };
+  } catch (e) {
+    return { ok: false, error: `scaffold failed: ${e}` };
+  }
 }
