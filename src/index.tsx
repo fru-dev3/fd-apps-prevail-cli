@@ -1905,6 +1905,28 @@ async function connectorsCommand(args: string[]): Promise<void> {
     else { console.error(r.error); process.exit(1); }
     return;
   }
+  if (sub === "set") {
+    // prevail connectors set <id> domains a,b,c [--json]
+    //   rewrites the app→domain binding (many-to-many). Add or remove domains
+    //   by passing the full desired list.
+    const id = args[1];
+    const field = args[2];
+    const value = args[3];
+    if (!id || field !== "domains") {
+      console.error("usage: prevail connectors set <id> domains <a,b,c>");
+      process.exit(1);
+    }
+    const domains = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    const { setCommunityAppDomains } = await import("./vault.ts");
+    const r = setCommunityAppDomains(id, domains);
+    if (args.includes("--json")) {
+      process.stdout.write(`${JSON.stringify(r)}\n`);
+      process.exit(r.ok ? 0 : 1);
+    }
+    if (r.ok) console.log(`set domains for "${id}": ${(r.domains ?? []).join(", ") || "(none)"}`);
+    else { console.error(r.error); process.exit(1); }
+    return;
+  }
   if (sub === "sync") {
     const id = args[1];
     if (!id) { console.error("usage: prevail connectors sync <id> [--vault <path>]"); process.exit(1); }
@@ -1930,6 +1952,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
   console.error("  prevail connectors skills <id>                       — list runnable skills");
   console.error("  prevail connectors run <id> <skill> [--input k=v]   — execute a skill");
   console.error("  prevail connectors add --id <id> --title <t> --integration <type> --domains a,b");
+  console.error("  prevail connectors set <id> domains <a,b,c>          — rewrite app→domain binding");
   console.error("  prevail connectors sync <id> [--vault <path>]       — sync one app now");
   process.exit(1);
 }

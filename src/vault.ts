@@ -1165,3 +1165,37 @@ export function scaffoldCommunityApp(opts: {
     return { ok: false, error: `scaffold failed: ${e}` };
   }
 }
+
+// Rewrite the many-to-many app→domain binding for an existing community app.
+// Locates the app's manifest.json via the same discovery the scanner uses,
+// then updates ONLY the `domains` array in place (preserving every other
+// field and key order). Domains are normalized to lowercase slugs, deduped,
+// and validated so a hostile/typo'd binding can't poison routing. Apps are a
+// PEER construct to domains and the binding is many-to-many: one app may feed
+// several domains, one domain is fed by many apps.
+export function setCommunityAppDomains(
+  id: string,
+  domains: string[],
+): { ok: boolean; path?: string; domains?: string[]; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  const clean = Array.from(
+    new Set((domains ?? []).map((d) => String(d).trim().toLowerCase()).filter(Boolean)),
+  );
+  for (const d of clean) {
+    if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(d)) {
+      return { ok: false, error: `invalid domain "${d}" (use lowercase letters, digits, hyphens)` };
+    }
+  }
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath));
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    (raw as Record<string, unknown>).domains = clean;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, domains: clean };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
+  }
+}
