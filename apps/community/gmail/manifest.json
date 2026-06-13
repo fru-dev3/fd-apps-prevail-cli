@@ -1,0 +1,29 @@
+{
+  "id": "gmail",
+  "name": "Gmail",
+  "version": "0.1.0",
+  "description": "Pull recent threads, important mail, and attachments from Gmail into the email domain so briefings and chats are grounded in what's actually in your inbox.",
+  "domains": ["email"],
+  "integration": "oauth",
+  "connection": "Authorize once with `prevail connectors oauth gmail` (OAuth 2.0 + PKCE; the refresh token is saved to ~/.prevail/connectors/gmail/auth/refresh.token, chmod 0600). Provide your own Google OAuth app via GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Read-only Gmail scope.",
+  "oauth": {
+    "provider": "google",
+    "client_id_env": "GOOGLE_CLIENT_ID",
+    "client_secret_env": "GOOGLE_CLIENT_SECRET",
+    "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "redirect_port": 8723,
+    "auth_extra_params": {"access_type": "offline", "prompt": "consent"}
+  },
+  "auth_check": {
+    "kind": "file-exists",
+    "paths": ["~/.prevail/connectors/gmail/auth/refresh.token"]
+  },
+  "refresh": {"every": "daily", "at": "06:30", "skill": "sync-inbox"},
+  "autonomy": "read-only",
+  "account": {"label": "primary"},
+  "homepage": "https://mail.google.com",
+  "license": "MIT",
+  "author": {"name": "fru-dev3", "url": "https://github.com/fru-dev3/prevail"}
+}
