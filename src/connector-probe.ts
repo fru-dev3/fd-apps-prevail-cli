@@ -22,8 +22,10 @@ export interface AuthCheckSpec {
   kind: "env-keys" | "file-exists" | "command" | "http" | "mcp" | "manual";
   // env-keys: every listed key must be set + non-empty in process.env
   env_keys?: string[];
-  // file-exists: every listed path must exist (~ and $HOME expanded)
+  // file-exists: every listed path must exist (~ and $HOME expanded).
+  // `paths` is accepted as an alias for `files` (manifests use either key).
   files?: string[];
+  paths?: string[];
   // command: spawn and check exit code; optionally match stdout substring
   command?: string;
   command_args?: string[];
@@ -123,7 +125,7 @@ function probeEnvKeys(spec: AuthCheckSpec, ts: number): ProbeResult {
 }
 
 function probeFileExists(spec: AuthCheckSpec, ts: number): ProbeResult {
-  const files = (spec.files ?? []).map(expandHome);
+  const files = (spec.files ?? spec.paths ?? []).map(expandHome);
   if (files.length === 0) {
     return { ok: false, status: "not-configured", message: "auth_check.files is empty", ts };
   }
