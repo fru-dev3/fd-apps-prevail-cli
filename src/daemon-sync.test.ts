@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  syncOnce, syncApp, refreshToCron, globMatch, readSyncState, looksLikeSecretFile,
+  syncOnce, syncApp, refreshToCron, globMatch, readSyncState, looksLikeSecretFile, backoffNextDue,
   type SyncConfig,
 } from "./daemon-sync.ts";
 
@@ -70,6 +70,17 @@ describe("refreshToCron", () => {
     const cron = refreshToCron({ every: "weekly", on: "fri", at: "17:00" });
     expect(cron).toContain("17");
     expect(cron?.endsWith("5") || cron?.includes("fri")).toBe(true);
+  });
+});
+
+describe("backoffNextDue", () => {
+  test("no backoff when not failing; grows then caps on repeated failures", () => {
+    const base = 1000;
+    expect(backoffNextDue(base, 0, 0)).toBe(base); // success → cron time
+    expect(backoffNextDue(0, 0, 1)).toBe(10 * 60_000); // 2^1 * 5min
+    expect(backoffNextDue(0, 0, 2)).toBe(20 * 60_000);
+    expect(backoffNextDue(0, 0, 20)).toBe(6 * 3600_000); // capped at 6h
+    expect(backoffNextDue(9_999_999_999, 0, 5)).toBe(9_999_999_999); // never earlier than base
   });
 });
 
