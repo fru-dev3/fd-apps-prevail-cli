@@ -11,3 +11,8 @@ bun.lockb
 # and attachments are committed; the per-run reply transcripts are not.
 vault-demo/benchmark/runs/
 .prevail-encint-*
+
+# Runtime connector state (written by the sync daemon into app dirs)
+apps/community/*/sync-state.json
+apps/community/*/connection-status.json
+apps/community/*/data/
