@@ -270,27 +270,30 @@ describe("backupVault", () => {
     const archive = join(root, "snap.tar.gz");
     await backupVault({ vaultPath, outputPath: archive, prevailHome });
 
-    const target = join(root, "restore-target");
-    mkdirSync(target, { recursive: true });
+    // Mutate the live vault, then restore IN PLACE (the documented use case:
+    // target IS the vault path). restoreVault extracts the archive's
+    // "<vaultname>/" subtree into the PARENT of the target, so it lands back at
+    // the original location and reverts the change. (Restoring a backup under a
+    // DIFFERENT vault name is a separate, unsupported scenario by design — the
+    // extract-to-parent model + archive-root files don't compose with it.)
+    writeFileSync(join(vaultPath, "marker.md"), "changed\n");
 
     // Wrong answer → throws.
     await expect(
       restoreVault({
         archivePath: archive,
-        targetVaultPath: target,
+        targetVaultPath: vaultPath,
         confirm: async () => "nope",
       }),
     ).rejects.toThrow(/confirmation mismatch/);
 
-    // Right answer (basename of the target) → succeeds.
+    // Right answer (basename of the target vault) → succeeds; marker reverts.
     await restoreVault({
       archivePath: archive,
-      targetVaultPath: target,
-      confirm: async () => "restore-target",
+      targetVaultPath: vaultPath,
+      confirm: async () => "wealth-vault",
     });
-    // The archive contains a folder named after the original basename
-    // ("wealth-vault") — extracting -C target produces target/wealth-vault.
-    expect(existsSync(join(target, "wealth-vault", "marker.md"))).toBe(true);
+    expect(readFileSync(join(vaultPath, "marker.md"), "utf8")).toContain("original");
   });
 });
 
