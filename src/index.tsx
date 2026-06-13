@@ -1642,6 +1642,16 @@ async function connectorsCommand(args: string[]): Promise<void> {
             title: a.title,
             integration: a.integration ?? "manual",
             path: a.path,
+            // Enriched for the desktop Apps view: real connection + sync state.
+            status: a.status,
+            configured: a.configured,
+            domains: a.domains ?? [],
+            lastSuccessTs: a.lastSuccessTs ?? null,
+            lastError: a.lastError ?? null,
+            account: a.account ?? null,
+            refresh: a.refresh ?? null,
+            autonomy: a.autonomy ?? null,
+            community: a.community,
           })),
         )}\n`,
       );
@@ -1670,6 +1680,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
       process.exit(1);
     }
     const r = await probeConnector(app, (app.authCheck as Parameters<typeof probeConnector>[1]) ?? null);
+    if (args.includes("--json")) {
+      process.stdout.write(`${JSON.stringify({ id: app.id, ...r })}\n`);
+      process.exit(0); // structured callers read `ok`/`status`, not the exit code
+    }
     console.log(`${app.title}: ${r.status}`);
     console.log(`  ${r.message}`);
     if (r.fixHint) console.log(`  fix: ${r.fixHint}`);
