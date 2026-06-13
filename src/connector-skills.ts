@@ -23,13 +23,13 @@ import type { AppSkill } from "./vault.ts";
 // applied PLUS only the auth keys the manifest explicitly declares it
 // needs. Output writes are confined to the connector's data/ directory.
 
-export type SkillRunner = "llm" | "api" | "browser" | "mcp" | "a2a";
+export type SkillRunner = "llm" | "api" | "cli" | "browser" | "mcp" | "a2a";
 
 export interface SkillSpec {
   id: string;
   filePath: string;
   runner: SkillRunner;
-  trigger?: string;             // "on-demand", "cron(...)" or "webhook(...)"
+  trigger?: string;             // "on-demand", "refresh", "cron(...)" or "webhook(...)"
   panelist?: string;            // for llm runner: claude|codex|gemini|ollama
   auth: string[];               // env-var names this skill may read
   inputs: SkillInput[];
@@ -38,6 +38,36 @@ export interface SkillSpec {
   // Connector this skill belongs to. Populated by loadSkillsForConnector.
   connectorId: string;
   connectorDir: string;         // absolute path to the connector folder
+  // --- api-runner routing (provider registry) ---
+  provider?: string;            // "gmail" | "gcal" | "garmin" — which provider module runs this
+  op?: string;                  // provider-specific operation, e.g. "sync" | "createDraft" | "send"
+  // Chain: run this skill automatically after the named skill succeeds in the
+  // same sync pass (e.g. triage-inbox is `after: sync-inbox`).
+  after?: string;
+  // The full parsed frontmatter, for pattern runners (cli/http) that read
+  // their own declarative keys (command, url, headers, cursor_path, ...).
+  extra?: Record<string, unknown>;
+}
+
+// Op classes for the autonomy gate. Anything not listed is a read op.
+const DRAFT_OPS = new Set(["createDraft", "draft", "modifyLabels", "label"]);
+const ACT_OPS = new Set(["send", "sendMessage", "delete", "act"]);
+
+export type OpClass = "read" | "draft" | "act";
+
+export function classifyOp(op: string | undefined): OpClass {
+  if (!op) return "read";
+  if (ACT_OPS.has(op)) return "act";
+  if (DRAFT_OPS.has(op)) return "draft";
+  return "read";
+}
+
+// The autonomy gate. Enforced in code at the runner boundary, never in the
+// prompt: a connector at "read-only" cannot draft; only "act" can send.
+export function autonomyAllows(autonomy: string | undefined, opClass: OpClass): boolean {
+  const level = autonomy === "act" ? 2 : autonomy === "draft" ? 1 : 0;
+  const need = opClass === "act" ? 2 : opClass === "draft" ? 1 : 0;
+  return level >= need;
 }
 
 export interface SkillInput {
@@ -63,6 +93,16 @@ export interface SkillRunResult {
   // Raw LLM reply (or HTTP response body, for non-LLM runners). Truncated
   // to 8KB to keep TUI memory bounded.
   raw?: string;
+  // One-paragraph human summary of what the run found/did. Routed into the
+  // target domains' intent ledgers by the sync daemon. Runners populate it
+  // from a ===SUMMARY=== block (llm/cli) or build it themselves (api).
+  summary?: string;
+  // Cursor updates to persist in sync-state.json (provider-opaque: a Gmail
+  // historyId, a statement date, an etag). Merged over the previous cursor.
+  cursor?: Record<string, unknown>;
+  // New files this run created under the connector dir (relative paths).
+  // The daemon matches routes[] against these for copy/pointer routing.
+  artifacts?: string[];
 }
 
 // Load every skill declared by a connector. Reads connector/skills/*.md
@@ -74,12 +114,20 @@ export function loadSkillsForConnector(app: AppSkill): SkillSpec[] {
   const skillsDir = join(app.path, "skills");
   if (!existsSync(skillsDir)) return [];
   const out: SkillSpec[] = [];
-  for (const f of readdirSync(skillsDir)) {
-    // Skip non-markdown + the connector's SKILL.md overview file.
-    if (!f.endsWith(".md") || f === "SKILL.md") continue;
+  // Two layouts supported: a flat `skills/<id>.md` file, or a
+  // `skills/<id>/SKILL.md` subdirectory (mirrors how a connector itself is a
+  // folder with a SKILL.md). Real community apps use the subdirectory form.
+  for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+    let filePath: string | null = null;
+    if (entry.isDirectory()) {
+      const inner = join(skillsDir, entry.name, "SKILL.md");
+      if (existsSync(inner)) filePath = inner;
+    } else if (entry.name.endsWith(".md") && entry.name !== "SKILL.md") {
+      filePath = join(skillsDir, entry.name);
+    }
+    if (!filePath) continue;
     try {
-      const raw = vreadFile(join(skillsDir, f));
-      const spec = parseSkillFile(raw, join(skillsDir, f), app);
+      const spec = parseSkillFile(vreadFile(filePath), filePath, app);
       if (spec) out.push(spec);
     } catch {
       /* skip unreadable */
@@ -112,6 +160,10 @@ export function parseSkillFile(raw: string, filePath: string, app: AppSkill): Sk
     description: m[2]!.trim(),
     connectorId: app.id,
     connectorDir: app.path,
+    provider: typeof fm.provider === "string" && isSafeId(fm.provider) ? fm.provider : undefined,
+    op: typeof fm.op === "string" && /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(fm.op) ? fm.op : undefined,
+    after: typeof fm.after === "string" && isSafeId(fm.after) ? fm.after : undefined,
+    extra: fm,
   };
 }
 
@@ -120,7 +172,7 @@ function isSafeId(s: string): boolean {
 }
 
 function isValidRunner(s: string): s is SkillRunner {
-  return s === "llm" || s === "api" || s === "browser" || s === "mcp" || s === "a2a";
+  return s === "llm" || s === "api" || s === "cli" || s === "browser" || s === "mcp" || s === "a2a";
 }
 
 function coerceInputs(items: unknown[]): SkillInput[] {
@@ -231,9 +283,13 @@ function parseScalar(s: string): unknown {
 
 function parseBlock(lines: string[]): unknown {
   if (lines.length === 0) return [];
-  // Check if it's a list of items (each line starts with -)
-  const allItems = lines.every((l) => l.trimStart().startsWith("- "));
-  if (allItems) {
+  // A block whose FIRST child is a "- " item is a list; later lines without
+  // the dash are continuation fields of the previous item (block-style
+  // objects in a list), which the grouping loop below folds in. The old
+  // every()-check misclassified those blocks as objects and produced keys
+  // like "- path".
+  const isList = lines[0]!.trimStart().startsWith("- ");
+  if (isList) {
     const items: unknown[] = [];
     // Group consecutive items
     let current: string[] = [];
@@ -488,12 +544,59 @@ function writeOutput(absPath: string, kind: SkillOutput["kind"], content: string
 // Top-level dispatcher. For now only `llm` is implemented; other runners
 // return a "not yet implemented" result so the UI can show what's there
 // without crashing.
+// Provider registry for the api runner. Each provider module registers a
+// single entry point; the skill's `op` selects the operation inside it.
+// Registered lazily by daemon-sync / CLI commands to avoid import cycles.
+export type ApiProviderRun = (
+  skill: SkillSpec,
+  inputs: Record<string, unknown>,
+  opts: SkillRunOpts,
+) => Promise<SkillRunResult>;
+const API_PROVIDERS = new Map<string, ApiProviderRun>();
+export function registerApiProvider(name: string, run: ApiProviderRun): void {
+  API_PROVIDERS.set(name, run);
+}
+
+export interface SkillRunOpts {
+  signal?: AbortSignal;
+  autonomy?: string;
+  // Sync cursor from sync-state.json, exposed to templates as ${cursor.x}.
+  cursor?: Record<string, unknown>;
+}
+
 export async function runSkill(
   skill: SkillSpec,
   inputs: Record<string, unknown>,
-  opts: { signal?: AbortSignal } = {},
+  opts: SkillRunOpts = {},
 ): Promise<SkillRunResult> {
+  // Autonomy gate: applies to every runner. The op class comes from the
+  // skill's declared op; llm-only skills are read-class by definition (they
+  // can't touch the outside world except via a follow-up api skill, which
+  // gets gated itself).
+  const opClass = classifyOp(skill.op);
+  if (!autonomyAllows(opts.autonomy, opClass)) {
+    return {
+      ok: false,
+      message: `blocked: "${skill.id}" needs autonomy "${opClass}" but connector is "${opts.autonomy ?? "read-only"}". Raise it with: prevail connectors set ${skill.connectorId} autonomy ${opClass === "act" ? "act" : "draft"}`,
+      outputsWritten: [],
+      durationMs: 0,
+    };
+  }
   if (skill.runner === "llm") return runSkillLLM(skill, inputs, opts);
+  if (skill.runner === "cli") {
+    const { runSkillCli } = await import("./runners.ts");
+    return runSkillCli(skill, inputs, opts);
+  }
+  if (skill.runner === "api") {
+    // Pattern-first: a registered provider module is the ESCAPE HATCH for
+    // providers whose cursor/pagination semantics need real code. The default
+    // path is the generic declarative HTTP runner — any REST app works with
+    // just a manifest + skill file, no code.
+    const provider = skill.provider ? API_PROVIDERS.get(skill.provider) : undefined;
+    if (provider) return provider(skill, inputs, opts);
+    const { runSkillHttp } = await import("./runners.ts");
+    return runSkillHttp(skill, inputs, opts);
+  }
   return {
     ok: false,
     message: `runner "${skill.runner}" not yet implemented (shipping in v0.6 phase ${runnerPhase(skill.runner)})`,
