@@ -2,7 +2,7 @@
 id: repo-stars-trend
 runner: llm
 panelist: claude
-trigger: cron("0 8 * * 1")
+trigger: refresh
 auth: [GH_TOKEN]
 inputs: []
 outputs:

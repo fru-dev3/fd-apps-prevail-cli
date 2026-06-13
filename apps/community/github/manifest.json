@@ -3,7 +3,11 @@
   "name": "GitHub",
   "version": "0.1.0",
   "description": "Read repo activity, PR queue, and notifications via the GitHub REST API. Used by the content and brand domains to track open-source presence and contributor momentum.",
-  "domains": ["content", "brand", "business"],
+  "domains": [
+    "content",
+    "brand",
+    "business"
+  ],
   "integration": "api",
   "connection": "Personal access token from github.com/settings/tokens. The token reads the `user`, `repo`, and `notifications` scopes. Set GH_TOKEN in your shell or ~/.ai/env/.env. The connector hits api.github.com/user as a probe.",
   "auth_check": {
@@ -15,5 +19,48 @@
   },
   "homepage": "https://github.com",
   "license": "MIT",
-  "author": {"name": "fru-dev3", "url": "https://github.com/fru-dev3/prevail"}
+  "author": {
+    "name": "fru-dev3",
+    "url": "https://github.com/fru-dev3/prevail"
+  },
+  "refresh": {
+    "every": "daily",
+    "at": "08:00",
+    "skill": "repo-stars-trend"
+  },
+  "autonomy": "read-only",
+  "account": {
+    "label": "primary"
+  },
+  "connections": [
+    {
+      "kind": "api",
+      "description": "GitHub REST API via GH_TOKEN env var.",
+      "auth_check": {
+        "kind": "http",
+        "url": "https://api.github.com/user",
+        "auth_header_env": "GH_TOKEN",
+        "auth_header_scheme": "Bearer",
+        "expect_status": 200
+      },
+      "skill": "repo-stars-trend"
+    },
+    {
+      "kind": "cli",
+      "description": "GitHub CLI (gh). Install: brew install gh; auth: gh auth login",
+      "auth_check": {
+        "kind": "command",
+        "command": "gh",
+        "args": [
+          "auth",
+          "status"
+        ],
+        "timeout_ms": 3000,
+        "success_exit_codes": [
+          0
+        ]
+      },
+      "skill": "repo-stars-trend"
+    }
+  ]
 }

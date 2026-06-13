@@ -42,7 +42,9 @@ export interface SkillSpec {
   provider?: string;            // "gmail" | "gcal" | "garmin" — which provider module runs this
   op?: string;                  // provider-specific operation, e.g. "sync" | "createDraft" | "send"
   // Chain: run this skill automatically after the named skill succeeds in the
-  // same sync pass (e.g. triage-inbox is `after: sync-inbox`).
+  // same sync pass (e.g. triage-inbox is `after: sync-inbox`). Can be a
+  // comma-separated list of alternative predecessors — the skill chains if
+  // any one of them ran (e.g. `after: sync-inbox, sync-inbox-mcp, sync-inbox-cli`).
   after?: string;
   // The full parsed frontmatter, for pattern runners (cli/http) that read
   // their own declarative keys (command, url, headers, cursor_path, ...).
@@ -162,7 +164,10 @@ export function parseSkillFile(raw: string, filePath: string, app: AppSkill): Sk
     connectorDir: app.path,
     provider: typeof fm.provider === "string" && isSafeId(fm.provider) ? fm.provider : undefined,
     op: typeof fm.op === "string" && /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(fm.op) ? fm.op : undefined,
-    after: typeof fm.after === "string" && isSafeId(fm.after) ? fm.after : undefined,
+    // Allow comma-separated alternative predecessors: "sync-inbox, sync-inbox-mcp"
+    after: typeof fm.after === "string"
+      ? fm.after.split(",").map((s) => s.trim()).filter((s) => s && isSafeId(s)).join(",") || undefined
+      : undefined,
     extra: fm,
   };
 }

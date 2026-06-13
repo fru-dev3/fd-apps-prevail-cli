@@ -203,4 +203,47 @@ describe("syncOnce (pattern-agnostic end to end)", () => {
     const r = await syncOnce(CFG);
     expect(r.ran).toBe(0);
   });
+
+  test("connections[] selects the skill from the first passing connection", async () => {
+    // Seed with two connection entries: first fails (missing env key), second passes.
+    // The second connection points to a separate skill that emits a distinct marker.
+    seedWorld();
+    const appDir = join(APPS, "demo-bank");
+    // Write a second skill: pull-alt that outputs a DIFFERENT summary.
+    mkdirSync(join(appDir, "skills", "pull-alt"), { recursive: true });
+    writeFileSync(join(appDir, "skills", "pull-alt", "SKILL.md"), [
+      "---",
+      "id: pull-alt",
+      "runner: cli",
+      'command: printf "===SUMMARY===\\nalt-skill ran\\n"',
+      "outputs:",
+      "  - path: alt-run.log",
+      "    kind: replace",
+      "---",
+      "Alt skill.",
+    ].join("\n"));
+    // Update manifest: add connections[] that prefers a missing env key first.
+    const mPath = join(appDir, "manifest.json");
+    const m = JSON.parse(readFileSync(mPath, "utf8"));
+    m.connections = [
+      {
+        kind: "api",
+        auth_check: { kind: "env-keys", env_keys: ["DEFINITELY_MISSING_KEY_ABC"] },
+        skill: "pull",
+      },
+      {
+        kind: "cli",
+        auth_check: { kind: "file-exists", paths: [mPath] },
+        skill: "pull-alt",
+      },
+    ];
+    writeFileSync(mPath, JSON.stringify(m));
+    const r = await syncOnce(CFG);
+    expect(r.ran).toBe(1);
+    expect(r.ok).toBe(1);
+    // The intent should contain "alt-skill ran" (from pull-alt), NOT "2 statements downloaded"
+    const ledger = readFileSync(join(VAULT, "wealth", "_intents.jsonl"), "utf8").trim();
+    const rec = JSON.parse(ledger.split("\n").pop()!);
+    expect(rec.message).toContain("alt-skill ran");
+  });
 });

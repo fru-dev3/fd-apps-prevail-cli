@@ -1,7 +1,7 @@
 {
   "name": "prevail",
-  "version": "1.7.0",
-  "description": "prevAIl — a terminal cockpit for your life domains.",
+  "version": "1.7.1",
+  "description": "prevAIl \u2014 a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,
   "license": "MIT",

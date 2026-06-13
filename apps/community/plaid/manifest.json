@@ -1,21 +1,41 @@
 {
   "id": "plaid",
   "name": "Plaid",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Aggregate bank, brokerage, and credit card transaction history via the Plaid API. Used by wealth, tax, and business domains to keep state.md in sync with the institutions Plaid is linked to.",
   "domains": ["wealth", "tax", "business"],
   "integration": "api",
-  "connection": "REST API. Authenticate with PLAID_CLIENT_ID + PLAID_SECRET (env vars). Per-institution PLAID_ACCESS_TOKEN values are stored in auth/ — one per linked institution. The connector polls /transactions/sync for incremental updates; pulled rows land under data/transactions/<institution>/YYYY-MM.jsonl for any domain skill to consume.",
+  "connection": "Three strategies in priority order: (1) API — set PLAID_CLIENT_ID + PLAID_SECRET + PLAID_ACCESS_TOKEN; (2) CLI — set PLAID_CLI_COMMAND to a wrapper binary that can call the Plaid API on your behalf.",
+  "connections": [
+    {
+      "kind": "api",
+      "description": "Plaid REST API via stored API keys. Set PLAID_CLIENT_ID, PLAID_SECRET, and PLAID_ACCESS_TOKEN env vars.",
+      "auth_check": {
+        "kind": "env-keys",
+        "env_keys": ["PLAID_CLIENT_ID", "PLAID_SECRET"]
+      },
+      "skill": "recent-transactions"
+    },
+    {
+      "kind": "cli",
+      "description": "Custom wrapper CLI set via PLAID_CLI_COMMAND env var.",
+      "auth_check": {
+        "kind": "env-keys",
+        "env_keys": ["PLAID_CLI_COMMAND"]
+      },
+      "skill": "recent-transactions-cli"
+    }
+  ],
   "auth": "api-key",
   "auth_env_vars": ["PLAID_CLIENT_ID", "PLAID_SECRET", "PLAID_ACCESS_TOKEN"],
   "auth_check": {
     "kind": "env-keys",
     "env_keys": ["PLAID_CLIENT_ID", "PLAID_SECRET"]
   },
+  "refresh": {"every": "daily", "at": "07:00", "skill": "recent-transactions"},
+  "autonomy": "read-only",
+  "account": {"label": "primary"},
   "homepage": "https://plaid.com",
   "license": "MIT",
-  "author": {
-    "name": "fru-dev3",
-    "url": "https://github.com/fru-dev3/prevail"
-  }
+  "author": {"name": "fru-dev3", "url": "https://github.com/fru-dev3/prevail"}
 }

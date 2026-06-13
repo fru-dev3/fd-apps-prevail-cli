@@ -2,7 +2,7 @@
 id: channel-metrics
 runner: llm
 panelist: claude
-trigger: cron("0 7 * * *")
+trigger: refresh
 auth: [PREVAIL_GOOGLE_CLIENT_ID, PREVAIL_GOOGLE_CLIENT_SECRET]
 inputs:
   - { name: days, type: number, required: false, description: "lookback window (default 7)" }

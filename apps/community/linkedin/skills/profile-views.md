@@ -2,7 +2,7 @@
 id: profile-views
 runner: browser
 panelist: claude
-trigger: cron("0 9 * * *")
+trigger: refresh
 auth: []
 inputs: []
 outputs:

@@ -7,6 +7,22 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.7.1] — 2026-06-13 · Multi-connection strategies, briefing delivery channels, connector completeness
+
+### Added
+- **Multi-connection strategies for connectors**: manifests now declare a `connections[]` priority list — each entry has `kind`, `auth_check`, and optional `skill` override. Engine probes each in order; first passing connection activates. Fully backwards-compatible with single `auth_check`.
+- **Gmail: MCP + OAuth + GAM CLI strategies**: Gmail connector now supports three connection paths — `mcp` (via `GMAIL_MCP_COMMAND` env var pointing to a local MCP server), `oauth` (existing PKCE flow), and `cli` (GAM/Google Apps Manager CLI).
+- **Plaid: API + CLI strategies**: Plaid connector gains `connections[]` plus proper `refresh` block and `autonomy: read-only`.
+- **Briefing delivery channels (email + drive)**: `briefing add --channels email,drive` stores channel config; `briefing run` builds `DeliveryHooks` from live connectors and delivers via email/drive when authenticated.
+- **`after:` multi-predecessor chains**: skill `after` field now accepts comma-separated IDs (`after: sync-inbox, sync-inbox-mcp, sync-inbox-cli`) so `draft-reply` chains correctly regardless of which inbox strategy is active.
+- **Connector probe improvements**: `args` accepted as alias for `command_args`; `timeout_ms` and `success_exit_codes` fields respected.
+- **All community connectors**: github, google-calendar, linkedin, youtube-analytics now have `refresh`, `autonomy`, and `account` blocks so they participate in daemon-sync scheduling.
+
+### Fixed
+- `mcp_command` in skills now resolves `${env.X}` references before validation.
+
+---
+
 ## [1.7.0] — 2026-06-08 · Engine JSON API expansion — council, decisions, surface, modes & privacy go machine-readable
 
 The engine is the shared seam under all three frontends (CLI cockpit, desktop, TUI). The desktop had pulled ahead because much of its surface was implemented in-app against raw vault files; this release moves that logic **into the engine** as `--json`/NDJSON commands so every frontend reaches parity through one contract — and so adding a command benefits all three at once.

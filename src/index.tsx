@@ -713,6 +713,61 @@ async function telegramCommand(args: string[]): Promise<void> {
   process.exit(1);
 }
 
+// Build DeliveryHooks for briefing delivery channels.
+// Checks which connectors are authenticated and returns hooks that call
+// the appropriate connector skill. Channels not backed by a live connector
+// are omitted — the caller will log "skipped (no connector)".
+async function buildBriefingHooks(
+  vault: string,
+  channels: string[],
+): Promise<import("./briefings.ts").DeliveryHooks> {
+  const hooks: import("./briefings.ts").DeliveryHooks = {};
+  if (!channels.length) return hooks;
+
+  const { scanCommunityApps } = await import("./vault.ts");
+  const { loadSkillsForConnector, runSkill } = await import("./connector-skills.ts");
+  const { probeConnector } = await import("./connector-probe.ts");
+  const apps = scanCommunityApps();
+
+  if (channels.includes("email")) {
+    const gmailApp = apps.find((a) => a.id === "gmail");
+    if (gmailApp) {
+      const probe = await probeConnector(gmailApp, (gmailApp.authCheck as import("./connector-probe.ts").AuthCheckSpec | null) ?? null);
+      if (probe.ok) {
+        const skills = loadSkillsForConnector(gmailApp);
+        const sendSkill = skills.find((s) => s.id === "send-reply");
+        if (sendSkill) {
+          hooks.email = async (subject: string, body: string) => {
+            const r = await runSkill(sendSkill, { subject, body }, { autonomy: "act" });
+            if (!r.ok) throw new Error(r.message);
+            return r.summary ?? "sent";
+          };
+        }
+      }
+    }
+  }
+
+  if (channels.includes("drive")) {
+    const driveApp = apps.find((a) => a.id === "google-drive" || a.id === "gdrive");
+    if (driveApp) {
+      const probe = await probeConnector(driveApp, (driveApp.authCheck as import("./connector-probe.ts").AuthCheckSpec | null) ?? null);
+      if (probe.ok) {
+        const skills = loadSkillsForConnector(driveApp);
+        const saveSkill = skills.find((s) => s.id === "save-doc" || s.id === "upload");
+        if (saveSkill) {
+          hooks.drive = async (subject: string, body: string) => {
+            const r = await runSkill(saveSkill, { subject, body }, { autonomy: "act" });
+            if (!r.ok) throw new Error(r.message);
+            return r.summary ?? "saved";
+          };
+        }
+      }
+    }
+  }
+
+  return hooks;
+}
+
 async function briefingCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const {
     loadBriefings,
@@ -763,6 +818,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
     let name = "";
     let mode: "single" | "council" = "single";
     let deliver: "log" | "telegram" | "both" = "log";
+    let channels: ("email" | "drive")[] = [];
     for (let i = 1; i < args.length; i++) {
       const a = args[i];
       const v = args[i + 1];
@@ -774,10 +830,13 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
       else if (a === "--deliver" && v) {
         deliver = v === "telegram" || v === "both" ? v : "log";
         i++;
+      } else if ((a === "--channels" || a === "--channel") && v) {
+        channels = v.split(",").map((s) => s.trim()).filter((s): s is "email" | "drive" => s === "email" || s === "drive");
+        i++;
       }
     }
     if (!cron || !domain || !prompt) {
-      console.error('usage: prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver telegram|both]');
+      console.error('usage: prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver telegram|both] [--channels email,drive]');
       process.exit(1);
     }
     if (!isValidCron(cron)) {
@@ -797,6 +856,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
       prompt,
       mode,
       deliver,
+      channels: channels.length ? channels : undefined,
       enabled: true,
       last_run: null,
       created_at: Date.now(),
@@ -810,10 +870,15 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
     console.log(`  mode:     ${mode}`);
     console.log(`  deliver:  ${deliver}`);
     console.log(`  prompt:   ${prompt}`);
+    if (channels.length) console.log(`  channels: ${channels.join(", ")}`);
     if (deliver !== "log") {
       console.log("");
-      console.log("⚠ telegram delivery requires the daemon to be running:");
-      console.log("  prevail daemon --telegram");
+      console.log("note: telegram delivery requires the daemon: prevail daemon --telegram");
+    }
+    if (channels.length) {
+      console.log("");
+      console.log("note: email/drive channels require the connector to be authenticated.");
+      console.log("  Gmail: prevail connectors oauth gmail");
     }
     return;
   }
@@ -836,9 +901,20 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
   }
 
   if (sub === "run") {
-    const id = args[1];
+    // Parse optional flags for this subcommand.
+    let id = "";
+    let extraChannels: string[] = [];
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      if ((a === "--channels" || a === "--channel") && args[i + 1]) {
+        extraChannels = args[i + 1]!.split(",").map((s) => s.trim()).filter(Boolean);
+        i++;
+      } else if (!a.startsWith("--") && !id) {
+        id = a;
+      }
+    }
     if (!id) {
-      console.error("usage: prevail briefing run <id>");
+      console.error("usage: prevail briefing run <id> [--channels email,drive]");
       process.exit(1);
     }
     const list = loadBriefings(vault);
@@ -848,13 +924,15 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
       process.exit(1);
     }
     console.log(`running ${entry.id}: ${entry.name}`);
-    // Telegram delivery is only wired by the daemon — `prevail briefing run`
-    // is for one-off manual fires, so telegram delivery is skipped here even
-    // if the briefing is configured for it. The verdict still lands in the
-    // vault log either way.
-    const r = await runBriefing(entry, vault);
+
+    // Build DeliveryHooks so email/drive channels actually fire.
+    // Extra channels from --channels flag are merged with entry.channels.
+    const activeChannels = [...new Set([...(entry.channels ?? []), ...extraChannels])];
+    const hooks = await buildBriefingHooks(vault, activeChannels);
+
+    const r = await runBriefing({ ...entry, channels: activeChannels }, vault, hooks);
     if (r.error) {
-      console.error(`✗ ${r.error}`);
+      console.error(`error: ${r.error}`);
       process.exit(1);
     }
     entry.last_run = r.ts;
@@ -862,7 +940,10 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
     console.log("");
     console.log(r.output);
     console.log("");
-    console.log(`✓ delivered to log: ${r.delivered.log}, telegram: ${r.delivered.telegram}`);
+    const chLine = r.delivered.channels
+      ? Object.entries(r.delivered.channels).map(([k, v]) => `${k}: ${v}`).join(", ")
+      : "";
+    console.log(`delivered to log: ${r.delivered.log}, telegram: ${r.delivered.telegram}${chLine ? ", channels: " + chLine : ""}`);
     return;
   }
 
@@ -871,7 +952,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
   console.error("  prevail briefing list");
   console.error('  prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver telegram|both]');
   console.error("  prevail briefing remove <id>");
-  console.error("  prevail briefing run <id>");
+  console.error("  prevail briefing run <id> [--channels email,drive]");
   process.exit(1);
 }
 

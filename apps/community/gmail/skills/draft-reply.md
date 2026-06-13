@@ -2,7 +2,7 @@
 id: draft-reply
 runner: llm
 trigger: on-demand
-after: sync-inbox
+after: sync-inbox, sync-inbox-mcp, sync-inbox-cli
 panelist: claude
 outputs:
   - path: drafts-${date}.md

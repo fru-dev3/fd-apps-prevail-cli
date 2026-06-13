@@ -27,9 +27,13 @@ export interface AuthCheckSpec {
   files?: string[];
   paths?: string[];
   // command: spawn and check exit code; optionally match stdout substring
+  // `args` is accepted as an alias for `command_args` (connections[] use `args`).
   command?: string;
   command_args?: string[];
+  args?: string[];
   expect_stdout?: string;
+  timeout_ms?: number;
+  success_exit_codes?: number[];
   // http: GET url; auth_header_env names an env var whose value goes into
   // an Authorization header (or x-api-key for plain api-key flow)
   url?: string;
@@ -184,7 +188,10 @@ async function probeCommand(spec: AuthCheckSpec, ts: number): Promise<ProbeResul
   if (!bin) {
     return { ok: false, status: "not-configured", message: "auth_check.command is empty", ts };
   }
-  const args = spec.command_args ?? [];
+  // `args` is an alias for `command_args` (connections[] use `args`)
+  const args = spec.command_args ?? spec.args ?? [];
+  const timeoutMs = spec.timeout_ms ?? 8000;
+  const successCodes = spec.success_exit_codes ?? [0];
   return new Promise<ProbeResult>((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -208,13 +215,13 @@ async function probeCommand(spec: AuthCheckSpec, ts: number): Promise<ProbeResul
       try {
         child!.kill();
       } catch {}
-      resolve({ ok: false, status: "error", message: `${bin} timed out after 8s`, ts });
-    }, 8000);
+      resolve({ ok: false, status: "error", message: `${bin} timed out after ${timeoutMs}ms`, ts });
+    }, timeoutMs);
     child.stdout.on("data", (b) => (stdout += b.toString()));
     child.stderr.on("data", (b) => (stderr += b.toString()));
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code !== 0) {
+      if (!successCodes.includes(code ?? -1)) {
         resolve({
           ok: false,
           status: "error",

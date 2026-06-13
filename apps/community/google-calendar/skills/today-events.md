@@ -2,7 +2,7 @@
 id: today-events
 runner: mcp
 panelist: claude
-trigger: cron("0 6 * * *")
+trigger: refresh
 auth: []
 inputs: []
 outputs:

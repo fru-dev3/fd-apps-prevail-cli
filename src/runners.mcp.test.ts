@@ -55,4 +55,17 @@ describe("runSkillMcp", () => {
     const r = await runSkillMcp(s as Parameters<typeof runSkillMcp>[0], {}, {});
     expect(r.ok).toBe(false);
   });
+
+  test("${env.X} in mcp_command resolves from process.env before validation", async () => {
+    const mock = writeMock();
+    process.env.TEST_MCP_CMD = mock;
+    try {
+      const s = skill("${env.TEST_MCP_CMD}");
+      const r = await runSkillMcp(s as Parameters<typeof runSkillMcp>[0], {}, {});
+      expect(r.ok).toBe(true);
+      expect(r.raw).toContain("mock returned hello");
+    } finally {
+      delete process.env.TEST_MCP_CMD;
+    }
+  });
 });

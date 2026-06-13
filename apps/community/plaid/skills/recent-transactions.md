@@ -2,7 +2,7 @@
 id: recent-transactions
 runner: llm
 panelist: claude
-trigger: cron("0 */2 * * *")
+trigger: refresh
 auth: [PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ACCESS_TOKEN]
 inputs:
   - { name: days, type: number, required: false, description: "lookback window (default 7)" }
