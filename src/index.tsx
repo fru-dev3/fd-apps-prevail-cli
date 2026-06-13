@@ -2272,11 +2272,43 @@ function printVaultHelp(): void {
 
 async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const wantTelegram = args.includes("--telegram") || args.includes("-t");
+  const wantLearn = args.includes("--learn");
+  const wantInstall = args.includes("install");
+  const wantUninstall = args.includes("uninstall");
+  const cfg0 = readConfig();
+  const vault0 = vaultOverride ?? cfg0?.vaultPath ?? bundledDemoVaultPath();
+
+  // launchd install/uninstall — run the headless learn daemon at login.
+  if (wantInstall || wantUninstall) {
+    const { installLaunchAgent, uninstallLaunchAgent } = await import("./daemon-launchd.ts");
+    if (wantUninstall) { await uninstallLaunchAgent(); return; }
+    await installLaunchAgent(vault0);
+    return;
+  }
+
+  // --learn: the headless self-learning loop (distill intents -> memory/state).
+  if (wantLearn) {
+    if (!existsSync(vault0)) { console.error(`vault path not found: ${vault0}`); process.exit(1); }
+    const { runLearnDaemon, DEFAULT_LEARN } = await import("./daemon-learn.ts");
+    let interval = DEFAULT_LEARN.intervalSec;
+    let provider = DEFAULT_LEARN.provider;
+    let model = DEFAULT_LEARN.model;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i], v = args[i + 1];
+      if (a === "--interval" && v) { interval = Math.max(30, parseInt(v, 10) || interval); i++; }
+      else if (a === "--cli" && v) { provider = v; i++; }
+      else if (a === "--model" && v) { model = v; i++; }
+    }
+    await runLearnDaemon({ ...DEFAULT_LEARN, vaultPath: vault0, intervalSec: interval, provider, model });
+    return;
+  }
+
   if (!wantTelegram) {
-    console.error("usage: prevail daemon --telegram");
-    console.error("");
-    console.error("Currently the daemon only supports the --telegram transport.");
-    console.error("Other transports (webhook, slack, sms) are on the roadmap.");
+    console.error("usage:");
+    console.error("  prevail daemon --telegram               two-way Telegram bridge");
+    console.error("  prevail daemon --learn [--interval N]   headless self-learning (distill intents)");
+    console.error("  prevail daemon install                  run --learn at login (launchd)");
+    console.error("  prevail daemon uninstall                remove the login agent");
     process.exit(1);
   }
   const cfg = readConfig();
