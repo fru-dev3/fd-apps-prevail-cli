@@ -597,6 +597,10 @@ export async function runSkill(
     const { runSkillHttp } = await import("./runners.ts");
     return runSkillHttp(skill, inputs, opts);
   }
+  if (skill.runner === "mcp") {
+    const { runSkillMcp } = await import("./runners.ts");
+    return runSkillMcp(skill, inputs, opts);
+  }
   return {
     ok: false,
     message: `runner "${skill.runner}" not yet implemented (shipping in v0.6 phase ${runnerPhase(skill.runner)})`,
