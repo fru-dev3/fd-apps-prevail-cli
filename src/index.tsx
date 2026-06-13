@@ -50,6 +50,8 @@ interface Args {
   chatArgs: string[];
   score: boolean;
   scoreArgs: string[];
+  alignment: boolean;
+  alignmentArgs: string[];
   onboard: boolean;
   onboardArgs: string[];
   heartbeat: boolean;
@@ -120,6 +122,8 @@ function parseArgs(argv: string[]): Args {
   let chatArgs: string[] = [];
   let score = false;
   let scoreArgs: string[] = [];
+  let alignment = false;
+  let alignmentArgs: string[] = [];
   let onboard = false;
   let onboardArgs: string[] = [];
   let heartbeat = false;
@@ -224,6 +228,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "score") {
       score = true;
       scoreArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "alignment" || a === "align") {
+      alignment = true;
+      alignmentArgs = argv.slice(i + 1);
       break;
     } else if (a === "onboard") {
       onboard = true;
@@ -333,6 +341,8 @@ function parseArgs(argv: string[]): Args {
     chatArgs,
     score,
     scoreArgs,
+    alignment,
+    alignmentArgs,
     onboard,
     onboardArgs,
     heartbeat,
@@ -3072,6 +3082,28 @@ async function main() {
   if (args.score) {
     const code = await scoreCommand(args.scoreArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.alignment) {
+    const { computeAlignment } = await import("./alignment.ts");
+    const vault = args.vaultPath;
+    const useModel = args.alignmentArgs.includes("--model");
+    let run: ((prompt: string) => Promise<string>) | undefined;
+    if (useModel) {
+      const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+      const { scanVault } = await import("./vault.ts");
+      const clis = await detectClis();
+      const cli = clis.find((c) => c.available)?.kind;
+      const dom = scanVault(vault)[0]?.name ?? "chief";
+      if (cli) run = (prompt) => runChatTurn({ prompt, cwd: `${vault}/${dom}`, cli, isFirst: true, bare: true });
+    }
+    const report = await computeAlignment(vault, Date.now(), run ? { run } : undefined);
+    if (args.alignmentArgs.includes("--json")) process.stdout.write(`${JSON.stringify(report)}\n`);
+    else {
+      console.log(`alignment (${report.method}) — overall ${report.overall}/100`);
+      for (const p of report.pillars) console.log(`  ${p.pillar.padEnd(14)} ${String(p.score).padStart(3)}/100  ${p.rationale}`);
+      if (report.actions.length) { console.log("\ntop actions:"); for (const a of report.actions) console.log(`  - ${a}`); }
+    }
+    process.exit(0);
   }
   if (args.onboard) {
     const code = await onboardCommand(args.onboardArgs, args.vaultPath);
