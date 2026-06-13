@@ -16,6 +16,7 @@
 
 import { mkdirSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { dirname, relative } from "node:path";
+import { spawn } from "node:child_process";
 import type { SkillSpec, SkillRunResult, SkillRunOpts } from "./connector-skills.ts";
 import { substitute, safeOutputPath, buildSkillEnv } from "./connector-skills.ts";
 
@@ -300,4 +301,93 @@ export async function runSkillHttp(
     cursor: Object.keys(cursor).length ? cursor : undefined,
     artifacts: written,
   };
+}
+
+// mcp runner. Calls a tool on a local stdio MCP server and ingests the text
+// result. Frontmatter:
+//   runner: mcp
+//   mcp_command: mcp-server-gmail        (binary on PATH; no shell, no args)
+//   tool: search_messages                (the MCP tool to call)
+//   args: '{"query": "${input.q}"}'      (optional JSON, templated)
+//   save: data/${date}.md                (optional; defaults to outputs[0])
+// JSON-RPC over newline-delimited stdio: initialize -> initialized -> tools/call.
+export async function runSkillMcp(
+  skill: SkillSpec,
+  inputs: Record<string, unknown>,
+  opts: SkillRunOpts = {},
+): Promise<SkillRunResult> {
+  const started = Date.now();
+  const cmd = typeof skill.extra?.mcp_command === "string" ? skill.extra.mcp_command : "";
+  const tool = typeof skill.extra?.tool === "string" ? skill.extra.tool : "";
+  if (!cmd || !tool) {
+    return { ok: false, message: `mcp skill "${skill.id}" needs mcp_command + tool`, outputsWritten: [], durationMs: 0 };
+  }
+  if (!/^[A-Za-z0-9._/-]{1,128}$/.test(cmd) || cmd.includes("..")) {
+    return { ok: false, message: `refusing unsafe mcp_command: ${cmd}`, outputsWritten: [], durationMs: 0 };
+  }
+  let argsObj: unknown = {};
+  if (typeof skill.extra?.args === "string" && skill.extra.args.trim()) {
+    try { argsObj = JSON.parse(await substituteFull(skill.extra.args, skill, inputs, opts)); }
+    catch (e) { return { ok: false, message: `mcp args not valid JSON: ${e}`, outputsWritten: [], durationMs: 0 }; }
+  }
+
+  let child;
+  try { child = spawn(cmd, [], { env: buildSkillEnv(skill), stdio: ["pipe", "pipe", "pipe"] }); }
+  catch (e) { return { ok: false, message: `spawn ${cmd}: ${e}`, outputsWritten: [], durationMs: 0 }; }
+
+  const pending = new Map<number, (m: Record<string, unknown>) => void>();
+  let buf = "";
+  child.stdout!.on("data", (d: Buffer) => {
+    buf += d.toString();
+    let i: number;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line) as Record<string, unknown>;
+        const id = msg.id as number | undefined;
+        if (id != null && pending.has(id)) { pending.get(id)!(msg); pending.delete(id); }
+      } catch { /* ignore non-JSON log lines */ }
+    }
+  });
+  const send = (obj: unknown) => { try { child!.stdin!.write(JSON.stringify(obj) + "\n"); } catch { /* closed */ } };
+  const call = (id: number, method: string, params: unknown) =>
+    new Promise<Record<string, unknown>>((resolve, reject) => {
+      const t = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 15000);
+      pending.set(id, (m) => { clearTimeout(t); resolve(m); });
+      send({ jsonrpc: "2.0", id, method, params });
+    });
+
+  try {
+    const init = await call(1, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "prevail", version: "1" } });
+    if (init.error) throw new Error(`initialize: ${JSON.stringify(init.error)}`);
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    const res = await call(2, "tools/call", { name: tool, arguments: argsObj });
+    if (res.error) throw new Error(`tools/call: ${JSON.stringify(res.error)}`);
+    const result = res.result as { content?: { type?: string; text?: string }[] } | undefined;
+    const text = Array.isArray(result?.content)
+      ? result!.content.filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text).join("\n")
+      : JSON.stringify(result ?? {});
+
+    const written: string[] = [];
+    const saveTpl = typeof skill.extra?.save === "string" ? skill.extra.save : skill.outputs[0]?.path;
+    if (saveTpl && text) {
+      const rel = await substituteFull(saveTpl, skill, inputs, opts);
+      const abs = safeOutputPath(skill.connectorDir, rel);
+      if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
+    }
+    return {
+      ok: true,
+      message: extractSummary(text) || `${tool} ok`,
+      summary: extractSummary(text),
+      outputsWritten: written,
+      durationMs: Date.now() - started,
+      raw: text.slice(0, 8192),
+      artifacts: written,
+    };
+  } catch (e) {
+    return { ok: false, message: String(e instanceof Error ? e.message : e), outputsWritten: [], durationMs: Date.now() - started };
+  } finally {
+    try { child.kill(); } catch { /* already gone */ }
+  }
 }

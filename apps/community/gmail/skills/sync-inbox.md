@@ -8,7 +8,7 @@ method: GET
 headers:
   - "Authorization: Bearer ${auth.token}"
   - "Accept: application/json"
-save: data/inbox-${date}.json
+save: inbox-${date}.json
 summary_path: resultSizeEstimate
 ---
 Pull recent important Gmail message references into the email domain. The raw
