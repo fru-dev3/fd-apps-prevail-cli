@@ -555,6 +555,9 @@ export interface AppSkill {
   // runner per op class: read ops always allowed; draft ops need >= "draft";
   // send/act ops need "act". Default "read-only".
   autonomy?: AppAutonomy;
+  // Whether the sync daemon may autonomously refresh this connector. Absent or
+  // true = enabled; false = configured and chattable, but the daemon skips it.
+  enabled?: boolean;
   // Human-meaningful account identity for multi-instance connectors
   // (gmail-personal vs gmail-estate): shown in every UI row.
   account?: { label: string; address?: string };
@@ -607,6 +610,9 @@ export interface CommunityAppManifest {
   // New: short description of how the connector connects. Inline
   // alternative to a separate connection.md file.
   connection?: string;
+  // Whether the sync daemon may autonomously refresh this connector.
+  // Absent / true = enabled; false = the daemon skips it.
+  enabled?: boolean;
 }
 
 function communityAppsDirs(): string[] {
@@ -661,6 +667,7 @@ interface CoercedManifest {
   oauth?: unknown;
   refresh?: AppRefresh;
   autonomy?: AppAutonomy;
+  enabled?: boolean;
   account?: { label: string; address?: string };
   routes?: AppRoute[];
   connections?: AppConnection[];
@@ -762,6 +769,9 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     oauth: typeof o.oauth === "object" && o.oauth !== null ? o.oauth : undefined,
     refresh: coerceRefresh(o.refresh),
     autonomy: coerceAutonomy(o.autonomy),
+    // Only an explicit `false` disables; any other value (absent, junk) leaves
+    // it enabled by default.
+    enabled: o.enabled === false ? false : undefined,
     account: coerceAccount(o.account),
     routes: coerceRoutes(o.routes),
     connections: coerceConnections(o.connections),
@@ -823,6 +833,7 @@ export function scanCommunityApps(): AppSkill[] {
         oauth: m.oauth,
         refresh: m.refresh,
         autonomy: m.autonomy,
+        enabled: m.enabled,
         account: m.account,
         routes: m.routes,
         connections: m.connections,
@@ -1195,6 +1206,31 @@ export function setCommunityAppDomains(
     (raw as Record<string, unknown>).domains = clean;
     writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
     return { ok: true, path: app.manifestPath, domains: clean };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
+  }
+}
+
+// Enable / disable a connector's autonomous sync. A disabled connector stays
+// fully configured and chattable; the sync daemon simply skips it (see
+// daemon-sync.ts). We persist only when disabling — enabling clears the key so
+// a manifest with no `enabled` field stays the canonical "on" shape.
+export function setCommunityAppEnabled(
+  id: string,
+  enabled: boolean,
+): { ok: boolean; path?: string; enabled?: boolean; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath));
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    const o = raw as Record<string, unknown>;
+    if (enabled) delete o.enabled;
+    else o.enabled = false;
+    writeFileSync(app.manifestPath, `${JSON.stringify(o, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, enabled };
   } catch (e) {
     return { ok: false, error: `update failed: ${e}` };
   }

@@ -1742,6 +1742,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
             account: a.account ?? null,
             refresh: a.refresh ?? null,
             autonomy: a.autonomy ?? null,
+            // Absent in the manifest = enabled; only an explicit false disables.
+            enabled: a.enabled ?? true,
             community: a.community,
             connections: a.connections ?? null,
           })),
@@ -1909,11 +1911,27 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // prevail connectors set <id> domains a,b,c [--json]
     //   rewrites the app→domain binding (many-to-many). Add or remove domains
     //   by passing the full desired list.
+    // prevail connectors set <id> enabled <true|false> [--json]
+    //   toggles whether the sync daemon may refresh this app. Disabled apps
+    //   stay configured and chattable.
     const id = args[1];
     const field = args[2];
     const value = args[3];
+    if (id && field === "enabled") {
+      const enabled = value === "true" || value === "1" || value === "on";
+      const { setCommunityAppEnabled } = await import("./vault.ts");
+      const r = setCommunityAppEnabled(id, enabled);
+      if (args.includes("--json")) {
+        process.stdout.write(`${JSON.stringify(r)}\n`);
+        process.exit(r.ok ? 0 : 1);
+      }
+      if (r.ok) console.log(`${id} is now ${enabled ? "enabled" : "disabled"}`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
     if (!id || field !== "domains") {
       console.error("usage: prevail connectors set <id> domains <a,b,c>");
+      console.error("       prevail connectors set <id> enabled <true|false>");
       process.exit(1);
     }
     const domains = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -1925,6 +1943,35 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     if (r.ok) console.log(`set domains for "${id}": ${(r.domains ?? []).join(", ") || "(none)"}`);
     else { console.error(r.error); process.exit(1); }
+    return;
+  }
+  if (sub === "runs" || sub === "history") {
+    // Per-app run history: the bounded ring the sync layer records in the
+    // connector's sync-state.json (last ~20 runs, manual + autonomous).
+    const id = args[1];
+    if (!id) { console.error("usage: prevail connectors runs <id>"); process.exit(1); }
+    const app = apps.find((a) => a.id === id);
+    if (!app) { console.error(`no connector with id "${id}"`); process.exit(1); }
+    const { readSyncState } = await import("./daemon-sync.ts");
+    const st = readSyncState(app);
+    if (args.includes("--json")) {
+      process.stdout.write(`${JSON.stringify({
+        lastRunTs: st.last_run_ts,
+        lastOkTs: st.last_ok_ts,
+        lastRunOk: st.last_run_ok,
+        lastError: st.last_error,
+        nextDueTs: st.next_due_ts,
+        consecutiveFailures: st.consecutive_failures,
+        runs: st.runs,
+      })}\n`);
+      return;
+    }
+    if (st.runs.length === 0) { console.log(`${app.title} has no recorded runs yet`); return; }
+    console.log(`${app.title} · last ${st.runs.length} run${st.runs.length === 1 ? "" : "s"}:`);
+    for (const r of [...st.runs].reverse()) {
+      const when = new Date(r.ts).toISOString();
+      console.log(`  ${when}  ${r.ok ? "ok " : "ERR"}  ${r.skill}  ${r.duration_ms}ms  ${r.artifacts} artifact(s)${r.error ? `  ${r.error}` : ""}`);
+    }
     return;
   }
   if (sub === "sync") {
@@ -1953,6 +2000,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
   console.error("  prevail connectors run <id> <skill> [--input k=v]   — execute a skill");
   console.error("  prevail connectors add --id <id> --title <t> --integration <type> --domains a,b");
   console.error("  prevail connectors set <id> domains <a,b,c>          — rewrite app→domain binding");
+  console.error("  prevail connectors set <id> enabled <true|false>     — toggle autonomous sync");
+  console.error("  prevail connectors runs <id>                         — per-app run history");
   console.error("  prevail connectors sync <id> [--vault <path>]       — sync one app now");
   process.exit(1);
 }
