@@ -605,6 +605,10 @@ export async function runSkill(
     const { runSkillA2a } = await import("./runners.ts");
     return runSkillA2a(skill, inputs, opts);
   }
+  if (skill.runner === "browser") {
+    const { runSkillBrowser } = await import("./runners.ts");
+    return runSkillBrowser(skill, inputs, opts);
+  }
   return {
     ok: false,
     message: `runner "${skill.runner}" not yet implemented (shipping in v0.6 phase ${runnerPhase(skill.runner)})`,
