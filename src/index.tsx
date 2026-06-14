@@ -27,6 +27,8 @@ interface Args {
   briefingArgs: string[];
   connectors: boolean;
   connectorsArgs: string[];
+  recommendations: boolean;
+  recommendationsArgs: string[];
   mcp: boolean;
   mcpUnsafeDetach: boolean;
   bench: boolean;
@@ -99,6 +101,8 @@ function parseArgs(argv: string[]): Args {
   let briefingArgs: string[] = [];
   let connectors = false;
   let connectorsArgs: string[] = [];
+  let recommendations = false;
+  let recommendationsArgs: string[] = [];
   let mcp = false;
   let mcpUnsafeDetach = false;
   let bench = false;
@@ -178,6 +182,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "connectors" || a === "connector") {
       connectors = true;
       connectorsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "recommendations" || a === "recommend") {
+      recommendations = true;
+      recommendationsArgs = argv.slice(i + 1);
       break;
     } else if (a === "mcp") {
       mcp = true;
@@ -318,6 +326,8 @@ function parseArgs(argv: string[]): Args {
     briefingArgs,
     connectors,
     connectorsArgs,
+    recommendations,
+    recommendationsArgs,
     mcp,
     mcpUnsafeDetach,
     bench,
@@ -3347,6 +3357,20 @@ async function main() {
   }
   if (args.connectors) {
     await connectorsCommand(args.connectorsArgs);
+    return;
+  }
+  if (args.recommendations) {
+    // prevail recommendations --vault <path> [--json] — the proactive feed.
+    const vflag = args.recommendationsArgs.indexOf("--vault");
+    const { readConfig: rc } = await import("./config.ts");
+    const { resolveDefaultVaultPath } = await import("./vault.ts");
+    const vault = (vflag >= 0 ? args.recommendationsArgs[vflag + 1] : undefined) ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const { recommendationsJson, buildRecommendations } = await import("./recommendations.ts");
+    if (args.recommendationsArgs.includes("--json")) { process.stdout.write(`${recommendationsJson(vault!)}\n`); return; }
+    const recs = buildRecommendations(vault!);
+    if (recs.length === 0) { console.log("no recommendations right now — keep using Prevail and they'll appear."); return; }
+    console.log(`${recs.length} recommendation${recs.length === 1 ? "" : "s"}:\n`);
+    for (const r of recs) console.log(`  [${r.category}] ${r.title}\n    ${r.detail}\n`);
     return;
   }
   if (args.mcp) {
