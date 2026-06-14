@@ -139,6 +139,29 @@ export function appendTask(domainDir: string, text: string): boolean {
   return true;
 }
 
+// The high-level intents the user is actually pursuing — curated by the intent
+// distiller into <vault>/_meta/intents_distilled.json from their activity across
+// sessions and domains — filtered to those that touch THIS domain. Feeding these
+// into the loop is what makes loops COMPOUND on the user's real goals over time,
+// not just react to the domain's own state. (Cross-component: written by the
+// desktop intent daemon, read here by the loop runner.)
+export function readDomainIntents(vaultRoot: string, domainName: string): string {
+  try {
+    const raw = safeRead(join(vaultRoot, "_meta", "intents_distilled.json"));
+    if (!raw.trim()) return "";
+    const doc = JSON.parse(raw) as { intents?: Array<{ title?: string; goal?: string; domains?: string[]; status?: string; recommendations?: string[] }> };
+    const dn = domainName.toLowerCase();
+    const relevant = (doc.intents ?? []).filter((it) =>
+      it.status !== "resolved" &&
+      (!it.domains?.length || it.domains.some((d) => String(d).toLowerCase() === dn)));
+    if (relevant.length === 0) return "";
+    return relevant.slice(0, 6).map((it) => {
+      const recs = (it.recommendations ?? []).slice(0, 2).join("; ");
+      return `- ${it.title || "intent"}: ${it.goal || ""}${recs ? ` (suggested: ${recs})` : ""}`;
+    }).join("\n");
+  } catch { return ""; }
+}
+
 function renderHistory(entry: LoopRtEntry | undefined): string {
   if (!entry || entry.history.length === 0) return "(no prior runs — this is the first)";
   return entry.history
@@ -153,7 +176,7 @@ function renderHistory(entry: LoopRtEntry | undefined): string {
 
 // Ask the model for this loop's current next actions and (for closed loops)
 // whether its condition is now satisfied. Strict JSON so parsing is reliable.
-function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined): string {
+function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined, intents: string): string {
   return [
     `You are the steward of the "${loop.name}" loop in the ${domainLabel} domain of a personal life-OS.`,
     `A loop is a persistent, self-driving control loop: it continuously reduces the gap between the current state and the desired state, learning and escalating over time. Your job each run: decide the smallest set of highest-leverage next actions (1-3) that move this loop forward RIGHT NOW, building on everything already tried.`,
@@ -171,6 +194,9 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
     "",
     `LONG-TERM MEMORY (excerpt):\n${memory.slice(0, 2000) || "(none yet)"}`,
     "",
+    intents
+      ? `WHAT THE USER IS ACTUALLY TRYING TO DO (high-level intents distilled from their activity across sessions; this loop should ACTIVELY ADVANCE the ones it can):\n${intents}\n`
+      : "",
     `RUN HISTORY (most recent first) — what this loop already tried:`,
     renderHistory(entry),
     "",
@@ -228,6 +254,8 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   const domainLabel = basename(domainDir);
   const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
   const memory = safeRead(join(domainDir, "_memory.md"));
+  // Curated high-level intents touching this domain — the compounding signal.
+  const domainIntents = readDomainIntents(resolve(cfg.vaultPath), domainLabel);
 
   const clis = await detectClis();
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
@@ -239,7 +267,7 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
     try {
       const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
       const out = await runChatTurn({
-        prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry),
+        prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents),
         cwd: domainDir,
         cli,
         model: cfg.model || "",
