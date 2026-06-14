@@ -1908,6 +1908,11 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const vaultArg = flag("--vault");
     const provider = flag("--cli") ?? "claude";
     const model = flag("--model") ?? "";
+    // Re-evaluate mode: don't scaffold (the app already exists) — just research
+    // and report whether a better method exists now. --current is the app's
+    // current integration so the agent can give a meaningful comparison.
+    const reevaluate = args.includes("--reevaluate");
+    const current = flag("--current") ?? "";
     if (!name || !vaultArg) {
       console.error("usage: prevail connectors connect --name <app> --goal <text> --vault <path>");
       process.exit(1);
@@ -1923,6 +1928,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
       `APP: ${name}`,
       `GOAL: ${goal || "(pull the most useful data this app offers)"}`,
       `THE USER'S DOMAINS: ${domainNames.join(", ") || "(none yet)"}`,
+      reevaluate && current ? `\nThis app is ALREADY connected via "${current}". Re-check whether a BETTER method exists now; if "${current}" is still best, return it.` : "",
       "",
       `Determine the BEST available way to connect this app RIGHT NOW. Prefer headless, in this order: an MCP server > an official API/SDK or an already-installed CLI (e.g. gcloud, gh) > the Composio gateway > browser automation (a one-time login is acceptable). Use web search to check what actually exists today for this specific app.`,
       "",
@@ -1935,6 +1941,12 @@ async function connectorsCommand(args: string[]): Promise<void> {
     if (s >= 0 && e > s) { try { plan = JSON.parse(out.slice(s, e + 1)); } catch { plan = null; } }
     if (!plan || typeof plan.app_id !== "string") {
       process.stdout.write(`${JSON.stringify({ ok: false, error: "could not determine a connection method", raw: out.slice(0, 300) })}\n`);
+      process.exit(0);
+    }
+    // Re-evaluate is research-only: report the plan without scaffolding (the app
+    // already exists, and scaffolding would fail with "already exists").
+    if (reevaluate) {
+      process.stdout.write(`${JSON.stringify({ ok: true, plan, reevaluated: true })}\n`);
       process.exit(0);
     }
     const integ = (["api", "oauth", "browser", "mcp", "cli", "manual"].includes(plan.integration as string) ? plan.integration : "manual") as "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
