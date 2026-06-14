@@ -1884,6 +1884,55 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     return;
   }
+  if (sub === "connect") {
+    // prevail connectors connect --name <app> --goal <what to pull> --vault <path> [--cli] [--model] [--json]
+    // The Connection Agent: research the best way to connect this app RIGHT NOW
+    // (MCP > API/CLI > Composio > browser), scaffold the app, and return a plan
+    // with the ONE auth step the user must do. Describe-the-goal, not forms.
+    const flag = (name: string): string | undefined => {
+      const i = args.indexOf(name);
+      return i >= 0 ? args[i + 1] : undefined;
+    };
+    const name = flag("--name");
+    const goal = flag("--goal") ?? "";
+    const vaultArg = flag("--vault");
+    const provider = flag("--cli") ?? "claude";
+    const model = flag("--model") ?? "";
+    if (!name || !vaultArg) {
+      console.error("usage: prevail connectors connect --name <app> --goal <text> --vault <path>");
+      process.exit(1);
+    }
+    const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+    const { scanVault, scaffoldCommunityApp } = await import("./vault.ts");
+    const domainNames = scanVault(vaultArg).map((d) => d.name);
+    const clis = await detectClis();
+    const cli = clis.find((c) => c.kind === provider) ?? clis[0];
+    if (!cli) { process.stdout.write(`${JSON.stringify({ ok: false, error: "no CLI available" })}\n`); process.exit(0); }
+    const prompt = [
+      `You are Prevail's Connection Agent. The user wants to connect an app so it syncs real data into their personal life-OS vault on a schedule.`,
+      `APP: ${name}`,
+      `GOAL: ${goal || "(pull the most useful data this app offers)"}`,
+      `THE USER'S DOMAINS: ${domainNames.join(", ") || "(none yet)"}`,
+      "",
+      `Determine the BEST available way to connect this app RIGHT NOW. Prefer headless, in this order: an MCP server > an official API/SDK or an already-installed CLI (e.g. gcloud, gh) > the Composio gateway > browser automation (a one-time login is acceptable). Use web search to check what actually exists today for this specific app.`,
+      "",
+      `Return ONLY a JSON object (no prose, no fences):`,
+      `{"app_id":"kebab-case-id","title":"display name","integration":"mcp|api|cli|composio|browser","why":"one line: why this is the best method now","auth_step":{"kind":"none|oauth-cli|api-key|browser-login|manual","instruction":"the ONE thing the user must do to authorize, or empty if none"},"schedule":{"every":"1d"},"domains":["which of the user's domains this should feed"],"data":"one line: what it will pull in"}`,
+    ].join("\n");
+    const out = await runChatTurn({ prompt, cwd: vaultArg, cli, model, isFirst: true, bare: true, act: true });
+    const s = out.indexOf("{"), e = out.lastIndexOf("}");
+    let plan: Record<string, unknown> | null = null;
+    if (s >= 0 && e > s) { try { plan = JSON.parse(out.slice(s, e + 1)); } catch { plan = null; } }
+    if (!plan || typeof plan.app_id !== "string") {
+      process.stdout.write(`${JSON.stringify({ ok: false, error: "could not determine a connection method", raw: out.slice(0, 300) })}\n`);
+      process.exit(0);
+    }
+    const integ = (["api", "oauth", "browser", "mcp", "cli", "manual"].includes(plan.integration as string) ? plan.integration : "manual") as "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
+    const planDomains = Array.isArray(plan.domains) ? (plan.domains as string[]).filter((d) => domainNames.includes(d)) : [];
+    const scaffold = scaffoldCommunityApp({ id: plan.app_id as string, title: (plan.title as string) || name, integration: integ, domains: planDomains });
+    process.stdout.write(`${JSON.stringify({ ok: scaffold.ok, plan, path: scaffold.path, error: scaffold.error })}\n`);
+    process.exit(0);
+  }
   if (sub === "add") {
     // prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b [--json]
     const flag = (name: string): string | undefined => {
