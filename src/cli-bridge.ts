@@ -547,31 +547,38 @@ export function detectSubprocessClis(): AvailableCli[] {
 // Returns null if nothing's listening. 1.5s timeout — local should be instant.
 export async function detectOllama(): Promise<AvailableCli | null> {
   const base = OLLAMA_BASE_URL.replace(/\/+$/, "");
-  const tryUrls = [`${base}/api/tags`, `${base}/v1/models`];
-  for (const url of tryUrls) {
-    try {
+  const cli: AvailableCli = { kind: "ollama", bin: base, label: base.includes("11434") ? "Ollama" : "Local" };
+  // Probe both endpoints CONCURRENTLY with a tight timeout. The old sequential
+  // loop with 1500ms each meant a down Ollama cost up to 3s on every detectClis
+  // (= every chat turn). Now the worst case is one ~700ms timeout, in parallel.
+  const probe = (url: string) =>
+    new Promise<boolean>((resolve) => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1500);
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timer);
-      if (res.ok) {
-        return {
-          kind: "ollama",
-          bin: base,
-          label: base.includes("11434") ? "Ollama" : "Local",
-        };
-      }
-    } catch {
-      // network error / timeout — try next URL
-    }
-  }
-  return null;
+      const timer = setTimeout(() => controller.abort(), 700);
+      fetch(url, { signal: controller.signal })
+        .then((res) => { clearTimeout(timer); resolve(res.ok); })
+        .catch(() => { clearTimeout(timer); resolve(false); });
+    });
+  const results = await Promise.all([probe(`${base}/api/tags`), probe(`${base}/v1/models`)]);
+  return results.some(Boolean) ? cli : null;
 }
 
 // Async detection — subprocess CLIs (sync) + Ollama (HTTP probe in parallel).
 // Used at app launch and by `prevail daemon`. Callers that don't care about
 // Ollama can use detectSubprocessClis() directly.
-export async function detectClis(): Promise<AvailableCli[]> {
+// Short-TTL cache for the CLI roster. detectClis runs on EVERY chat turn (and in
+// every daemon tick) and its slow part is the Ollama probe — without a cache a
+// down Ollama adds its timeout to every single turn. Availability barely changes
+// within a session, so a few seconds of caching is safe and a big latency win for
+// the long-running gateways (MCP / Telegram / WebUI / loops). `force` re-detects
+// (model picker, connect flow).
+let _cliRoster: { at: number; clis: AvailableCli[] } | null = null;
+const CLI_ROSTER_TTL_MS = 15_000;
+
+export async function detectClis(opts?: { force?: boolean }): Promise<AvailableCli[]> {
+  if (!opts?.force && _cliRoster && Date.now() - _cliRoster.at < CLI_ROSTER_TTL_MS) {
+    return _cliRoster.clis;
+  }
   const subprocess = detectSubprocessClis();
   const ollama = await detectOllama();
   const out = ollama ? [...subprocess, ollama] : subprocess;
@@ -580,6 +587,7 @@ export async function detectClis(): Promise<AvailableCli[]> {
   if (process.env.PREVAIL_OPENROUTER_KEY) {
     out.push({ kind: "openrouter", bin: "https://openrouter.ai/api/v1", label: "OpenRouter" });
   }
+  _cliRoster = { at: Date.now(), clis: out };
   return out;
 }
 
