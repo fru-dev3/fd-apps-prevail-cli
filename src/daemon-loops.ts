@@ -286,6 +286,45 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   return advanced;
 }
 
+// Execute a single APPROVED loop action for real, using the agent's actual tools
+// and connectors (MCP servers, file ops, configured app connectors). The user has
+// already approved this specific action in the UI, so the agent is told to DO it —
+// but only it, and to refuse cleanly if no connector can. Returns the agent's
+// report of what it did (captured by the desktop, recorded as a decision).
+export async function executeAction(cfg: LoopsConfig, domainName: string, action: string): Promise<string> {
+  const root = resolve(cfg.vaultPath);
+  const found = scanVault(root).find((d) => d.name === domainName);
+  const domainDir = found?.path ?? join(root, "domains", domainName);
+  const clis = await detectClis();
+  const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
+  if (!cli) throw new Error("no CLI available to execute the action");
+  const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
+  const prompt = [
+    `You are carrying out an action the user has EXPLICITLY APPROVED in the "${domainName}" domain of their personal life-OS.`,
+    `Do it now using the tools and connectors available to you: MCP servers, file operations, and any configured app connectors (email, calendar, etc.).`,
+    "",
+    `APPROVED ACTION:`,
+    action,
+    "",
+    state ? `DOMAIN CONTEXT (from _state.md):\n${state.slice(0, 2000)}` : "",
+    "",
+    `RULES:`,
+    `- Actually perform the action with a real tool/connector. Do not merely describe it.`,
+    `- Do NOT do anything beyond this one approved action.`,
+    `- If NO available tool or connector can perform it, do nothing and reply with exactly: "NO_CONNECTOR: <one-line reason>".`,
+    `- When finished, reply with a one-paragraph report of precisely what you did, including any IDs, links, or recipients.`,
+  ].filter(Boolean).join("\n");
+  const out = await runChatTurn({
+    prompt,
+    cwd: domainDir,
+    cli,
+    model: cfg.model || "",
+    isFirst: true,
+    bare: false, // full operating manual — the agent SHOULD take action here
+  });
+  return out.trim();
+}
+
 // One pass across every domain that has loops defined. Domain discovery goes
 // through scanVault so it finds domains in BOTH the v3 (vault/domains/<d>) and
 // legacy (vault/<d>) layouts and gets each one's resolved path.

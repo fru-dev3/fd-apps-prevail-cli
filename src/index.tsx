@@ -2546,6 +2546,21 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
       else if (a === "--model" && v) { model = v; i++; }
     }
     const cfg = { ...DEFAULT_LOOPS, vaultPath: vault0, intervalSec: interval, provider, model };
+    // --exec: execute one APPROVED action for real via the agent's connectors.
+    // Used by the desktop "Execute" button on a pending approval.
+    if (args.includes("--exec")) {
+      let domain = "", action = "";
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i], v = args[i + 1];
+        if (a === "--domain" && v) { domain = v; i++; }
+        else if (a === "--action" && v) { action = v; i++; }
+      }
+      if (!domain || !action) { console.error("loops --exec needs --domain and --action"); process.exit(1); }
+      const { executeAction } = await import("./daemon-loops.ts");
+      const report = await executeAction(cfg, domain, action);
+      console.log(report);
+      return;
+    }
     if (once) {
       const { domains, loops } = await loopsOnce(cfg);
       console.log(`[loops] advanced ${loops} loop(s) across ${domains} domain(s)`);
