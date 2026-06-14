@@ -797,9 +797,30 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
   };
 }
 
+// Per-app user overrides that must persist regardless of where the app's own
+// manifest lives. Bundled apps ship inside the read-only app bundle, so we
+// CANNOT write their enabled flag back to their manifest.json — that write
+// throws and the toggle silently no-ops. The override file lives in the
+// always-writable ~/.prevail and is folded into scanCommunityApps below.
+export function appOverridesPath(): string {
+  const base = process.env.PREVAIL_HOME || join(homedir(), ".prevail");
+  return join(base, "app-overrides.json");
+}
+export function readAppOverrides(): Record<string, { enabled?: boolean }> {
+  try {
+    const p = appOverridesPath();
+    if (!existsSync(p)) return {};
+    const raw = JSON.parse(vreadFile(p));
+    return raw && typeof raw === "object" ? (raw as Record<string, { enabled?: boolean }>) : {};
+  } catch {
+    return {};
+  }
+}
+
 export function scanCommunityApps(): AppSkill[] {
   const seen = new Set<string>();
   const out: AppSkill[] = [];
+  const overrides = readAppOverrides();
   for (const dir of communityAppsDirs()) {
     if (!existsSync(dir)) continue;
     let entries: import("node:fs").Dirent[] = [];
@@ -852,7 +873,9 @@ export function scanCommunityApps(): AppSkill[] {
         oauth: m.oauth,
         refresh: m.refresh,
         autonomy: m.autonomy,
-        enabled: m.enabled,
+        // A user override (always writable) wins over the manifest, so toggling
+        // a bundled app actually sticks.
+        enabled: overrides[m.id]?.enabled === false ? false : m.enabled,
         account: m.account,
         routes: m.routes,
         connections: m.connections,
@@ -1245,15 +1268,23 @@ export function setCommunityAppEnabled(
   const cleanId = (id ?? "").trim().toLowerCase();
   if (!cleanId) return { ok: false, error: "missing app id" };
   const app = scanCommunityApps().find((a) => a.id === cleanId);
-  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  if (!app) return { ok: false, error: `no app with id "${id}"` };
+  // Persist to the always-writable override file rather than the app's own
+  // manifest: bundled apps live in the read-only app bundle, so a manifest
+  // write throws and the toggle silently no-ops. scanCommunityApps folds the
+  // override back in, so the list + sync daemon both see the change.
   try {
-    const raw = JSON.parse(vreadFile(app.manifestPath));
-    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
-    const o = raw as Record<string, unknown>;
-    if (enabled) delete o.enabled;
-    else o.enabled = false;
-    writeFileSync(app.manifestPath, `${JSON.stringify(o, null, 2)}\n`);
-    return { ok: true, path: app.manifestPath, enabled };
+    const p = appOverridesPath();
+    mkdirSync(dirname(p), { recursive: true });
+    const ov = readAppOverrides();
+    if (enabled) {
+      if (ov[cleanId]) delete ov[cleanId].enabled;
+      if (ov[cleanId] && Object.keys(ov[cleanId]).length === 0) delete ov[cleanId];
+    } else {
+      ov[cleanId] = { ...(ov[cleanId] ?? {}), enabled: false };
+    }
+    writeFileSync(p, `${JSON.stringify(ov, null, 2)}\n`);
+    return { ok: true, path: p, enabled };
   } catch (e) {
     return { ok: false, error: `update failed: ${e}` };
   }
