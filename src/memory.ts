@@ -2,6 +2,7 @@ import { readdirSync, writeFileSync, existsSync } from "node:fs";
 
 import { vreadFile } from "./vault-session.ts";
 import { join } from "node:path";
+import { resolveDomainDir } from "./path-safety.ts";
 import { OLLAMA_BASE_URL } from "./cli-bridge.ts";
 
 // Markdown-native vault memory.
@@ -116,7 +117,7 @@ export async function recall(args: {
   }
   for (const domain of domains) {
     if (args.domainFilter && domain.toLowerCase() !== args.domainFilter.toLowerCase()) continue;
-    const logDir = join(args.vaultPath, domain, "_log");
+    const logDir = join(resolveDomainDir(args.vaultPath, domain), "_log");
     if (!existsSync(logDir)) continue;
     let files: string[];
     try {

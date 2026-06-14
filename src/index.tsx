@@ -2,6 +2,7 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { resolve, join, basename } from "node:path";
+import { resolveDomainDir } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { App } from "./app.tsx";
@@ -1583,7 +1584,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     const failures: string[] = [];
 
     for (const domain of domains) {
-      const domainDir = join(vault, domain);
+      const domainDir = resolveDomainDir(vault, domain);
       if (!exists(domainDir)) {
         failures.push(`${domain}: domain directory not found`);
         continue;
@@ -2529,20 +2530,28 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
     return;
   }
 
-  // --loops: the headless loop runner (advance each domain's loops on cadence).
+  // --loops: the loop runner. --once does a single pass and exits (used by the
+  // desktop "Run loops now" action and for testing); otherwise it runs forever.
   if (wantLoops) {
     if (!existsSync(vault0)) { console.error(`vault path not found: ${vault0}`); process.exit(1); }
-    const { runLoopsDaemon, DEFAULT_LOOPS } = await import("./daemon-loops.ts");
+    const { runLoopsDaemon, loopsOnce, DEFAULT_LOOPS } = await import("./daemon-loops.ts");
     let interval = DEFAULT_LOOPS.intervalSec;
     let provider = DEFAULT_LOOPS.provider;
     let model = DEFAULT_LOOPS.model;
+    const once = args.includes("--once");
     for (let i = 0; i < args.length; i++) {
       const a = args[i], v = args[i + 1];
       if (a === "--interval" && v) { interval = Math.max(60, parseInt(v, 10) || interval); i++; }
       else if (a === "--cli" && v) { provider = v; i++; }
       else if (a === "--model" && v) { model = v; i++; }
     }
-    await runLoopsDaemon({ ...DEFAULT_LOOPS, vaultPath: vault0, intervalSec: interval, provider, model });
+    const cfg = { ...DEFAULT_LOOPS, vaultPath: vault0, intervalSec: interval, provider, model };
+    if (once) {
+      const { domains, loops } = await loopsOnce(cfg);
+      console.log(`[loops] advanced ${loops} loop(s) across ${domains} domain(s)`);
+      return;
+    }
+    await runLoopsDaemon(cfg);
     return;
   }
 

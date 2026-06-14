@@ -10,10 +10,11 @@
 // Mirrors daemon-learn.ts: same config/lifecycle shape, same model bridge
 // (runChatTurn), same encryption-aware vault I/O (vread/vwrite). Idempotent and
 // best-effort: a failing loop records its error and never blocks the others.
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
+import { scanVault } from "./vault.ts";
 
 export interface LoopsConfig {
   vaultPath: string;
@@ -177,23 +178,22 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   return advanced;
 }
 
-// One pass across every domain that has loops defined.
+// One pass across every domain that has loops defined. Domain discovery goes
+// through scanVault so it finds domains in BOTH the v3 (vault/domains/<d>) and
+// legacy (vault/<d>) layouts and gets each one's resolved path.
 export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; loops: number }> {
   const root = resolve(cfg.vaultPath);
   const now = Date.now();
   let domains = 0;
   let loops = 0;
 
-  for (const name of readdirSync(root)) {
-    if (name.startsWith(".") || name.startsWith("_")) continue;
-    const dir = join(root, name);
+  for (const d of scanVault(root)) {
     try {
-      if (!statSync(dir).isDirectory()) continue;
-      if (!existsSync(loopsFile(dir))) continue;
-      const n = await runDomain(dir, cfg, now);
+      if (!existsSync(loopsFile(d.path))) continue;
+      const n = await runDomain(d.path, cfg, now);
       if (n > 0) { domains += 1; loops += n; }
     } catch (e) {
-      console.error(`[loops] ${name}: ${String(e).slice(0, 160)}`);
+      console.error(`[loops] ${d.name}: ${String(e).slice(0, 160)}`);
     }
   }
   return { domains, loops };

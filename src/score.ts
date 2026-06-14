@@ -35,6 +35,7 @@ import {
   statSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveDomainDir } from "./path-safety.ts";
 
 import {
   readManifest,
@@ -87,7 +88,7 @@ const RELEVANCE_BLEND = 0.35;
 // =============================================================================
 
 function domainPath(vaultPath: string, domain: string): string {
-  return join(vaultPath, domain);
+  return resolveDomainDir(vaultPath, domain);
 }
 
 function exists(p: string): boolean {

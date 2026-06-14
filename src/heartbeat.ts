@@ -11,6 +11,7 @@ import {
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 
+import { resolveDomainDir } from "./path-safety.ts";
 import { readManifest, type HeartbeatRoutine } from "./manifest.ts";
 import {
   appendHeartbeatRecord,
@@ -129,7 +130,7 @@ export function cadenceToCron(schedule: string): string | null {
  *  <vault>/<domain>/skills/<id>/SKILL.md. */
 export function skillCadence(vaultPath: string, domain: string, routineId: string): string | null {
   if (!isSafeEntryName(domain) || !isSafeEntryName(routineId)) return null;
-  const file = join(vaultPath, domain, "skills", routineId, "SKILL.md");
+  const file = join(resolveDomainDir(vaultPath, domain), "skills", routineId, "SKILL.md");
   if (!existsSync(file)) return null;
   let raw = "";
   try {
