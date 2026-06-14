@@ -1,15 +1,28 @@
-// launchd agent installer for the headless learn daemon. Writes a LaunchAgent
-// plist that runs `prevail daemon --learn` at login and keeps it alive, so
-// self-learning continues with the desktop app closed.
+// launchd agent installer for the headless daemons. Writes LaunchAgent plists
+// that run at login and stay alive, so Prevail keeps WORKING with the desktop
+// app closed: self-learning (--learn), domain loops (--loops), and app sync
+// (--sync). One agent per daemon (each is a single forever-loop), all toggled
+// together by the desktop's "keep working when closed" switch.
 
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+// The learn agent keeps its original label so existing status checks + the
+// in-app distiller's "defer when installed" guard keep working unchanged.
 const LABEL = "sh.prevail.learn";
+type AgentDef = { label: string; flag: string; env?: Record<string, string> };
+const AGENTS: AgentDef[] = [
+  { label: LABEL, flag: "--learn", env: { PREVAIL_HEADLESS_LEARN: "1" } },
+  { label: "sh.prevail.loops", flag: "--loops" },
+  { label: "sh.prevail.sync", flag: "--sync" },
+];
 
+function plistPathFor(label: string): string {
+  return join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
+}
 function plistPath(): string {
-  return join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+  return plistPathFor(LABEL);
 }
 
 // Resolve the absolute path to this engine binary so the agent can launch it
@@ -24,57 +37,58 @@ function enginePath(): string {
   return process.env.PREVAIL_BIN || "prevail";
 }
 
-export async function installLaunchAgent(vault: string, bin?: string): Promise<void> {
-  const dir = join(homedir(), "Library", "LaunchAgents");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const program = bin || enginePath();
-  const logOut = join(homedir(), "Library", "Logs", "prevail-learn.log");
-  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+function buildPlist(label: string, program: string, flag: string, vault: string, logOut: string, env?: Record<string, string>): string {
+  const envXml = env
+    ? `\n  <key>EnvironmentVariables</key>\n  <dict>\n${Object.entries(env).map(([k, v]) => `    <key>${k}</key><string>${v}</string>`).join("\n")}\n  </dict>`
+    : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>${LABEL}</string>
+  <key>Label</key><string>${label}</string>
   <key>ProgramArguments</key>
   <array>
     <string>${program}</string>
     <string>daemon</string>
-    <string>--learn</string>
+    <string>${flag}</string>
     <string>--vault</string>
     <string>${vault}</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>${logOut}</string>
-  <key>StandardErrorPath</key><string>${logOut}</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PREVAIL_HEADLESS_LEARN</key><string>1</string>
-  </dict>
+  <key>StandardErrorPath</key><string>${logOut}</string>${envXml}
 </dict>
 </plist>
 `;
-  writeFileSync(plistPath(), plist);
-  // (Re)load it. bootout first so a re-install picks up changes; ignore errors.
+}
+
+export async function installLaunchAgent(vault: string, bin?: string): Promise<void> {
+  const dir = join(homedir(), "Library", "LaunchAgents");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const program = bin || enginePath();
   const uid = process.getuid?.() ?? 501;
-  await run(["launchctl", "bootout", `gui/${uid}/${LABEL}`]).catch(() => {});
-  const r = await run(["launchctl", "bootstrap", `gui/${uid}`, plistPath()]);
-  if (r.ok) {
-    console.log(`installed: ${LABEL} runs 'prevail daemon --learn' at login`);
-    console.log(`           plist: ${plistPath()}`);
-    console.log(`           logs:  ${logOut}`);
-  } else {
-    // bootstrap can fail if already loaded; fall back to legacy load.
-    await run(["launchctl", "load", plistPath()]).catch(() => {});
-    console.log(`installed: ${LABEL} (plist written; ${r.err || "loaded"})`);
+  for (const a of AGENTS) {
+    const logOut = join(homedir(), "Library", "Logs", `prevail-${a.flag.replace(/^--/, "")}.log`);
+    const path = plistPathFor(a.label);
+    writeFileSync(path, buildPlist(a.label, program, a.flag, vault, logOut, a.env));
+    // (Re)load it. bootout first so a re-install picks up changes; ignore errors.
+    await run(["launchctl", "bootout", `gui/${uid}/${a.label}`]).catch(() => {});
+    const r = await run(["launchctl", "bootstrap", `gui/${uid}`, path]);
+    if (r.ok) console.log(`installed: ${a.label} runs 'prevail daemon ${a.flag}' at login`);
+    else { await run(["launchctl", "load", path]).catch(() => {}); console.log(`installed: ${a.label} (plist written; ${r.err || "loaded"})`); }
   }
 }
 
 export async function uninstallLaunchAgent(): Promise<void> {
   const uid = process.getuid?.() ?? 501;
-  await run(["launchctl", "bootout", `gui/${uid}/${LABEL}`]).catch(() => {});
-  await run(["launchctl", "unload", plistPath()]).catch(() => {});
-  if (existsSync(plistPath())) rmSync(plistPath());
-  console.log(`uninstalled: ${LABEL} removed`);
+  for (const a of AGENTS) {
+    const path = plistPathFor(a.label);
+    await run(["launchctl", "bootout", `gui/${uid}/${a.label}`]).catch(() => {});
+    await run(["launchctl", "unload", path]).catch(() => {});
+    if (existsSync(path)) rmSync(path);
+    console.log(`uninstalled: ${a.label} removed`);
+  }
 }
 
 export function isLaunchAgentInstalled(): boolean {
