@@ -90,12 +90,73 @@ function safeRead(path: string): string {
   try { return existsSync(path) ? vreadFile(path) : ""; } catch { return ""; }
 }
 
+// ── Self-driving loop state ──────────────────────────────────────────────────
+// A loop is not a stateless re-suggester: it remembers what it tried, learns
+// whether the gap is closing, persists pending decisions that need the user, and
+// turns concrete steps into real tracked tasks. Runtime state lives in its OWN
+// file (_loops_runtime.json) so the desktop loop editor — which rewrites the
+// whole _loops.json with a fixed schema — can never strip it.
+const MAX_HISTORY = 6;
+
+interface LoopAction { text: string; task: boolean; needsApproval: boolean }
+interface LoopRun { ts: number; actions: string[]; note: string; done: boolean; tasksCreated: string[] }
+interface LoopRtEntry { history: LoopRun[]; pending: { text: string; ts: number }[] }
+interface LoopRuntime { schema: 1; loops: Record<string, LoopRtEntry> }
+
+function runtimeFile(domainDir: string): string { return join(domainDir, "_loops_runtime.json"); }
+function readRuntime(domainDir: string): LoopRuntime {
+  try {
+    const raw = safeRead(runtimeFile(domainDir));
+    if (raw.trim()) {
+      const d = JSON.parse(raw) as LoopRuntime;
+      if (d && typeof d === "object" && d.loops) return d;
+    }
+  } catch { /* fall through */ }
+  return { schema: 1, loops: {} };
+}
+function writeRuntime(domainDir: string, rt: LoopRuntime): void {
+  try { vwriteFile(runtimeFile(domainDir), JSON.stringify(rt, null, 2)); } catch { /* best effort */ }
+}
+
+function todayYmd(): string { return new Date().toISOString().slice(0, 10); }
+
+// Turn a concrete loop step into a real, tracked task in the domain's _tasks.md
+// (the same ledger the desktop reads/writes). Deduped by text. Returns whether a
+// new task was actually created. This is how a loop "works on the goal" — it
+// files trackable work the rest of the system (and the user) acts on.
+export function appendTask(domainDir: string, text: string): boolean {
+  const clean = text.trim();
+  if (!clean) return false;
+  const f = join(domainDir, "_tasks.md");
+  const cur = safeRead(f) || "# Tasks\n\n";
+  const already = cur.split("\n").some((l) => {
+    const m = /^- \[[ xX]\]\s+(.+?)(?:\s+[@+~][^\s]*)*\s*$/.exec(l.trim());
+    return !!m && m[1].trim().toLowerCase() === clean.toLowerCase();
+  });
+  if (already) return false;
+  const body = cur.endsWith("\n") ? cur : `${cur}\n`;
+  vwriteFile(f, `${body}- [ ] ${clean} +${todayYmd()} ~loop\n`);
+  return true;
+}
+
+function renderHistory(entry: LoopRtEntry | undefined): string {
+  if (!entry || entry.history.length === 0) return "(no prior runs — this is the first)";
+  return entry.history
+    .map((r, i) => {
+      const when = new Date(r.ts).toISOString().slice(0, 16).replace("T", " ");
+      const acts = r.actions.length ? r.actions.join(" | ") : "(none)";
+      const made = r.tasksCreated.length ? ` [filed tasks: ${r.tasksCreated.length}]` : "";
+      return `${i + 1}. ${when} — ${r.note || "(no note)"}${made}\n   tried: ${acts}`;
+    })
+    .join("\n");
+}
+
 // Ask the model for this loop's current next actions and (for closed loops)
 // whether its condition is now satisfied. Strict JSON so parsing is reliable.
-function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string): string {
+function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined): string {
   return [
     `You are the steward of the "${loop.name}" loop in the ${domainLabel} domain of a personal life-OS.`,
-    `A loop continuously reduces the gap between the current state and the desired state. Your job: given what's known now, output the smallest set of highest-leverage next actions (1-3) that move this loop forward.`,
+    `A loop is a persistent, self-driving control loop: it continuously reduces the gap between the current state and the desired state, learning and escalating over time. Your job each run: decide the smallest set of highest-leverage next actions (1-3) that move this loop forward RIGHT NOW, building on everything already tried.`,
     "",
     `DESIRED STATE (domain):\n${doc.desiredState || "(not set)"}`,
     "",
@@ -110,8 +171,15 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
     "",
     `LONG-TERM MEMORY (excerpt):\n${memory.slice(0, 2000) || "(none yet)"}`,
     "",
-    `Respond with ONLY a JSON object on a single line:`,
-    `{"actions":["next action 1","next action 2"],"done":false,"note":"one-line rationale"}`,
+    `RUN HISTORY (most recent first) — what this loop already tried:`,
+    renderHistory(entry),
+    "",
+    `Think like an operator who PERSISTS: do not repeat actions already tried unless they're genuinely the next step; judge from the state + history whether the gap is closing; if it's stalled, change approach and escalate. Each run should build on the last and get better.`,
+    "",
+    `Respond with ONLY a JSON object on a single line. Each action is an object:`,
+    `{"actions":[{"text":"the next step","task":true,"needs_approval":false}],"done":false,"note":"one-line read on progress + why these steps"}`,
+    `- "task": true if this is a concrete, trackable step — it will be FILED as a real task in this domain and worked on. false for pure observations/notes.`,
+    `- "needs_approval": true if it spends money, contacts someone, is irreversible, or needs a decision/info only the user can give. Those are PROPOSED and wait for the user instead of being done automatically. Be conservative: when unsure, set true.`,
     loop.type === "closed"
       ? `Set "done" to true only if the loop's condition is clearly satisfied by the current state.`
       : `"done" must be false for open loops.`,
@@ -119,14 +187,32 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
 }
 
 // Pull the first JSON object out of model output (tolerates code fences / prose).
-function parseResult(out: string): { actions: string[]; done: boolean } | null {
+// Accepts actions as rich objects {text,task,needs_approval} OR plain strings
+// (back-compat — a plain string defaults to a trackable, auto-approved task).
+export function parseResult(out: string): { actions: LoopAction[]; done: boolean; note: string } | null {
   const start = out.indexOf("{");
   const end = out.lastIndexOf("}");
   if (start === -1 || end <= start) return null;
   try {
-    const obj = JSON.parse(out.slice(start, end + 1)) as { actions?: unknown; done?: unknown };
-    const actions = Array.isArray(obj.actions) ? obj.actions.filter((a): a is string => typeof a === "string" && a.trim() !== "").slice(0, 5) : [];
-    return { actions, done: obj.done === true };
+    const obj = JSON.parse(out.slice(start, end + 1)) as { actions?: unknown; done?: unknown; note?: unknown };
+    const raw = Array.isArray(obj.actions) ? obj.actions : [];
+    const actions: LoopAction[] = raw
+      .map((a): LoopAction | null => {
+        if (typeof a === "string") {
+          return a.trim() ? { text: a.trim(), task: true, needsApproval: false } : null;
+        }
+        if (a && typeof a === "object") {
+          const o = a as { text?: unknown; task?: unknown; needs_approval?: unknown };
+          const text = typeof o.text === "string" ? o.text.trim() : "";
+          if (!text) return null;
+          return { text, task: o.task !== false, needsApproval: o.needs_approval === true };
+        }
+        return null;
+      })
+      .filter((a): a is LoopAction => a !== null)
+      .slice(0, 5);
+    const note = typeof obj.note === "string" ? obj.note.trim() : "";
+    return { actions, done: obj.done === true, note };
   } catch {
     return null;
   }
@@ -147,11 +233,13 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
   if (!cli) throw new Error("no CLI available to run loops");
 
+  const rt = readRuntime(domainDir);
   let advanced = 0;
   for (const loop of due) {
     try {
+      const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
       const out = await runChatTurn({
-        prompt: buildPrompt(doc, loop, domainLabel, state, memory),
+        prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry),
         cwd: domainDir,
         cli,
         model: cfg.model || "",
@@ -161,8 +249,26 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
       const res = parseResult(out);
       loop.lastRunTs = now;
       if (res) {
-        if (res.actions.length) loop.actions = res.actions;
+        // Surface text actions on the loop (back-compat: the UI reads loop.actions).
+        loop.actions = res.actions.map((a) => a.text);
+        // Act: file concrete auto-approved steps as real tasks; queue the rest
+        // (anything needing money/contact/decision) as pending approvals so the
+        // loop ASKS instead of assuming.
+        const created: string[] = [];
+        for (const a of res.actions) {
+          if (a.needsApproval) {
+            if (!entry.pending.some((p) => p.text.toLowerCase() === a.text.toLowerCase())) {
+              entry.pending.push({ text: a.text, ts: now });
+            }
+          } else if (a.task) {
+            if (appendTask(domainDir, a.text)) created.push(a.text);
+          }
+        }
         if (loop.type === "closed" && res.done) loop.status = "done";
+        // Learn: record this run so the next one builds on it and doesn't repeat.
+        entry.history.unshift({ ts: now, actions: res.actions.map((a) => a.text), note: res.note, done: res.done, tasksCreated: created });
+        entry.history = entry.history.slice(0, MAX_HISTORY);
+        rt.loops[loop.id] = entry;
         advanced += 1;
       }
     } catch (e) {
@@ -173,8 +279,10 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
     }
   }
 
-  // Persist the whole doc once per domain (full-document write, like _state.md).
+  // Persist the whole doc once per domain (full-document write, like _state.md),
+  // plus the engine-owned runtime (history + pending approvals).
   try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
+  writeRuntime(domainDir, rt);
   return advanced;
 }
 
