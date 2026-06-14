@@ -2498,6 +2498,7 @@ function printVaultHelp(): void {
 async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const wantTelegram = args.includes("--telegram") || args.includes("-t");
   const wantLearn = args.includes("--learn");
+  const wantLoops = args.includes("--loops");
   const wantInstall = args.includes("install");
   const wantUninstall = args.includes("uninstall");
   const cfg0 = readConfig();
@@ -2528,10 +2529,28 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
     return;
   }
 
+  // --loops: the headless loop runner (advance each domain's loops on cadence).
+  if (wantLoops) {
+    if (!existsSync(vault0)) { console.error(`vault path not found: ${vault0}`); process.exit(1); }
+    const { runLoopsDaemon, DEFAULT_LOOPS } = await import("./daemon-loops.ts");
+    let interval = DEFAULT_LOOPS.intervalSec;
+    let provider = DEFAULT_LOOPS.provider;
+    let model = DEFAULT_LOOPS.model;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i], v = args[i + 1];
+      if (a === "--interval" && v) { interval = Math.max(60, parseInt(v, 10) || interval); i++; }
+      else if (a === "--cli" && v) { provider = v; i++; }
+      else if (a === "--model" && v) { model = v; i++; }
+    }
+    await runLoopsDaemon({ ...DEFAULT_LOOPS, vaultPath: vault0, intervalSec: interval, provider, model });
+    return;
+  }
+
   if (!wantTelegram) {
     console.error("usage:");
     console.error("  prevail daemon --telegram               two-way Telegram bridge");
     console.error("  prevail daemon --learn [--interval N]   headless self-learning (distill intents)");
+    console.error("  prevail daemon --loops [--interval N]   advance domain loops on their cadence");
     console.error("  prevail daemon install                  run --learn at login (launchd)");
     console.error("  prevail daemon uninstall                remove the login agent");
     process.exit(1);
