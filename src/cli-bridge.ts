@@ -656,6 +656,13 @@ export interface ChatTurn {
   // codex to echo the manual verbatim back into the response bubble when it
   // exited non-zero, polluting the transcript.
   bare?: boolean;
+  // Execution mode. Normal turns are advisory (read-only is enough). When act is
+  // true the agent is expected to TAKE the action using its tools/connectors, so
+  // claude is run with permissions granted (codex/antigravity already skip
+  // permission prompts). Only set this for a user-APPROVED action — the approval
+  // is the safety gate. Without it claude can't write files or call MCP tools in
+  // headless -p mode (no TTY to approve), so execution would silently no-op.
+  act?: boolean;
   // Optional cancellation. Aborting the signal SIGTERMs the child process so
   // Escape in the cockpit can drop an in-flight prompt without waiting for
   // the model to finish. runCapture resolves with "(cancelled)" on abort.
@@ -708,7 +715,7 @@ function augmentManualWithWebGate(manual: string | null): string | null {
   return `${manual}\n\n${WEB_DENY_NOTE}`;
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, signal, onChunk, maxOutputChars, guard }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, maxOutputChars, guard }: ChatTurn): Promise<string> {
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
   const domainKeyForGuard = basename(cwd);
@@ -801,6 +808,11 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, sign
     // the manual is intentionally null.
     const claudeSystem = [constitution, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
+    // Execution turns for a user-approved action: let the agent actually use its
+    // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to
+    // approve prompts, so without this the action silently no-ops. Gated by the
+    // explicit per-action approval upstream.
+    if (act) args.push("--dangerously-skip-permissions");
     args.push(...head);
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }

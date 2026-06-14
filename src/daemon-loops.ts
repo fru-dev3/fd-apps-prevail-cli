@@ -321,6 +321,7 @@ export async function executeAction(cfg: LoopsConfig, domainName: string, action
     model: cfg.model || "",
     isFirst: true,
     bare: false, // full operating manual — the agent SHOULD take action here
+    act: true,   // user-approved: let the agent actually use its tools/connectors
   });
   return out.trim();
 }
