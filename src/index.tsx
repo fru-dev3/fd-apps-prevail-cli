@@ -1723,13 +1723,20 @@ async function connectorsCommand(args: string[]): Promise<void> {
   const { scanCommunityApps } = await import("./vault.ts");
   const { probeConnector } = await import("./connector-probe.ts");
   const { runOAuthFlow } = await import("./oauth-flow.ts");
+  const { readSyncState } = await import("./daemon-sync.ts");
   const apps = scanCommunityApps();
   const sub = args[0];
   if (!sub || sub === "list" || sub === "ls") {
     if (args.includes("--json")) {
       process.stdout.write(
         `${JSON.stringify(
-          apps.map((a) => ({
+          apps.map((a) => {
+            // Per-app sync state (next due + recent run log) so the desktop can
+            // show "next sync" and a recent-activity log, not just last success.
+            let nextDueTs: number | null = null;
+            let runs: Array<Record<string, unknown>> = [];
+            try { const st = readSyncState(a); nextDueTs = st.next_due_ts; runs = (st.runs ?? []).slice(-5); } catch { /* none yet */ }
+            return {
             id: a.id,
             title: a.title,
             integration: a.integration ?? "manual",
@@ -1747,7 +1754,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
             enabled: a.enabled ?? true,
             community: a.community,
             connections: a.connections ?? null,
-          })),
+            nextDueTs,
+            runs,
+            };
+          }),
         )}\n`,
       );
       return;
@@ -2039,6 +2049,21 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     if (r.ok) console.log(`synced ${id}: ${r.artifacts} artifact(s) routed`);
     else { console.error(`sync ${id} failed: ${r.error}`); process.exit(1); }
+    return;
+  }
+  if (sub === "sync-due") {
+    // One pass over every DUE app (the in-app scheduler calls this on a tick;
+    // the headless `daemon --sync` runs the same pass on a loop). Respects each
+    // app's own schedule + the enabled flag; never stacks (per-app file lock).
+    const vflag = args.indexOf("--vault");
+    const { readConfig } = await import("./config.ts");
+    const { resolveDefaultVaultPath } = await import("./vault.ts");
+    const vault = (vflag >= 0 ? args[vflag + 1] : undefined) ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
+    const max = (() => { const i = args.indexOf("--max"); return i >= 0 ? Math.max(1, parseInt(args[i + 1], 10) || 2) : 2; })();
+    const { syncOnce } = await import("./daemon-sync.ts");
+    const r = await syncOnce({ vaultPath: vault!, tickSec: 60, maxRunsPerTick: max });
+    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); return; }
+    console.log(`[sync] ran ${r.ran} connector(s): ${r.ok} ok, ${r.failed} failed`);
     return;
   }
   console.error(`unknown connectors subcommand: ${sub}\n`);
@@ -2549,6 +2574,7 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
   const wantTelegram = args.includes("--telegram") || args.includes("-t");
   const wantLearn = args.includes("--learn");
   const wantLoops = args.includes("--loops");
+  const wantSync = args.includes("--sync");
   const wantInstall = args.includes("install");
   const wantUninstall = args.includes("uninstall");
   const cfg0 = readConfig();
@@ -2619,11 +2645,34 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
     return;
   }
 
+  // --sync: the autonomous app-sync daemon — keeps every connected app fresh on
+  // its own schedule, headlessly. --once does a single due-pass and exits.
+  if (wantSync) {
+    if (!existsSync(vault0)) { console.error(`vault path not found: ${vault0}`); process.exit(1); }
+    const { runSyncDaemon, syncOnce, DEFAULT_SYNC } = await import("./daemon-sync.ts");
+    let tick = DEFAULT_SYNC.tickSec;
+    let max = DEFAULT_SYNC.maxRunsPerTick;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i], v = args[i + 1];
+      if (a === "--interval" && v) { tick = Math.max(30, parseInt(v, 10) || tick); i++; }
+      else if (a === "--max" && v) { max = Math.max(1, parseInt(v, 10) || max); i++; }
+    }
+    const cfg = { vaultPath: vault0, tickSec: tick, maxRunsPerTick: max };
+    if (args.includes("--once")) {
+      const r = await syncOnce(cfg);
+      console.log(`[sync] ran ${r.ran} connector(s): ${r.ok} ok, ${r.failed} failed`);
+      return;
+    }
+    await runSyncDaemon(cfg);
+    return;
+  }
+
   if (!wantTelegram) {
     console.error("usage:");
     console.error("  prevail daemon --telegram               two-way Telegram bridge");
     console.error("  prevail daemon --learn [--interval N]   headless self-learning (distill intents)");
     console.error("  prevail daemon --loops [--interval N]   advance domain loops on their cadence");
+    console.error("  prevail daemon --sync [--interval N]    keep connected apps fresh on schedule");
     console.error("  prevail daemon install                  run --learn at login (launchd)");
     console.error("  prevail daemon uninstall                remove the login agent");
     process.exit(1);
