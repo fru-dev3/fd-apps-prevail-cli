@@ -1243,6 +1243,17 @@ export function buildCliArgs({
   return [];
 }
 
+// Absolute safety ceiling for a single model invocation's captured output.
+// A normal reply is a few KB; even a very long answer stays well under 1MB.
+// This default ONLY engages for a genuinely runaway / looping model — it kills
+// the child the moment cumulative output crosses it, so one wedged process can
+// never balloon the engine (and the desktop buffering its stdout) toward OOM.
+// Callers that pass an explicit, smaller maxOutputChars keep that tighter cap.
+const DEFAULT_OUTPUT_CEILING = 8_000_000;
+// stderr is diagnostics only; we never return it as content, so truncating it
+// past this point is lossless for the user and bounds a runaway stack dump.
+const MAX_STDERR_CHARS = 256_000;
+
 function runCapture(
   bin: string,
   args: string[],
@@ -1256,6 +1267,8 @@ function runCapture(
     let stderr = "";
     let child;
     let truncated = false;
+    // Always bounded: an explicit cap if given, otherwise the safety ceiling.
+    const effectiveCap = typeof maxOutputChars === "number" ? maxOutputChars : DEFAULT_OUTPUT_CEILING;
     if (signal?.aborted) {
       resolve("(cancelled)");
       return;
@@ -1310,15 +1323,11 @@ function runCapture(
       // the same text the user would have seen in a terminal, which is
       // good enough for the "feels live" UX.
       if (onChunk) onChunk(chunk);
-      // Output cap. Once the cumulative stdout crosses maxOutputChars,
+      // Output cap. Once the cumulative stdout crosses the effective cap,
       // SIGKILL the whole pgroup (same trick as the abort path — gemini's
       // wrapper ignores SIGTERM). Distinct from abort: not a user cancel,
-      // just a "this caller has no business returning 50KB" guard.
-      if (
-        !truncated &&
-        typeof maxOutputChars === "number" &&
-        stdout.length > maxOutputChars
-      ) {
+      // just a "this output has gone runaway" guard.
+      if (!truncated && stdout.length > effectiveCap) {
         truncated = true;
         try {
           if (typeof child!.pid === "number") {
@@ -1332,7 +1341,10 @@ function runCapture(
       }
     });
     child.stderr.on("data", (b) => {
-      stderr += b.toString();
+      // Bound the diagnostic buffer so a runaway stack dump / no-newline blob
+      // can't grow stderr without limit. Diagnostics only, so dropping the
+      // overflow is lossless for the returned reply.
+      if (stderr.length < MAX_STDERR_CHARS) stderr += b.toString();
     });
     child.on("close", (code) => {
       signal?.removeEventListener("abort", onAbort);
@@ -1340,8 +1352,8 @@ function runCapture(
         resolve("(cancelled)");
         return;
       }
-      if (truncated && typeof maxOutputChars === "number") {
-        resolve(stdout.slice(0, maxOutputChars) + " ... (truncated at " + maxOutputChars + " chars)");
+      if (truncated) {
+        resolve(stdout.slice(0, effectiveCap) + " ... (truncated at " + effectiveCap + " chars)");
         return;
       }
       const out = stdout.trim();
@@ -1357,8 +1369,8 @@ function runCapture(
       signal?.removeEventListener("abort", onAbort);
       if (cancelled) {
         resolve("(cancelled)");
-      } else if (truncated && typeof maxOutputChars === "number") {
-        resolve(stdout.slice(0, maxOutputChars) + " ... (truncated at " + maxOutputChars + " chars)");
+      } else if (truncated) {
+        resolve(stdout.slice(0, effectiveCap) + " ... (truncated at " + effectiveCap + " chars)");
       } else {
         resolve(`(error running ${bin}: ${err.message})`);
       }

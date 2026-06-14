@@ -1,5 +1,6 @@
 import { mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { resolveDomainDir } from "./path-safety.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
@@ -824,7 +825,7 @@ export function seedFromLatestCouncil(
   vaultPath: string,
   domain: string,
 ): { path: string; sourceFile: string } | null {
-  const logDir = join(vaultPath, domain, "_log");
+  const logDir = join(resolveDomainDir(vaultPath, domain), "_log");
   if (!existsSync(logDir)) return null;
   // Newest first.
   const files = readdirSync(logDir)

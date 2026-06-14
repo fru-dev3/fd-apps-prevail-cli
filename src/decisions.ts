@@ -15,6 +15,7 @@ import { existsSync, mkdirSync } from "node:fs";
 
 import { vappendLine, vreadFile, vwriteFile } from "./vault-session.ts";
 import { join, resolve } from "node:path";
+import { resolveDomainDir } from "./path-safety.ts";
 
 // A domain name is "safe" if it's a single path segment with no traversal.
 // Anything else (empty, "general", "..", contains a slash) resolves to the
@@ -26,7 +27,7 @@ function isSafeDomain(d: string): boolean {
 // Resolve the directory a domain's curated files live in. General → vault root.
 export function domainDir(vaultPath: string, domain: string | null | undefined): string {
   const v = resolve(vaultPath);
-  return domain && isSafeDomain(domain) ? join(v, domain) : v;
+  return domain && isSafeDomain(domain) ? resolveDomainDir(v, domain) : v;
 }
 
 export function decisionsFile(vaultPath: string, domain: string | null | undefined): string {

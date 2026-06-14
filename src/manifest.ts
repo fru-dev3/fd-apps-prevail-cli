@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import type { CliKind } from "./config.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { isCliKind } from "./config.ts";
-import { isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
+import { isSafeEntryName, resolveDomainDir, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
 
 // =============================================================================
 // DomainManifest — the optional per-domain machine-config file (manifest.json).
@@ -167,7 +167,7 @@ function domainDir(vaultPath: string, domain: string): string {
   const v = validateVaultPath(vaultPath);
   if (!v.ok) throw new Error(`invalid vault path: ${v.reason}`);
   if (!isSafeEntryName(domain)) throw new Error(`unsafe domain name: ${domain}`);
-  return join(vaultPath, domain);
+  return resolveDomainDir(vaultPath, domain);
 }
 
 function manifestPath(vaultPath: string, domain: string): string {

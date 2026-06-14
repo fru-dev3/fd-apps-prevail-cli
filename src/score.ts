@@ -35,6 +35,7 @@ import {
   statSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveDomainDir } from "./path-safety.ts";
 
 import {
   readManifest,
@@ -87,7 +88,7 @@ const RELEVANCE_BLEND = 0.35;
 // =============================================================================
 
 function domainPath(vaultPath: string, domain: string): string {
-  return join(vaultPath, domain);
+  return resolveDomainDir(vaultPath, domain);
 }
 
 function exists(p: string): boolean {
@@ -889,6 +890,30 @@ export async function handleScoreAll(opts: ScoreCommandOptions): Promise<number>
   }
 }
 
+// `prevail score --all --stream --json` — same computation as handleScoreAll
+// but emits one NDJSON line PER DOMAIN as it is scored (so a UI can fill the
+// readiness dashboard progressively on a large vault), then a final roll-up.
+// Lines: {"type":"domain","score":<ContextScore>} ... {"type":"done","lifeReadiness":N,"count":M}
+export function handleScoreAllStream(opts: ScoreCommandOptions): number {
+  const root = resolve(opts.vaultPath);
+  if (!existsSync(root)) return emitScoreError(`vault path not found: ${root}`, "VAULT_NOT_FOUND");
+  try {
+    const domains = scanVault(root);
+    let sum = 0;
+    for (const d of domains) {
+      const sc = computeContextScore(root, d.name);
+      try { persistScore(root, d.name, sc); appendScoreHistory(root, d.name, sc); } catch { /* best-effort */ }
+      sum += sc.score;
+      emitJson({ type: "domain", score: sc });
+    }
+    const lifeReadiness = domains.length === 0 ? 0 : clamp(sum / domains.length);
+    emitJson({ type: "done", lifeReadiness, count: domains.length });
+    return 0;
+  } catch (err) {
+    return emitScoreError((err as Error).message, "SCORE_ALL_FAILED");
+  }
+}
+
 // `prevail score history <domain> --json`
 export function handleScoreHistory(domain: string, opts: ScoreCommandOptions): number {
   const root = resolve(opts.vaultPath);
@@ -911,6 +936,7 @@ export async function scoreCommand(args: string[], vaultPath: string): Promise<n
   let audit = false;
   let localOnly = false;
   let all = false;
+  let stream = false;
   let history = false;
   const positionals: string[] = [];
 
@@ -918,6 +944,7 @@ export async function scoreCommand(args: string[], vaultPath: string): Promise<n
     if (a === "--audit") audit = true;
     else if (a === "--local-only") localOnly = true;
     else if (a === "--all") all = true;
+    else if (a === "--stream") stream = true;
     else if (a === "--json") continue; // implied by these handlers
     else if (a === "history") history = true;
     else if (!a.startsWith("-")) positionals.push(a);
@@ -925,6 +952,7 @@ export async function scoreCommand(args: string[], vaultPath: string): Promise<n
 
   const opts: ScoreCommandOptions = { vaultPath, audit, localOnly };
 
+  if (all && stream) return handleScoreAllStream(opts);
   if (all) return handleScoreAll(opts);
   if (history) return handleScoreHistory(positionals[0] ?? "", opts);
   return handleScoreDomain(positionals[0] ?? "", opts);

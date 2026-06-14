@@ -1,5 +1,6 @@
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
+import { APPS_DIR, DOMAINS_DIR, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -40,6 +41,8 @@ export interface ManifestSummary {
 }
 
 const NON_DOMAIN_DIRS = new Set([
+  "domains", // v3 container (its children are scanned separately, not it)
+  "apps",    // app manifests live here, never a domain
   "complete",
   "core",
   "scripts",
@@ -186,22 +189,38 @@ export function scanVault(vaultPath: string): Domain[] {
   const entries = readdirSync(vaultPath, { withFileTypes: true });
   const lifePath = resolve(vaultPath, "..");
 
-  const domains: Domain[] = [];
+  // Domain candidates from BOTH the legacy root layout (<vault>/<domain>) and
+  // the v3 container (<vault>/domains/<domain>). The v3 home wins on a name
+  // clash. The belt-and-suspenders entry-name guard (null bytes, control chars,
+  // "..", leading-dot hidden dirs, >200 chars) still applies to every candidate.
+  const seen = new Set<string>();
+  const candidates: { name: string; dir: string; parent: string }[] = [];
+  const domainsRoot = join(vaultPath, DOMAINS_DIR);
+  if (existsSync(domainsRoot)) {
+    for (const e of readdirSync(domainsRoot, { withFileTypes: true })) {
+      if (!e.isDirectory() || !isSafeEntryName(e.name) || seen.has(e.name)) continue;
+      seen.add(e.name);
+      candidates.push({ name: e.name, dir: join(domainsRoot, e.name), parent: domainsRoot });
+    }
+  }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     if (NON_DOMAIN_DIRS.has(entry.name)) continue;
-    // SECURITY: belt-and-suspenders entry-name guard (rejects null bytes,
-    // control chars, "..", leading-dot hidden dirs, anything over 200
-    // chars). readdirSync at the OS level already strips path separators,
-    // but explicit validation makes "we never read outside the vault" an
-    // enforceable invariant instead of an emergent one.
     if (!isSafeEntryName(entry.name)) continue;
-    // SECURITY: confirm the resolved child actually lives under the vault
-    // root after symlink resolution. A symlink that escapes the vault
-    // (e.g. wealth -> ../../etc) is silently skipped instead of followed.
-    if (!resolveSafeChild(vaultPath, entry.name)) continue;
+    if (seen.has(entry.name)) continue;
+    seen.add(entry.name);
+    candidates.push({ name: entry.name, dir: join(vaultPath, entry.name), parent: vaultPath });
+  }
 
-    const domainPath = join(vaultPath, entry.name);
+  const domains: Domain[] = [];
+  for (const cand of candidates) {
+    const entryName = cand.name;
+    // SECURITY: confirm the resolved child actually lives under its parent after
+    // symlink resolution. A symlink that escapes (e.g. wealth -> ../../etc) is
+    // silently skipped instead of followed.
+    if (!resolveSafeChild(cand.parent, entryName)) continue;
+
+    const domainPath = cand.dir;
     // v2 detects a domain by soul.md (declared intent); v1 by state.md. The
     // derived _state.md also counts during the transition.
     if (!isDomainDir(domainPath)) continue;
@@ -250,7 +269,7 @@ export function scanVault(vaultPath: string): Domain[] {
     // the scan (the domain still appears on its state.md alone).
     let manifestSummary: ManifestSummary | undefined;
     try {
-      const m = readManifest(vaultPath, entry.name);
+      const m = readManifest(vaultPath, entryName);
       if (m) {
         manifestSummary = {
           label: m.identity.label,
@@ -262,12 +281,12 @@ export function scanVault(vaultPath: string): Domain[] {
     } catch {}
 
     domains.push({
-      name: entry.name,
+      name: entryName,
       path: domainPath,
       hasState,
       openLoopCount,
       stateMtime,
-      skills: scanSkills(lifePath, vaultPath, entry.name),
+      skills: scanSkills(lifePath, vaultPath, entryName),
       ...(manifestSummary ? { manifestSummary } : {}),
     });
   }
@@ -324,7 +343,7 @@ function scanSkills(lifePath: string, vaultPath: string, domain: string): Domain
   // Try vault-internal layout first (vault-demo/<domain>/skills/), then sibling layout
   // (<lifeRoot>/<domain>/skills/) for compatibility with the original Prevail structure.
   const candidates = [
-    join(vaultPath, domain, "skills"),
+    join(resolveDomainDir(vaultPath, domain), "skills"),
     join(lifePath, domain, "skills"),
   ];
   for (const skillsRoot of candidates) {
@@ -555,6 +574,9 @@ export interface AppSkill {
   // runner per op class: read ops always allowed; draft ops need >= "draft";
   // send/act ops need "act". Default "read-only".
   autonomy?: AppAutonomy;
+  // Whether the sync daemon may autonomously refresh this connector. Absent or
+  // true = enabled; false = configured and chattable, but the daemon skips it.
+  enabled?: boolean;
   // Human-meaningful account identity for multi-instance connectors
   // (gmail-personal vs gmail-estate): shown in every UI row.
   account?: { label: string; address?: string };
@@ -607,6 +629,9 @@ export interface CommunityAppManifest {
   // New: short description of how the connector connects. Inline
   // alternative to a separate connection.md file.
   connection?: string;
+  // Whether the sync daemon may autonomously refresh this connector.
+  // Absent / true = enabled; false = the daemon skips it.
+  enabled?: boolean;
 }
 
 function communityAppsDirs(): string[] {
@@ -661,6 +686,7 @@ interface CoercedManifest {
   oauth?: unknown;
   refresh?: AppRefresh;
   autonomy?: AppAutonomy;
+  enabled?: boolean;
   account?: { label: string; address?: string };
   routes?: AppRoute[];
   connections?: AppConnection[];
@@ -762,6 +788,9 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     oauth: typeof o.oauth === "object" && o.oauth !== null ? o.oauth : undefined,
     refresh: coerceRefresh(o.refresh),
     autonomy: coerceAutonomy(o.autonomy),
+    // Only an explicit `false` disables; any other value (absent, junk) leaves
+    // it enabled by default.
+    enabled: o.enabled === false ? false : undefined,
     account: coerceAccount(o.account),
     routes: coerceRoutes(o.routes),
     connections: coerceConnections(o.connections),
@@ -823,6 +852,7 @@ export function scanCommunityApps(): AppSkill[] {
         oauth: m.oauth,
         refresh: m.refresh,
         autonomy: m.autonomy,
+        enabled: m.enabled,
         account: m.account,
         routes: m.routes,
         connections: m.connections,
@@ -1139,7 +1169,11 @@ export function scaffoldCommunityApp(opts: {
   if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) {
     return { ok: false, error: `invalid app id "${opts.id}" (use lowercase letters, digits, hyphens)` };
   }
-  const base = process.env.PREVAIL_APPS_DIR || join(homedir(), ".prevail", "apps");
+  // New apps live in the vault (<vault>/apps) so the vault is the single source
+  // of truth. PREVAIL_APPS_DIR stays an explicit override (CI/dev); the legacy
+  // ~/.prevail/apps is only the last-resort fallback when no vault is known.
+  const base = process.env.PREVAIL_APPS_DIR
+    || (process.env.PREVAIL_VAULT_ROOT ? join(process.env.PREVAIL_VAULT_ROOT, APPS_DIR) : join(homedir(), ".prevail", "apps"));
   const root = join(base, id);
   if (existsSync(root)) return { ok: false, error: `app "${id}" already exists at ${root}` };
   // Map a connector pattern to the manifest integration vocabulary.
@@ -1163,5 +1197,64 @@ export function scaffoldCommunityApp(opts: {
     return { ok: true, path: root };
   } catch (e) {
     return { ok: false, error: `scaffold failed: ${e}` };
+  }
+}
+
+// Rewrite the many-to-many app→domain binding for an existing community app.
+// Locates the app's manifest.json via the same discovery the scanner uses,
+// then updates ONLY the `domains` array in place (preserving every other
+// field and key order). Domains are normalized to lowercase slugs, deduped,
+// and validated so a hostile/typo'd binding can't poison routing. Apps are a
+// PEER construct to domains and the binding is many-to-many: one app may feed
+// several domains, one domain is fed by many apps.
+export function setCommunityAppDomains(
+  id: string,
+  domains: string[],
+): { ok: boolean; path?: string; domains?: string[]; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  const clean = Array.from(
+    new Set((domains ?? []).map((d) => String(d).trim().toLowerCase()).filter(Boolean)),
+  );
+  for (const d of clean) {
+    if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(d)) {
+      return { ok: false, error: `invalid domain "${d}" (use lowercase letters, digits, hyphens)` };
+    }
+  }
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath));
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    (raw as Record<string, unknown>).domains = clean;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, domains: clean };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
+  }
+}
+
+// Enable / disable a connector's autonomous sync. A disabled connector stays
+// fully configured and chattable; the sync daemon simply skips it (see
+// daemon-sync.ts). We persist only when disabling — enabling clears the key so
+// a manifest with no `enabled` field stays the canonical "on" shape.
+export function setCommunityAppEnabled(
+  id: string,
+  enabled: boolean,
+): { ok: boolean; path?: string; enabled?: boolean; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath));
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    const o = raw as Record<string, unknown>;
+    if (enabled) delete o.enabled;
+    else o.enabled = false;
+    writeFileSync(app.manifestPath, `${JSON.stringify(o, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, enabled };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
   }
 }

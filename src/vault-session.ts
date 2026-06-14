@@ -12,7 +12,7 @@
 // vreadFile at a read site cannot change behavior for a plaintext vault. That's
 // what makes the migration safe to land incrementally.
 
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { decryptText, encryptText } from "./vault-crypto.ts";
@@ -114,4 +114,54 @@ export function vappendLine(path: string, line: string): void {
     }
   }
   writeFileSync(path, encryptText(sessionDek, current + line));
+}
+
+/**
+ * Read ONLY the bytes of an append-only ledger after `byteOffset`, without
+ * loading the whole file — the memory-safe path for the distiller, which only
+ * ever needs the new tail past its cursor. Under encryption the file is one
+ * AES-GCM blob that can't be seeked, so we must decrypt the whole thing and
+ * slice (no win, but correct); the plaintext path does a true positional read.
+ * Returns { slice, total } where `total` is the post-decrypt byte length, so a
+ * caller can detect rotation/truncation when total < byteOffset.
+ */
+export function vreadTail(path: string, byteOffset: number): { slice: string; total: number } {
+  if (sessionEncrypted && sessionDek && inVault(path)) {
+    const buf = Buffer.from(decryptText(sessionDek, readFileSync(path, "utf8")), "utf8");
+    if (byteOffset >= buf.length) return { slice: "", total: buf.length };
+    return { slice: buf.slice(byteOffset).toString("utf8"), total: buf.length };
+  }
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    if (byteOffset >= size) return { slice: "", total: size };
+    const len = size - byteOffset;
+    const out = Buffer.allocUnsafe(len);
+    readSync(fd, out, 0, len, byteOffset);
+    return { slice: out.toString("utf8"), total: size };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Rotate an append-only ledger to keep it bounded. Moves the already-consumed
+ * prefix into `archivePath` (append) and rewrites the ledger with only the
+ * remaining tail. The cut is the SMALLER of `maxCutOffset` (the distiller's
+ * cursor — never archive un-distilled records) and `plaintextLen - keepTailBytes`
+ * (always keep a recent tail so skillgen/taskgen still see recent activity),
+ * then snapped DOWN to a newline so a record is never split. Never deletes data
+ * (the prefix is archived, not dropped). Returns the bytes removed from the
+ * front (0 if nothing safe to rotate), so the caller decrements its cursor.
+ * Encryption-aware; rotation is rare so the whole-file read/write is acceptable.
+ */
+export function vrotateLedgerPrefix(path: string, archivePath: string, maxCutOffset: number, keepTailBytes: number): number {
+  if (maxCutOffset <= 0 || !existsSync(path)) return 0;
+  const buf = Buffer.from(vreadFile(path), "utf8");
+  let cut = Math.min(maxCutOffset, Math.max(0, buf.length - keepTailBytes));
+  while (cut > 0 && buf[cut - 1] !== 0x0a) cut--; // snap to a complete record
+  if (cut <= 0) return 0;
+  vappendLine(archivePath, buf.slice(0, cut).toString("utf8")); // head ends in \n
+  vwriteFile(path, buf.slice(cut).toString("utf8"));
+  return cut;
 }

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 
 import { vwriteFile } from "./vault-session.ts";
 import { join } from "node:path";
+import { appsContainer, newDomainDir, resolveDomainDir } from "./path-safety.ts";
 
 export interface ScaffoldResult {
   ok: boolean;
@@ -12,7 +13,7 @@ export interface ScaffoldResult {
 export function scaffoldDomain(vaultPath: string, rawName: string): ScaffoldResult {
   const name = rawName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   if (!name) return { ok: false, message: "name is empty" };
-  const dir = join(vaultPath, name);
+  const dir = newDomainDir(vaultPath, name);
   if (existsSync(dir)) return { ok: false, message: `${name} already exists` };
 
   try {
@@ -43,7 +44,7 @@ export function scaffoldSkill(
 ): ScaffoldResult {
   const name = rawName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   if (!name) return { ok: false, message: "name is empty" };
-  const domainDir = join(vaultPath, domainName);
+  const domainDir = resolveDomainDir(vaultPath, domainName);
   if (!existsSync(domainDir)) return { ok: false, message: `domain ${domainName} not found` };
   const skillsRoot = join(domainDir, "skills");
   const dir = join(skillsRoot, name);
@@ -93,7 +94,7 @@ Any constraints, gotchas, or links to related skills.
 export function scaffoldApp(vaultPath: string, rawName: string): ScaffoldResult {
   const name = rawName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   if (!name) return { ok: false, message: "name is empty" };
-  const appsRoot = join(vaultPath, "apps");
+  const appsRoot = appsContainer(vaultPath);
   const dir = join(appsRoot, name);
   if (existsSync(dir)) return { ok: false, message: `app ${name} already exists` };
 

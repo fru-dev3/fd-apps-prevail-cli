@@ -120,7 +120,7 @@ export async function runCouncilOneShot(args: {
   // Optional cognitive lens selection. null = run each panelist once
   // (today's behavior). A specific id = prepend that one lens to every
   // panelist's prompt. "all" = fan every panelist across every lens,
-  // multiplying the call count by LENSES.length (5). Chair synthesis
+  // multiplying the call count by LENSES.length. Chair synthesis
   // adapts: with lenses, divergence is grouped by lens, not by panelist.
   lens?: LensSelection;
 }): Promise<CouncilResult> {
@@ -212,43 +212,62 @@ export async function runCouncilOneShot(args: {
   let goodSoFar = 0;
   const isUsable = (reply: string) => !(reply.startsWith("(") && reply.includes("error"));
 
-  // Fan out in parallel. Each job runs in a separate runChatTurn —
-  // shared abort signal means a single cancel kills the whole batch.
-  const panel: PanelResult[] = await Promise.all(
-    jobs.map(async (j, idx) => {
-      const start = Date.now();
-      const label = `${j.cli.label}${j.model ? `·${j.model}` : ""}${j.lens ? ` [${j.lens.label}]` : ""}`;
-      const finish = (ok: boolean, reply: string): PanelResult => {
-        args.onPanelistDone?.(idx, { ok, ms: Date.now() - start });
-        return { cli: j.cli, model: j.model, lens: j.lens, ok, reply, ms: Date.now() - start };
-      };
-      try {
-        const reply = await withTimeout(
-          runChatTurn({
-            prompt: j.prompt,
-            cwd: args.cwd,
-            cli: j.cli,
-            model: j.model,
-            isFirst: true,
-            bare: true,
-            signal: jobSignal,
-            onChunk: args.onPanelistChunk
-              ? (delta) => args.onPanelistChunk!(idx, delta)
-              : undefined,
-          }),
-          PANELIST_TIMEOUT_MS,
-          label,
-        );
-        const ok = isUsable(reply);
-        // Quorum: count usable replies; once we hit the threshold, abort the
-        // rest so a slow/stuck panelist can't hold up synthesis.
-        if (ok && quorum) {
-          goodSoFar += 1;
-          if (goodSoFar >= quorum) internalAbort.abort();
-        }
-        return finish(ok, reply);
-      } catch (err) {
-        return finish(false, `(error: ${(err as Error).message})`);
+  // Fan out with a BOUNDED worker pool. Each job still runs in its own
+  // runChatTurn with the shared abort signal (a single cancel kills the whole
+  // batch). The cap exists because lens="all" multiplies jobs to
+  // panelists × lenses — without a limit that spawns dozens of heavyweight
+  // model subprocesses AT ONCE, each 1-3GB, which can exhaust machine memory
+  // and freeze the host. The pool runs the SAME jobs and produces the SAME
+  // results (panel is index-aligned); it only throttles how many are in flight.
+  // Without lenses there are only a few jobs, so every worker starts a job
+  // immediately and timing is identical to the old Promise.all.
+  const MAX_CONCURRENT_PANELISTS = 4;
+  const panel: PanelResult[] = new Array<PanelResult>(jobs.length);
+  const runJob = async (j: Job, idx: number): Promise<void> => {
+    const start = Date.now();
+    const label = `${j.cli.label}${j.model ? `·${j.model}` : ""}${j.lens ? ` [${j.lens.label}]` : ""}`;
+    const finish = (ok: boolean, reply: string): PanelResult => {
+      args.onPanelistDone?.(idx, { ok, ms: Date.now() - start });
+      return { cli: j.cli, model: j.model, lens: j.lens, ok, reply, ms: Date.now() - start };
+    };
+    try {
+      const reply = await withTimeout(
+        runChatTurn({
+          prompt: j.prompt,
+          cwd: args.cwd,
+          cli: j.cli,
+          model: j.model,
+          isFirst: true,
+          bare: true,
+          signal: jobSignal,
+          onChunk: args.onPanelistChunk
+            ? (delta) => args.onPanelistChunk!(idx, delta)
+            : undefined,
+        }),
+        PANELIST_TIMEOUT_MS,
+        label,
+      );
+      const ok = isUsable(reply);
+      // Quorum: count usable replies; once we hit the threshold, abort the
+      // rest so a slow/stuck panelist can't hold up synthesis. Queued jobs
+      // then see the aborted signal and resolve "(cancelled)" without spawning.
+      if (ok && quorum) {
+        goodSoFar += 1;
+        if (goodSoFar >= quorum) internalAbort.abort();
+      }
+      panel[idx] = finish(ok, reply);
+    } catch (err) {
+      panel[idx] = finish(false, `(error: ${(err as Error).message})`);
+    }
+  };
+  // Each worker pulls the next job index until the queue drains.
+  let nextJob = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(MAX_CONCURRENT_PANELISTS, jobs.length) }, async () => {
+      while (true) {
+        const idx = nextJob++;
+        if (idx >= jobs.length) break;
+        await runJob(jobs[idx]!, idx);
       }
     }),
   );

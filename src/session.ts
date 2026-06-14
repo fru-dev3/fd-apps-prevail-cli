@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveDomainDir } from "./path-safety.ts";
 import {
   appendFileSync,
   chmodSync,
@@ -350,11 +351,11 @@ export function makeTurnId(): string {
 // Path to a domain's JSONL thread file inside the vault. Lives under the
 // agent-writable _threads/ zone (VAULT-SPEC §3).
 export function threadJsonlPath(vaultPath: string, domain: string, sessionId: string): string {
-  return join(vaultPath, domain, "_threads", `${sessionId}.jsonl`);
+  return join(resolveDomainDir(vaultPath, domain), "_threads", `${sessionId}.jsonl`);
 }
 
 function threadsDir(vaultPath: string, domain: string): string {
-  return join(vaultPath, domain, "_threads");
+  return join(resolveDomainDir(vaultPath, domain), "_threads");
 }
 
 // Append a turn to <domain>/_threads/<sessionId>.jsonl, creating the

@@ -24,6 +24,7 @@ import {
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { DOMAINS_DIR, resolveDomainDir } from "./path-safety.ts";
 
 import { readManifest, writeManifest } from "./manifest.ts";
 
@@ -437,8 +438,11 @@ export function verifyVault(vaultPath: string): VerifyEntry[] {
   const vault = resolve(vaultPath);
   const out: VerifyEntry[] = [];
   if (!existsSync(vault)) return out;
-  for (const domain of safeReaddir(vault)) {
-    const domainPath = join(vault, domain);
+  // Verify both legacy root-level domains and the v3 domains/ container.
+  const domainDirs = safeReaddir(vault).map((d) => ({ name: d, path: join(vault, d) }));
+  const v3 = join(vault, DOMAINS_DIR);
+  if (existsSync(v3)) for (const d of safeReaddir(v3)) domainDirs.push({ name: d, path: join(v3, d) });
+  for (const { name: domain, path: domainPath } of domainDirs) {
     if (!isDir(domainPath)) continue;
     const logDir = join(domainPath, "_log");
     if (!isDir(logDir)) continue;
@@ -663,7 +667,7 @@ export async function archiveDomain(
 ): Promise<ArchiveResult> {
   assertSafeDomainName(domain);
   const vault = resolve(vaultPath);
-  const from = join(vault, domain);
+  const from = resolveDomainDir(vault, domain);
   if (!existsSync(from)) {
     throw new Error(`archiveDomain: domain not found: ${from}`);
   }
@@ -710,7 +714,7 @@ export function restoreDomain(
   if (!existsSync(from)) {
     throw new Error(`restoreDomain: not archived: ${from}`);
   }
-  const to = join(vault, domain);
+  const to = resolveDomainDir(vault, domain);
   if (existsSync(to)) {
     throw new Error(`restoreDomain: a live domain already exists at ${to}`);
   }
