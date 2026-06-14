@@ -4,7 +4,7 @@
   "description": "prevAIl \u2014 a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "homepage": "https://github.com/fru-dev3/prevail-cli",
   "repository": {
     "type": "git",

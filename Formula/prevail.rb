@@ -2,7 +2,7 @@ class Prevail < Formula
   desc "Terminal cockpit for hard personal decisions — Claude + Codex + Gemini + Ollama council"
   homepage "https://github.com/fru-dev3/prevail"
   version "0.8.2"
-  license "MIT"
+  license "GPL-3.0-only"
 
   # NOTE: The SHA256 values below are placeholders. After cutting a release
   # with prebuilt binaries attached, run `shasum -a 256 <binary>` for each

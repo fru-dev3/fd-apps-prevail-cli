@@ -142,7 +142,7 @@ apps/community/<plugin-id>/
   "auth": "api-key",
   "auth_env_vars": ["PLAID_CLIENT_ID", "PLAID_SECRET", "PLAID_ACCESS_TOKEN"],
   "homepage": "https://plaid.com",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "author": { "name": "your-handle", "url": "https://github.com/your-handle" }
 }
 ```

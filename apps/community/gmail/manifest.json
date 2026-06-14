@@ -56,6 +56,6 @@
   "autonomy": "read-only",
   "account": {"label": "primary"},
   "homepage": "https://mail.google.com",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "author": {"name": "fru-dev3", "url": "https://github.com/fru-dev3/prevail"}
 }

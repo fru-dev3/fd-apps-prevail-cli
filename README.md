@@ -12,7 +12,7 @@
   <a href="#install"><img src="https://img.shields.io/badge/install-curl%20%7C%20bash-3CD8FF" alt="install"/></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-bun%20single%20binary-C4A35A" alt="bun"/></a>
   <a href="https://opentui.com"><img src="https://img.shields.io/badge/tui-OpenTUI-3CD8FF" alt="OpenTUI"/></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-C4A35A" alt="MIT"/></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-C4A35A" alt="GPL-3.0"/></a>
 </p>
 
 <p align="center">
@@ -204,4 +204,6 @@ The threat model is documented in [SECURITY.md](./SECURITY.md) and [docs/threat-
 
 ## License
 
-MIT. The bundled demo vault contains no real personal data.
+[GPL-3.0-only](./LICENSE). © 2026 Fru · fru.dev. Free software: use, study,
+share, and modify under the GNU GPL v3; redistributed forks must stay open under
+the same license. The bundled demo vault contains no real personal data.
