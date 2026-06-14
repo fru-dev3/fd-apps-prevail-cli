@@ -10,13 +10,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { scanVault, scanCommunityApps } from "./vault.ts";
 import { buildPublicResults } from "./canonical-bench.ts";
+import { computeContextScore } from "./score.ts";
 
 export interface Recommendation {
   id: string;
-  category: "domain" | "model" | "app";
+  category: "domain" | "model" | "app" | "context";
   title: string;
   detail: string;
-  action: { kind: "create_domain" | "set_domain_model" | "connect_app"; domain?: string; model?: string; cli?: string };
+  action: { kind: "create_domain" | "set_domain_model" | "connect_app" | "improve_context"; domain?: string; model?: string; cli?: string };
 }
 
 function titleCase(s: string): string {
@@ -80,6 +81,26 @@ export function buildRecommendations(vaultRoot: string): Recommendation[] {
       }
     }
   } catch { /* no benchmark data yet */ }
+
+  // 4. CONTEXT — domains whose context score is low and have a concrete gap.
+  // This is the self-learning tie-in: the context score's missing[] items become
+  // actions to enrich the domain, and the score then rises on its own as apps
+  // sync and memory builds. Closes the loop: score -> action -> higher score.
+  try {
+    for (const d of domainList) {
+      const sc = computeContextScore(vaultRoot, d.name);
+      const serious = (sc.missing ?? []).filter((m) => m.severity === "critical" || m.severity === "warn");
+      if (sc.score < 60 && serious.length > 0) {
+        recs.push({
+          id: `context:${d.name.toLowerCase()}`,
+          category: "context",
+          title: `Strengthen ${titleCase(d.name)} context (${Math.round(sc.score)}/100)`,
+          detail: `${serious[0].label}. Richer context makes every answer, loop, and recommendation here sharper — and the score climbs on its own as apps sync and memory builds.`,
+          action: { kind: "improve_context", domain: d.name },
+        });
+      }
+    }
+  } catch { /* scoring unavailable */ }
 
   // 3. APP — a domain with no app feeding it real data.
   try {
