@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
-import { createCliRenderer } from "@opentui/core";
-import { createRoot } from "@opentui/react";
+// PERF: the TUI framework (@opentui) + the App/wizard component trees are heavy
+// and are ONLY needed for the interactive cockpit. They used to be imported at
+// the top level, so EVERY headless command (score, recommendations, connectors,
+// daemon, chat-json…) paid ~400ms loading the whole terminal UI it never renders.
+// They're now dynamically imported inside runWizard()/launchCockpit() only.
 import { resolve, join, basename } from "node:path";
 import { resolveDomainDir } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { App } from "./app.tsx";
-import { FirstRunWizard } from "./wizard.tsx";
 import { bundledDemoVaultPath, readConfig, } from "./config.ts";
 
 interface Args {
@@ -3526,6 +3527,10 @@ async function main() {
 }
 
 async function runWizard(): Promise<string> {
+  // Lazy: only the interactive path loads the TUI framework (see top-of-file note).
+  const { createCliRenderer } = await import("@opentui/core");
+  const { createRoot } = await import("@opentui/react");
+  const { FirstRunWizard } = await import("./wizard.tsx");
   return new Promise((resolve) => {
     void (async () => {
       const renderer = await createCliRenderer({
@@ -3548,6 +3553,10 @@ async function runWizard(): Promise<string> {
 }
 
 async function launchCockpit(vaultPath: string) {
+  // Lazy: only the interactive path loads the TUI framework (see top-of-file note).
+  const { createCliRenderer } = await import("@opentui/core");
+  const { createRoot } = await import("@opentui/react");
+  const { App } = await import("./app.tsx");
   const renderer = await createCliRenderer({
     targetFps: 60,
     exitOnCtrlC: true,
