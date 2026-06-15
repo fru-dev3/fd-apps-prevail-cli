@@ -14,7 +14,7 @@
     "mcp_command": "mcp-server-gcal"
   },
   "homepage": "https://calendar.google.com",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "author": {
     "name": "fru-dev3",
     "url": "https://github.com/fru-dev3/prevail"
