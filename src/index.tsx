@@ -1630,6 +1630,21 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
           }
         }
       } catch { /* no threads */ }
+      // BENCH-3: also ground in the domain's recent decision logs (_log/*.md) —
+      // the self-curating record of what actually happened. Questions drawn from
+      // real logged decisions test accuracy against the user's real life, not
+      // synthetic prompts.
+      let logCtx = "";
+      try {
+        const ldir = join(domainDir, "_log");
+        if (exists(ldir)) {
+          const logs = readDir(ldir).filter((f) => f.endsWith(".md")).sort();
+          const recent = logs.slice(-3); // most recent few days
+          const parts = recent.map((f) => `## ${f}\n${readFile(join(ldir, f), "utf8")}`);
+          logCtx = parts.join("\n\n");
+          if (logCtx.length > 2500) logCtx = logCtx.slice(0, 2500) + "\n…(truncated)";
+        }
+      } catch { /* no logs */ }
       const sections = ([
         ["_state.md", readCtx("_state.md", 3000) || readCtx("state.md", 3000)],
         ["goals.md", readCtx("goals.md", 1500)],
@@ -1637,6 +1652,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         ["soul.md", readCtx("soul.md", 800)],
         ["_tasks.md", readCtx("_tasks.md", 800)],
         ["_memory.md", readCtx("_memory.md", 1200)],
+        ["recent _log decisions", logCtx],
         ["latest thread", threadCtx],
       ] as [string, string][]).filter(([, t]) => t);
       if (sections.length === 0) {
