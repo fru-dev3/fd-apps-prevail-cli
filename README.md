@@ -204,6 +204,6 @@ The threat model is documented in [SECURITY.md](./SECURITY.md) and [docs/threat-
 
 ## License
 
-[GPL-3.0-only](./LICENSE). © 2026 Fru · fru.dev. Free software: use, study,
+[GPL-3.0-only](./LICENSE). © 2026 fru.dev. Free software: use, study,
 share, and modify under the GNU GPL v3; redistributed forks must stay open under
 the same license. The bundled demo vault contains no real personal data.
