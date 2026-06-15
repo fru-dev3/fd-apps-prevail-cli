@@ -91,4 +91,43 @@ describe("mcp-server (stdio)", () => {
     expect(names).toContain("read_state");
     expect(names).toContain("read_log");
   });
+
+  // MCP-1: over stdio the per-request token is NOT required (generic stdio
+  // clients like Claude Code can't attach `_meta.authorization`). tools/list
+  // must succeed with no token at all. The token is only enforced in --network
+  // mode. This is the regression guard for the unauthorized -32001 bug.
+  test("tools/list works WITHOUT a token over stdio", async () => {
+    if (!Bun.file(BIN).size) return; // binary not built — skip
+    const vault = makeFakeVault();
+    const cfgDir = mkdtempSync(join(tmpdir(), "prevail-mcp-cfg-"));
+    const child = spawn(BIN, ["mcp", "--vault", vault, "--unsafe-detach"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, PREVAIL_CONFIG_DIR: cfgDir },
+    });
+    const out: string[] = [];
+    let buffer = "";
+    child.stdout.on("data", (b) => {
+      buffer += b.toString();
+      let idx: number;
+      while ((idx = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (line) out.push(line);
+      }
+    });
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }) + "\n");
+    // No _meta.authorization at all — must still be answered over stdio.
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) + "\n");
+    const deadline = Date.now() + 8000;
+    while (out.length < 2 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    child.kill();
+    await new Promise((r) => child.on("close", r));
+    expect(out.length).toBeGreaterThanOrEqual(2);
+    const tools = JSON.parse(out[1]!);
+    expect(tools.error).toBeUndefined(); // not -32001 unauthorized
+    const names = tools.result?.tools?.map((t: { name: string }) => t.name) ?? [];
+    expect(names).toContain("council");
+  });
 });

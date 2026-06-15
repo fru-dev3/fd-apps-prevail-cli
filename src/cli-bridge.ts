@@ -16,6 +16,7 @@ import {
 
 const OPERATING_MANUAL_FILE = "AGENTS-operating.md";
 const IDEAL_STATE_FILE = "ideal-state.md";
+const OMEGA_FILE = "omega.md";
 let operatingManualCache: { vaultPath: string; content: string | null } | null = null;
 
 function findOperatingManual(vaultPath: string): string | null {
@@ -81,6 +82,52 @@ function findIdealState(vaultPath: string): string | null {
 
 export function refreshIdealStateCache(): void {
   idealStateCache = null;
+}
+
+// Omega — the app-wide LEARNED knowledge layer. Lives at <vault>/omega.md, beside
+// ideal-state.md. Durable, cross-cutting lessons / preferences / meta-patterns
+// distilled across every domain + the app. Injected just BELOW the Ideal State
+// (which is authored and wins conflicts) and ABOVE framework, domain state, and
+// per-domain memory. See docs/OMEGA-PLAN.md.
+let omegaCache: { vaultPath: string; content: string | null } | null = null;
+
+function findOmega(vaultPath: string): string | null {
+  if (omegaCache && omegaCache.vaultPath === vaultPath) {
+    return omegaCache.content;
+  }
+  const candidates = [
+    join(vaultPath, OMEGA_FILE),
+    join(homedir(), ".prevail", OMEGA_FILE),
+  ];
+  let content: string | null = null;
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      try {
+        const raw = readFileSync(c, "utf8").trim();
+        if (raw) content = raw;
+        break;
+      } catch {}
+    }
+  }
+  omegaCache = { vaultPath, content };
+  return content;
+}
+
+export function refreshOmegaCache(): void {
+  omegaCache = null;
+}
+
+// Wrap Omega in a header that positions it as learned context, explicitly BELOW
+// the Ideal State. Kept tight (non-Claude CLIs see it inline, not via a system
+// channel) so it never bloats the turn.
+function buildOmegaPreamble(omega: string): string {
+  return (
+    "# OMEGA — what Prevail has LEARNED across all your domains. App-wide context.\n" +
+    "Durable lessons, preferences, and patterns that hold across everything. Apply them by " +
+    "default. They rank BELOW the Ideal State above: if they ever conflict, the Ideal State wins.\n\n" +
+    omega.slice(0, 3000) +
+    "\n\n---\n\n"
+  );
 }
 
 // Wrap the Ideal State in an authoritative header so the model treats it as
@@ -792,7 +839,13 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   const idealState = findIdealState(vaultPath);
   const constitution = idealState ? buildConstitutionPreamble(idealState) : null;
   const promptConstitution = constitution && cli.kind !== "claude" ? constitution : "";
-  const framedPrompt = promptConstitution + buildFrameworkPreamble(framework) + prompt;
+  // Omega — learned app-wide context, injected just below the constitution and
+  // above the framework/domain/memory. Applies in every turn, including bare
+  // (council) mode, same as the constitution.
+  const omega = findOmega(vaultPath);
+  const omegaPreamble = omega ? buildOmegaPreamble(omega) : null;
+  const promptOmega = omegaPreamble && cli.kind !== "claude" ? omegaPreamble : "";
+  const framedPrompt = promptConstitution + promptOmega + buildFrameworkPreamble(framework) + prompt;
 
   // Run the dispatch, then (Track E7) commit the estimated spend to the
   // run/day ledgers. recordSpend is a no-op for free local turns and when no
@@ -814,7 +867,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [constitution, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [constitution, omegaPreamble, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to

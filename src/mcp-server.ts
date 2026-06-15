@@ -63,6 +63,13 @@ export interface McpServerOptions {
   // launchd, systemd, or any detached parent — the user is explicitly
   // taking responsibility for the trust boundary.
   unsafeDetach?: boolean;
+  // MCP-1: require the per-request `_meta.authorization` token. This is a
+  // NETWORK control — meaningful only when the server is exposed beyond the
+  // local stdio pipe. Over plain stdio the OS process boundary plus
+  // verifyParentProcess() already secure the channel, and generic stdio
+  // clients (Claude Code, Codex, Gemini CLI) can't attach the token, so
+  // requiring it there just breaks them. Default: false (stdio).
+  network?: boolean;
 }
 
 export async function runMcpServer(
@@ -87,12 +94,13 @@ export async function runMcpServer(
     }
   }
 
-  // Read (or create) the persisted auth token. After this point every
-  // non-initialize request must carry it in `_meta.authorization` as
-  // `prevail-<token>`.
+  // Read (or create) the persisted auth token. Only ENFORCED in network mode
+  // (see McpServerOptions.network); over stdio the token is not required so
+  // generic stdio clients work out of the box.
+  const requireToken = !!opts.network;
   const token = readOrCreateMcpToken();
 
-  log(`starting · vault=${vaultPath}`);
+  log(`starting · vault=${vaultPath}${requireToken ? " · network (token required)" : " · stdio"}`);
 
   const tools: McpTool[] = [
     {
@@ -150,12 +158,13 @@ export async function runMcpServer(
     },
   ];
 
-  // Print the token-discovery hint once, on stderr, so a human launching
-  // the server interactively can find their token. Never on stdout — that
-  // channel is reserved for valid JSON-RPC frames.
-  log(
-    `send your token in _meta.authorization. Token: prevail-<...> (${mcpConfigPath()})`,
-  );
+  // Print the token-discovery hint once, on stderr, so a human launching the
+  // server in network mode can find their token. Never on stdout — that
+  // channel is reserved for valid JSON-RPC frames. Skipped over stdio (no
+  // token is required there).
+  if (requireToken) {
+    log(`send your token in _meta.authorization. Token: prevail-<...> (${mcpConfigPath()})`);
+  }
 
   for await (const line of readStdinLines()) {
     let req: JsonRpcReq;
@@ -166,10 +175,10 @@ export async function runMcpServer(
       continue;
     }
     const id = req.id ?? null;
-    // Auth check — initialize is the one exception. The client uses
-    // initialize to handshake; the token gates everything else. The hint
-    // line above (printed at startup) tells the human where to find it.
-    if (req.method !== "initialize" && !isAuthorized(req, token)) {
+    // Auth check — only in network mode, and initialize is always exempt
+    // (it's the handshake). Over stdio (requireToken=false) the token is not
+    // required, so generic stdio clients work without attaching `_meta`.
+    if (requireToken && req.method !== "initialize" && !isAuthorized(req, token)) {
       if (req.id !== undefined && req.id !== null) {
         send({
           jsonrpc: "2.0",

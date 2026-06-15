@@ -32,6 +32,7 @@ interface Args {
   recommendationsArgs: string[];
   mcp: boolean;
   mcpUnsafeDetach: boolean;
+  mcpNetwork: boolean;
   bench: boolean;
   benchArgs: string[];
   usage: boolean;
@@ -106,6 +107,7 @@ function parseArgs(argv: string[]): Args {
   let recommendationsArgs: string[] = [];
   let mcp = false;
   let mcpUnsafeDetach = false;
+  let mcpNetwork = false;
   let bench = false;
   let benchArgs: string[] = [];
   let usage = false;
@@ -197,6 +199,9 @@ function parseArgs(argv: string[]): Args {
       for (let j = i + 1; j < argv.length; j++) {
         const f = argv[j];
         if (f === "--unsafe-detach") mcpUnsafeDetach = true;
+        // MCP-1: --network opts INTO per-request token auth (for any non-stdio /
+        // network-exposed transport). Default stdio relies on parent verification.
+        else if (f === "--network" || f === "--require-token") mcpNetwork = true;
       }
       break;
     } else if (a === "bench") {
@@ -331,6 +336,7 @@ function parseArgs(argv: string[]): Args {
     recommendationsArgs,
     mcp,
     mcpUnsafeDetach,
+    mcpNetwork,
     bench,
     benchArgs,
     usage,
@@ -1624,6 +1630,21 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
           }
         }
       } catch { /* no threads */ }
+      // BENCH-3: also ground in the domain's recent decision logs (_log/*.md) —
+      // the self-curating record of what actually happened. Questions drawn from
+      // real logged decisions test accuracy against the user's real life, not
+      // synthetic prompts.
+      let logCtx = "";
+      try {
+        const ldir = join(domainDir, "_log");
+        if (exists(ldir)) {
+          const logs = readDir(ldir).filter((f) => f.endsWith(".md")).sort();
+          const recent = logs.slice(-3); // most recent few days
+          const parts = recent.map((f) => `## ${f}\n${readFile(join(ldir, f), "utf8")}`);
+          logCtx = parts.join("\n\n");
+          if (logCtx.length > 2500) logCtx = logCtx.slice(0, 2500) + "\n…(truncated)";
+        }
+      } catch { /* no logs */ }
       const sections = ([
         ["_state.md", readCtx("_state.md", 3000) || readCtx("state.md", 3000)],
         ["goals.md", readCtx("goals.md", 1500)],
@@ -1631,6 +1652,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         ["soul.md", readCtx("soul.md", 800)],
         ["_tasks.md", readCtx("_tasks.md", 800)],
         ["_memory.md", readCtx("_memory.md", 1200)],
+        ["recent _log decisions", logCtx],
         ["latest thread", threadCtx],
       ] as [string, string][]).filter(([, t]) => t);
       if (sections.length === 0) {
@@ -2012,9 +2034,29 @@ async function connectorsCommand(args: string[]): Promise<void> {
       else { console.error(r.error); process.exit(1); }
       return;
     }
+    // APP-4: prevail connectors set <id> refresh <cadence> [at HH:MM] [on day]
+    //   cadence ∈ hourly | 2h..23h | daily | weekly; "off"/"none" clears it.
+    if (id && field === "refresh") {
+      let at: string | undefined;
+      let on: string | undefined;
+      for (let k = 4; k < args.length; k++) {
+        if (args[k] === "at" && args[k + 1]) { at = args[k + 1]; k++; }
+        else if (args[k] === "on" && args[k + 1]) { on = args[k + 1]; k++; }
+      }
+      const { setCommunityAppSchedule } = await import("./vault.ts");
+      const r = setCommunityAppSchedule(id, value ?? "", at, on);
+      if (args.includes("--json")) {
+        process.stdout.write(`${JSON.stringify(r)}\n`);
+        process.exit(r.ok ? 0 : 1);
+      }
+      if (r.ok) console.log(r.refresh ? `schedule for "${id}": every ${r.refresh.every}${r.refresh.at ? ` at ${r.refresh.at}` : ""}${r.refresh.on ? ` on ${r.refresh.on}` : ""}` : `schedule cleared for "${id}"`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
     if (!id || field !== "domains") {
       console.error("usage: prevail connectors set <id> domains <a,b,c>");
       console.error("       prevail connectors set <id> enabled <true|false>");
+      console.error("       prevail connectors set <id> refresh <hourly|Nh|daily|weekly|off> [at HH:MM] [on day]");
       process.exit(1);
     }
     const domains = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -2099,6 +2141,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
   console.error("  prevail connectors add --id <id> --title <t> --integration <type> --domains a,b");
   console.error("  prevail connectors set <id> domains <a,b,c>          — rewrite app→domain binding");
   console.error("  prevail connectors set <id> enabled <true|false>     — toggle autonomous sync");
+  console.error("  prevail connectors set <id> refresh <cadence> [at HH:MM] [on day]  — set sync schedule (hourly|Nh|daily|weekly|off)");
   console.error("  prevail connectors runs <id>                         — per-app run history");
   console.error("  prevail connectors sync <id> [--vault <path>]       — sync one app now");
   process.exit(1);
@@ -3378,7 +3421,7 @@ async function main() {
     const cfg = readConfig();
     const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
     const { runMcpServer } = await import("./mcp-server.ts");
-    await runMcpServer(vault, { unsafeDetach: args.mcpUnsafeDetach });
+    await runMcpServer(vault, { unsafeDetach: args.mcpUnsafeDetach, network: args.mcpNetwork });
     return;
   }
   if (args.bench) {
