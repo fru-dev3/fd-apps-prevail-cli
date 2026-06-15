@@ -32,6 +32,7 @@ interface Args {
   recommendationsArgs: string[];
   mcp: boolean;
   mcpUnsafeDetach: boolean;
+  mcpNetwork: boolean;
   bench: boolean;
   benchArgs: string[];
   usage: boolean;
@@ -106,6 +107,7 @@ function parseArgs(argv: string[]): Args {
   let recommendationsArgs: string[] = [];
   let mcp = false;
   let mcpUnsafeDetach = false;
+  let mcpNetwork = false;
   let bench = false;
   let benchArgs: string[] = [];
   let usage = false;
@@ -197,6 +199,9 @@ function parseArgs(argv: string[]): Args {
       for (let j = i + 1; j < argv.length; j++) {
         const f = argv[j];
         if (f === "--unsafe-detach") mcpUnsafeDetach = true;
+        // MCP-1: --network opts INTO per-request token auth (for any non-stdio /
+        // network-exposed transport). Default stdio relies on parent verification.
+        else if (f === "--network" || f === "--require-token") mcpNetwork = true;
       }
       break;
     } else if (a === "bench") {
@@ -331,6 +336,7 @@ function parseArgs(argv: string[]): Args {
     recommendationsArgs,
     mcp,
     mcpUnsafeDetach,
+    mcpNetwork,
     bench,
     benchArgs,
     usage,
@@ -3378,7 +3384,7 @@ async function main() {
     const cfg = readConfig();
     const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
     const { runMcpServer } = await import("./mcp-server.ts");
-    await runMcpServer(vault, { unsafeDetach: args.mcpUnsafeDetach });
+    await runMcpServer(vault, { unsafeDetach: args.mcpUnsafeDetach, network: args.mcpNetwork });
     return;
   }
   if (args.bench) {
