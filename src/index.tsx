@@ -2034,9 +2034,29 @@ async function connectorsCommand(args: string[]): Promise<void> {
       else { console.error(r.error); process.exit(1); }
       return;
     }
+    // APP-4: prevail connectors set <id> refresh <cadence> [at HH:MM] [on day]
+    //   cadence ∈ hourly | 2h..23h | daily | weekly; "off"/"none" clears it.
+    if (id && field === "refresh") {
+      let at: string | undefined;
+      let on: string | undefined;
+      for (let k = 4; k < args.length; k++) {
+        if (args[k] === "at" && args[k + 1]) { at = args[k + 1]; k++; }
+        else if (args[k] === "on" && args[k + 1]) { on = args[k + 1]; k++; }
+      }
+      const { setCommunityAppSchedule } = await import("./vault.ts");
+      const r = setCommunityAppSchedule(id, value ?? "", at, on);
+      if (args.includes("--json")) {
+        process.stdout.write(`${JSON.stringify(r)}\n`);
+        process.exit(r.ok ? 0 : 1);
+      }
+      if (r.ok) console.log(r.refresh ? `schedule for "${id}": every ${r.refresh.every}${r.refresh.at ? ` at ${r.refresh.at}` : ""}${r.refresh.on ? ` on ${r.refresh.on}` : ""}` : `schedule cleared for "${id}"`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
     if (!id || field !== "domains") {
       console.error("usage: prevail connectors set <id> domains <a,b,c>");
       console.error("       prevail connectors set <id> enabled <true|false>");
+      console.error("       prevail connectors set <id> refresh <hourly|Nh|daily|weekly|off> [at HH:MM] [on day]");
       process.exit(1);
     }
     const domains = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -2121,6 +2141,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
   console.error("  prevail connectors add --id <id> --title <t> --integration <type> --domains a,b");
   console.error("  prevail connectors set <id> domains <a,b,c>          — rewrite app→domain binding");
   console.error("  prevail connectors set <id> enabled <true|false>     — toggle autonomous sync");
+  console.error("  prevail connectors set <id> refresh <cadence> [at HH:MM] [on day]  — set sync schedule (hourly|Nh|daily|weekly|off)");
   console.error("  prevail connectors runs <id>                         — per-app run history");
   console.error("  prevail connectors sync <id> [--vault <path>]       — sync one app now");
   process.exit(1);

@@ -1257,6 +1257,46 @@ export function setCommunityAppDomains(
   }
 }
 
+// APP-4: set (or clear) an app's autonomous-sync schedule. `every` is the
+// cadence the engine understands (hourly | <2-23>h | daily | weekly), with an
+// optional HH:MM `at` and weekday `on`. "" / "off" / "none" clears the schedule.
+// The value is round-tripped through coerceRefresh — the SAME validator the
+// engine uses when reading the manifest — so anything written here is honored.
+export function setCommunityAppSchedule(
+  id: string,
+  every: string,
+  at?: string,
+  on?: string,
+): { ok: boolean; path?: string; refresh?: AppRefresh | null; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  const e = (every ?? "").trim().toLowerCase();
+  const clearing = e === "" || e === "off" || e === "none";
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    if (clearing) {
+      delete raw.refresh;
+      writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+      return { ok: true, path: app.manifestPath, refresh: null };
+    }
+    // Preserve the existing pull skill if the manifest already had one.
+    const prevSkill = (raw.refresh && typeof raw.refresh === "object")
+      ? (raw.refresh as Record<string, unknown>).skill : undefined;
+    const coerced = coerceRefresh({ every: e, at, on, skill: prevSkill });
+    if (!coerced) {
+      return { ok: false, error: `invalid cadence "${every}" (use hourly | 2h..23h | daily | weekly; optional at HH:MM, on mon..sun)` };
+    }
+    raw.refresh = coerced;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, refresh: coerced };
+  } catch (e2) {
+    return { ok: false, error: `update failed: ${e2}` };
+  }
+}
+
 // Enable / disable a connector's autonomous sync. A disabled connector stays
 // fully configured and chattable; the sync daemon simply skips it (see
 // daemon-sync.ts). We persist only when disabling — enabling clears the key so
