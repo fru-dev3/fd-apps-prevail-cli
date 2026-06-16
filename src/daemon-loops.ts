@@ -41,6 +41,7 @@ interface Loop {
   signals: string[];
   condition: string;
   cadence: LoopCadence;
+  autonomy?: "suggest" | "tasks" | "ask" | "auto"; // guardrail: how much it may do on its own
   evaluation: string;
   actions: string[];
   status: LoopStatus;
@@ -176,6 +177,18 @@ function renderHistory(entry: LoopRtEntry | undefined): string {
 
 // Ask the model for this loop's current next actions and (for closed loops)
 // whether its condition is now satisfied. Strict JSON so parsing is reliable.
+// Translate the loop's guardrail into an instruction the steward must honor when
+// deciding the `task` / `needs_approval` flags on each action.
+function guardrailRule(a: "suggest" | "tasks" | "ask" | "auto"): string {
+  switch (a) {
+    case "suggest": return "SUGGEST ONLY. Propose next steps but set every action's \"task\" to false and \"needs_approval\" to false; do not file or act.";
+    case "tasks": return "May FILE tasks (set \"task\": true) but never act externally; set \"needs_approval\": false for everything (no external actions proposed).";
+    case "auto": return "May act within guardrails; still set \"needs_approval\": true for anything that spends money, contacts someone, or is irreversible.";
+    case "ask":
+    default: return "May propose actions; anything consequential (spend/contact/irreversible/decision) must set \"needs_approval\": true and waits for the user.";
+  }
+}
+
 function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined, intents: string): string {
   return [
     `You are the steward of the "${loop.name}" loop in the ${domainLabel} domain of a personal life-OS.`,
@@ -184,8 +197,9 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
     `DESIRED STATE (domain):\n${doc.desiredState || "(not set)"}`,
     "",
     `LOOP`,
-    `- purpose: ${loop.purpose || loop.name}`,
+    `- purpose / goal: ${loop.purpose || loop.name}`,
     `- type: ${loop.type}${loop.type === "closed" ? ` (closed: finishes when the condition is met)` : " (open: ongoing)"}`,
+    `- guardrail: ${loop.autonomy ?? "ask"} — ${guardrailRule(loop.autonomy ?? "ask")}`,
     `- signals to weigh: ${loop.signals.join(", ") || "(none listed)"}`,
     `- condition: ${loop.condition || "(none)"}`,
     `- what good looks like: ${loop.evaluation || "(not specified)"}`,
