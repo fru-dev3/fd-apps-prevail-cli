@@ -117,6 +117,28 @@ export function refreshOmegaCache(): void {
   omegaCache = null;
 }
 
+// M6 (Monday feedback): per-domain ideal state. Lives at <domain>/ideal-state.md.
+// Injected just below the GLOBAL ideal (which still wins on direct conflict) and
+// above omega/framework, so a domain can have its own target on top of the global
+// one. Skipped for General (cwd === vault root → that's the global ideal).
+function findDomainIdeal(cwd: string, vaultPath: string): string | null {
+  try {
+    if (resolve(cwd) === resolve(vaultPath)) return null;
+    const p = join(cwd, IDEAL_STATE_FILE);
+    if (!existsSync(p)) return null;
+    const raw = readFileSync(p, "utf8").trim();
+    return raw || null;
+  } catch { return null; }
+}
+function buildDomainIdealPreamble(s: string): string {
+  return (
+    "# DOMAIN IDEAL STATE — your target for THIS domain specifically.\n" +
+    "Applies on top of the global Ideal State above; the global one wins on a direct conflict.\n\n" +
+    s.slice(0, 2500) +
+    "\n\n---\n\n"
+  );
+}
+
 // Wrap Omega in a header that positions it as learned context, explicitly BELOW
 // the Ideal State. Kept tight (non-Claude CLIs see it inline, not via a system
 // channel) so it never bloats the turn.
@@ -845,7 +867,11 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   const omega = findOmega(vaultPath);
   const omegaPreamble = omega ? buildOmegaPreamble(omega) : null;
   const promptOmega = omegaPreamble && cli.kind !== "claude" ? omegaPreamble : "";
-  const framedPrompt = promptConstitution + promptOmega + buildFrameworkPreamble(framework) + prompt;
+  // M6: per-domain ideal, just below the global ideal and above omega/framework.
+  const domainIdeal = findDomainIdeal(cwd, vaultPath);
+  const domainIdealPreamble = domainIdeal ? buildDomainIdealPreamble(domainIdeal) : null;
+  const promptDomainIdeal = domainIdealPreamble && cli.kind !== "claude" ? domainIdealPreamble : "";
+  const framedPrompt = promptConstitution + promptDomainIdeal + promptOmega + buildFrameworkPreamble(framework) + prompt;
 
   // Run the dispatch, then (Track E7) commit the estimated spend to the
   // run/day ledgers. recordSpend is a no-op for free local turns and when no
@@ -867,7 +893,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [constitution, omegaPreamble, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [constitution, domainIdealPreamble, omegaPreamble, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to
