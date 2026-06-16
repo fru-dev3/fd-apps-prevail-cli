@@ -12,6 +12,7 @@ mkdirSync(TEST_ROOT, { recursive: true });
 import {
   archiveLegacyRoot,
   countFiles,
+  isAlreadyDataRoot,
   isDataLayout,
   migratableEntries,
   migrateToDataLayout,
@@ -102,21 +103,31 @@ describe("v4 data-layout migrator", () => {
     expect(migratableEntries(vault)).not.toContain("data");
   });
 
-  test("archiveLegacyRoot sweeps only v4-aware containers; defers loose files", () => {
+  test("after migrate+repoint, archiveLegacyRoot sweeps EVERYTHING verified", () => {
+    // migrate writes the marker; the config repoint (done by the CLI command)
+    // makes every reader use data/, so all originals are safe to archive.
     migrateToDataLayout(vault);
-    const { archiveDir, archived, deferred } = archiveLegacyRoot(vault, "20260616-000000");
-    // domains/ + apps/ readers are v4-aware → safe to archive.
+    const { archiveDir, archived } = archiveLegacyRoot(vault, "20260616-000000");
+    // Both containers AND the loose General files are archived (all mirrored).
     expect(archived).toContain("domains");
     expect(archived).toContain("apps");
-    expect(existsSync(join(vault, "domains"))).toBe(false);
-    expect(existsSync(join(archiveDir, "domains"))).toBe(true); // moved, not deleted
-    expect(existsSync(join(vault, "data", "domains", "wealth", "_state.md"))).toBe(true);
-    // The General-bucket loose files are still read from the root → must NOT be
-    // archived yet (would orphan them); they're reported as deferred instead.
-    expect(deferred).toContain("_decisions.jsonl");
-    expect(existsSync(join(vault, "_decisions.jsonl"))).toBe(true);
-    // The vault still resolves entirely (domains now under data/).
-    expect(scanVault(vault).map((d) => d.name)).toContain("wealth");
+    expect(archived).toContain("_decisions.jsonl");
+    expect(archived).toContain("profile.md");
+    // Root is clean of originals; copies under data/ remain; nothing deleted.
+    expect(existsSync(join(vault, "_decisions.jsonl"))).toBe(false);
+    expect(existsSync(join(vault, "data", "_decisions.jsonl"))).toBe(true);
+    expect(existsSync(join(archiveDir, "_decisions.jsonl"))).toBe(true);
+    // The data/ container itself is never archived (it's the live vault).
+    expect(archived).not.toContain("data");
+    expect(existsSync(join(vault, "data"))).toBe(true);
+  });
+
+  test("migrate writes a data-root marker; the repointed path is idempotent", () => {
+    migrateToDataLayout(vault);
+    // The vault root is NOT itself a data root (config still points here pre-repoint).
+    expect(isAlreadyDataRoot(vault)).toBe(false);
+    // The data/ dir (where config gets repointed to) carries the marker.
+    expect(isAlreadyDataRoot(join(vault, "data"))).toBe(true);
   });
 
   test("archiveLegacyRoot refuses to run before migration", () => {

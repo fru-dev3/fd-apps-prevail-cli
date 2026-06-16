@@ -20,10 +20,10 @@
 // originals is a SEPARATE, explicitly-confirmed step (archiveLegacyRoot) so a
 // verified copy always exists before anything leaves the root.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { APPS_DIR, DATA_DIR, DOMAINS_DIR, validateVaultPath } from "./path-safety.ts";
+import { DATA_DIR, validateVaultPath } from "./path-safety.ts";
 
 // Root entries that are NOT vault content and must never be swept into data/:
 // the data container itself, VCS / tooling dirs, and node_modules. Everything
@@ -73,6 +73,16 @@ export function isDataLayout(vaultPath: string): boolean {
   }
 }
 
+// Marker dropped INSIDE the data/ container on migration. After the configured
+// vault path is repointed to <vault>/data, this marker is what tells a re-run
+// "you're already the data root — don't nest another data/ inside me."
+const DATA_ROOT_MARKER = ".prevail-data-layout";
+
+/** True when `vaultPath` IS itself a migrated data root (config already repointed). */
+export function isAlreadyDataRoot(vaultPath: string): boolean {
+  return existsSync(join(vaultPath, DATA_ROOT_MARKER));
+}
+
 export interface DataMigrateResult {
   dataDir: string;
   alreadyMigrated: boolean; // a data/ dir already existed before this run
@@ -112,32 +122,35 @@ export function migrateToDataLayout(vaultPath: string): DataMigrateResult {
     copiedFiles += countFiles(dest);
   }
 
+  const ok = copiedFiles >= sourceFiles;
+  // Drop the data-root marker only after a verified copy, so a re-run on the
+  // repointed path is recognized as already-migrated (no nested data/data/).
+  if (ok) {
+    try { writeFileSync(join(dataDir, DATA_ROOT_MARKER), `migrated ${new Date().toISOString()}\n`); } catch { /* best effort */ }
+  }
+
   return {
     dataDir,
     alreadyMigrated,
     movedEntries: entries,
     sourceFiles,
     copiedFiles,
-    ok: copiedFiles >= sourceFiles,
+    ok,
   };
 }
 
 // Only the containers whose READERS are already v4-aware (path-safety.ts:
 // resolveDomainDir / appsContainer prefer <vault>/data/...). Archiving anything
 // else would orphan it: the General-bucket loose files + dirs (_decisions.jsonl,
-// _threads/, benchmark/, usage.ndjson, profile.md, …) are still read from the
-// vault ROOT by both the engine and the desktop, so they must stay there until
-// that reader switch ships + is live-verified across all three processes. Once
-// it does, add those names here.
-export const V4_ARCHIVABLE = new Set([DOMAINS_DIR, APPS_DIR]);
-
 /**
- * AFTER a verified migration, move the now-duplicated originals of the v4-aware
- * containers out of the root into a timestamped archive folder (never delete).
- * An entry is archived ONLY when (a) its readers resolve under data/ and (b) a
- * full copy is confirmed present there — so a file is never removed from the
- * root unless it's both reachable elsewhere AND verified. `stamp` is injected so
- * the archive name is deterministic/testable. Returns the archive dir + entries.
+ * AFTER a verified migration + config repoint (every surface now reads from
+ * data/), move the now-orphaned originals out of the root into a timestamped
+ * archive folder. NEVER deletes — renames into `_pre-data-<stamp>/`. An entry is
+ * archived ONLY when a full copy is confirmed present under data/ (so a file is
+ * never removed from the root unless it's verifiably reachable from the live
+ * vault); anything not yet fully mirrored is reported as `deferred` and left in
+ * place. `stamp` is injected so the archive name is deterministic/testable.
+ * `vaultPath` is the TRUE root (the parent that contains data/).
  */
 export function archiveLegacyRoot(vaultPath: string, stamp: string): { archiveDir: string; archived: string[]; deferred: string[] } {
   if (!isDataLayout(vaultPath)) {
@@ -149,7 +162,6 @@ export function archiveLegacyRoot(vaultPath: string, stamp: string): { archiveDi
   const archived: string[] = [];
   const deferred: string[] = [];
   for (const name of migratableEntries(vaultPath)) {
-    if (!V4_ARCHIVABLE.has(name)) { deferred.push(name); continue; }
     const root = join(vaultPath, name);
     const mirrored = join(dataDir, name);
     // Only archive once the copy is verified complete under data/.

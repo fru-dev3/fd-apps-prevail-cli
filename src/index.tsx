@@ -4,11 +4,11 @@
 // the top level, so EVERY headless command (score, recommendations, connectors,
 // daemon, chat-json…) paid ~400ms loading the whole terminal UI it never renders.
 // They're now dynamically imported inside runWizard()/launchCockpit() only.
-import { resolve, join, basename } from "node:path";
+import { resolve, join, basename, dirname } from "node:path";
 import { resolveDomainDir } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { bundledDemoVaultPath, readConfig, } from "./config.ts";
+import { bundledDemoVaultPath, readConfig, writeConfig, } from "./config.ts";
 
 interface Args {
   vaultPath: string | null;
@@ -2345,16 +2345,31 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   // moves the now-duplicated originals into a timestamped `_pre-data-*` archive
   // (never deletes) once a verified copy exists under data/.
   if (sub === "migrate-data" || sub === "archive-data") {
-    const { migrateToDataLayout, archiveLegacyRoot, isDataLayout } = await import("./vault-data-layout.ts");
+    const { migrateToDataLayout, archiveLegacyRoot, isDataLayout, isAlreadyDataRoot } = await import("./vault-data-layout.ts");
     const asJson = args.includes("--json");
     try {
       if (sub === "migrate-data") {
+        // Idempotent: if the configured vault IS already a migrated data root
+        // (repointed on a prior run), do nothing — never nest data/data/.
+        if (isAlreadyDataRoot(vault)) {
+          const msg = { alreadyMigrated: true, dataDir: vault, ok: true };
+          if (asJson) process.stdout.write(JSON.stringify(msg) + "\n");
+          else console.log(`vault is already the data root: ${vault}`);
+          return;
+        }
         const r = migrateToDataLayout(vault);
-        if (asJson) process.stdout.write(JSON.stringify(r) + "\n");
+        // On a VERIFIED copy, repoint the configured vault to <vault>/data so
+        // every surface (CLI, TUI, desktop) operates under data/ transparently —
+        // the same repoint pattern `vault embed` uses. The loose root files are
+        // now read from data/; archive-data cleans the orphaned originals.
+        if (r.ok) {
+          writeConfig({ ...(cfg ?? {}), vaultPath: r.dataDir } as never);
+        }
+        if (asJson) process.stdout.write(JSON.stringify({ ...r, repointed: r.ok }) + "\n");
         else {
           console.log(`copied ${r.copiedFiles}/${r.sourceFiles} files into ${r.dataDir}${r.ok ? "" : "  (verify mismatch — originals left intact!)"}`);
           console.log(`moved entries: ${r.movedEntries.join(", ")}`);
-          console.log(`originals left intact at ${vault}. Run 'vault archive-data --force' to clean the root once you've verified the app reads from data/.`);
+          if (r.ok) console.log(`vault path repointed to ${r.dataDir}. The root now holds just data/ (+ originals until you run 'vault archive-data --force').`);
         }
         if (!r.ok) process.exit(1);
       } else {
@@ -2362,16 +2377,19 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
           console.error("vault archive-data moves the loose root originals into a backup folder.\nRe-run with --force once you've confirmed the app reads correctly from data/.");
           process.exit(1);
         }
-        if (!isDataLayout(vault)) { console.error("no data/ layout yet — run 'vault migrate-data' first."); process.exit(1); }
+        // After migrate-data repoints config, `vault` IS <root>/data. The
+        // originals to archive live one level up, at the true root.
+        const root = isAlreadyDataRoot(vault) ? dirname(vault) : vault;
+        if (!isDataLayout(root)) { console.error("no data/ layout yet — run 'vault migrate-data' first."); process.exit(1); }
         // Deterministic stamp from the wall clock (UTC, compact).
         const d = new Date();
         const stamp = d.toISOString().replace(/[-:T]/g, "").slice(0, 14);
-        const r = archiveLegacyRoot(vault, stamp);
+        const r = archiveLegacyRoot(root, stamp);
         if (asJson) process.stdout.write(JSON.stringify(r) + "\n");
         else {
-          console.log(`archived ${r.archived.length} container(s) to ${r.archiveDir}: ${r.archived.join(", ") || "(none)"}`);
-          if (r.deferred.length) console.log(`deferred ${r.deferred.length} entr(ies) (readers still point at the root, kept in place): ${r.deferred.join(", ")}`);
-          console.log(`nothing was deleted. domains/ + apps/ now read from ${vault}/data.`);
+          console.log(`archived ${r.archived.length} entr(ies) to ${r.archiveDir}: ${r.archived.join(", ") || "(none)"}`);
+          if (r.deferred.length) console.log(`deferred ${r.deferred.length} (no verified copy under data/ yet, kept in place): ${r.deferred.join(", ")}`);
+          console.log(`nothing was deleted. The vault now reads entirely from ${root}/data.`);
         }
       }
     } catch (e) {
