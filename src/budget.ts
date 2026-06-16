@@ -43,6 +43,13 @@ const PER_CALL_USD: Record<CliKind, number> = {
   antigravity: 0.003,
   ollama: 0,
   openrouter: 0.005,
+  // Direct providers — rough per-call estimates for the budget heuristic.
+  anthropic: 0.005,
+  openai: 0.005,
+  xai: 0.005,
+  kimi: 0.003,
+  deepseek: 0.002,
+  google: 0.003,
 };
 
 const PER_CALL_USD_UNKNOWN = 0.005;

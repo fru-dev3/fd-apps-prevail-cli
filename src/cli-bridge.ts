@@ -182,7 +182,7 @@ function buildConstitutionPreamble(idealState: string): string {
 // migrateLegacyCliKind in src/config.ts).
 // CliKind is single-sourced in config.ts; imported for local use and re-exported
 // so existing `import { CliKind } from "./cli-bridge"` sites keep working.
-import type { CliKind } from "./config.ts";
+import type { CliKind, DirectProviderKind } from "./config.ts";
 export type { CliKind };
 
 // Legacy CliKind values from earlier versions of prevAIl. Listed here as
@@ -251,6 +251,12 @@ export const CLI_MODEL_HINT: Record<CliKind, string> = {
   ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
   antigravity: 'e.g. "Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Medium)" — run `agy models` for the full list (Antigravity now uses display names, not short ids)',
   openrouter: "e.g. anthropic/claude-opus-4.1, openai/gpt-5.1, google/gemini-2.5-pro — any model id from openrouter.ai/models",
+  anthropic: "e.g. claude-opus-4-1, claude-sonnet-4-5, claude-haiku-4-5 (your Anthropic API key)",
+  openai: "e.g. gpt-5.1, gpt-5, o4-mini (your OpenAI API key)",
+  xai: "e.g. grok-4, grok-3, grok-3-mini (your xAI key)",
+  kimi: "e.g. kimi-k2-0711-preview, moonshot-v1-128k (your Moonshot key)",
+  deepseek: "e.g. deepseek-chat, deepseek-reasoner (your DeepSeek key)",
+  google: "e.g. gemini-2.5-pro, gemini-2.5-flash (your Google AI key)",
 };
 
 // Quick-pick chips shown in the council config bubble. Two tiers:
@@ -318,7 +324,45 @@ export const OPENROUTER_MODELS: string[] = [
   "meta-llama/llama-3.3-70b-instruct",
 ];
 
-const CLI_DEFAULT_MODELS: Record<CliKind, string> = {
+// G1 — direct single-vendor providers. Each works once the user adds their key
+// (Settings → Models → Direct Providers), injected by the desktop as
+// PREVAIL_<ID>_KEY (the PREVAIL_ prefix dodges scrubbedEnv's secret strip). All
+// speak the OpenAI /chat/completions schema except Anthropic (native=true →
+// /v1/messages). One table drives detection, routing, and the key-entry UI.
+export interface DirectProvider {
+  id: DirectProviderKind;
+  label: string;
+  baseUrl: string;
+  keyEnv: string;
+  native?: boolean; // Anthropic: /v1/messages instead of OpenAI-compat
+  models: string[];
+}
+export const DIRECT_PROVIDERS: DirectProvider[] = [
+  { id: "anthropic", label: "Anthropic", baseUrl: "https://api.anthropic.com/v1", keyEnv: "PREVAIL_ANTHROPIC_KEY", native: true,
+    models: ["claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"] },
+  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyEnv: "PREVAIL_OPENAI_KEY",
+    models: ["gpt-5.1", "gpt-5", "gpt-4.1", "o4-mini"] },
+  { id: "xai", label: "xAI", baseUrl: "https://api.x.ai/v1", keyEnv: "PREVAIL_XAI_KEY",
+    models: ["grok-4", "grok-3", "grok-3-mini"] },
+  { id: "kimi", label: "Kimi (Moonshot)", baseUrl: "https://api.moonshot.ai/v1", keyEnv: "PREVAIL_KIMI_KEY",
+    models: ["kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k"] },
+  { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", keyEnv: "PREVAIL_DEEPSEEK_KEY",
+    models: ["deepseek-chat", "deepseek-reasoner"] },
+  { id: "google", label: "Google AI", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", keyEnv: "PREVAIL_GOOGLE_KEY",
+    models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"] },
+];
+export const DIRECT_PROVIDER_BY_ID: Record<DirectProviderKind, DirectProvider> =
+  Object.fromEntries(DIRECT_PROVIDERS.map((p) => [p.id, p])) as Record<DirectProviderKind, DirectProvider>;
+
+const DIRECT_DEFAULT_MODELS = Object.fromEntries(
+  DIRECT_PROVIDERS.map((p) => [p.id, p.models[0]!]),
+) as Record<DirectProviderKind, string>;
+const DIRECT_QUICKPICKS = Object.fromEntries(
+  DIRECT_PROVIDERS.map((p) => [p.id, p.models]),
+) as Record<DirectProviderKind, string[]>;
+
+export const CLI_DEFAULT_MODELS: Record<CliKind, string> = {
+  ...DIRECT_DEFAULT_MODELS,
   claude: CLAUDE_VERSIONS[0]!,
   codex: CODEX_VERSIONS[0]!,
   antigravity: ANTIGRAVITY_VERSIONS[0]!,
@@ -338,6 +382,7 @@ export function defaultModelFor(kind: CliKind): string {
 // haiku ..." and users couldn't tell which version of each they'd actually
 // get without typing /model.
 export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
+  ...DIRECT_QUICKPICKS,
   claude: [...CLAUDE_VERSIONS, ...CLAUDE_ALIASES],
   codex: CODEX_VERSIONS,
   antigravity: ANTIGRAVITY_VERSIONS,
@@ -656,6 +701,13 @@ export async function detectClis(opts?: { force?: boolean }): Promise<AvailableC
   if (process.env.PREVAIL_OPENROUTER_KEY) {
     out.push({ kind: "openrouter", bin: "https://openrouter.ai/api/v1", label: "OpenRouter" });
   }
+  // Direct providers (G1): each is "available" iff its key is present in the
+  // env (the desktop injects PREVAIL_<ID>_KEY from the Keychain).
+  for (const p of DIRECT_PROVIDERS) {
+    if (process.env[p.keyEnv]) {
+      out.push({ kind: p.id, bin: p.baseUrl, label: p.label });
+    }
+  }
   _cliRoster = { at: Date.now(), clis: out };
   return out;
 }
@@ -973,7 +1025,110 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
       extraHeaders: { "HTTP-Referer": "https://prevail.sh", "X-Title": "Prevail" },
     });
   }
+  // Direct providers (G1): single-vendor keys. Anthropic uses its native API;
+  // the rest are OpenAI-compatible and share runOpenAICompatChat.
+  const direct = DIRECT_PROVIDER_BY_ID[cli.kind as DirectProviderKind];
+  if (direct) {
+    const apiKey = process.env[direct.keyEnv] ?? "";
+    const model = m || direct.models[0]!;
+    if (direct.native) {
+      return runAnthropicChat({ apiKey, model, prompt: framedPrompt, signal, onChunk, maxOutputChars });
+    }
+    return runOpenAICompatChat({
+      label: direct.id,
+      baseUrl: direct.baseUrl,
+      apiKey,
+      model,
+      prompt: framedPrompt,
+      signal,
+      onChunk,
+      maxOutputChars,
+    });
+  }
   return `(no handler for ${cli.kind})`;
+  }
+}
+
+// Anthropic's native Messages API (/v1/messages) — not OpenAI-compatible: it
+// uses x-api-key + anthropic-version headers and a {content:[{text}]} response.
+// Mirrors runOpenAICompatChat's contract (errors returned as the reply string,
+// optional SSE streaming, output cap) so a panelist failure never throws.
+interface AnthropicChatArgs {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  signal?: AbortSignal;
+  onChunk?: (delta: string) => void;
+  maxOutputChars?: number;
+}
+export async function runAnthropicChat(args: AnthropicChatArgs): Promise<string> {
+  const { apiKey, model, prompt, signal, onChunk, maxOutputChars } = args;
+  if (!apiKey) return "(anthropic: no API key configured — add it in Settings → Models → Direct Providers)";
+  const stream = !!onChunk;
+  const body = {
+    model,
+    max_tokens: 4096,
+    stream,
+    messages: [{ role: "user", content: prompt }],
+  };
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return `(anthropic: HTTP ${res.status} — ${truncate(text, 200)})`;
+    }
+    if (!stream) {
+      const data = (await res.json()) as {
+        content?: Array<{ text?: string }>;
+        error?: { message?: string };
+      };
+      if (data.error?.message) return `(anthropic: ${data.error.message})`;
+      return (data.content ?? []).map((c) => c.text ?? "").join("");
+    }
+    // SSE stream: Anthropic emits content_block_delta events with {delta:{text}}.
+    let acc = "";
+    const reader = res.body?.getReader();
+    if (!reader) return "(anthropic: no response body)";
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith("data:")) continue;
+        const payload = t.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const ev = JSON.parse(payload) as { delta?: { text?: string } };
+          const delta = ev.delta?.text;
+          if (delta) {
+            acc += delta;
+            onChunk?.(delta);
+            if (maxOutputChars && acc.length >= maxOutputChars) {
+              try { await reader.cancel(); } catch { /* ignore */ }
+              return `${acc.slice(0, maxOutputChars)} ... (truncated at ${maxOutputChars} chars)`;
+            }
+          }
+        } catch { /* skip malformed SSE frame */ }
+      }
+    }
+    return acc;
+  } catch (e) {
+    if (signal?.aborted) return "(anthropic: request aborted)";
+    return `(anthropic: ${e instanceof Error ? e.message : String(e)})`;
   }
 }
 
