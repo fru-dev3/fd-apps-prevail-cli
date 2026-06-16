@@ -2338,6 +2338,49 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  // `vault migrate-data` (W4) — relocate the vault's content under a single
+  // `<vault>/data/` container so the root is no longer littered with loose files
+  // and apps+domains sit together. Non-destructive: copies + verifies, leaves
+  // the originals. `vault archive-data --force` is the SEPARATE, opt-in step that
+  // moves the now-duplicated originals into a timestamped `_pre-data-*` archive
+  // (never deletes) once a verified copy exists under data/.
+  if (sub === "migrate-data" || sub === "archive-data") {
+    const { migrateToDataLayout, archiveLegacyRoot, isDataLayout } = await import("./vault-data-layout.ts");
+    const asJson = args.includes("--json");
+    try {
+      if (sub === "migrate-data") {
+        const r = migrateToDataLayout(vault);
+        if (asJson) process.stdout.write(JSON.stringify(r) + "\n");
+        else {
+          console.log(`copied ${r.copiedFiles}/${r.sourceFiles} files into ${r.dataDir}${r.ok ? "" : "  (verify mismatch — originals left intact!)"}`);
+          console.log(`moved entries: ${r.movedEntries.join(", ")}`);
+          console.log(`originals left intact at ${vault}. Run 'vault archive-data --force' to clean the root once you've verified the app reads from data/.`);
+        }
+        if (!r.ok) process.exit(1);
+      } else {
+        if (!args.includes("--force")) {
+          console.error("vault archive-data moves the loose root originals into a backup folder.\nRe-run with --force once you've confirmed the app reads correctly from data/.");
+          process.exit(1);
+        }
+        if (!isDataLayout(vault)) { console.error("no data/ layout yet — run 'vault migrate-data' first."); process.exit(1); }
+        // Deterministic stamp from the wall clock (UTC, compact).
+        const d = new Date();
+        const stamp = d.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+        const r = archiveLegacyRoot(vault, stamp);
+        if (asJson) process.stdout.write(JSON.stringify(r) + "\n");
+        else {
+          console.log(`archived ${r.archived.length} root entries to ${r.archiveDir}`);
+          console.log(`root is now clean; the vault reads from ${vault}/data. Nothing was deleted.`);
+        }
+      }
+    } catch (e) {
+      if (asJson) process.stdout.write(JSON.stringify({ error: String(e) }) + "\n");
+      else console.error(`vault ${sub} failed: ${e}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // Vault encryption (F4 Phase 1). Passcode is read from STDIN, never argv.
   //   encrypt: create/load keyring, encrypt the vault in place, SELF-VERIFY by
   //            reading it back, and AUTO-ROLLBACK (decrypt) if verification fails

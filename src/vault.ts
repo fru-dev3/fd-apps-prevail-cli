@@ -1,6 +1,6 @@
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { APPS_DIR, DOMAINS_DIR, resolveDomainDir } from "./path-safety.ts";
+import { APPS_DIR, DOMAINS_DIR, dataRoot, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -41,6 +41,7 @@ export interface ManifestSummary {
 }
 
 const NON_DOMAIN_DIRS = new Set([
+  "data",    // v4 container (its domains/ + apps/ are scanned separately, not it)
   "domains", // v3 container (its children are scanned separately, not it)
   "apps",    // app manifests live here, never a domain
   "complete",
@@ -195,8 +196,12 @@ export function scanVault(vaultPath: string): Domain[] {
   // "..", leading-dot hidden dirs, >200 chars) still applies to every candidate.
   const seen = new Set<string>();
   const candidates: { name: string; dir: string; parent: string }[] = [];
-  const domainsRoot = join(vaultPath, DOMAINS_DIR);
-  if (existsSync(domainsRoot)) {
+  // Scan the v4 (<vault>/data/domains) container first, then the v3
+  // (<vault>/domains) container; the newer layout wins on a name clash. When no
+  // data/ dir exists dataRoot() === vaultPath, so these two collapse to one scan.
+  const domainsRoots = [join(dataRoot(vaultPath), DOMAINS_DIR), join(vaultPath, DOMAINS_DIR)];
+  for (const domainsRoot of domainsRoots) {
+    if (!existsSync(domainsRoot)) continue;
     for (const e of readdirSync(domainsRoot, { withFileTypes: true })) {
       if (!e.isDirectory() || !isSafeEntryName(e.name) || seen.has(e.name)) continue;
       seen.add(e.name);
