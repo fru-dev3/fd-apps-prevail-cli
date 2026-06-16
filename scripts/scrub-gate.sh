@@ -34,6 +34,21 @@ if [ -n "$leaked" ]; then
   echo "$leaked" | sed 's/^/   /'
   fail=1
 fi
+
+# Auto-generated runtime LEDGERS must never ship — they accumulate the user's
+# REAL activity (chat intents/questions, decisions, Omega learnings, loop runs,
+# usage). The bundled demo is curated synthetic content only.
+ledgers=$(find "$TARGET" \( \
+  -name "omega.md" -o -name "_intents.jsonl" -o -name "_decisions.jsonl" \
+  -o -name "_journal.md" -o -name "_loops_runtime.json" -o -name "_surface.json" \
+  -o -name "_skillgen.json" -o -name "_taskgen.json" -o -name "usage.ndjson" \
+  \) 2>/dev/null || true)
+if [ -n "$ledgers" ]; then
+  echo "❌ scrub-gate: runtime ledger(s) present in $TARGET — real-activity byproducts must not ship:"
+  echo "$ledgers" | sed "s|$TARGET/|   |"
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo ""
   echo "Deploy blocked: scrub real/personal data from the demo vault before releasing."
