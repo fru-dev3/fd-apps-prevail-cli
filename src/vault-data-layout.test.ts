@@ -102,17 +102,20 @@ describe("v4 data-layout migrator", () => {
     expect(migratableEntries(vault)).not.toContain("data");
   });
 
-  test("archiveLegacyRoot only moves entries verified present under data/", () => {
+  test("archiveLegacyRoot sweeps only v4-aware containers; defers loose files", () => {
     migrateToDataLayout(vault);
-    const { archiveDir, archived } = archiveLegacyRoot(vault, "20260616-000000");
+    const { archiveDir, archived, deferred } = archiveLegacyRoot(vault, "20260616-000000");
+    // domains/ + apps/ readers are v4-aware → safe to archive.
     expect(archived).toContain("domains");
-    expect(archived).toContain("_decisions.jsonl");
-    // Root is now clean of the loose file; the copy under data/ remains.
-    expect(existsSync(join(vault, "_decisions.jsonl"))).toBe(false);
-    expect(existsSync(join(vault, "data", "_decisions.jsonl"))).toBe(true);
-    // Nothing is deleted — it's moved into the archive.
-    expect(existsSync(join(archiveDir, "_decisions.jsonl"))).toBe(true);
-    // The vault still resolves entirely from data/.
+    expect(archived).toContain("apps");
+    expect(existsSync(join(vault, "domains"))).toBe(false);
+    expect(existsSync(join(archiveDir, "domains"))).toBe(true); // moved, not deleted
+    expect(existsSync(join(vault, "data", "domains", "wealth", "_state.md"))).toBe(true);
+    // The General-bucket loose files are still read from the root → must NOT be
+    // archived yet (would orphan them); they're reported as deferred instead.
+    expect(deferred).toContain("_decisions.jsonl");
+    expect(existsSync(join(vault, "_decisions.jsonl"))).toBe(true);
+    // The vault still resolves entirely (domains now under data/).
     expect(scanVault(vault).map((d) => d.name)).toContain("wealth");
   });
 

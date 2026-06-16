@@ -2369,8 +2369,9 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         const r = archiveLegacyRoot(vault, stamp);
         if (asJson) process.stdout.write(JSON.stringify(r) + "\n");
         else {
-          console.log(`archived ${r.archived.length} root entries to ${r.archiveDir}`);
-          console.log(`root is now clean; the vault reads from ${vault}/data. Nothing was deleted.`);
+          console.log(`archived ${r.archived.length} container(s) to ${r.archiveDir}: ${r.archived.join(", ") || "(none)"}`);
+          if (r.deferred.length) console.log(`deferred ${r.deferred.length} entr(ies) (readers still point at the root, kept in place): ${r.deferred.join(", ")}`);
+          console.log(`nothing was deleted. domains/ + apps/ now read from ${vault}/data.`);
         }
       }
     } catch (e) {

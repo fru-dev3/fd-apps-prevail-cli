@@ -23,7 +23,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { DATA_DIR, validateVaultPath } from "./path-safety.ts";
+import { APPS_DIR, DATA_DIR, DOMAINS_DIR, validateVaultPath } from "./path-safety.ts";
 
 // Root entries that are NOT vault content and must never be swept into data/:
 // the data container itself, VCS / tooling dirs, and node_modules. Everything
@@ -122,15 +122,24 @@ export function migrateToDataLayout(vaultPath: string): DataMigrateResult {
   };
 }
 
+// Only the containers whose READERS are already v4-aware (path-safety.ts:
+// resolveDomainDir / appsContainer prefer <vault>/data/...). Archiving anything
+// else would orphan it: the General-bucket loose files + dirs (_decisions.jsonl,
+// _threads/, benchmark/, usage.ndjson, profile.md, …) are still read from the
+// vault ROOT by both the engine and the desktop, so they must stay there until
+// that reader switch ships + is live-verified across all three processes. Once
+// it does, add those names here.
+export const V4_ARCHIVABLE = new Set([DOMAINS_DIR, APPS_DIR]);
+
 /**
- * AFTER a verified migration, move the now-duplicated originals out of the root
- * into a timestamped archive folder (never delete). Only entries that exist
- * under data/ are archived, so a file is never removed from the root unless a
- * copy is confirmed present. `stamp` is injected (the engine has no ambient
- * clock in some contexts) so the archive name is deterministic/testable.
- * Returns the archive dir and the entries moved.
+ * AFTER a verified migration, move the now-duplicated originals of the v4-aware
+ * containers out of the root into a timestamped archive folder (never delete).
+ * An entry is archived ONLY when (a) its readers resolve under data/ and (b) a
+ * full copy is confirmed present there — so a file is never removed from the
+ * root unless it's both reachable elsewhere AND verified. `stamp` is injected so
+ * the archive name is deterministic/testable. Returns the archive dir + entries.
  */
-export function archiveLegacyRoot(vaultPath: string, stamp: string): { archiveDir: string; archived: string[] } {
+export function archiveLegacyRoot(vaultPath: string, stamp: string): { archiveDir: string; archived: string[]; deferred: string[] } {
   if (!isDataLayout(vaultPath)) {
     throw new Error("refusing to archive: no data/ layout exists yet — migrate first");
   }
@@ -138,13 +147,15 @@ export function archiveLegacyRoot(vaultPath: string, stamp: string): { archiveDi
   const archiveDir = join(vaultPath, `_pre-data-${stamp}`);
   mkdirSync(archiveDir, { recursive: true });
   const archived: string[] = [];
+  const deferred: string[] = [];
   for (const name of migratableEntries(vaultPath)) {
+    if (!V4_ARCHIVABLE.has(name)) { deferred.push(name); continue; }
     const root = join(vaultPath, name);
     const mirrored = join(dataDir, name);
-    // Only archive a root entry once its copy is verified present under data/.
-    if (countFiles(mirrored) < countFiles(root)) continue;
+    // Only archive once the copy is verified complete under data/.
+    if (countFiles(mirrored) < countFiles(root)) { deferred.push(name); continue; }
     renameSync(root, join(archiveDir, name));
     archived.push(name);
   }
-  return { archiveDir: resolve(archiveDir), archived };
+  return { archiveDir: resolve(archiveDir), archived, deferred };
 }

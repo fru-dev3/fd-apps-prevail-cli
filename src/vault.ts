@@ -1,6 +1,6 @@
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { APPS_DIR, DOMAINS_DIR, dataRoot, resolveDomainDir } from "./path-safety.ts";
+import { APPS_DIR, DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -936,7 +936,8 @@ function readConnector(root: string): ConnectorState {
 // Vault apps live at <vault>/apps/<id>/ and mirror the domain shape exactly:
 // state.md, open-loops.md, PROMPTS.md, QUICKSTART.md, skills/<skill-id>/SKILL.md.
 function scanVaultApps(vaultPath: string): AppSkill[] {
-  const appsRoot = join(vaultPath, "apps");
+  // v4-aware: prefer <vault>/data/apps once migrated, else legacy <vault>/apps.
+  const appsRoot = appsContainer(vaultPath);
   if (!existsSync(appsRoot)) return [];
   const out: AppSkill[] = [];
   let entries: import("node:fs").Dirent[] = [];
