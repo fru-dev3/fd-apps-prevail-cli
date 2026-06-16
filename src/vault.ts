@@ -1193,6 +1193,11 @@ export function scaffoldCommunityApp(opts: {
   integration: "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
   domains: string[];
   connection?: string;
+  // Autonomous connect: a verifiable test the engine runs to confirm the
+  // connection actually works (an HTTP probe or a CLI command). Written into the
+  // manifest so probeConnector + the sync daemon can re-verify on a schedule.
+  authCheck?: Record<string, unknown> | null;
+  refreshEvery?: string | null;
 }): { ok: boolean; path?: string; error?: string } {
   const id = opts.id.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) {
@@ -1210,15 +1215,18 @@ export function scaffoldCommunityApp(opts: {
   const domains = (opts.domains ?? []).filter(Boolean);
   try {
     mkdirSync(join(root, "skills"), { recursive: true });
-    const manifest = {
+    const manifest: Record<string, unknown> = {
       id,
       name: opts.title,
       description: `${opts.title} connector (scaffolded from the catalog).`,
       domains,
       integration: integ,
       connection: opts.connection ?? `Connect ${opts.title}, then this app syncs into ${domains.join(", ") || "its domains"}.`,
-      // No auth_check / refresh yet: the user wires those when they connect.
     };
+    // Autonomous connect: the research agent supplies a verifiable auth_check +
+    // refresh cadence so the connection can be tested immediately and re-synced.
+    if (opts.authCheck && Object.keys(opts.authCheck).length > 0) manifest.auth_check = opts.authCheck;
+    if (opts.refreshEvery) manifest.refresh = { every: opts.refreshEvery };
     writeFileSync(join(root, "manifest.json"), JSON.stringify(manifest, null, 2));
     writeFileSync(join(root, "SKILL.md"), `# ${opts.title}\n\n${manifest.connection}\n`);
     writeFileSync(join(root, "connection.md"), `# Connecting ${opts.title}\n\nIntegration: ${integ}\nDomains: ${domains.join(", ") || "(none yet)"}\n\nAdd an auth_check + refresh block to manifest.json and a skill under skills/ to enable syncing.\n`);

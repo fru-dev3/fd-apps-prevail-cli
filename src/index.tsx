@@ -1965,8 +1965,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
       "",
       `Determine the BEST available way to connect this app RIGHT NOW. Prefer headless, in this order: an MCP server > an official API/SDK or an already-installed CLI (e.g. gcloud, gh) > the Composio gateway > browser automation (a one-time login is acceptable). Use web search to check what actually exists today for this specific app.`,
       "",
+      `Also provide an auth_check: a CONCRETE test Prevail can run to VERIFY the connection works, so the user doesn't have to. For an installed CLI use {"kind":"command","command":"gh","args":["auth","status"]} (exits 0 iff authed). For an HTTP API use {"kind":"http","url":"<a lightweight authed GET endpoint>","auth_header_env":"PREVAIL_<APP>_KEY","expect_status":200}. If nothing can be tested without a secret the user hasn't provided yet, omit it (kind "none").`,
+      "",
       `Return ONLY a JSON object (no prose, no fences):`,
-      `{"app_id":"kebab-case-id","title":"display name","integration":"mcp|api|cli|composio|browser","why":"one line: why this is the best method now","auth_step":{"kind":"none|oauth-cli|api-key|browser-login|manual","instruction":"the ONE thing the user must do to authorize, or empty if none"},"schedule":{"every":"1d"},"domains":["which of the user's domains this should feed"],"data":"one line: what it will pull in"}`,
+      `{"app_id":"kebab-case-id","title":"display name","integration":"mcp|api|cli|composio|browser","why":"one line: why this is the best method now","auth_step":{"kind":"none|oauth-cli|api-key|browser-login|manual","instruction":"the ONE thing the user must do to authorize, or empty if none"},"auth_check":{"kind":"command|http|none","command":"","args":[],"url":"","auth_header_env":"","expect_status":200},"schedule":{"every":"1d"},"domains":["which of the user's domains this should feed"],"data":"one line: what it will pull in"}`,
     ].join("\n");
     const out = await runChatTurn({ prompt, cwd: vaultArg, cli, model, isFirst: true, bare: true, act: true });
     const s = out.indexOf("{"), e = out.lastIndexOf("}");
@@ -1984,8 +1986,30 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     const integ = (["api", "oauth", "browser", "mcp", "cli", "manual"].includes(plan.integration as string) ? plan.integration : "manual") as "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
     const planDomains = Array.isArray(plan.domains) ? (plan.domains as string[]).filter((d) => domainNames.includes(d)) : [];
-    const scaffold = scaffoldCommunityApp({ id: plan.app_id as string, title: (plan.title as string) || name, integration: integ, domains: planDomains });
-    process.stdout.write(`${JSON.stringify({ ok: scaffold.ok, plan, path: scaffold.path, error: scaffold.error })}\n`);
+    const authCheck = (plan.auth_check && typeof plan.auth_check === "object" && (plan.auth_check as Record<string, unknown>).kind && (plan.auth_check as Record<string, unknown>).kind !== "none")
+      ? (plan.auth_check as Record<string, unknown>) : null;
+    const refreshEvery = (plan.schedule && typeof plan.schedule === "object") ? ((plan.schedule as Record<string, unknown>).every as string | undefined) ?? null : null;
+    const scaffold = scaffoldCommunityApp({ id: plan.app_id as string, title: (plan.title as string) || name, integration: integ, domains: planDomains, authCheck, refreshEvery });
+    // Autonomous verify: if no user action is required (auth_step.kind === "none")
+    // and we have a testable auth_check, run it NOW and report proof — the agent
+    // confirms success instead of telling the user to. When a secret IS required,
+    // we return the single auth step; the desktop re-runs this check after it.
+    let verified: boolean | null = null;
+    let proof: string | null = null;
+    const authStepKind = (plan.auth_step && typeof plan.auth_step === "object") ? (plan.auth_step as Record<string, unknown>).kind : "none";
+    if (scaffold.ok && authCheck && (authStepKind === "none" || !authStepKind)) {
+      try {
+        const { probeConnector } = await import("./connector-probe.ts");
+        const { scanApps } = await import("./vault.ts");
+        const fresh = scanApps(vaultArg).find((a) => a.id === (plan.app_id as string));
+        if (fresh) {
+          const r = await probeConnector(fresh, authCheck as unknown as import("./connector-probe.ts").AuthCheckSpec);
+          verified = r.ok;
+          proof = r.ok ? (r.message || "connection test passed") : (r.fixHint || r.message || `test failed (${r.status})`);
+        }
+      } catch (e) { verified = false; proof = `could not run the test: ${e}`; }
+    }
+    process.stdout.write(`${JSON.stringify({ ok: scaffold.ok, plan, path: scaffold.path, error: scaffold.error, verified, proof })}\n`);
     process.exit(0);
   }
   if (sub === "add") {
