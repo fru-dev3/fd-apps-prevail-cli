@@ -1,6 +1,6 @@
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { APPS_DIR, DOMAINS_DIR, resolveDomainDir } from "./path-safety.ts";
+import { APPS_DIR, DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -41,6 +41,7 @@ export interface ManifestSummary {
 }
 
 const NON_DOMAIN_DIRS = new Set([
+  "data",    // v4 container (its domains/ + apps/ are scanned separately, not it)
   "domains", // v3 container (its children are scanned separately, not it)
   "apps",    // app manifests live here, never a domain
   "complete",
@@ -195,8 +196,12 @@ export function scanVault(vaultPath: string): Domain[] {
   // "..", leading-dot hidden dirs, >200 chars) still applies to every candidate.
   const seen = new Set<string>();
   const candidates: { name: string; dir: string; parent: string }[] = [];
-  const domainsRoot = join(vaultPath, DOMAINS_DIR);
-  if (existsSync(domainsRoot)) {
+  // Scan the v4 (<vault>/data/domains) container first, then the v3
+  // (<vault>/domains) container; the newer layout wins on a name clash. When no
+  // data/ dir exists dataRoot() === vaultPath, so these two collapse to one scan.
+  const domainsRoots = [join(dataRoot(vaultPath), DOMAINS_DIR), join(vaultPath, DOMAINS_DIR)];
+  for (const domainsRoot of domainsRoots) {
+    if (!existsSync(domainsRoot)) continue;
     for (const e of readdirSync(domainsRoot, { withFileTypes: true })) {
       if (!e.isDirectory() || !isSafeEntryName(e.name) || seen.has(e.name)) continue;
       seen.add(e.name);
@@ -931,7 +936,8 @@ function readConnector(root: string): ConnectorState {
 // Vault apps live at <vault>/apps/<id>/ and mirror the domain shape exactly:
 // state.md, open-loops.md, PROMPTS.md, QUICKSTART.md, skills/<skill-id>/SKILL.md.
 function scanVaultApps(vaultPath: string): AppSkill[] {
-  const appsRoot = join(vaultPath, "apps");
+  // v4-aware: prefer <vault>/data/apps once migrated, else legacy <vault>/apps.
+  const appsRoot = appsContainer(vaultPath);
   if (!existsSync(appsRoot)) return [];
   const out: AppSkill[] = [];
   let entries: import("node:fs").Dirent[] = [];
@@ -1252,6 +1258,29 @@ export function setCommunityAppDomains(
     (raw as Record<string, unknown>).domains = clean;
     writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
     return { ok: true, path: app.manifestPath, domains: clean };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
+  }
+}
+
+// A2 (Monday feedback): change how a connected app connects (MCP / API / OAuth /
+// browser / manual), editing the manifest's `integration` in place.
+export function setCommunityAppIntegration(
+  id: string,
+  integration: string,
+): { ok: boolean; path?: string; integration?: string; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const v = (integration ?? "").trim().toLowerCase();
+  if (!VALID_INTEGRATIONS.has(v)) return { ok: false, error: `invalid integration "${integration}" (api | oauth | browser | mcp | manual)` };
+  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    raw.integration = v;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, integration: v };
   } catch (e) {
     return { ok: false, error: `update failed: ${e}` };
   }

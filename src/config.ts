@@ -10,7 +10,12 @@ import type { LensSelection } from "./lens.ts";
 // config layer can't drift. Re-exported here so callers that read
 // councilClis / councilModels / councilChair from this module don't
 // need to import from two places.
-export type CliKind = "claude" | "codex" | "antigravity" | "ollama" | "openrouter";
+// G1 (Monday feedback): direct single-vendor providers — the user brings their
+// own API key per vendor and it works, alongside the CLIs and the OpenRouter
+// gateway. All are OpenAI-compatible HTTP endpoints except Anthropic (native
+// /v1/messages), which has its own handler.
+export type DirectProviderKind = "anthropic" | "openai" | "xai" | "kimi" | "deepseek" | "google";
+export type CliKind = "claude" | "codex" | "antigravity" | "ollama" | "openrouter" | DirectProviderKind;
 
 export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "antigravity", "ollama", "openrouter"];
 

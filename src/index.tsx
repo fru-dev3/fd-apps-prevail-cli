@@ -4,11 +4,11 @@
 // the top level, so EVERY headless command (score, recommendations, connectors,
 // daemon, chat-json…) paid ~400ms loading the whole terminal UI it never renders.
 // They're now dynamically imported inside runWizard()/launchCockpit() only.
-import { resolve, join, basename } from "node:path";
+import { resolve, join, basename, dirname } from "node:path";
 import { resolveDomainDir } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { bundledDemoVaultPath, readConfig, } from "./config.ts";
+import { bundledDemoVaultPath, readConfig, writeConfig, } from "./config.ts";
 
 interface Args {
   vaultPath: string | null;
@@ -2053,10 +2053,20 @@ async function connectorsCommand(args: string[]): Promise<void> {
       else { console.error(r.error); process.exit(1); }
       return;
     }
+    // A2: prevail connectors set <id> integration <api|oauth|browser|mcp|manual>
+    if (id && field === "integration") {
+      const { setCommunityAppIntegration } = await import("./vault.ts");
+      const r = setCommunityAppIntegration(id, value ?? "");
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(`integration for "${id}" set to ${r.integration}`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
     if (!id || field !== "domains") {
       console.error("usage: prevail connectors set <id> domains <a,b,c>");
       console.error("       prevail connectors set <id> enabled <true|false>");
       console.error("       prevail connectors set <id> refresh <hourly|Nh|daily|weekly|off> [at HH:MM] [on day]");
+      console.error("       prevail connectors set <id> integration <api|oauth|browser|mcp|manual>");
       process.exit(1);
     }
     const domains = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -2323,6 +2333,68 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     } catch (e) {
       if (asJson) process.stdout.write(JSON.stringify({ error: String(e) }) + "\n");
       else console.error(`vault embed failed: ${e}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  // `vault migrate-data` (W4) — relocate the vault's content under a single
+  // `<vault>/data/` container so the root is no longer littered with loose files
+  // and apps+domains sit together. Non-destructive: copies + verifies, leaves
+  // the originals. `vault archive-data --force` is the SEPARATE, opt-in step that
+  // moves the now-duplicated originals into a timestamped `_pre-data-*` archive
+  // (never deletes) once a verified copy exists under data/.
+  if (sub === "migrate-data" || sub === "archive-data") {
+    const { migrateToDataLayout, archiveLegacyRoot, isDataLayout, isAlreadyDataRoot } = await import("./vault-data-layout.ts");
+    const asJson = args.includes("--json");
+    try {
+      if (sub === "migrate-data") {
+        // Idempotent: if the configured vault IS already a migrated data root
+        // (repointed on a prior run), do nothing — never nest data/data/.
+        if (isAlreadyDataRoot(vault)) {
+          const msg = { alreadyMigrated: true, dataDir: vault, ok: true };
+          if (asJson) process.stdout.write(JSON.stringify(msg) + "\n");
+          else console.log(`vault is already the data root: ${vault}`);
+          return;
+        }
+        const r = migrateToDataLayout(vault);
+        // On a VERIFIED copy, repoint the configured vault to <vault>/data so
+        // every surface (CLI, TUI, desktop) operates under data/ transparently —
+        // the same repoint pattern `vault embed` uses. The loose root files are
+        // now read from data/; archive-data cleans the orphaned originals.
+        if (r.ok) {
+          writeConfig({ ...(cfg ?? {}), vaultPath: r.dataDir } as never);
+        }
+        if (asJson) process.stdout.write(JSON.stringify({ ...r, repointed: r.ok }) + "\n");
+        else {
+          console.log(`copied ${r.copiedFiles}/${r.sourceFiles} files into ${r.dataDir}${r.ok ? "" : "  (verify mismatch — originals left intact!)"}`);
+          console.log(`moved entries: ${r.movedEntries.join(", ")}`);
+          if (r.ok) console.log(`vault path repointed to ${r.dataDir}. The root now holds just data/ (+ originals until you run 'vault archive-data --force').`);
+        }
+        if (!r.ok) process.exit(1);
+      } else {
+        if (!args.includes("--force")) {
+          console.error("vault archive-data moves the loose root originals into a backup folder.\nRe-run with --force once you've confirmed the app reads correctly from data/.");
+          process.exit(1);
+        }
+        // After migrate-data repoints config, `vault` IS <root>/data. The
+        // originals to archive live one level up, at the true root.
+        const root = isAlreadyDataRoot(vault) ? dirname(vault) : vault;
+        if (!isDataLayout(root)) { console.error("no data/ layout yet — run 'vault migrate-data' first."); process.exit(1); }
+        // Deterministic stamp from the wall clock (UTC, compact).
+        const d = new Date();
+        const stamp = d.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+        const r = archiveLegacyRoot(root, stamp);
+        if (asJson) process.stdout.write(JSON.stringify(r) + "\n");
+        else {
+          console.log(`archived ${r.archived.length} entr(ies) to ${r.archiveDir}: ${r.archived.join(", ") || "(none)"}`);
+          if (r.deferred.length) console.log(`deferred ${r.deferred.length} (no verified copy under data/ yet, kept in place): ${r.deferred.join(", ")}`);
+          console.log(`nothing was deleted. The vault now reads entirely from ${root}/data.`);
+        }
+      }
+    } catch (e) {
+      if (asJson) process.stdout.write(JSON.stringify({ error: String(e) }) + "\n");
+      else console.error(`vault ${sub} failed: ${e}`);
       process.exit(1);
     }
     return;

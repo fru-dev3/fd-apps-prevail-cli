@@ -7,4 +7,11 @@ export const COUNCIL_CLI_COLORS: Record<CliKind, string> = {
   antigravity: theme.ok, // green — Google panelist (formerly gemini)
   ollama: theme.aiAccent, // electric cyan — the "local AI" panelist
   openrouter: theme.gold, // gateway — reuse gold (routes to many vendors)
+  // Direct providers (G1) — single-vendor keys.
+  anthropic: theme.gold, // Claude family
+  openai: theme.bubbleAssistant,
+  xai: theme.bubbleAssistant,
+  kimi: theme.ok,
+  deepseek: theme.aiAccent,
+  google: theme.ok,
 };
