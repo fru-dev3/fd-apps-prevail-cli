@@ -2053,10 +2053,20 @@ async function connectorsCommand(args: string[]): Promise<void> {
       else { console.error(r.error); process.exit(1); }
       return;
     }
+    // A2: prevail connectors set <id> integration <api|oauth|browser|mcp|manual>
+    if (id && field === "integration") {
+      const { setCommunityAppIntegration } = await import("./vault.ts");
+      const r = setCommunityAppIntegration(id, value ?? "");
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(`integration for "${id}" set to ${r.integration}`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
     if (!id || field !== "domains") {
       console.error("usage: prevail connectors set <id> domains <a,b,c>");
       console.error("       prevail connectors set <id> enabled <true|false>");
       console.error("       prevail connectors set <id> refresh <hourly|Nh|daily|weekly|off> [at HH:MM] [on day]");
+      console.error("       prevail connectors set <id> integration <api|oauth|browser|mcp|manual>");
       process.exit(1);
     }
     const domains = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);

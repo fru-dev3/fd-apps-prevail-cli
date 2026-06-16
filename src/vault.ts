@@ -1257,6 +1257,29 @@ export function setCommunityAppDomains(
   }
 }
 
+// A2 (Monday feedback): change how a connected app connects (MCP / API / OAuth /
+// browser / manual), editing the manifest's `integration` in place.
+export function setCommunityAppIntegration(
+  id: string,
+  integration: string,
+): { ok: boolean; path?: string; integration?: string; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const v = (integration ?? "").trim().toLowerCase();
+  if (!VALID_INTEGRATIONS.has(v)) return { ok: false, error: `invalid integration "${integration}" (api | oauth | browser | mcp | manual)` };
+  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    raw.integration = v;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, integration: v };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
+  }
+}
+
 // APP-4: set (or clear) an app's autonomous-sync schedule. `every` is the
 // cadence the engine understands (hourly | <2-23>h | daily | weekly), with an
 // optional HH:MM `at` and weekday `on`. "" / "off" / "none" clears the schedule.
