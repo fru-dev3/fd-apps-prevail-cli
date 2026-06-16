@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Scrub gate (no personal data in demo vault)
+        run: bash scripts/scrub-gate.sh
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
