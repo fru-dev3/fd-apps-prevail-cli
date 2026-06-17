@@ -1471,19 +1471,25 @@ export function buildCliArgs({
   manual: string | null;
 }): string[] {
   const m = model.trim();
+  // A prompt that begins with "-" (e.g. an injected context block that leads with
+  // "--- Label ---", or a pasted markdown list) is otherwise parsed by the CLI's
+  // arg parser as an unknown OPTION ("error: unknown option '--- Profile ...'").
+  // A single leading space makes the token no longer look like a flag and the
+  // model ignores it. Cheap, universal guard for every CLI below.
+  const safe = /^\s*-/.test(prompt) ? ` ${prompt}` : prompt;
   if (cli === "claude") {
     const args: string[] = [];
     if (m) args.push("--model", m);
     if (manual && isFirst) args.push("--append-system-prompt", manual);
-    if (isFirst) args.push("-p", prompt);
-    else args.push("--continue", "-p", prompt);
+    if (isFirst) args.push("-p", safe);
+    else args.push("--continue", "-p", safe);
     return args;
   }
   // codex and gemini have no system-prompt channel; manual is intentionally
   // dropped (it would otherwise be echoed back into the response bubble).
   if (cli === "codex") {
     const base = ["exec", "--skip-git-repo-check"];
-    return m ? [...base, "-m", m, prompt] : [...base, prompt];
+    return m ? [...base, "-m", m, safe] : [...base, safe];
   }
   if (cli === "antigravity") {
     // Probe path can't easily detect which binary is in use here (this
