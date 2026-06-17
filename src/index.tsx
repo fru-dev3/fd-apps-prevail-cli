@@ -202,6 +202,12 @@ function parseArgs(argv: string[]): Args {
         // MCP-1: --network opts INTO per-request token auth (for any non-stdio /
         // network-exposed transport). Default stdio relies on parent verification.
         else if (f === "--network" || f === "--require-token") mcpNetwork = true;
+        // BUGFIX (B2-11): the MCP launch config passes `mcp --vault <path>`, but
+        // this loop used to ignore --vault and then break out of arg parsing, so
+        // the server started on the WRONG vault and failed to connect. Parse it
+        // here too. (Handles a path with spaces fine - it's a single argv token.)
+        else if (f === "--vault" || f === "-d") { if (argv[j + 1]) { vaultPath = resolve(process.cwd(), argv[j + 1]); j++; } }
+        else if (f.startsWith("--vault=")) { vaultPath = resolve(process.cwd(), f.slice("--vault=".length)); }
       }
       break;
     } else if (a === "bench") {
