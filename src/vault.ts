@@ -968,6 +968,23 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
       } catch {}
     }
     const conn = readConnector(appPath);
+    // A scaffolded connector writes manifest.json with auth_check + integration +
+    // refresh. Surface auth_check onto the AppSkill so the connection can be
+    // RE-VERIFIED later (sync daemon, relaunch, the desktop re-test-after-auth
+    // flow) — not only at connect time. Without this, autonomous re-probing of a
+    // vault app silently no-ops because the spec never made it back off disk.
+    let appAuthCheck: unknown;
+    let appIntegration: string | undefined;
+    try {
+      const manifestPath = join(appPath, "manifest.json");
+      if (existsSync(manifestPath)) {
+        const m = JSON.parse(vreadFile(manifestPath)) as Record<string, unknown>;
+        if (m && typeof m === "object") {
+          if (typeof m.auth_check === "object" && m.auth_check !== null) appAuthCheck = m.auth_check;
+          if (typeof m.integration === "string") appIntegration = m.integration;
+        }
+      }
+    } catch { /* a malformed manifest just leaves auth_check undefined */ }
     out.push({
       id: entry.name,
       title: extractAppTitle(appPath, entry.name),
@@ -979,10 +996,10 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
       stateMtime,
       skills: scanAppSkills(appPath),
       community: false,
-      // Vault apps don't yet ship integration metadata in their state.md
-      // frontmatter — leave undefined; the detail view shows "manual"
-      // when missing. Future: parse from state.md frontmatter.
-      integration: undefined,
+      // Integration comes from manifest.json when a scaffolded connector wrote
+      // one; otherwise undefined and the detail view shows "manual".
+      integration: appIntegration as AppSkill["integration"],
+      authCheck: appAuthCheck,
       connectionNotes: conn.notes,
       status: conn.status,
       lastSuccessTs: conn.lastSuccessTs,
