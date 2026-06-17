@@ -56,6 +56,50 @@ describe("probeConnector — env-keys kind", () => {
   });
 });
 
+// The `command` kind is the autonomous-connect verify path: after scaffolding a
+// connector, Prevail RUNS a check command and reads the exit code to confirm the
+// connection actually works — no user babysitting. These exercise that mechanism
+// with local commands (true/false/printf), so no real third-party creds needed.
+describe("probeConnector — command kind (autonomous verify)", () => {
+  test("command exits 0 → connected", async () => {
+    const r = await probeConnector(fakeApp("cmdtest"), { kind: "command", command: "true" });
+    expect(r.status).toBe("connected");
+    expect(r.ok).toBe(true);
+  });
+
+  test("command exits non-zero → error (connection not verified)", async () => {
+    const r = await probeConnector(fakeApp("cmdtest"), { kind: "command", command: "false" });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("error");
+  });
+
+  test("expect_stdout match → connected; mismatch → error", async () => {
+    const ok = await probeConnector(fakeApp("cmdtest"), {
+      kind: "command", command: "printf", args: ["authenticated"], expect_stdout: "authenticated",
+    });
+    expect(ok.ok).toBe(true);
+    const bad = await probeConnector(fakeApp("cmdtest"), {
+      kind: "command", command: "printf", args: ["nope"], expect_stdout: "authenticated",
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.status).toBe("error");
+  });
+
+  test("missing binary → error with a fix hint, never throws", async () => {
+    const r = await probeConnector(fakeApp("cmdtest"), {
+      kind: "command", command: "prevail-no-such-binary-xyz",
+    });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("error");
+    expect(r.fixHint).toBeDefined();
+  });
+
+  test("empty command → not-configured", async () => {
+    const r = await probeConnector(fakeApp("cmdtest"), { kind: "command", command: "" });
+    expect(r.status).toBe("not-configured");
+  });
+});
+
 describe("probeConnector — file-exists kind", () => {
   test("all files present → connected", async () => {
     const dir = mkdtempSync(join(tmpdir(), "probe-"));

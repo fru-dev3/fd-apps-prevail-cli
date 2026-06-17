@@ -217,6 +217,20 @@ async function probeCommand(spec: AuthCheckSpec, ts: number): Promise<ProbeResul
       } catch {}
       resolve({ ok: false, status: "error", message: `${bin} timed out after ${timeoutMs}ms`, ts });
     }, timeoutMs);
+    // A bad binary (ENOENT) surfaces asynchronously as an 'error' event, NOT a
+    // throw from spawn(). Without this handler the probe would crash the caller
+    // instead of reporting a clean, fixable result — the autonomous-connect path
+    // must degrade gracefully when the check command isn't installed.
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({
+        ok: false,
+        status: "error",
+        message: `cannot run ${bin}: ${(err as Error).message}`,
+        fixHint: `is ${bin} installed and on your PATH?`,
+        ts,
+      });
+    });
     child.stdout.on("data", (b) => (stdout += b.toString()));
     child.stderr.on("data", (b) => (stderr += b.toString()));
     child.on("close", (code) => {
