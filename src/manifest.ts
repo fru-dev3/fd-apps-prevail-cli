@@ -473,7 +473,9 @@ function defaultManifest(vaultPath: string, domain: string): DomainManifest {
     context_score: null,
     goals: [],
     heartbeat: { enabled: false, routines: [] },
-    routing: { keywords: [], channels: [], default: false },
+    // B5: seed the domain name as an implicit routing keyword so a freshly
+    // created domain matches inbound channel messages without manual setup.
+    routing: { keywords: [domain.toLowerCase()], channels: [], default: false },
     sandbox: { mode: "open" },
     privacy: { localOnly: false },
     archived: false,
