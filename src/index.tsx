@@ -1645,7 +1645,23 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
           if (logCtx.length > 2500) logCtx = logCtx.slice(0, 2500) + "\n…(truncated)";
         }
       } catch { /* no logs */ }
+      // K6: ground drafts in the user's cross-cutting truth — their profile (who
+      // they are, real numbers/constraints) and ideal-state constitution (how
+      // THEY weigh trade-offs). Without these the model drafts generic textbook
+      // questions; with them it captures this person's specific nuance.
+      const readVaultRoot = (file: string, max: number): string => {
+        try {
+          const p = join(vault, file);
+          if (!exists(p)) return "";
+          const t = readFile(p, "utf8");
+          return t.length > max ? t.slice(0, max) + "\n…(truncated)" : t;
+        } catch { return ""; }
+      };
+      const profileCtx = readVaultRoot("profile.md", 2500) || readVaultRoot("user.md", 2500);
+      const idealCtx = readVaultRoot("ideal-state.md", 1500);
       const sections = ([
+        ["WHO THEY ARE — user profile", profileCtx],
+        ["HOW THEY DECIDE — ideal-state constitution", idealCtx],
         ["_state.md", readCtx("_state.md", 3000) || readCtx("state.md", 3000)],
         ["goals.md", readCtx("goals.md", 1500)],
         ["config.md", readCtx("config.md", 800)],
@@ -1665,6 +1681,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         `Based on the context below, generate exactly ${count} high-quality benchmark question${count === 1 ? "" : "s"}.`,
         "",
         "Each question must be something this person would actually ask their AI council — grounded in their real situation, open-ended enough to reveal model quality, and answerable with a clear recommendation.",
+        "",
+        "Make every question SPECIFIC to THIS person: reference their real numbers, names, accounts, deadlines, and constraints from the context, and the particular way they weigh trade-offs (from their profile and constitution). A good question is one only they would ask, with their details baked in. Reject generic, textbook questions anyone could ask — the entire value is in their nuance. Favor cross-domain tension where it exists (e.g. a choice that pits one domain's goal against another's).",
         "",
         "REQUIRED OUTPUT: a single JSON object, no preamble, no markdown fences, no explanation.",
         `Shape: {"questions":[{"prompt":"...","expected_decision":"...","expected_verdict_keywords":["kw1","kw2","kw3"]},...]}`,
