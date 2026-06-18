@@ -923,7 +923,15 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   const domainIdeal = findDomainIdeal(cwd, vaultPath);
   const domainIdealPreamble = domainIdeal ? buildDomainIdealPreamble(domainIdeal) : null;
   const promptDomainIdeal = domainIdealPreamble && cli.kind !== "claude" ? domainIdealPreamble : "";
-  const framedPrompt = promptConstitution + promptDomainIdeal + promptOmega + buildFrameworkPreamble(framework) + prompt;
+  let framedPrompt = promptConstitution + promptDomainIdeal + promptOmega + buildFrameworkPreamble(framework) + prompt;
+  // A prompt that begins with '-' makes the runtime CLI's option parser treat the
+  // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
+  // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
+  // ... ---", "--- PRIOR TURNS ---") and markdown frontmatter ('---') routinely
+  // start with dashes, so this is hit on ordinary turns. A single leading space
+  // turns it back into a plain value/positional and is invisible to the model.
+  // (buildCliArgs already guarded this; the live dispatch path was missing it.)
+  if (/^\s*-/.test(framedPrompt)) framedPrompt = " " + framedPrompt;
 
   // Run the dispatch, then (Track E7) commit the estimated spend to the
   // run/day ledgers. recordSpend is a no-op for free local turns and when no
