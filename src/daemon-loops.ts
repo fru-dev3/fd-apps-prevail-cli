@@ -222,6 +222,7 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
     `{"actions":[{"text":"the next step","task":true,"needs_approval":false}],"done":false,"note":"one-line read on progress + why these steps"}`,
     `- "task": true if this is a concrete, trackable step — it will be FILED as a real task in this domain and worked on. false for pure observations/notes.`,
     `- "needs_approval": true if it spends money, contacts someone, is irreversible, or needs a decision/info only the user can give. Those are PROPOSED and wait for the user instead of being done automatically. Be conservative: when unsure, set true.`,
+    `- Write task text in plain punctuation. NEVER use em dashes ("—"); use a hyphen "-", a colon, or two short phrases instead.`,
     loop.type === "closed"
       ? `Set "done" to true only if the loop's condition is clearly satisfied by the current state.`
       : `"done" must be false for open loops.`,
