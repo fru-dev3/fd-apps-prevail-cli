@@ -20,6 +20,7 @@ import { existsSync, mkdirSync } from "node:fs";
 
 import { vappendLine, vreadFile } from "./vault-session.ts";
 import { dirname, join, resolve } from "node:path";
+import { runtimePath } from "./path-safety.ts";
 
 // =============================================================================
 // Pricing — USD per million tokens, approximate public API list prices as a
@@ -117,7 +118,7 @@ export function dayKey(ts: number = Date.now()): string {
 }
 
 export function usageLedgerPath(vaultPath: string): string {
-  return join(resolve(vaultPath), "_meta", "usage.jsonl");
+  return join(runtimePath(resolve(vaultPath), "_meta"), "usage.jsonl");
 }
 
 // What a caller hands in — tokens OR chars, plus the dimensions. Everything

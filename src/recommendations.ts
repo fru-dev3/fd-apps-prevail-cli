@@ -8,6 +8,7 @@
 // testable — no model call. Surfaced in one feed; each rec has a one-click action.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runtimePath } from "./path-safety.ts";
 import { scanVault, scanCommunityApps } from "./vault.ts";
 import { buildPublicResults } from "./canonical-bench.ts";
 import { computeContextScore } from "./score.ts";
@@ -31,7 +32,7 @@ export function buildRecommendations(vaultRoot: string): Recommendation[] {
 
   // 1. DOMAIN — distilled intents referencing a life area with no domain yet.
   try {
-    const raw = readFileSync(join(vaultRoot, "_meta", "intents_distilled.json"), "utf8");
+    const raw = readFileSync(join(runtimePath(vaultRoot, "_meta"), "intents_distilled.json"), "utf8");
     const doc = JSON.parse(raw) as { intents?: Array<{ title?: string; goal?: string; domains?: string[]; status?: string }> };
     const missing = new Map<string, { n: number; ex: string }>();
     for (const it of doc.intents ?? []) {

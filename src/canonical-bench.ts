@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { resolveDomainDir } from "./path-safety.ts";
+import { resolveDomainDir, buildRoot } from "./path-safety.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
@@ -54,7 +54,7 @@ export interface CanonicalQuestion {
 }
 
 export function benchmarkRoot(vaultPath: string): string {
-  return join(vaultPath, "benchmark");
+  return join(buildRoot(vaultPath), "benchmark");
 }
 
 export function attachmentsDir(vaultPath: string): string {

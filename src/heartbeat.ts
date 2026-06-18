@@ -11,7 +11,7 @@ import {
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 
-import { resolveDomainDir } from "./path-safety.ts";
+import { resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { readManifest, type HeartbeatRoutine } from "./manifest.ts";
 import {
   appendHeartbeatRecord,
@@ -340,8 +340,8 @@ export function renderPlist(vaultPath: string, tickMinute = 0): string {
   const programArgs = argv
     .map((a) => `    <string>${escapeXml(a)}</string>`)
     .join("\n");
-  const logOut = join(vaultPath, "_log", "heartbeat.out.log");
-  const logErr = join(vaultPath, "_log", "heartbeat.err.log");
+  const logOut = join(runtimePath(vaultPath, "_log"), "heartbeat.out.log");
+  const logErr = join(runtimePath(vaultPath, "_log"), "heartbeat.err.log");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

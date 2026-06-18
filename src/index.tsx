@@ -2448,6 +2448,49 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  // `vault migrate-build` (B2-12) — tidy the General/root SUPPORTING runtime files
+  // (ledgers, _meta, _threads, benchmark, usage, …) into a single `<vault>/build/`
+  // folder so the root holds just content + build/. Non-destructive: copies +
+  // verifies, leaves the originals; buildRoot()/runtimePath() resolve to build/ the
+  // instant it exists, so no config repoint is needed. `vault archive-build --force`
+  // is the SEPARATE opt-in that moves the duplicated originals into a `_pre-build-*`
+  // backup (never deletes) once a verified copy exists under build/.
+  if (sub === "migrate-build" || sub === "archive-build") {
+    const { migrateToBuildLayout, archiveLegacyBuild } = await import("./vault-data-layout.ts");
+    const asJson = args.includes("--json");
+    try {
+      if (sub === "migrate-build") {
+        const r = migrateToBuildLayout(vault);
+        if (asJson) process.stdout.write(JSON.stringify(r) + "\n");
+        else {
+          console.log(`copied ${r.copiedFiles}/${r.sourceFiles} files into ${r.buildDir}${r.ok ? "" : "  (verify mismatch — originals left intact!)"}`);
+          console.log(`moved entries: ${r.movedEntries.join(", ") || "(none found)"}`);
+          if (r.ok) console.log(`the root now reads runtime files from build/ (+ originals until you run 'vault archive-build --force').`);
+        }
+        if (!r.ok) process.exit(1);
+      } else {
+        if (!args.includes("--force")) {
+          console.error("vault archive-build moves the duplicated root originals into a backup folder.\nRe-run with --force once you've confirmed the app reads correctly from build/.");
+          process.exit(1);
+        }
+        const d = new Date();
+        const stamp = d.toISOString().replace(/[-:T]/g, "").slice(0, 14);
+        const r = archiveLegacyBuild(vault, stamp);
+        if (asJson) process.stdout.write(JSON.stringify(r) + "\n");
+        else {
+          console.log(`archived ${r.archived.length} entr(ies) to ${r.archiveDir}: ${r.archived.join(", ") || "(none)"}`);
+          if (r.deferred.length) console.log(`deferred ${r.deferred.length} (no verified copy under build/ yet, kept in place): ${r.deferred.join(", ")}`);
+          console.log(`nothing was deleted. Runtime files now read from build/.`);
+        }
+      }
+    } catch (e) {
+      if (asJson) process.stdout.write(JSON.stringify({ error: String(e) }) + "\n");
+      else console.error(`vault ${sub} failed: ${e}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // Vault encryption (F4 Phase 1). Passcode is read from STDIN, never argv.
   //   encrypt: create/load keyring, encrypt the vault in place, SELF-VERIFY by
   //            reading it back, and AUTO-ROLLBACK (decrypt) if verification fails

@@ -23,7 +23,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { DATA_DIR, validateVaultPath } from "./path-safety.ts";
+import { BUILD_DIR, DATA_DIR, validateVaultPath } from "./path-safety.ts";
 
 // Root entries that are NOT vault content and must never be swept into data/:
 // the data container itself, VCS / tooling dirs, and node_modules. Everything
@@ -152,6 +152,99 @@ export function migrateToDataLayout(vaultPath: string): DataMigrateResult {
  * place. `stamp` is injected so the archive name is deterministic/testable.
  * `vaultPath` is the TRUE root (the parent that contains data/).
  */
+// ── B2-12: the `build/` layout migrator ──────────────────────────────────────
+// Tidies the General/root bucket's SUPPORTING runtime files into a single
+// `<vaultPath>/build/` folder, so the vault root holds just content (domains/,
+// apps/, _memory.md/_state.md/_skills, profile.md) + build/. Operates on the
+// CONFIGURED vaultPath (post-W4 that's <vault>/data), so build/ lands next to the
+// content the app actually reads — the same path buildRoot()/runtimePath() resolve
+// against. SAME safety contract as the data/ migrator: COPY + verify by file
+// count, NEVER delete (originals stay put; a separate archive step prunes them
+// once the user is confident). Idempotent.
+//
+// Only SUPPORTING files move. CONTENT (_memory.md, _state.md, _skills) and config
+// (profile.md, ideal-state.md, omega.md, AGENTS-operating.md) stay at the root.
+//
+// CRITICAL: this set must match what BOTH processes route to build/ (desktop
+// paths.rs runtime_file/build_root + distill.rs split; cli decisions.runtimeFile +
+// daemon-learn split + runtimePath sites), or a migrated vault DESYNCS (one process
+// reads build/ while the other writes root). It is therefore CONSERVATIVE — only
+// the entries confirmed routed on both sides. DEFERRED until both-process routing
+// is confirmed against a running app: `_threads`, `_journal.md`, `usage.ndjson`,
+// `_log`, `_surface.json` (left at the root; the root is tidier but not bare).
+export const BUILD_SUPPORTING_ENTRIES: readonly string[] = [
+  "_decisions.jsonl",
+  "_intents.jsonl",
+  "_meta",
+  "benchmark",
+];
+
+export interface BuildMigrateResult {
+  buildDir: string;
+  movedEntries: string[];
+  sourceFiles: number;
+  copiedFiles: number;
+  ok: boolean;
+}
+
+/**
+ * Copy the General-bucket SUPPORTING entries into `<vaultPath>/build/`,
+ * non-destructively, then verify by file count. Originals are left untouched
+ * (prune later via archiveLegacyBuild). Idempotent and safe to re-run.
+ */
+export function migrateToBuildLayout(vaultPath: string): BuildMigrateResult {
+  const v = validateVaultPath(vaultPath);
+  if (!v.ok) throw new Error(`refusing to migrate: ${v.reason}`);
+  if (!existsSync(vaultPath) || !statSync(vaultPath).isDirectory()) {
+    throw new Error(`vault not found or not a directory: ${vaultPath}`);
+  }
+  const buildDir = join(vaultPath, BUILD_DIR);
+  mkdirSync(buildDir, { recursive: true });
+
+  let sourceFiles = 0;
+  let copiedFiles = 0;
+  const moved: string[] = [];
+  for (const name of BUILD_SUPPORTING_ENTRIES) {
+    const src = join(vaultPath, name);
+    if (!existsSync(src)) continue; // nothing of this kind in this vault
+    const dest = join(buildDir, name);
+    const before = countFiles(src);
+    sourceFiles += before;
+    cpSync(src, dest, { recursive: true, force: true, errorOnExist: false });
+    copiedFiles += countFiles(dest);
+    moved.push(name);
+  }
+  const ok = copiedFiles >= sourceFiles;
+  return { buildDir, movedEntries: moved, sourceFiles, copiedFiles, ok };
+}
+
+/**
+ * AFTER a verified build/ migration (every surface now reads from build/), move
+ * the now-duplicated originals out of the root into a timestamped archive folder.
+ * NEVER deletes — renames into `_pre-build-<stamp>/`. An entry is archived ONLY
+ * when a full copy is confirmed under build/; anything not fully mirrored is
+ * `deferred` and left in place.
+ */
+export function archiveLegacyBuild(vaultPath: string, stamp: string): { archiveDir: string; archived: string[]; deferred: string[] } {
+  const buildDir = join(vaultPath, BUILD_DIR);
+  if (!existsSync(buildDir)) {
+    throw new Error("refusing to archive: no build/ layout exists yet — migrate first");
+  }
+  const archiveDir = join(vaultPath, `_pre-build-${stamp}`);
+  mkdirSync(archiveDir, { recursive: true });
+  const archived: string[] = [];
+  const deferred: string[] = [];
+  for (const name of BUILD_SUPPORTING_ENTRIES) {
+    const root = join(vaultPath, name);
+    if (!existsSync(root)) continue;
+    const mirrored = join(buildDir, name);
+    if (countFiles(mirrored) < countFiles(root)) { deferred.push(name); continue; }
+    renameSync(root, join(archiveDir, name));
+    archived.push(name);
+  }
+  return { archiveDir: resolve(archiveDir), archived, deferred };
+}
+
 export function archiveLegacyRoot(vaultPath: string, stamp: string): { archiveDir: string; archived: string[]; deferred: string[] } {
   if (!isDataLayout(vaultPath)) {
     throw new Error("refusing to archive: no data/ layout exists yet — migrate first");

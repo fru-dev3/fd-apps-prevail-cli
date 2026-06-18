@@ -12,10 +12,10 @@
 // it only hard-fails when no local engine is up.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
-import { domainDir } from "./decisions.ts";
+import { domainDir, runtimeFile } from "./decisions.ts";
 import { scanVault } from "./vault.ts";
 
 const TTL_MS = 6 * 60 * 60 * 1000; // 6h, matches surface.rs
@@ -83,10 +83,6 @@ function parseSurface(output: string): { questions: string[]; actions: string[] 
   }
 }
 
-function cachePath(dir: string): string {
-  return join(dir, "_surface.json");
-}
-
 // Pick the engine for surface generation. Under local-only we require a local
 // CLI; otherwise prefer the first detected CLI (cheap, single call).
 function pickCli(available: AvailableCli[], localOnly: boolean): AvailableCli | null {
@@ -106,7 +102,9 @@ export async function runSurface(opts: SurfaceOptions): Promise<SurfaceResult> {
   const vaultPath = resolve(opts.vaultPath);
   const general = !opts.domain || opts.domain === "general" || opts.domain === "__general__";
   const dir = domainDir(vaultPath, general ? null : opts.domain);
-  const cache = cachePath(dir);
+  // CONTENT (memory/state) stays in `dir`; the SUPPORTING cache file moves to
+  // build/ for the General/root bucket (per-domain caches stay in the domain).
+  const cache = runtimeFile(vaultPath, general ? null : opts.domain, "_surface.json");
 
   // Serve fresh cache unless forced.
   if (!opts.force && existsSync(cache)) {
@@ -146,7 +144,8 @@ export async function runSurface(opts: SurfaceOptions): Promise<SurfaceResult> {
   }
   const result: SurfaceResult = { ...parsed, generated_at: Date.now(), stale: false };
   try {
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const cacheDir = dirname(cache);
+    if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
     writeFileSync(cache, JSON.stringify(result, null, 2));
   } catch {
     /* cache write best-effort */

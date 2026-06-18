@@ -15,7 +15,7 @@ import { existsSync, mkdirSync } from "node:fs";
 
 import { vappendLine, vreadFile, vwriteFile } from "./vault-session.ts";
 import { join, resolve } from "node:path";
-import { resolveDomainDir } from "./path-safety.ts";
+import { resolveDomainDir, runtimePath } from "./path-safety.ts";
 
 // A domain name is "safe" if it's a single path segment with no traversal.
 // Anything else (empty, "general", "..", contains a slash) resolves to the
@@ -30,8 +30,20 @@ export function domainDir(vaultPath: string, domain: string | null | undefined):
   return domain && isSafeDomain(domain) ? resolveDomainDir(v, domain) : v;
 }
 
+// B2-12: resolve a SUPPORTING runtime file (ledgers, journal, surface, …). Mirrors
+// the desktop `paths.rs::runtime_file`: per-domain files stay inside the domain dir;
+// the General/root bucket's supporting files move to <vault>/build/ (via runtimePath,
+// which falls back to the vault root until a migration creates build/). Both
+// processes MUST agree on this so a migrated vault never desyncs. Do NOT use this
+// for CONTENT (_memory.md/_state.md/_skills) — those stay at the root.
+export function runtimeFile(vaultPath: string, domain: string | null | undefined, file: string): string {
+  const v = resolve(vaultPath);
+  if (domain && isSafeDomain(domain)) return join(resolveDomainDir(v, domain), file);
+  return runtimePath(v, file);
+}
+
 export function decisionsFile(vaultPath: string, domain: string | null | undefined): string {
-  return join(domainDir(vaultPath, domain), "_decisions.jsonl");
+  return runtimeFile(vaultPath, domain, "_decisions.jsonl");
 }
 
 export interface DecisionFeedback {

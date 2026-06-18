@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import { scanVault } from "./vault.ts";
 import { computeContextScore } from "./score.ts";
 import { vreadFile, vappendLine } from "./vault-session.ts";
+import { runtimePath } from "./path-safety.ts";
 
 export interface PillarScore {
   pillar: string;
@@ -133,7 +134,7 @@ export function signalAlignment(vaultPath: string): AlignmentReport {
 }
 
 function writeReport(vaultPath: string, report: AlignmentReport): void {
-  const dir = join(vaultPath, "_meta");
+  const dir = runtimePath(vaultPath, "_meta");
   try {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "alignment.json"), JSON.stringify(report, null, 2));
@@ -142,7 +143,7 @@ function writeReport(vaultPath: string, report: AlignmentReport): void {
 }
 
 export function readAlignment(vaultPath: string): AlignmentReport | null {
-  const p = join(vaultPath, "_meta", "alignment.json");
+  const p = join(runtimePath(vaultPath, "_meta"), "alignment.json");
   if (!existsSync(p)) return null;
   try { return JSON.parse(vreadFile(p)); } catch { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } }
 }

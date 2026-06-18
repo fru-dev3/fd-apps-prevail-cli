@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tryAcquireLock } from "./file-lock.ts";
+import { runtimePath } from "./path-safety.ts";
 
 export interface ScheduleEntry {
   id: string;
@@ -265,7 +266,7 @@ export const DEFAULT_TICK_BUDGET: TickBudget = {
 };
 
 function logDir(vaultPath: string): string {
-  return join(vaultPath, "_log");
+  return runtimePath(vaultPath, "_log");
 }
 
 export function heartbeatLogPath(vaultPath: string): string {

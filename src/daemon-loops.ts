@@ -12,6 +12,7 @@
 // best-effort: a failing loop records its error and never blocks the others.
 import { existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
+import { runtimePath } from "./path-safety.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
 import { scanVault } from "./vault.ts";
@@ -148,7 +149,7 @@ export function appendTask(domainDir: string, text: string): boolean {
 // desktop intent daemon, read here by the loop runner.)
 export function readDomainIntents(vaultRoot: string, domainName: string): string {
   try {
-    const raw = safeRead(join(vaultRoot, "_meta", "intents_distilled.json"));
+    const raw = safeRead(join(runtimePath(vaultRoot, "_meta"), "intents_distilled.json"));
     if (!raw.trim()) return "";
     const doc = JSON.parse(raw) as { intents?: Array<{ title?: string; goal?: string; domains?: string[]; status?: string; recommendations?: string[] }> };
     const dn = domainName.toLowerCase();

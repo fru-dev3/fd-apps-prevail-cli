@@ -11,10 +11,13 @@ mkdirSync(TEST_ROOT, { recursive: true });
 
 import {
   archiveLegacyRoot,
+  archiveLegacyBuild,
+  BUILD_SUPPORTING_ENTRIES,
   countFiles,
   isAlreadyDataRoot,
   isDataLayout,
   migratableEntries,
+  migrateToBuildLayout,
   migrateToDataLayout,
 } from "./vault-data-layout.ts";
 import { dataRoot, resolveDomainDir, appsContainer, newDomainDir } from "./path-safety.ts";
@@ -132,5 +135,54 @@ describe("v4 data-layout migrator", () => {
 
   test("archiveLegacyRoot refuses to run before migration", () => {
     expect(() => archiveLegacyRoot(vault, "x")).toThrow();
+  });
+});
+
+// B2-12: the build/ migrator — copy + verify + leave originals; archive never deletes.
+describe("migrateToBuildLayout", () => {
+  let v: string;
+  beforeEach(() => { v = mkdtempSync(join(TEST_ROOT, "buildmig-")); });
+  afterEach(() => { try { rmSync(v, { recursive: true, force: true }); } catch { /* noop */ } });
+
+  test("copies supporting entries into build/, leaves originals, verifies", () => {
+    writeFileSync(join(v, "_decisions.jsonl"), "{}\n");
+    writeFileSync(join(v, "_intents.jsonl"), "{}\n{}\n");
+    mkdirSync(join(v, "_meta"), { recursive: true });
+    writeFileSync(join(v, "_meta", "alignment.json"), "{}");
+    mkdirSync(join(v, "benchmark"), { recursive: true });
+    writeFileSync(join(v, "benchmark", "q.json"), "{}");
+    // CONTENT must NOT move.
+    writeFileSync(join(v, "_memory.md"), "# mem");
+
+    const r = migrateToBuildLayout(v);
+    expect(r.ok).toBe(true);
+    expect(r.copiedFiles).toBe(r.sourceFiles);
+    // Copied into build/.
+    expect(existsSync(join(v, "build", "_decisions.jsonl"))).toBe(true);
+    expect(existsSync(join(v, "build", "_meta", "alignment.json"))).toBe(true);
+    expect(existsSync(join(v, "build", "benchmark", "q.json"))).toBe(true);
+    // Originals LEFT in place (non-destructive).
+    expect(existsSync(join(v, "_decisions.jsonl"))).toBe(true);
+    // CONTENT never moved.
+    expect(existsSync(join(v, "build", "_memory.md"))).toBe(false);
+    expect(existsSync(join(v, "_memory.md"))).toBe(true);
+  });
+
+  test("BUILD_SUPPORTING_ENTRIES excludes content files", () => {
+    for (const c of ["_memory.md", "_state.md", "_skills", "profile.md", "domains", "apps"]) {
+      expect(BUILD_SUPPORTING_ENTRIES).not.toContain(c);
+    }
+  });
+
+  test("archiveLegacyBuild refuses before migration, then moves originals (never deletes)", () => {
+    writeFileSync(join(v, "_decisions.jsonl"), "{}\n");
+    expect(() => archiveLegacyBuild(v, "x")).toThrow(); // no build/ yet
+    migrateToBuildLayout(v);
+    const { archived, archiveDir } = archiveLegacyBuild(v, "20260618");
+    expect(archived).toContain("_decisions.jsonl");
+    // Moved out of root, into the archive, and the live copy survives in build/.
+    expect(existsSync(join(v, "_decisions.jsonl"))).toBe(false);
+    expect(existsSync(join(archiveDir, "_decisions.jsonl"))).toBe(true);
+    expect(existsSync(join(v, "build", "_decisions.jsonl"))).toBe(true);
   });
 });

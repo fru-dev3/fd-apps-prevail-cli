@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
+import { buildRoot } from "./path-safety.ts";
 import { vreadFile, vwriteFile, vappendLine, vreadTail, vrotateLedgerPrefix } from "./vault-session.ts";
 
 // Ledger hygiene: rotate _intents.jsonl once it grows past this, always keeping
@@ -214,8 +215,13 @@ function appendDecisions(dir: string, decisions: unknown[]): void {
   }
 }
 
-// One distill pass over a single domain dir. Returns lines distilled.
-async function distillDir(dir: string, vaultPath: string, cfg: LearnConfig): Promise<number> {
+// One distill pass over a single bucket. The append-only ledger (intents/cursor/
+// rotation/decisions) lives in `ledgerDir`; the distilled _memory.md/_state.md are
+// written to `contentDir`. For domains these are the same dir; for the General
+// bucket the ledger is under build/ (B2-12) but memory/state stay at the vault
+// root, so they split. Mirrors the desktop distill.rs.
+async function distillDir(ledgerDir: string, contentDir: string, vaultPath: string, cfg: LearnConfig): Promise<number> {
+  const dir = ledgerDir; // ledger/cursor/rotation/decisions side
   const ledger = join(dir, "_intents.jsonl");
   if (!existsSync(ledger)) return 0;
   let cursor = readCursor(dir);
@@ -234,11 +240,11 @@ async function distillDir(dir: string, vaultPath: string, cfg: LearnConfig): Pro
   // Threshold gate: don't burn a model call on a trivial slice.
   if (activity.length < cfg.threshold * cfg.memoryBudgetChars) return 0;
 
-  const memoryPath = join(dir, "_memory.md");
-  const statePath = join(dir, "_state.md");
+  const memoryPath = join(contentDir, "_memory.md");
+  const statePath = join(contentDir, "_state.md");
   const existingMemory = existsSync(memoryPath) ? safeRead(memoryPath) : "";
   const existingState = existsSync(statePath) ? safeRead(statePath) : "";
-  const domainLabel = basename(dir);
+  const domainLabel = basename(contentDir);
   const ideal = readIdealPreamble(vaultPath);
   const prompt = ideal + buildDistillPrompt(
     domainLabel, existingMemory, existingState, activity,
@@ -309,25 +315,30 @@ function safeRead(p: string): string {
 export async function learnOnce(cfg: LearnConfig): Promise<{ domains: number; lines: number }> {
   const root = cfg.vaultPath;
   let domains = 0, lines = 0;
-  // Root ledger (general) + each domain dir.
-  const dirs: string[] = [];
-  if (existsSync(join(root, "_intents.jsonl"))) dirs.push(root);
+  // General bucket + each domain dir. B2-12: the General ledger reads from build/
+  // once migrated (buildRoot falls back to root until then) but its memory/state
+  // stay at root, so ledgerDir and contentDir split for General only.
+  const targets: { ledgerDir: string; contentDir: string }[] = [];
+  const generalLedger = buildRoot(root);
+  if (existsSync(join(generalLedger, "_intents.jsonl"))) targets.push({ ledgerDir: generalLedger, contentDir: root });
   for (const name of readdirSync(root)) {
-    if (name.startsWith(".") || name.startsWith("_")) continue;
+    // Skip hidden/underscore, plus the v4 containers (build/ holds the General
+    // ledger handled above; data/ holds domains, not a domain itself).
+    if (name.startsWith(".") || name.startsWith("_") || name === "build" || name === "data") continue;
     const p = join(root, name);
-    try { if (statSync(p).isDirectory() && existsSync(join(p, "_intents.jsonl"))) dirs.push(p); } catch { /* skip */ }
+    try { if (statSync(p).isDirectory() && existsSync(join(p, "_intents.jsonl"))) targets.push({ ledgerDir: p, contentDir: p }); } catch { /* skip */ }
   }
-  for (const dir of dirs) {
+  for (const t of targets) {
     try {
-      const n = await distillDir(dir, root, cfg);
+      const n = await distillDir(t.ledgerDir, t.contentDir, root, cfg);
       if (n > 0) { domains += 1; lines += n; }
     } catch (e) {
       // Record the error in the cursor but keep going (matches desktop).
-      const c = readCursor(dir);
+      const c = readCursor(t.ledgerDir);
       c.last_run_ok = false;
       c.last_error = String(e).slice(0, 200);
       c.last_run_ts = Math.floor(Date.now() / 1000);
-      writeCursor(dir, c);
+      writeCursor(t.ledgerDir, c);
     }
   }
   return { domains, lines };
