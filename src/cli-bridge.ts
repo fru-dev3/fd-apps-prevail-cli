@@ -182,7 +182,7 @@ function buildConstitutionPreamble(idealState: string): string {
 // migrateLegacyCliKind in src/config.ts).
 // CliKind is single-sourced in config.ts; imported for local use and re-exported
 // so existing `import { CliKind } from "./cli-bridge"` sites keep working.
-import type { CliKind, DirectProviderKind } from "./config.ts";
+import type { CliKind, DirectProviderKind, ExtraCliKind } from "./config.ts";
 export type { CliKind };
 
 // Legacy CliKind values from earlier versions of prevAIl. Listed here as
@@ -229,6 +229,27 @@ export interface AvailableCli {
   label: string;
 }
 
+// Extra spawnable CLI runtime families. `protocol` = the base CLI invocation each
+// speaks, so dispatch can route to a known handler: "gemini" → the Gemini handler;
+// "claude" → the de-facto headless convention `<bin> -p "<prompt>"` (best-effort —
+// families with non-standard flags may need per-family args later). Detection +
+// listing in the Runtimes catalog work regardless of whether dispatch is exact.
+export const EXTRA_CLI_FAMILIES: { kind: CliKind; bins: string[]; label: string; protocol: "claude" | "gemini" | "codex" }[] = [
+  { kind: "gemini", bins: ["gemini"], label: "Gemini", protocol: "gemini" },
+  { kind: "codebuddy", bins: ["codebuddy"], label: "Codebuddy", protocol: "claude" },
+  { kind: "copilot", bins: ["copilot"], label: "Copilot", protocol: "claude" },
+  { kind: "opencode", bins: ["opencode"], label: "Opencode", protocol: "claude" },
+  { kind: "openclaw", bins: ["openclaw"], label: "Openclaw", protocol: "claude" },
+  { kind: "hermes", bins: ["hermes"], label: "Hermes", protocol: "claude" },
+  { kind: "pi", bins: ["pi"], label: "Pi", protocol: "claude" },
+  { kind: "cursor", bins: ["cursor-agent", "cursor"], label: "Cursor", protocol: "claude" },
+  { kind: "kiro", bins: ["kiro"], label: "Kiro", protocol: "claude" },
+  { kind: "paperclip", bins: ["paperclip"], label: "Paperclip", protocol: "claude" },
+  { kind: "motorcar", bins: ["motorcar"], label: "Motorcar", protocol: "claude" },
+];
+const EXTRA_PROTOCOL: Record<string, "claude" | "gemini" | "codex"> =
+  Object.fromEntries(EXTRA_CLI_FAMILIES.map((f) => [f.kind, f.protocol]));
+
 const CANDIDATES: { kind: CliKind; bins: string[]; label: string }[] = [
   { kind: "claude", bins: ["claude"], label: "Claude" },
   { kind: "codex", bins: ["codex"], label: "Codex" },
@@ -238,6 +259,8 @@ const CANDIDATES: { kind: CliKind; bins: string[]; label: string }[] = [
   // legacy CLI down 2026-06-18). Drop `gemini` from this list after
   // that date.
   { kind: "antigravity", bins: ["agy", "gemini"], label: "Antigravity" },
+  // Additional families (detected the same PATH way; dispatched by protocol).
+  ...EXTRA_CLI_FAMILIES.map((f) => ({ kind: f.kind, bins: f.bins, label: f.label })),
 ];
 
 // Ollama / OpenAI-compatible local-model endpoint. Override via env var.
@@ -246,6 +269,7 @@ export const OLLAMA_BASE_URL = process.env.PREVAIL_OLLAMA_URL || "http://localho
 export const OLLAMA_DEFAULT_MODEL = process.env.PREVAIL_OLLAMA_MODEL || "llama3.1";
 
 export const CLI_MODEL_HINT: Record<CliKind, string> = {
+  ...(Object.fromEntries(EXTRA_CLI_FAMILIES.map((f) => [f.kind, "leave blank for the runtime's default, or whatever model id its CLI accepts"])) as Record<ExtraCliKind, string>),
   claude: "e.g. opus, sonnet, haiku, or full id like claude-opus-4-7",
   codex: "e.g. gpt-5, gpt-5.4, o3 (whatever your codex install accepts)",
   ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
@@ -363,6 +387,7 @@ const DIRECT_QUICKPICKS = Object.fromEntries(
 
 export const CLI_DEFAULT_MODELS: Record<CliKind, string> = {
   ...DIRECT_DEFAULT_MODELS,
+  ...(Object.fromEntries(EXTRA_CLI_FAMILIES.map((f) => [f.kind, ""])) as Record<ExtraCliKind, string>),
   claude: CLAUDE_VERSIONS[0]!,
   codex: CODEX_VERSIONS[0]!,
   antigravity: ANTIGRAVITY_VERSIONS[0]!,
@@ -383,6 +408,7 @@ export function defaultModelFor(kind: CliKind): string {
 // get without typing /model.
 export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
   ...DIRECT_QUICKPICKS,
+  ...(Object.fromEntries(EXTRA_CLI_FAMILIES.map((f) => [f.kind, [] as string[]])) as Record<ExtraCliKind, string[]>),
   claude: [...CLAUDE_VERSIONS, ...CLAUDE_ALIASES],
   codex: CODEX_VERSIONS,
   antigravity: ANTIGRAVITY_VERSIONS,
@@ -981,8 +1007,8 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractCodexReply(raw);
   }
-  if (cli.kind === "antigravity") {
-    // Antigravity (`agy`) and the legacy Gemini CLI (`gemini`) have
+  if (cli.kind === "antigravity" || EXTRA_PROTOCOL[cli.kind] === "gemini") {
+    // Antigravity (`agy`) and the Gemini CLI (`gemini`) have
     // DIFFERENT flag surfaces, even though prevAIl exposes them as the
     // same panelist:
     //
@@ -1006,6 +1032,19 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     }
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractGeminiReply(raw);
+  }
+  if (EXTRA_PROTOCOL[cli.kind] === "claude") {
+    // Best-effort headless dispatch for the additional agent CLIs (codebuddy,
+    // copilot, opencode, openclaw, hermes, pi, cursor, kiro, paperclip, motorcar):
+    // the de-facto `<bin> -p "<prompt>"` convention. No claude-only flags
+    // (--append-system-prompt / --dangerously-skip-permissions) since other CLIs
+    // may reject them. Families with non-standard invocations can get per-family
+    // args later; until then a wrong-flag turn surfaces as a visible error (never
+    // a silent or data-losing failure).
+    const args: string[] = [];
+    if (m) args.push("--model", m);
+    args.push("-p", framedPrompt);
+    return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }
   if (cli.kind === "ollama") {
     return runOllamaChat({

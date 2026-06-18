@@ -15,9 +15,19 @@ import type { LensSelection } from "./lens.ts";
 // gateway. All are OpenAI-compatible HTTP endpoints except Anthropic (native
 // /v1/messages), which has its own handler.
 export type DirectProviderKind = "anthropic" | "openai" | "xai" | "kimi" | "deepseek" | "google";
-export type CliKind = "claude" | "codex" | "antigravity" | "ollama" | "openrouter" | DirectProviderKind;
+// Additional CLI runtime families (beyond the original 3 subprocess CLIs). Each is
+// a spawnable agent CLI dispatched by its base protocol — see EXTRA_CLI_FAMILIES in
+// cli-bridge.ts. (kimi is omitted — it already exists as a DirectProviderKind.)
+export type ExtraCliKind =
+  | "gemini" | "codebuddy" | "copilot" | "opencode" | "openclaw"
+  | "hermes" | "pi" | "cursor" | "kiro" | "paperclip" | "motorcar";
+export type CliKind = "claude" | "codex" | "antigravity" | "ollama" | "openrouter" | ExtraCliKind | DirectProviderKind;
 
-export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "antigravity", "ollama", "openrouter"];
+export const EXTRA_CLI_KINDS: readonly ExtraCliKind[] = [
+  "gemini", "codebuddy", "copilot", "opencode", "openclaw",
+  "hermes", "pi", "cursor", "kiro", "paperclip", "motorcar",
+];
+export const ALL_CLI_KINDS: readonly CliKind[] = ["claude", "codex", "antigravity", "ollama", "openrouter", ...EXTRA_CLI_KINDS];
 
 export function isCliKind(s: string): s is CliKind {
   return ALL_CLI_KINDS.includes(s as CliKind);

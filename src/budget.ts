@@ -28,8 +28,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { CliKind } from "./config.ts";
-import { configDir } from "./config.ts";
+import type { CliKind, ExtraCliKind } from "./config.ts";
+import { EXTRA_CLI_KINDS, configDir } from "./config.ts";
 
 // =============================================================================
 // Cost heuristic — kept structurally parallel to src/council-cost.ts so the
@@ -38,6 +38,9 @@ import { configDir } from "./config.ts";
 // =============================================================================
 
 const PER_CALL_USD: Record<CliKind, number> = {
+  // Additional spawnable CLI families — subscription/local agent CLIs, so a small
+  // nominal per-call estimate for the budget heuristic.
+  ...(Object.fromEntries(EXTRA_CLI_KINDS.map((k) => [k, 0.004])) as Record<ExtraCliKind, number>),
   claude: 0.005,
   codex: 0.004,
   antigravity: 0.003,
