@@ -16,6 +16,7 @@ import { runtimePath } from "./path-safety.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
 import { scanVault } from "./vault.ts";
+import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 
 export interface LoopsConfig {
   vaultPath: string;
@@ -369,25 +370,106 @@ export async function executeAction(cfg: LoopsConfig, domainName: string, action
   return out.trim();
 }
 
-// One pass across every domain that has loops defined. Domain discovery goes
-// through scanVault so it finds domains in BOTH the v3 (vault/domains/<d>) and
-// legacy (vault/<d>) layouts and gets each one's resolved path.
-export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; loops: number }> {
+// ── AI-task steward (Workflows-Kanban P0) ────────────────────────────────────
+// A task with `~owner:ai` is work the user HANDED to the AI from the board. This
+// is the autonomous half: pick up AI-owned tasks that are still open (todo/doing,
+// not blocked/review/done) and either DO them or, if consequential, pause them for
+// the user. Outcomes flow back through the same files the desktop reads:
+//   - did it          → task `~status:review`  (shows in the Decision Inbox to accept)
+//   - needs a decision → task `~status:blocked` (shows in the Decision Inbox to approve)
+//   - no connector     → task `~status:blocked` (surfaced so the user can intervene)
+// Capped per pass so a backlog can't fan out into a runaway of agent runs.
+const AI_TASK_BUDGET = 3;
+
+function openAiTasks(domainDir: string): Task[] {
+  return readTasks(domainDir).filter((t) => {
+    if (t.owner !== "ai" || t.done || !t.id) return false;
+    const st = effectiveStatus(t);
+    return st === "todo" || st === "doing";
+  });
+}
+
+// Run ONE AI-owned task. Returns the resulting status it was moved to (or null on
+// a transient failure — the task is left as-is to retry next pass).
+async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promise<string | null> {
+  const clis = await detectClis();
+  const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
+  if (!cli) throw new Error("no CLI available to run AI tasks");
+  const domainName = basename(domainDir);
+  const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
+  const prompt = [
+    `You are working an AI-owned task the user assigned to you on their board, in the "${domainName}" domain of their personal life-OS.`,
+    `You are in the LABOR seat, not the decision seat: do the legwork, but the user makes any real call.`,
+    "",
+    `TASK:`,
+    task.text,
+    "",
+    state ? `DOMAIN CONTEXT (from _state.md):\n${state.slice(0, 1500)}` : "",
+    "",
+    `DECIDE then ACT:`,
+    `- If this task SPENDS money, CONTACTS someone, is IRREVERSIBLE, or needs a decision/info only the user can give: do NOT do it. Reply with exactly "NEEDS_APPROVAL: <one-line what you'd do and why it needs the user>".`,
+    `- Else, actually perform it now using your tools/connectors (MCP servers, file ops, configured app connectors). Don't merely describe it.`,
+    `- If no available tool/connector can perform it, reply with exactly "NO_CONNECTOR: <one-line reason>".`,
+    `- When you DID it, reply with a one-paragraph report of precisely what you did (IDs, links, recipients).`,
+  ].filter(Boolean).join("\n");
+  const out = (await runChatTurn({
+    prompt,
+    cwd: domainDir,
+    cli,
+    model: cfg.model || "",
+    isFirst: true,
+    bare: false,
+    act: true,
+  })).trim();
+
+  const head = out.slice(0, 40).toUpperCase();
+  const next = head.startsWith("NEEDS_APPROVAL") || head.startsWith("NO_CONNECTOR") ? "blocked" : "review";
+  if (task.id) setTaskStatus(domainDir, task.id, next);
+  return next;
+}
+
+// Work this domain's AI-owned tasks (up to the per-pass budget). Returns count handled.
+async function consumeAiTasks(domainDir: string, cfg: LoopsConfig): Promise<number> {
+  const queue = openAiTasks(domainDir).slice(0, AI_TASK_BUDGET);
+  let handled = 0;
+  for (const task of queue) {
+    try {
+      const r = await runAiTask(domainDir, cfg, task);
+      if (r) handled += 1;
+    } catch (e) {
+      console.error(`[loops] ${basename(domainDir)} ai-task: ${String(e).slice(0, 160)}`);
+    }
+  }
+  return handled;
+}
+
+// One pass across every domain. Domain discovery goes through scanVault so it
+// finds domains in BOTH the v3 (vault/domains/<d>) and legacy (vault/<d>) layouts
+// and gets each one's resolved path. Advances due loops AND works AI-owned tasks.
+export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; loops: number; aiTasks: number }> {
   const root = resolve(cfg.vaultPath);
   const now = Date.now();
   let domains = 0;
   let loops = 0;
+  let aiTasks = 0;
 
   for (const d of scanVault(root)) {
     try {
-      if (!existsSync(loopsFile(d.path))) continue;
-      const n = await runDomain(d.path, cfg, now);
-      if (n > 0) { domains += 1; loops += n; }
+      let touched = false;
+      if (existsSync(loopsFile(d.path))) {
+        const n = await runDomain(d.path, cfg, now);
+        if (n > 0) { loops += n; touched = true; }
+      }
+      // AI tasks are independent of loop definitions — a domain can have AI-owned
+      // tasks without any loops.
+      const a = await consumeAiTasks(d.path, cfg);
+      if (a > 0) { aiTasks += a; touched = true; }
+      if (touched) domains += 1;
     } catch (e) {
       console.error(`[loops] ${d.name}: ${String(e).slice(0, 160)}`);
     }
   }
-  return { domains, loops };
+  return { domains, loops, aiTasks };
 }
 
 // The long-running daemon: wake on the interval, advance any due loops.
@@ -402,8 +484,8 @@ export async function runLoopsDaemon(cfg: LoopsConfig): Promise<void> {
   console.log(`[loops] running domain loops every ${Math.round(interval / 1000)}s (each loop on its own cadence)`);
   while (!stopped) {
     try {
-      const { domains, loops } = await loopsOnce(live);
-      if (loops > 0) console.log(`[loops] advanced ${loops} loop(s) across ${domains} domain(s)`);
+      const { domains, loops, aiTasks } = await loopsOnce(live);
+      if (loops > 0 || aiTasks > 0) console.log(`[loops] advanced ${loops} loop(s) + ${aiTasks} AI task(s) across ${domains} domain(s)`);
     } catch (e) {
       console.error(`[loops] pass error: ${String(e).slice(0, 200)}`);
     }
