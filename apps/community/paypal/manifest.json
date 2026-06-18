@@ -1,0 +1,32 @@
+{
+  "id": "paypal",
+  "name": "PayPal",
+  "version": "0.1.0",
+  "description": "Pull PayPal transaction history into the wealth + tax domains via the PayPal REST Transaction Search API (OAuth2 client-credentials).",
+  "domains": ["wealth", "tax"],
+  "integration": "api",
+  "connection": "PayPal REST Transaction Search. Create a REST app at developer.paypal.com, enable the Transaction Search feature, and provide its Client ID + Secret. Prevail mints an OAuth2 client-credentials token and pulls your transactions read-only.",
+  "connections": [
+    {
+      "kind": "api",
+      "description": "PayPal REST Transaction Search via OAuth2 client-credentials. Set PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET (+ PAYPAL_ENV=sandbox|live).",
+      "auth_check": {
+        "kind": "env-keys",
+        "env_keys": ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"]
+      },
+      "skill": "recent-transactions"
+    }
+  ],
+  "auth": "api-key",
+  "auth_env_vars": ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET", "PAYPAL_ENV"],
+  "auth_check": {
+    "kind": "env-keys",
+    "env_keys": ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"]
+  },
+  "refresh": { "every": "daily", "at": "07:00", "skill": "recent-transactions" },
+  "autonomy": "read-only",
+  "account": { "label": "primary" },
+  "homepage": "https://www.paypal.com",
+  "license": "GPL-3.0-only",
+  "author": { "name": "fru-dev3", "url": "https://github.com/fru-dev3/prevail" }
+}

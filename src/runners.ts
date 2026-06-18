@@ -36,15 +36,32 @@ async function substituteFull(
   const needsToken = template.includes("${auth.token}");
   let token = "";
   if (needsToken) {
-    const { refreshAccessToken } = await import("./oauth-flow.ts");
-    const r = await refreshAccessToken(skill.connectorId);
-    if (!r.ok || !r.accessToken) throw new Error(r.message ?? `oauth refresh failed for ${skill.connectorId}`);
-    token = r.accessToken;
+    // Connectors that use the OAuth2 client-credentials grant (app id+secret →
+    // token, no per-user browser consent) mint their token here. PayPal is the
+    // first; P1 generalizes this via a skill `token_grant: client_credentials`
+    // frontmatter field instead of a per-connector branch.
+    if (skill.connectorId === "paypal") {
+      const { mintPaypalToken } = await import("./paypal-auth.ts");
+      token = await mintPaypalToken(skill.connectorId);
+    } else {
+      const { refreshAccessToken } = await import("./oauth-flow.ts");
+      const r = await refreshAccessToken(skill.connectorId);
+      if (!r.ok || !r.accessToken) throw new Error(r.message ?? `oauth refresh failed for ${skill.connectorId}`);
+      token = r.accessToken;
+    }
   }
   const env = buildSkillEnv(skill);
   return template.replace(/\$\{([^}]+)\}/g, (whole, expr: string) => {
     const t = expr.trim();
     if (t === "auth.token") return token;
+    // Generic time-window tokens for date-ranged APIs (PayPal, etc.). RFC3339,
+    // no milliseconds (some APIs reject them). ${now.rfc3339} and
+    // ${days_ago.rfc3339:N} → N days before now.
+    if (t === "now.rfc3339") return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    {
+      const ago = /^days_ago\.rfc3339:(\d+)$/.exec(t);
+      if (ago) return new Date(Date.now() - Number(ago[1]) * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    }
     if (t.startsWith("cursor.")) {
       const key = t.slice("cursor.".length);
       const v = opts.cursor?.[key];
