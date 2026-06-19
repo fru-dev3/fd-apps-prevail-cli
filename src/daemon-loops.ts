@@ -483,7 +483,8 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   const due = doc.loops.filter((l) => isDue(l, now));
   if (due.length === 0) return 0;
 
-  const domainLabel = basename(domainDir);
+  // The vault root is the "general" domain; everything else is named by its dir.
+  const domainLabel = resolve(domainDir) === resolve(cfg.vaultPath) ? "general" : basename(domainDir);
   const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
   const memory = safeRead(join(domainDir, "_memory.md"));
   // Curated high-level intents touching this domain — the compounding signal.
@@ -693,7 +694,10 @@ export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; lo
   let loops = 0;
   let aiTasks = 0;
 
-  for (const d of scanVault(root)) {
+  // The vault root is the "general" domain (its loops/tasks live at the root, not
+  // under domains/), so include it alongside the scanned domains.
+  const targets = [...scanVault(root).map((d) => ({ name: d.name, path: d.path })), { name: "general", path: root }];
+  for (const d of targets) {
     try {
       let touched = false;
       if (existsSync(loopsFile(d.path))) {
