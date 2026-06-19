@@ -312,9 +312,18 @@ export async function runOneLoop(cfg: LoopsConfig, domainName: string, loopRef: 
     const created: string[] = [];
     if (res) {
       loop.actions = res.actions.map((a) => a.text);
+      // A loop's pending list reflects its LATEST run, not an ever-growing pile.
+      // Each run re-evaluates from scratch, so rebuild pending from this run's
+      // needs-approval actions (deduped within the run) rather than appending to
+      // the old set. Items the loop still wants reappear (same text, refreshed
+      // ts); items it no longer proposes drop off. This stops the Decision Inbox
+      // from accumulating near-duplicates across repeated runs.
+      const nextPending: { text: string; ts: number }[] = [];
+      const seenP = new Set<string>();
       for (const a of res.actions) {
         if (a.needsApproval) {
-          if (!entry.pending.some((p) => p.text.toLowerCase() === a.text.toLowerCase())) entry.pending.push({ text: a.text, ts: now });
+          const key = a.text.trim().toLowerCase();
+          if (!seenP.has(key)) { seenP.add(key); nextPending.push({ text: a.text, ts: now }); }
           actions.push({ text: a.text, disposition: "approval" });
         } else if (a.task) {
           if (appendTask(domainDir, a.text)) created.push(a.text);
@@ -323,6 +332,7 @@ export async function runOneLoop(cfg: LoopsConfig, domainName: string, loopRef: 
           actions.push({ text: a.text, disposition: "suggested" });
         }
       }
+      entry.pending = nextPending;
       if (loop.type === "closed" && res.done) loop.status = "done";
       entry.history.unshift({ ts: now, actions: res.actions.map((a) => a.text), note: res.note, done: res.done, tasksCreated: created });
       entry.history = entry.history.slice(0, MAX_HISTORY);
@@ -377,15 +387,19 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
         // (anything needing money/contact/decision) as pending approvals so the
         // loop ASKS instead of assuming.
         const created: string[] = [];
+        // Rebuild pending from THIS run's approvals (deduped) rather than
+        // appending, so repeated scheduled runs don't pile up near-duplicates.
+        const nextPending: { text: string; ts: number }[] = [];
+        const seenP = new Set<string>();
         for (const a of res.actions) {
           if (a.needsApproval) {
-            if (!entry.pending.some((p) => p.text.toLowerCase() === a.text.toLowerCase())) {
-              entry.pending.push({ text: a.text, ts: now });
-            }
+            const key = a.text.trim().toLowerCase();
+            if (!seenP.has(key)) { seenP.add(key); nextPending.push({ text: a.text, ts: now }); }
           } else if (a.task) {
             if (appendTask(domainDir, a.text)) created.push(a.text);
           }
         }
+        entry.pending = nextPending;
         if (loop.type === "closed" && res.done) loop.status = "done";
         // Learn: record this run so the next one builds on it and doesn't repeat.
         entry.history.unshift({ ts: now, actions: res.actions.map((a) => a.text), note: res.note, done: res.done, tasksCreated: created });
