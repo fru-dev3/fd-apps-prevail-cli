@@ -17,6 +17,7 @@ import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
 import { scanVault } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
+import { logActivity } from "./activity.ts";
 
 export interface LoopsConfig {
   vaultPath: string;
@@ -354,6 +355,10 @@ export async function runOneLoop(
     }
     try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
     writeRuntime(domainDir, rt);
+    onPhase("done", "Done");
+    // Record this run in the system activity log (one event per run + per filed task).
+    logActivity(root, { type: "loop_run", domain: domainLabel, title: `${loop.name} ran`, detail: res?.note || undefined, status: "ok", ref: loop.id });
+    for (const t of created) logActivity(root, { type: "task_filed", domain: domainLabel, title: `Filed task: ${t}`, status: "ok", ref: loop.id });
     return { ok: true, loop: loop.name, note: res?.note ?? "", done: res?.done ?? false, actions, tasksCreated: created, pending: entry.pending.map((p) => p.text) };
   } catch (e) {
     loop.lastRunTs = now;
@@ -420,6 +425,9 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
         entry.history = entry.history.slice(0, MAX_HISTORY);
         rt.loops[loop.id] = entry;
         advanced += 1;
+        // System activity: one event per scheduled run + per filed task.
+        logActivity(resolve(cfg.vaultPath), { type: "loop_run", domain: basename(domainDir), title: `${loop.name} ran`, detail: res.note || undefined, status: "ok", ref: loop.id });
+        for (const t of created) logActivity(resolve(cfg.vaultPath), { type: "task_filed", domain: basename(domainDir), title: `Filed task: ${t}`, status: "ok", ref: loop.id });
       }
     } catch (e) {
       // Best-effort: stamp the run so a persistently-failing loop doesn't spin
@@ -473,7 +481,17 @@ export async function executeAction(cfg: LoopsConfig, domainName: string, action
     bare: false, // full operating manual — the agent SHOULD take action here
     act: true,   // user-approved: let the agent actually use its tools/connectors
   });
-  return out.trim();
+  const report = out.trim();
+  // System activity: record the execution + its outcome.
+  const noConn = report.startsWith("NO_CONNECTOR");
+  logActivity(root, {
+    type: "loop_exec",
+    domain: domainName,
+    title: `Executed: ${action.length > 80 ? action.slice(0, 80) + "…" : action}`,
+    detail: report.slice(0, 400),
+    status: noConn ? "error" : "ok",
+  });
+  return report;
 }
 
 // ── AI-task steward (Workflows-Kanban P0) ────────────────────────────────────
