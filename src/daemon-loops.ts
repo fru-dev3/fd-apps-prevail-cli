@@ -452,12 +452,16 @@ async function runBriefingLoop(p: {
     const cliLabel = `${cli.label} (briefing)`;
     const delivered = await deliverBriefing(briefEntry, output, now, cliLabel, domainDir, cfg.deliverTelegram, { email: cfg.deliverEmail });
 
+    const emailResult = typeof delivered.channels?.email === "string" ? delivered.channels.email : "";
+    const emailSkipped = /^skipped/.test(emailResult);   // channel requested but not connected
+    const emailErr = /^error/.test(emailResult);         // a real send failure
     const sentTo: string[] = [];
     if (delivered.log) sentTo.push("journal");
     if (delivered.telegram) sentTo.push(`telegram (${delivered.telegram})`);
-    if (delivered.channels?.email) sentTo.push(`gmail: ${delivered.channels.email}`);
-    const emailErr = typeof delivered.channels?.email === "string" && /^(error|skipped)/.test(delivered.channels.email);
-    const note = sentTo.length ? `Briefing delivered to ${sentTo.join(", ")}` : "Briefing generated (no channel delivered)";
+    if (emailResult && !emailSkipped && !emailErr) sentTo.push("gmail");
+    let note = sentTo.length ? `Briefing delivered to ${sentTo.join(", ")}` : "Briefing generated (not delivered)";
+    if (emailSkipped) note += " - connect Gmail to email it";
+    else if (emailErr) note += ` - gmail failed: ${emailResult.replace(/^error:?\s*/i, "")}`;
 
     loop.lastRunTs = now;
     entry.history.unshift({ ts: now, actions: [], note, done: false, tasksCreated: [] });
@@ -468,7 +472,7 @@ async function runBriefingLoop(p: {
     try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
     writeRuntime(domainDir, rt);
     onPhase("done", "Done");
-    logActivity(root, { type: "briefing", domain: domainLabel, title: `${loop.name} delivered`, detail: note, status: emailErr ? "error" : "ok", ref: loop.id });
+    logActivity(root, { type: "briefing", domain: domainLabel, title: `${loop.name} delivered`, detail: note, status: emailErr ? "error" : emailSkipped ? "pending" : "ok", ref: loop.id });
     return { ok: true, loop: loop.name, note, done: false, actions: [], tasksCreated: [], pending: [], briefing: output };
   } catch (e) {
     loop.lastRunTs = now;
