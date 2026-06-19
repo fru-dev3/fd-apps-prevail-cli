@@ -7,6 +7,7 @@ import type { Domain, ViewKey } from "./vault.ts";
 import { readResponseFramework, readWebAccess } from "./config.ts";
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
+import { buildRoot } from "./path-safety.ts";
 import {
   type BudgetCaps,
   checkBudget,
@@ -15,6 +16,7 @@ import {
 } from "./budget.ts";
 
 const OPERATING_MANUAL_FILE = "AGENTS-operating.md";
+const PREVAIL_DOC_FILE = "PREVAIL.md"; // canonical root OS doc (summary + guiding principles)
 const IDEAL_STATE_FILE = "ideal-state.md";
 const OMEGA_FILE = "omega.md";
 let operatingManualCache: { vaultPath: string; content: string | null } | null = null;
@@ -23,8 +25,14 @@ function findOperatingManual(vaultPath: string): string | null {
   if (operatingManualCache && operatingManualCache.vaultPath === vaultPath) {
     return operatingManualCache.content;
   }
+  // Canonical layout: PREVAIL.md at the vault root is the operating doc. Fall back
+  // to the legacy AGENTS-operating.md (root, then build/), then ~/.prevail, then the
+  // bundled copy beside the binary.
   const candidates: string[] = [
+    join(vaultPath, PREVAIL_DOC_FILE),
     join(vaultPath, OPERATING_MANUAL_FILE),
+    join(buildRoot(vaultPath), OPERATING_MANUAL_FILE),
+    join(homedir(), ".prevail", PREVAIL_DOC_FILE),
     join(homedir(), ".prevail", OPERATING_MANUAL_FILE),
   ];
   try {
@@ -62,7 +70,10 @@ function findIdealState(vaultPath: string): string | null {
   if (idealStateCache && idealStateCache.vaultPath === vaultPath) {
     return idealStateCache.content;
   }
+  // Canonical layout keeps app-support config under build/; read there first, then
+  // the legacy root location, then ~/.prevail.
   const candidates = [
+    join(buildRoot(vaultPath), IDEAL_STATE_FILE),
     join(vaultPath, IDEAL_STATE_FILE),
     join(homedir(), ".prevail", IDEAL_STATE_FILE),
   ];
@@ -96,6 +107,7 @@ function findOmega(vaultPath: string): string | null {
     return omegaCache.content;
   }
   const candidates = [
+    join(buildRoot(vaultPath), OMEGA_FILE),
     join(vaultPath, OMEGA_FILE),
     join(homedir(), ".prevail", OMEGA_FILE),
   ];
