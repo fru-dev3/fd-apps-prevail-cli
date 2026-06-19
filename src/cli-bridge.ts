@@ -1020,15 +1020,20 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // extractGeminiReply is reused for both. After 2026-06-18 when
     // Google sunsets the legacy binary, drop the gemini branch.
     const isAgy = /(^|\/)agy$/.test(cli.bin);
+    // Antigravity/Gemini narrate their planning + tool steps as plain stdout with
+    // no thinking channel (verified: `agy` has no json/output-format flag). Ask the
+    // model to fence that reasoning in <thinking>…</thinking> so the desktop can
+    // collapse it (splitThinking) and show only the final answer, expandable.
+    const geminiPrompt = `${framedPrompt}\n\n--- OUTPUT FORMAT ---\nPut ALL of your planning, reasoning, and step narration inside one <thinking>…</thinking> block at the very start. After </thinking>, write ONLY the final answer in clean markdown. If you have no reasoning to show, skip the block and just answer.`;
     const args: string[] = [];
     if (isAgy) {
       args.push("--dangerously-skip-permissions");
       if (m) args.push("--model", m);
-      args.push("-p", framedPrompt);
+      args.push("-p", geminiPrompt);
     } else {
       args.push("--skip-trust");
       if (m) args.push("-m", m);
-      args.push("-p", framedPrompt);
+      args.push("-p", geminiPrompt);
     }
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractGeminiReply(raw);
