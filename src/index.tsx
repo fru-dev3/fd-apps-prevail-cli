@@ -5,7 +5,7 @@
 // daemon, chat-json…) paid ~400ms loading the whole terminal UI it never renders.
 // They're now dynamically imported inside runWizard()/launchCockpit() only.
 import { resolve, join, basename, dirname } from "node:path";
-import { resolveDomainDir } from "./path-safety.ts";
+import { resolveDomainDir, buildRoot } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, } from "./config.ts";
@@ -1683,8 +1683,19 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
           return t.length > max ? t.slice(0, max) + "\n…(truncated)" : t;
         } catch { return ""; }
       };
-      const profileCtx = readVaultRoot("profile.md", 2500) || readVaultRoot("user.md", 2500);
-      const idealCtx = readVaultRoot("ideal-state.md", 1500);
+      // Profile + ideal-state are app-support: they live under build/ (canonical),
+      // not the vault root. Read from buildRoot, with root kept only as a legacy
+      // fallback for un-migrated vaults.
+      const readBuild = (file: string, max: number): string => {
+        try {
+          const p = join(buildRoot(vault), file);
+          if (!exists(p)) return "";
+          const t = readFile(p, "utf8");
+          return t.length > max ? t.slice(0, max) + "\n…(truncated)" : t;
+        } catch { return ""; }
+      };
+      const profileCtx = readBuild("_profile.md", 2500) || readBuild("profile.md", 2500) || readVaultRoot("profile.md", 2500) || readVaultRoot("user.md", 2500);
+      const idealCtx = readBuild("ideal-state.md", 1500) || readVaultRoot("ideal-state.md", 1500);
       const sections = ([
         ["WHO THEY ARE — user profile", profileCtx],
         ["HOW THEY DECIDE — ideal-state constitution", idealCtx],
