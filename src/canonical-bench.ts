@@ -5,6 +5,7 @@ import { vreadFile, vwriteFile } from "./vault-session.ts";
 
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
+import { estimateCostUsd, estimateTokens, priceFor } from "./model-pricing.ts";
 
 // Canonical benchmark — the USER's personal set of questions with KNOWN
 // ground-truth verdicts. Distinct from the bundled bench/ generic suite:
@@ -538,6 +539,19 @@ export interface RunScore {
   // Per-run aggregates.
   keyword_avg: number | null;
   judge_avg: number | null;
+  // The 3D Arena: beyond intelligence (judge/keyword), every run also carries
+  // a SPEED and a COST dimension so models can be compared on all three.
+  // Average wall-clock latency per question, in milliseconds (real, measured).
+  ms_avg: number | null;
+  // Approximate output throughput: estimated reply tokens per second across the
+  // run. Estimated (no exact token usage from every CLI) but directionally true.
+  tokens_per_sec: number | null;
+  // Estimated USD cost of the whole run (sum of per-question input+output token
+  // estimates times the model's published rate). Null for unpriced/mixed runs.
+  // 0 for local models (free to run on the user's own hardware).
+  cost_usd_est: number | null;
+  // Whether cost is free-by-local, priced, or unknown - lets the UI label it.
+  cost_basis: "local" | "frontier" | "mixed" | "unknown";
 }
 
 function keywordMatch(reply: string, keywords?: string[]): {
@@ -654,20 +668,61 @@ export async function scoreRun(args: ScoreArgs): Promise<RunScore> {
   const kScores = questionScores.map((q) => q.keyword_score).filter((s): s is number => s !== null);
   const jScores = questionScores.map((q) => q.judge_score).filter((s): s is number => s !== null);
   const avg = (xs: number[]) => xs.length === 0 ? null : Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10;
+
+  // --- Speed + cost dimensions (computed from the run records) -------------
+  const okRecords = records.filter((r) => r.ok && r.reply);
+  const msVals = okRecords.map((r) => r.ms).filter((m) => m > 0);
+  const ms_avg = msVals.length ? Math.round(msVals.reduce((a, b) => a + b, 0) / msVals.length) : null;
+  // Throughput: total estimated output tokens / total wall-clock seconds.
+  const totalOutTok = okRecords.reduce((a, r) => a + estimateTokens(r.reply.length), 0);
+  const totalMs = okRecords.reduce((a, r) => a + (r.ms > 0 ? r.ms : 0), 0);
+  const tokens_per_sec = totalMs > 0 ? Math.round((totalOutTok / (totalMs / 1000)) * 10) / 10 : null;
+  // Cost: sum estimated per-question cost. Each record knows its own cli/model
+  // (council records leave them undefined, so a council run is "mixed").
+  let costSum = 0;
+  let priced = 0;
+  let frontierSeen = false;
+  let localSeen = false;
+  let mixedSeen = false;
+  for (const r of okRecords) {
+    if (r.council || !r.cli) { mixedSeen = true; continue; }
+    const c = estimateCostUsd(r.cli, r.model, r.prompt.length, r.reply.length);
+    const basis = priceFor(r.cli, r.model);
+    if (c === null || basis === null) { mixedSeen = true; continue; }
+    costSum += c;
+    priced++;
+    if (basis.source === "local") localSeen = true;
+    else frontierSeen = true;
+  }
+  const cost_basis: RunScore["cost_basis"] =
+    priced === 0 ? "unknown"
+    : mixedSeen || (frontierSeen && localSeen) ? "mixed"
+    : localSeen ? "local"
+    : "frontier";
+  // Round to a sane precision (sub-cent runs are common).
+  const cost_usd_est = priced === 0 ? null : Math.round(costSum * 100000) / 100000;
+
   const result: RunScore = {
     runDir: args.runDir,
     label: args.runDir.split("/").pop() ?? args.runDir,
     questionScores,
     keyword_avg: avg(kScores),
     judge_avg: avg(jScores),
+    ms_avg,
+    tokens_per_sec,
+    cost_usd_est,
+    cost_basis,
   };
   vwriteFile(join(args.runDir, "score.json"), JSON.stringify(result, null, 2));
   // Markdown scoreboard alongside the json for grep/PR review.
   const md: string[] = [];
   md.push(`# score · ${result.label}`);
   md.push("");
-  md.push(`- keyword_avg: ${result.keyword_avg ?? "—"}%`);
-  md.push(`- judge_avg:   ${result.judge_avg ?? "—"} / 10`);
+  md.push(`- keyword_avg: ${result.keyword_avg ?? "-"}%`);
+  md.push(`- judge_avg:   ${result.judge_avg ?? "-"} / 10`);
+  md.push(`- ms_avg:      ${result.ms_avg ?? "-"} ms/question`);
+  md.push(`- throughput:  ${result.tokens_per_sec ?? "-"} tok/s (est.)`);
+  md.push(`- cost_est:    ${result.cost_usd_est === null ? "-" : "$" + result.cost_usd_est.toFixed(5)} (${result.cost_basis})`);
   md.push("");
   md.push(`| id | domain | keyword% | judge/10 | rationale |`);
   md.push(`| --- | --- | --- | --- | --- |`);
