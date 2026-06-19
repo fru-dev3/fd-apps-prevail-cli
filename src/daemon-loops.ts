@@ -110,7 +110,7 @@ function safeRead(path: string): string {
 // whole _loops.json with a fixed schema — can never strip it.
 const MAX_HISTORY = 6;
 
-interface LoopAction { text: string; task: boolean; needsApproval: boolean }
+interface LoopAction { text: string; task: boolean; needsApproval: boolean; due?: string; priority?: string }
 interface LoopRun { ts: number; actions: string[]; note: string; done: boolean; tasksCreated: string[] }
 interface LoopRtEntry { history: LoopRun[]; pending: { text: string; ts: number }[] }
 interface LoopRuntime { schema: 1; loops: Record<string, LoopRtEntry> }
@@ -136,7 +136,7 @@ function todayYmd(): string { return new Date().toISOString().slice(0, 10); }
 // (the same ledger the desktop reads/writes). Deduped by text. Returns whether a
 // new task was actually created. This is how a loop "works on the goal" — it
 // files trackable work the rest of the system (and the user) acts on.
-export function appendTask(domainDir: string, text: string): boolean {
+export function appendTask(domainDir: string, text: string, opts?: { due?: string; priority?: string }): boolean {
   const clean = text.trim();
   if (!clean) return false;
   const f = join(domainDir, "_tasks.md");
@@ -147,7 +147,12 @@ export function appendTask(domainDir: string, text: string): boolean {
   });
   if (already) return false;
   const body = cur.endsWith("\n") ? cur : `${cur}\n`;
-  vwriteFile(f, `${body}- [ ] ${clean} +${todayYmd()} ~loop\n`);
+  // Optional due date (@) and priority let the steward file time-sensitive
+  // obligations (e.g. annual physical) that land in the right horizon bucket and
+  // trigger the Due alert. Validate to keep the line well-formed.
+  const due = opts?.due && /^\d{4}-\d{2}-\d{2}$/.test(opts.due) ? ` @${opts.due}` : "";
+  const prio = opts?.priority && ["high", "critical"].includes(opts.priority) ? ` ~priority:${opts.priority}` : "";
+  vwriteFile(f, `${body}- [ ] ${clean}${due} +${todayYmd()} ~loop${prio}\n`);
   return true;
 }
 
@@ -227,10 +232,14 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
     "",
     `Think like an operator who PERSISTS: do not repeat actions already tried unless they're genuinely the next step; judge from the state + history whether the gap is closing; if it's stalled, change approach and escalate. Each run should build on the last and get better.`,
     "",
+    `RECURRING OBLIGATIONS: this domain has cyclical things that must happen on a cadence (for example: an annual health physical or screening; quarterly estimated taxes; an annual insurance or policy review; a yearly financial/tax filing). From the desired state, memory, and what's been done, infer the obligations that apply to THIS domain. If one appears DUE or OVERDUE for its current period and is not already a tracked task, propose it as a task with a "due" date and a "priority" ("high", or "critical" if overdue / legally or health time-sensitive). Today is ${todayYmd()}.`,
+    "",
     `Respond with ONLY a JSON object on a single line. Each action is an object:`,
-    `{"actions":[{"text":"the next step","task":true,"needs_approval":false}],"done":false,"note":"one-line read on progress + why these steps"}`,
+    `{"actions":[{"text":"the next step","task":true,"needs_approval":false,"due":"YYYY-MM-DD","priority":"high"}],"done":false,"note":"one-line read on progress + why these steps"}`,
     `- "task": true if this is a concrete, trackable step — it will be FILED as a real task in this domain and worked on. false for pure observations/notes.`,
     `- "needs_approval": true if it spends money, contacts someone, is irreversible, or needs a decision/info only the user can give. Those are PROPOSED and wait for the user instead of being done automatically. Be conservative: when unsure, set true.`,
+    `- "due": OPTIONAL YYYY-MM-DD deadline. Set it for anything time-sensitive (especially recurring obligations) so it surfaces on the right horizon and alerts. Omit if there's no real deadline.`,
+    `- "priority": OPTIONAL "high" or "critical". Use for important or time-critical work; omit for normal. Overdue obligations are "critical".`,
     `- Write task text in plain punctuation. NEVER use em dashes ("—"); use a hyphen "-", a colon, or two short phrases instead.`,
     loop.type === "closed"
       ? `Set "done" to true only if the loop's condition is clearly satisfied by the current state.`
@@ -254,10 +263,12 @@ export function parseResult(out: string): { actions: LoopAction[]; done: boolean
           return a.trim() ? { text: a.trim(), task: true, needsApproval: false } : null;
         }
         if (a && typeof a === "object") {
-          const o = a as { text?: unknown; task?: unknown; needs_approval?: unknown };
+          const o = a as { text?: unknown; task?: unknown; needs_approval?: unknown; due?: unknown; priority?: unknown };
           const text = typeof o.text === "string" ? o.text.trim() : "";
           if (!text) return null;
-          return { text, task: o.task !== false, needsApproval: o.needs_approval === true };
+          const due = typeof o.due === "string" && /^\d{4}-\d{2}-\d{2}$/.test(o.due) ? o.due : undefined;
+          const priority = (o.priority === "high" || o.priority === "critical") ? o.priority : undefined;
+          return { text, task: o.task !== false, needsApproval: o.needs_approval === true, due, priority };
         }
         return null;
       })
@@ -359,7 +370,7 @@ export async function runOneLoop(
           if (!seenP.has(key)) { seenP.add(key); nextPending.push({ text: a.text, ts: now }); }
           actions.push({ text: a.text, disposition: "approval" });
         } else if (a.task) {
-          if (appendTask(domainDir, a.text)) created.push(a.text);
+          if (appendTask(domainDir, a.text, { due: a.due, priority: a.priority })) created.push(a.text);
           actions.push({ text: a.text, disposition: "task" });
         } else {
           actions.push({ text: a.text, disposition: "suggested" });
@@ -545,7 +556,7 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
             const key = a.text.trim().toLowerCase();
             if (!seenP.has(key)) { seenP.add(key); nextPending.push({ text: a.text, ts: now }); }
           } else if (a.task) {
-            if (appendTask(domainDir, a.text)) created.push(a.text);
+            if (appendTask(domainDir, a.text, { due: a.due, priority: a.priority })) created.push(a.text);
           }
         }
         entry.pending = nextPending;
