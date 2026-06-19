@@ -2876,8 +2876,17 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
       }
       if (!domain || !loop) { console.error("loops --run-loop needs --domain and --loop"); process.exit(1); }
       const { runOneLoop } = await import("./daemon-loops.ts");
-      const result = await runOneLoop(cfg, domain, loop);
-      console.log(`__LOOPRESULT__${JSON.stringify(result)}`);
+      // Streaming mode (the desktop adds --json): emit one NDJSON line per phase
+      // as the run proceeds so the UI can show live progress instead of a blank
+      // spinner, then a final {type:"result"} line. Non-stream mode keeps the
+      // single __LOOPRESULT__ line for back-compat.
+      const stream = args.includes("--json");
+      const onPhase = stream
+        ? (phase: string, label: string) => { try { console.log(JSON.stringify({ type: "phase", phase, label })); } catch { /* ignore */ } }
+        : undefined;
+      const result = await runOneLoop(cfg, domain, loop, onPhase);
+      if (stream) console.log(JSON.stringify({ type: "result", result }));
+      else console.log(`__LOOPRESULT__${JSON.stringify(result)}`);
       return;
     }
     if (once) {

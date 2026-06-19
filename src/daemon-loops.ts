@@ -50,6 +50,7 @@ interface Loop {
   enabled: boolean;
   lastRunTs: number | null;
   createdTs: number;
+  model?: string; // per-loop model override ("" / undefined = use the global loops model)
 }
 
 interface LoopsDoc {
@@ -277,9 +278,17 @@ export interface LoopRunResult {
 // Run ONE loop right now, regardless of its cadence, and apply the result per the
 // loop's autonomy (file tasks / queue approvals / just suggest). Returns a precise
 // summary of what happened. Powers the per-loop "Run now" button.
-export async function runOneLoop(cfg: LoopsConfig, domainName: string, loopRef: string): Promise<LoopRunResult> {
+export async function runOneLoop(
+  cfg: LoopsConfig,
+  domainName: string,
+  loopRef: string,
+  // Live progress callback. The desktop streams these to show what the loop is
+  // doing instead of a blank spinner (resolve → read → think → apply → done).
+  onPhase: (phase: string, label: string) => void = () => {},
+): Promise<LoopRunResult> {
   const empty = (error: string, loop = loopRef): LoopRunResult => ({ ok: false, loop, note: "", done: false, actions: [], tasksCreated: [], pending: [], error });
   const root = resolve(cfg.vaultPath);
+  onPhase("resolve", "Locating the loop");
   // Resolve to whichever layout actually holds this domain's _loops.json (a vault
   // can be split across data/domains, domains/, or the legacy root during migration).
   const scanned = scanVault(root).find((d) => d.name === domainName)?.path;
@@ -291,21 +300,26 @@ export async function runOneLoop(cfg: LoopsConfig, domainName: string, loopRef: 
   if (!loop) return empty("loop not found");
 
   const domainLabel = basename(domainDir);
+  onPhase("read", "Reading state and memory");
   const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
   const memory = safeRead(join(domainDir, "_memory.md"));
   const domainIntents = readDomainIntents(root, domainLabel);
   const clis = await detectClis();
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
   if (!cli) return empty("no CLI available to run loops", loop.name);
+  // Per-loop model override wins over the global loops model.
+  const runModel = (loop.model && loop.model.trim()) ? loop.model.trim() : (cfg.model || "");
 
   const now = Date.now();
   const rt = readRuntime(domainDir);
   const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
   try {
+    onPhase("think", `Measuring the gap with ${runModel || cli.label}`);
     const out = await runChatTurn({
       prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents),
-      cwd: domainDir, cli, model: cfg.model || "", isFirst: true, bare: true,
+      cwd: domainDir, cli, model: runModel, isFirst: true, bare: true,
     });
+    onPhase("apply", "Applying the decision");
     const res = parseResult(out);
     loop.lastRunTs = now;
     const actions: LoopRunResult["actions"] = [];
