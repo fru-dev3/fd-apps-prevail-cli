@@ -178,6 +178,27 @@ function buildConstitutionPreamble(idealState: string): string {
   );
 }
 
+// Vault Lock guardrail. When the desktop sets PREVAIL_VAULT_LOCK=1, the agent
+// must keep ALL filesystem activity inside the vault. This is the strongest
+// lever available against an agentic CLI in headless mode: a hard, leading
+// system rule. (The engine's own file ops are already vault-scoped by
+// path-safety; this binds the underlying CLI agent too.)
+function buildVaultLockPreamble(): string {
+  return (
+    "# FILESYSTEM SCOPE — VAULT LOCK IS ON. HARD CONSTRAINT.\n" +
+    "You may only read, write, list, search, or modify files inside the vault " +
+    "(the workspace that contains this working directory, its data/ and build/ folders). " +
+    "Do NOT access, read, list, search, or execute ANYTHING outside the vault: " +
+    "no other directories on this machine, no home folder, no system paths, no temp dirs, " +
+    "and no tools or commands that reach beyond the vault. " +
+    "If a request would require touching files outside the vault, refuse and state that Vault Lock is enabled.\n\n---\n\n"
+  );
+}
+
+function vaultLockOn(): boolean {
+  return process.env.PREVAIL_VAULT_LOCK === "1";
+}
+
 // "ollama" is an OpenAI-compatible HTTP endpoint (default
 // http://localhost:11434/v1) — covers Ollama, LM Studio, llama.cpp
 // server, vLLM, anything that speaks OpenAI's /chat/completions schema.
@@ -961,7 +982,12 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   const domainIdeal = findDomainIdeal(cwd, vaultPath);
   const domainIdealPreamble = domainIdeal ? buildDomainIdealPreamble(domainIdeal) : null;
   const promptDomainIdeal = domainIdealPreamble && cli.kind !== "claude" ? domainIdealPreamble : "";
-  let framedPrompt = promptConstitution + promptDomainIdeal + promptOmega + buildFrameworkPreamble(framework) + prompt;
+  // Vault Lock leads everything (a security guardrail outranks even the
+  // constitution). Claude gets it via the system channel below; CLIs without a
+  // system-prompt flag get it prepended to the prompt so it still governs.
+  const vaultLockPreamble = vaultLockOn() ? buildVaultLockPreamble() : null;
+  const promptVaultLock = vaultLockPreamble && cli.kind !== "claude" ? vaultLockPreamble : "";
+  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + buildFrameworkPreamble(framework) + prompt;
   // A prompt that begins with '-' makes the runtime CLI's option parser treat the
   // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
   // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
@@ -991,7 +1017,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [constitution, domainIdealPreamble, omegaPreamble, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to
