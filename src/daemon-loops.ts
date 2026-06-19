@@ -261,6 +261,83 @@ export function parseResult(out: string): { actions: LoopAction[]; done: boolean
   }
 }
 
+// Result of an on-demand single-loop run (the desktop "Run now" button). Reports
+// exactly what the loop did this pass so the UI can show it without guesswork.
+export interface LoopRunResult {
+  ok: boolean;
+  loop: string;
+  note: string;
+  done: boolean;
+  actions: { text: string; disposition: "task" | "approval" | "suggested" }[];
+  tasksCreated: string[];
+  pending: string[];
+  error?: string;
+}
+
+// Run ONE loop right now, regardless of its cadence, and apply the result per the
+// loop's autonomy (file tasks / queue approvals / just suggest). Returns a precise
+// summary of what happened. Powers the per-loop "Run now" button.
+export async function runOneLoop(cfg: LoopsConfig, domainName: string, loopRef: string): Promise<LoopRunResult> {
+  const empty = (error: string, loop = loopRef): LoopRunResult => ({ ok: false, loop, note: "", done: false, actions: [], tasksCreated: [], pending: [], error });
+  const root = resolve(cfg.vaultPath);
+  // Resolve to whichever layout actually holds this domain's _loops.json (a vault
+  // can be split across data/domains, domains/, or the legacy root during migration).
+  const scanned = scanVault(root).find((d) => d.name === domainName)?.path;
+  const candidates = [scanned, join(root, "data", "domains", domainName), join(root, "domains", domainName), join(root, domainName)].filter(Boolean) as string[];
+  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? scanned ?? join(root, "domains", domainName);
+  const doc = readDoc(domainDir);
+  if (!doc) return empty("no loops in this domain");
+  const loop = doc.loops.find((l) => l.id === loopRef || l.name === loopRef);
+  if (!loop) return empty("loop not found");
+
+  const domainLabel = basename(domainDir);
+  const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
+  const memory = safeRead(join(domainDir, "_memory.md"));
+  const domainIntents = readDomainIntents(root, domainLabel);
+  const clis = await detectClis();
+  const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
+  if (!cli) return empty("no CLI available to run loops", loop.name);
+
+  const now = Date.now();
+  const rt = readRuntime(domainDir);
+  const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
+  try {
+    const out = await runChatTurn({
+      prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents),
+      cwd: domainDir, cli, model: cfg.model || "", isFirst: true, bare: true,
+    });
+    const res = parseResult(out);
+    loop.lastRunTs = now;
+    const actions: LoopRunResult["actions"] = [];
+    const created: string[] = [];
+    if (res) {
+      loop.actions = res.actions.map((a) => a.text);
+      for (const a of res.actions) {
+        if (a.needsApproval) {
+          if (!entry.pending.some((p) => p.text.toLowerCase() === a.text.toLowerCase())) entry.pending.push({ text: a.text, ts: now });
+          actions.push({ text: a.text, disposition: "approval" });
+        } else if (a.task) {
+          if (appendTask(domainDir, a.text)) created.push(a.text);
+          actions.push({ text: a.text, disposition: "task" });
+        } else {
+          actions.push({ text: a.text, disposition: "suggested" });
+        }
+      }
+      if (loop.type === "closed" && res.done) loop.status = "done";
+      entry.history.unshift({ ts: now, actions: res.actions.map((a) => a.text), note: res.note, done: res.done, tasksCreated: created });
+      entry.history = entry.history.slice(0, MAX_HISTORY);
+      rt.loops[loop.id] = entry;
+    }
+    try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
+    writeRuntime(domainDir, rt);
+    return { ok: true, loop: loop.name, note: res?.note ?? "", done: res?.done ?? false, actions, tasksCreated: created, pending: entry.pending.map((p) => p.text) };
+  } catch (e) {
+    loop.lastRunTs = now;
+    try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
+    return empty(String(e).slice(0, 200), loop.name);
+  }
+}
+
 // Run every due loop in one domain. Returns how many loops advanced.
 async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Promise<number> {
   const doc = readDoc(domainDir);

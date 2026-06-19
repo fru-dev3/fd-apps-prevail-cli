@@ -2865,6 +2865,21 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
       console.log(report);
       return;
     }
+    // --run-loop: run ONE loop now (the desktop per-loop "Run now"). Applies per
+    // the loop's autonomy and prints a JSON result of what it did (last line).
+    if (args.includes("--run-loop")) {
+      let domain = "", loop = "";
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i], v = args[i + 1];
+        if (a === "--domain" && v) { domain = v; i++; }
+        else if (a === "--loop" && v) { loop = v; i++; }
+      }
+      if (!domain || !loop) { console.error("loops --run-loop needs --domain and --loop"); process.exit(1); }
+      const { runOneLoop } = await import("./daemon-loops.ts");
+      const result = await runOneLoop(cfg, domain, loop);
+      console.log(`__LOOPRESULT__${JSON.stringify(result)}`);
+      return;
+    }
     if (once) {
       const { domains, loops } = await loopsOnce(cfg);
       console.log(`[loops] advanced ${loops} loop(s) across ${domains} domain(s)`);
