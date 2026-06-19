@@ -58,7 +58,7 @@ interface Loop {
   lastRunTs: number | null;
   createdTs: number;
   model?: string; // per-loop model override ("" / undefined = use the global loops model)
-  kind?: "steward" | "briefing"; // briefing = synthesize + deliver a domain digest; default steward
+  kind?: "steward" | "briefing" | "scout"; // briefing = domain digest · scout = web-search AI models for the benchmark · default steward
   channel?: "gmail" | "telegram" | "log"; // briefing delivery target (default gmail)
 }
 
@@ -343,6 +343,34 @@ export async function runOneLoop(
   // deliver it to the configured channel, rather than proposing gap-closing steps.
   if (loop.kind === "briefing") {
     return runBriefingLoop({ cfg, root, domainDir, domainLabel, doc, loop, cli, runModel, state, memory, now, rt, entry, onPhase });
+  }
+
+  // Scout loops search the WEB for AI models worth adding to the Arena benchmark
+  // (open-weight + frontier) and write build/_meta/model_suggestions.json, which
+  // the Arena surfaces as "New models to add". The loop's own actions become the
+  // current shortlist so it's visible in the Loops board too.
+  if (loop.kind === "scout") {
+    onPhase("think", `Scouting AI models with ${runModel || cli.label} (web)`);
+    try {
+      const { scoutModels } = await import("./model-scout.ts");
+      const known = (loop.actions ?? []).map((a) => a.split(" (")[0].trim()).filter(Boolean);
+      const items = await scoutModels({ vault: root, cli, model: runModel, known });
+      onPhase("apply", "Recording suggestions");
+      loop.lastRunTs = now;
+      loop.actions = items.map((m) => `${m.name} (${m.provider}, ${m.kind})`);
+      entry.history.unshift({ ts: now, actions: loop.actions, note: `Found ${items.length} models to consider`, done: false, tasksCreated: [] });
+      entry.history = entry.history.slice(0, MAX_HISTORY);
+      rt.loops[loop.id] = entry;
+      try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
+      writeRuntime(domainDir, rt);
+      onPhase("done", "Done");
+      logActivity(root, { type: "loop_run", domain: domainLabel, title: `${loop.name} ran`, detail: `${items.length} models found`, status: "ok", ref: loop.id });
+      return { ok: true, loop: loop.name, note: `Found ${items.length} AI models to consider for the benchmark.`, done: false, actions: loop.actions.map((t) => ({ text: t, disposition: "suggested" as const })), tasksCreated: [], pending: [] };
+    } catch (e) {
+      loop.lastRunTs = now;
+      try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
+      return empty(String(e).slice(0, 200), loop.name);
+    }
   }
 
   try {

@@ -32,6 +32,8 @@ interface Args {
   recommendationsArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
+  scout: boolean;
+  scoutArgs: string[];
   mcp: boolean;
   mcpUnsafeDetach: boolean;
   mcpNetwork: boolean;
@@ -109,6 +111,8 @@ function parseArgs(argv: string[]): Args {
   let recommendationsArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
+  let scout = false;
+  let scoutArgs: string[] = [];
   let mcp = false;
   let mcpUnsafeDetach = false;
   let mcpNetwork = false;
@@ -197,6 +201,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "suggest-apps") {
       suggestApps = true;
       suggestAppsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "scout-models") {
+      scout = true;
+      scoutArgs = argv.slice(i + 1);
       break;
     } else if (a === "mcp") {
       mcp = true;
@@ -350,6 +358,8 @@ function parseArgs(argv: string[]): Args {
     recommendationsArgs,
     suggestApps,
     suggestAppsArgs,
+    scout,
+    scoutArgs,
     mcp,
     mcpUnsafeDetach,
     mcpNetwork,
@@ -3694,6 +3704,41 @@ async function main() {
       }
     }
     if (json) process.stdout.write(`${JSON.stringify(readAppSuggestions(vault!))}\n`);
+    return;
+  }
+  if (args.scout) {
+    // prevail scout-models [--known a,b,c] [--cli <kind>] [--model <id>] [--json] [--read]
+    // Searches the web for AI models worth adding to the Arena benchmark
+    // (open-weight + frontier) and writes build/_meta/model_suggestions.json.
+    const a = args.scoutArgs;
+    const { readConfig: rc } = await import("./config.ts");
+    const { resolveDefaultVaultPath } = await import("./vault.ts");
+    const vflag = a.indexOf("--vault");
+    const vault = (vflag >= 0 ? a[vflag + 1] : undefined) ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const json = a.includes("--json");
+    const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
+    const { readModelSuggestions, scoutModels } = await import("./model-scout.ts");
+    if (a.includes("--read")) { process.stdout.write(`${JSON.stringify(readModelSuggestions(vault!) ?? {})}\n`); return; }
+    const known = (get("--known") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    const { detectClis } = await import("./cli-bridge.ts");
+    let clis = await detectClis();
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL = new Set(["ollama", "lmstudio", "mlx"]);
+      clis = clis.filter((c) => LOCAL.has(c.kind));
+    }
+    const cliKind = get("--cli");
+    const model = get("--model");
+    const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
+    if (!cli) { console.error("no AI CLI available to scout models"); process.exit(1); }
+    if (!json) process.stdout.write("scout-models (searching the web)…\n");
+    try {
+      const items = await scoutModels({ vault: vault!, cli, model: model ?? undefined, known });
+      if (json) process.stdout.write(`${JSON.stringify(readModelSuggestions(vault!) ?? {})}\n`);
+      else for (const it of items) process.stdout.write(`  [${it.kind}] ${it.name} (${it.provider}) — ${it.reason}\n`);
+    } catch (e) {
+      if (json) process.stdout.write(`${JSON.stringify({ error: String(e) })}\n`);
+      else process.stdout.write(`  (failed: ${(e as Error).message})\n`);
+    }
     return;
   }
   if (args.mcp) {
