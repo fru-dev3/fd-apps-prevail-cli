@@ -152,13 +152,22 @@ export function readQuestion(filePath: string): CanonicalQuestion | null {
 }
 
 export function listQuestions(vaultPath: string): CanonicalQuestion[] {
-  const dir = questionsDir(vaultPath);
-  if (!existsSync(dir)) return [];
+  // Read from the canonical build/benchmark/questions AND the legacy
+  // <vault>/benchmark/questions (dedup by filename, build wins) - so the runner
+  // sees EXACTLY the same set the desktop counts. A mismatch here made a run
+  // launch for N questions but only execute the build-local subset, leaving the
+  // progress bar stuck below 100%.
+  const dirs = [questionsDir(vaultPath), join(vaultPath, "benchmark", "questions")];
+  const seen = new Set<string>();
   const out: CanonicalQuestion[] = [];
-  for (const entry of readdirSync(dir)) {
-    if (!entry.endsWith(".md")) continue;
-    const q = readQuestion(join(dir, entry));
-    if (q && !q.archived) out.push(q);
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const entry of readdirSync(dir)) {
+      if (!entry.endsWith(".md") || seen.has(entry)) continue;
+      seen.add(entry);
+      const q = readQuestion(join(dir, entry));
+      if (q && !q.archived) out.push(q);
+    }
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
