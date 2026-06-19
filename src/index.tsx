@@ -1235,10 +1235,12 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     // detected; can override with --judge-cli/--judge-model). Skip the
     // LLM-as-judge layer with --no-judge for a fast mechanical pass.
     const { scoreRun, runsDir } = await import("./canonical-bench.ts");
+    const { vreadFile } = await import("./vault-session.ts");
     let runName: string | null = null;
     let noJudge = false;
     let scoreAll = false;
     let rescore = false;
+    let batchId: string | null = null;
     let judgeCliKind: string | null = null;
     let judgeModel: string | null = null;
     for (let i = 1; i < args.length; i++) {
@@ -1247,6 +1249,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       if (a === "--run" && v) { runName = v; i++; }
       else if (a === "--no-judge") noJudge = true;
       else if (a === "--all") scoreAll = true;
+      else if (a === "--batch" && v) { batchId = v; i++; }
       else if (a === "--rescore") rescore = true;
       else if (a === "--judge-cli" && v) { judgeCliKind = v; i++; }
       else if (a === "--judge-model" && v) { judgeModel = v; i++; }
@@ -1287,16 +1290,23 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         }
       }
     }
-    // --all: score every run dir that has results.json but no score.json
-    // (or all of them with --rescore). Robust for multi-model batches where
-    // "latest by name" would pick the wrong run.
-    if (scoreAll) {
+    // --batch <id>: score ONLY the run dirs from one batch (the models launched
+    // together) - what the desktop uses after a run, so it never re-scores the
+    // whole history. --all: score every unscored run. Both write score.json.
+    if (scoreAll || batchId) {
       const dirs = readdirSync(root)
         .map((n) => join(root, n))
         .filter((d) => existsSync(join(d, "results.json")))
+        .filter((d) => {
+          if (batchId) {
+            try { return (JSON.parse(vreadFile(join(d, "batch.json"))) as { id?: string }).id === batchId; }
+            catch { return false; }
+          }
+          return true;
+        })
         .filter((d) => rescore || !existsSync(join(d, "score.json")));
       if (dirs.length === 0) {
-        console.log("nothing to score — every run already has a score.json (use --rescore to redo).");
+        console.log(batchId ? `nothing to score for batch ${batchId}.` : "nothing to score — every run already has a score.json (use --rescore to redo).");
         return;
       }
       for (const runDir of dirs) {
