@@ -423,7 +423,7 @@ async function runBriefingLoop(p: {
   const channel = loop.channel ?? "gmail";
   try {
     onPhase("read", "Gathering tasks and context");
-    const tasks = readTasks(domainDir);
+    const tasks = readTasks(domainDir).filter((t) => !t.trashed); // never surface trashed tasks
     const open = tasks.filter((t) => !t.done && effectiveStatus(t) !== "done");
     const doing = open.filter((t) => effectiveStatus(t) === "doing");
     const blocked = open.filter((t) => effectiveStatus(t) === "blocked");
@@ -628,7 +628,7 @@ const AI_TASK_BUDGET = 3;
 
 function openAiTasks(domainDir: string): Task[] {
   return readTasks(domainDir).filter((t) => {
-    if (t.owner !== "ai" || t.done || !t.id) return false;
+    if (t.owner !== "ai" || t.done || !t.id || t.trashed) return false; // skip trashed
     const st = effectiveStatus(t);
     return st === "todo" || st === "doing";
   });
