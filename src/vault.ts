@@ -226,9 +226,14 @@ export function scanVault(vaultPath: string): Domain[] {
     if (!resolveSafeChild(cand.parent, entryName)) continue;
 
     const domainPath = cand.dir;
-    // v2 detects a domain by soul.md (declared intent); v1 by state.md. The
-    // derived _state.md also counts during the transition.
-    if (!isDomainDir(domainPath)) continue;
+    // A child of the domains container (v4 data/domains or v3 domains/) IS a
+    // domain by virtue of where it lives — even a freshly-created one with no
+    // _state.md yet. The marker heuristic (soul.md/_state.md/state.md) only
+    // applies to the flat LEGACY root layout, where any folder could be junk.
+    // This keeps the sidebar and the chat engine in agreement (a domain shown in
+    // the sidebar is always chat-addressable, never "unknown domain").
+    const fromContainer = cand.parent !== vaultPath;
+    if (!fromContainer && !isDomainDir(domainPath)) continue;
     const statePath = resolveStatePath(domainPath); // _state.md || state.md || null
     const hasState = statePath !== null;
 
