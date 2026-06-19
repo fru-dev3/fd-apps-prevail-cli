@@ -1494,9 +1494,14 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       targetCli,
       targetModel: targetModel ?? undefined,
       onProgress: (id, status, info) => {
-        if (status === "start") process.stdout.write(`  ${id}…`);
-        else if (status === "ok") console.log(` ${info ?? "ok"}`);
-        else console.log(` ✗ ${info ?? "error"}`);
+        // Newline-terminated markers so each reaches the desktop immediately (a
+        // no-newline in-flight write can sit in Bun's pipe buffer until the slow
+        // model answer lands, making the run look frozen). The desktop shows the
+        // current question from the `> ` start line and counts the `  id… info`
+        // completion lines.
+        if (status === "start") console.log(`> ${id}`);
+        else if (status === "ok") console.log(`  ${id}… ${info ?? "ok"}`);
+        else console.log(`  ${id}… ✗ ${info ?? "error"}`);
       },
     });
     const dir = writeRunDirectory({
