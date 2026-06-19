@@ -300,9 +300,12 @@ export async function runOneLoop(
   onPhase("resolve", "Locating the loop");
   // Resolve to whichever layout actually holds this domain's _loops.json (a vault
   // can be split across data/domains, domains/, or the legacy root during migration).
+  // "general" is the first-class domain backed by the vault ROOT (its _loops.json
+  // lives there, not under domains/), so resolve it to the root.
+  const isGeneral = domainName.toLowerCase() === "general";
   const scanned = scanVault(root).find((d) => d.name === domainName)?.path;
-  const candidates = [scanned, join(root, "data", "domains", domainName), join(root, "domains", domainName), join(root, domainName)].filter(Boolean) as string[];
-  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? scanned ?? join(root, "domains", domainName);
+  const candidates = [scanned, isGeneral ? root : null, join(root, "data", "domains", domainName), join(root, "domains", domainName), join(root, domainName)].filter(Boolean) as string[];
+  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? (isGeneral ? root : scanned ?? join(root, "domains", domainName));
   const doc = readDoc(domainDir);
   if (!doc) return empty("no loops in this domain");
   const loop = doc.loops.find((l) => l.id === loopRef || l.name === loopRef);
