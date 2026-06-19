@@ -18,12 +18,17 @@ import { runChatTurn, detectClis } from "./cli-bridge.ts";
 import { scanVault } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
+import { deliverBriefing, type BriefingEntry } from "./briefings.ts";
 
 export interface LoopsConfig {
   vaultPath: string;
   intervalSec: number; // how often the daemon wakes to check for due loops
   provider: string;    // which CLI runs the evaluation
   model: string;       // optional model id ("" = provider default)
+  // Optional delivery hooks for briefing loops, wired by the caller (index.tsx)
+  // to the live connectors. Absent → a briefing falls back to log-only.
+  deliverEmail?: (subject: string, body: string) => Promise<string>;
+  deliverTelegram?: (text: string) => Promise<number>;
 }
 
 export const DEFAULT_LOOPS: Omit<LoopsConfig, "vaultPath"> = {
@@ -52,6 +57,8 @@ interface Loop {
   lastRunTs: number | null;
   createdTs: number;
   model?: string; // per-loop model override ("" / undefined = use the global loops model)
+  kind?: "steward" | "briefing"; // briefing = synthesize + deliver a domain digest; default steward
+  channel?: "gmail" | "telegram" | "log"; // briefing delivery target (default gmail)
 }
 
 interface LoopsDoc {
@@ -273,6 +280,7 @@ export interface LoopRunResult {
   actions: { text: string; disposition: "task" | "approval" | "suggested" }[];
   tasksCreated: string[];
   pending: string[];
+  briefing?: string; // for briefing loops: the rendered digest that was delivered
   error?: string;
 }
 
@@ -314,6 +322,13 @@ export async function runOneLoop(
   const now = Date.now();
   const rt = readRuntime(domainDir);
   const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
+
+  // Briefing loops take a different path: synthesize a digest of the domain and
+  // deliver it to the configured channel, rather than proposing gap-closing steps.
+  if (loop.kind === "briefing") {
+    return runBriefingLoop({ cfg, root, domainDir, domainLabel, doc, loop, cli, runModel, state, memory, now, rt, entry, onPhase });
+  }
+
   try {
     onPhase("think", `Measuring the gap with ${runModel || cli.label}`);
     const out = await runChatTurn({
@@ -367,6 +382,97 @@ export async function runOneLoop(
   }
 }
 
+// Prompt for a briefing loop: turn the domain's state, memory, and task rollup
+// into a tight, skimmable digest written FOR the user (second person).
+function buildBriefingDigestPrompt(domainLabel: string, loop: Loop, state: string, memory: string, taskRollup: string, pending: string[]): string {
+  return [
+    `You are preparing a ${loop.cadence} briefing for the "${domainLabel}" domain of a personal life-OS. Write it FOR the user, addressing them as "you".`,
+    `Synthesize what matters NOW: where things stand, what changed, what needs attention, and the clear next steps. Be concise and skimmable - a busy person reads this on their phone.`,
+    "",
+    `CURRENT STATE:\n${state.slice(0, 4000) || "(none yet)"}`,
+    "",
+    `DURABLE MEMORY:\n${memory.slice(0, 1500) || "(none)"}`,
+    "",
+    `TASKS:\n${taskRollup}`,
+    pending.length ? `\nAWAITING YOUR APPROVAL:\n- ${pending.slice(0, 10).join("\n- ")}` : "",
+    "",
+    `OUTPUT - markdown only, no preamble, no sign-off, in this shape:`,
+    `## ${domainLabel} briefing`,
+    `**TL;DR**: one or two sentences on the single most important thing.`,
+    `**Where things stand**: 2-4 bullets.`,
+    `**Needs your attention**: blocked items, approvals, decisions - or "Nothing right now".`,
+    `**Next steps**: 2-4 concrete actions.`,
+    `Keep it tight, grounded in the data above. NEVER use em dashes; use hyphens or colons. No fluff, no invented facts.`,
+  ].filter(Boolean).join("\n");
+}
+
+// Briefing-loop run: gather the domain, synthesize a digest, deliver to the
+// configured channel (default Gmail), and record it. Reuses the tested briefing
+// delivery layer (deliverBriefing) so channels behave identically to scheduled
+// briefings. Falls back to log-only when no delivery hook is wired.
+async function runBriefingLoop(p: {
+  cfg: LoopsConfig; root: string; domainDir: string; domainLabel: string; doc: LoopsDoc;
+  loop: Loop; cli: Awaited<ReturnType<typeof detectClis>>[number]; runModel: string;
+  state: string; memory: string; now: number; rt: LoopRuntime; entry: LoopRtEntry;
+  onPhase: (phase: string, label: string) => void;
+}): Promise<LoopRunResult> {
+  const { cfg, root, domainDir, domainLabel, doc, loop, cli, runModel, state, memory, now, rt, entry, onPhase } = p;
+  const channel = loop.channel ?? "gmail";
+  try {
+    onPhase("read", "Gathering tasks and context");
+    const tasks = readTasks(domainDir);
+    const open = tasks.filter((t) => !t.done && effectiveStatus(t) !== "done");
+    const doing = open.filter((t) => effectiveStatus(t) === "doing");
+    const blocked = open.filter((t) => effectiveStatus(t) === "blocked");
+    const todo = open.filter((t) => { const s = effectiveStatus(t); return s !== "doing" && s !== "blocked"; });
+    const review = tasks.filter((t) => effectiveStatus(t) === "review");
+    const taskRollup = [
+      doing.length ? `In progress (${doing.length}): ${doing.map((t) => t.text).join("; ")}` : "",
+      blocked.length ? `Blocked or waiting (${blocked.length}): ${blocked.map((t) => t.text).join("; ")}` : "",
+      todo.length ? `To do (${todo.length}): ${todo.slice(0, 12).map((t) => t.text).join("; ")}` : "",
+      review.length ? `Awaiting your review (${review.length}): ${review.map((t) => t.text).join("; ")}` : "",
+    ].filter(Boolean).join("\n") || "(no open tasks)";
+    const pendingAll = Object.values(rt.loops).flatMap((e) => e.pending.map((x) => x.text));
+
+    onPhase("think", `Writing the briefing with ${runModel || cli.label}`);
+    const prompt = buildBriefingDigestPrompt(domainLabel, loop, state, memory, taskRollup, pendingAll);
+    const output = (await runChatTurn({ prompt, cwd: domainDir, cli, model: runModel, isFirst: true, bare: true })).trim();
+
+    onPhase("apply", `Delivering to ${channel}`);
+    // Synthetic briefing entry so we reuse the same delivery code paths.
+    const briefEntry: BriefingEntry = {
+      id: loop.id, name: loop.name, cron: "", domain: domainLabel, prompt: "", mode: "single",
+      deliver: channel === "telegram" ? "telegram" : "log",
+      channels: channel === "gmail" ? ["email"] : [],
+      enabled: true, last_run: null, created_at: 0,
+    };
+    const cliLabel = `${cli.label} (briefing)`;
+    const delivered = await deliverBriefing(briefEntry, output, now, cliLabel, domainDir, cfg.deliverTelegram, { email: cfg.deliverEmail });
+
+    const sentTo: string[] = [];
+    if (delivered.log) sentTo.push("journal");
+    if (delivered.telegram) sentTo.push(`telegram (${delivered.telegram})`);
+    if (delivered.channels?.email) sentTo.push(`gmail: ${delivered.channels.email}`);
+    const emailErr = typeof delivered.channels?.email === "string" && /^(error|skipped)/.test(delivered.channels.email);
+    const note = sentTo.length ? `Briefing delivered to ${sentTo.join(", ")}` : "Briefing generated (no channel delivered)";
+
+    loop.lastRunTs = now;
+    entry.history.unshift({ ts: now, actions: [], note, done: false, tasksCreated: [] });
+    entry.history = entry.history.slice(0, MAX_HISTORY);
+    rt.loops[loop.id] = entry;
+    const lref = doc.loops.find((x) => x.id === loop.id);
+    if (lref) lref.lastRunTs = now;
+    try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
+    writeRuntime(domainDir, rt);
+    onPhase("done", "Done");
+    logActivity(root, { type: "briefing", domain: domainLabel, title: `${loop.name} delivered`, detail: note, status: emailErr ? "error" : "ok", ref: loop.id });
+    return { ok: true, loop: loop.name, note, done: false, actions: [], tasksCreated: [], pending: [], briefing: output };
+  } catch (e) {
+    loop.lastRunTs = now;
+    return { ok: false, loop: loop.name, note: "", done: false, actions: [], tasksCreated: [], pending: [], error: String(e).slice(0, 200) };
+  }
+}
+
 // Run every due loop in one domain. Returns how many loops advanced.
 async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Promise<number> {
   const doc = readDoc(domainDir);
@@ -389,6 +495,13 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   for (const loop of due) {
     try {
       const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
+      // Briefing loops synthesize + deliver a digest on their cadence (no steward pass).
+      if (loop.kind === "briefing") {
+        const bModel = (loop.model && loop.model.trim()) ? loop.model.trim() : (cfg.model || "");
+        const r = await runBriefingLoop({ cfg, root: resolve(cfg.vaultPath), domainDir, domainLabel, doc, loop, cli, runModel: bModel, state, memory, now, rt, entry, onPhase: () => {} });
+        if (r.ok) advanced += 1;
+        continue;
+      }
       const out = await runChatTurn({
         prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents),
         cwd: domainDir,

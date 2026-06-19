@@ -494,7 +494,7 @@ async function sendCouncilResult(
 // Split on paragraph boundaries to stay under Telegram's 4096-char ceiling.
 // If a single paragraph is too long, hard-split on character count — better
 // to deliver in pieces than to truncate the answer.
-async function sendLongMessage(token: string, chatId: number, text: string): Promise<void> {
+export async function sendLongMessage(token: string, chatId: number, text: string): Promise<void> {
   const chunks: string[] = [];
   let cur = "";
   for (const para of text.split(/\n\n+/)) {

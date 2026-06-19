@@ -2849,7 +2849,24 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
       else if (a === "--cli" && v) { provider = v; i++; }
       else if (a === "--model" && v) { model = v; i++; }
     }
-    const cfg = { ...DEFAULT_LOOPS, vaultPath: vault0, intervalSec: interval, provider, model };
+    // Briefing-loop delivery hooks (default channel Gmail). Best-effort: if a
+    // connector isn't authenticated, the hook is omitted and a briefing logs only.
+    let deliverEmail: ((s: string, b: string) => Promise<string>) | undefined;
+    try { deliverEmail = (await buildBriefingHooks(vault0, ["email"])).email; } catch { /* no gmail */ }
+    let deliverTelegram: ((t: string) => Promise<number>) | undefined;
+    try {
+      const { readTelegramConfig } = await import("./telegram-config.ts");
+      const { sendLongMessage } = await import("./telegram.ts");
+      const tg = readTelegramConfig();
+      if (tg?.botToken && tg.allowList?.length) {
+        deliverTelegram = async (text: string) => {
+          let ok = 0;
+          for (const id of tg.allowList) { try { await sendLongMessage(tg.botToken, id, text); ok++; } catch { /* skip */ } }
+          return ok;
+        };
+      }
+    } catch { /* no telegram */ }
+    const cfg = { ...DEFAULT_LOOPS, vaultPath: vault0, intervalSec: interval, provider, model, deliverEmail, deliverTelegram };
     // --exec: execute one APPROVED action for real via the agent's connectors.
     // Used by the desktop "Execute" button on a pending approval.
     if (args.includes("--exec")) {
