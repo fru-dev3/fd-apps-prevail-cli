@@ -15,31 +15,40 @@ import { existsSync, mkdirSync } from "node:fs";
 
 import { vappendLine, vreadFile, vwriteFile } from "./vault-session.ts";
 import { join, resolve } from "node:path";
-import { resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { resolveDomainDir, dataRoot, DOMAINS_DIR } from "./path-safety.ts";
 
-// A domain name is "safe" if it's a single path segment with no traversal.
-// Anything else (empty, "general", "..", contains a slash) resolves to the
-// vault root — the General space — mirroring the desktop's domain_dir().
-function isSafeDomain(d: string): boolean {
-  return d.length > 0 && d !== "general" && d !== "__general__" && !d.includes("/") && !d.includes("\\") && d !== ".." && d !== ".";
+// A path segment is unsafe if it could traverse out of the vault. (General is no
+// longer special-cased here — it is a first-class domain named "general".)
+function isTraversal(d: string): boolean {
+  return d.includes("/") || d.includes("\\") || d === ".." || d === ".";
 }
 
-// Resolve the directory a domain's curated files live in. General → vault root.
+// The General space is now a first-class domain. Canonical home: data/domains/general
+// on a v4 vault (one with a data/ dir); legacy vaults (no data/) keep General at the
+// vault root so older content still reads without a migration. The desktop's
+// paths.rs general resolution MUST mirror this exactly.
+export function generalDir(vaultPath: string): string {
+  const v = resolve(vaultPath);
+  const dr = dataRoot(v);
+  return dr !== v ? join(dr, DOMAINS_DIR, "general") : v;
+}
+
+// Resolve the directory a domain's curated files live in. General (empty / "general"
+// / "__general__" / anything unsafe) → generalDir; a named domain → its dir.
 export function domainDir(vaultPath: string, domain: string | null | undefined): string {
   const v = resolve(vaultPath);
-  return domain && isSafeDomain(domain) ? resolveDomainDir(v, domain) : v;
+  const d = (domain ?? "").trim();
+  if (!d || d === "general" || d === "__general__" || isTraversal(d)) return generalDir(v);
+  return resolveDomainDir(v, d);
 }
 
-// B2-12: resolve a SUPPORTING runtime file (ledgers, journal, surface, …). Mirrors
-// the desktop `paths.rs::runtime_file`: per-domain files stay inside the domain dir;
-// the General/root bucket's supporting files move to <vault>/build/ (via runtimePath,
-// which falls back to the vault root until a migration creates build/). Both
-// processes MUST agree on this so a migrated vault never desyncs. Do NOT use this
-// for CONTENT (_memory.md/_state.md/_skills) — those stay at the root.
+// Resolve a SUPPORTING runtime file (ledgers, journal, surface, decisions, …). Now
+// that General is a real domain, ALL of a domain's supporting files (General's
+// included) live inside the domain dir, exactly like a named domain. Truly GLOBAL
+// app-support (intents_distilled, activity, _meta) is accessed via runtimePath
+// directly, not through here. Both processes MUST agree on this.
 export function runtimeFile(vaultPath: string, domain: string | null | undefined, file: string): string {
-  const v = resolve(vaultPath);
-  if (domain && isSafeDomain(domain)) return join(resolveDomainDir(v, domain), file);
-  return runtimePath(v, file);
+  return join(domainDir(vaultPath, domain), file);
 }
 
 export function decisionsFile(vaultPath: string, domain: string | null | undefined): string {

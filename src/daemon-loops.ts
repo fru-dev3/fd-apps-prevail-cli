@@ -19,6 +19,7 @@ import { scanVault } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
 import { deliverBriefing, type BriefingEntry } from "./briefings.ts";
+import { generalDir } from "./decisions.ts";
 
 export interface LoopsConfig {
   vaultPath: string;
@@ -311,12 +312,13 @@ export async function runOneLoop(
   onPhase("resolve", "Locating the loop");
   // Resolve to whichever layout actually holds this domain's _loops.json (a vault
   // can be split across data/domains, domains/, or the legacy root during migration).
-  // "general" is the first-class domain backed by the vault ROOT (its _loops.json
-  // lives there, not under domains/), so resolve it to the root.
+  // "general" is a first-class domain: its canonical home is generalDir
+  // (data/domains/general on a v4 vault, else the legacy vault root).
   const isGeneral = domainName.toLowerCase() === "general";
+  const gdir = generalDir(root);
   const scanned = scanVault(root).find((d) => d.name === domainName)?.path;
-  const candidates = [scanned, isGeneral ? root : null, join(root, "data", "domains", domainName), join(root, "domains", domainName), join(root, domainName)].filter(Boolean) as string[];
-  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? (isGeneral ? root : scanned ?? join(root, "domains", domainName));
+  const candidates = [scanned, isGeneral ? gdir : null, join(root, "data", "domains", domainName), join(root, "domains", domainName), join(root, domainName)].filter(Boolean) as string[];
+  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? (isGeneral ? gdir : scanned ?? join(root, "domains", domainName));
   const doc = readDoc(domainDir);
   if (!doc) return empty("no loops in this domain");
   const loop = doc.loops.find((l) => l.id === loopRef || l.name === loopRef);
@@ -507,8 +509,8 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   const due = doc.loops.filter((l) => isDue(l, now));
   if (due.length === 0) return 0;
 
-  // The vault root is the "general" domain; everything else is named by its dir.
-  const domainLabel = resolve(domainDir) === resolve(cfg.vaultPath) ? "general" : basename(domainDir);
+  // The general domain dir maps to the label "general"; everything else by dir name.
+  const domainLabel = resolve(domainDir) === resolve(generalDir(cfg.vaultPath)) || resolve(domainDir) === resolve(cfg.vaultPath) ? "general" : basename(domainDir);
   const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
   const memory = safeRead(join(domainDir, "_memory.md"));
   // Curated high-level intents touching this domain — the compounding signal.
@@ -718,9 +720,9 @@ export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; lo
   let loops = 0;
   let aiTasks = 0;
 
-  // The vault root is the "general" domain (its loops/tasks live at the root, not
-  // under domains/), so include it alongside the scanned domains.
-  const targets = [...scanVault(root).map((d) => ({ name: d.name, path: d.path })), { name: "general", path: root }];
+  // Include the general domain (data/domains/general on v4, else root) alongside
+  // the scanned domains so its loops run on schedule too.
+  const targets = [...scanVault(root).map((d) => ({ name: d.name, path: d.path })), { name: "general", path: generalDir(root) }];
   for (const d of targets) {
     try {
       let touched = false;
