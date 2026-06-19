@@ -20,6 +20,8 @@ import { vreadFile, vwriteFile, vappendLine, vreadTail, vrotateLedgerPrefix } fr
 const LEDGER_ROTATE_BYTES = 4 * 1024 * 1024;
 const LEDGER_KEEP_TAIL_BYTES = 512 * 1024;
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
+import { suggestAppsForDomain, readAppSuggestions } from "./app-suggest.ts";
+import { scanCommunityApps } from "./vault.ts";
 
 export interface LearnConfig {
   vaultPath: string;
@@ -312,6 +314,58 @@ function safeRead(p: string): string {
 }
 
 // One pass across every domain in the vault.
+// Daily app-suggestion refresh. Piggybacks on the learn daemon's tick but is
+// gated to ~once a day per domain so it never over-calls the model: a domain is
+// (re)suggested only when its stored suggestions are missing or older than 22h.
+// Under Bunker Mode it only runs if the chosen provider is local.
+const APP_SUGGEST_TTL_MS = 22 * 60 * 60 * 1000;
+export async function refreshAppSuggestions(root: string, cfg: LearnConfig): Promise<number> {
+  // Domains = the same targets the learn pass walks (each domain dir + General).
+  const domains: string[] = [];
+  for (const name of readdirSync(root)) {
+    if (name.startsWith(".") || name.startsWith("_") || name === "build" || name === "data") continue;
+    try {
+      const p = join(root, name);
+      if (statSync(p).isDirectory() && existsSync(join(p, "state.md"))) domains.push(name.toLowerCase());
+    } catch { /* skip */ }
+  }
+  // v4 layout: domains live under data/domains/.
+  const dataDomains = join(root, "data", "domains");
+  if (existsSync(dataDomains)) {
+    for (const name of readdirSync(dataDomains)) {
+      if (name.startsWith(".") || name.startsWith("_")) continue;
+      try { if (statSync(join(dataDomains, name)).isDirectory()) domains.push(name.toLowerCase()); } catch { /* skip */ }
+    }
+  }
+  const uniq = Array.from(new Set(domains));
+  if (uniq.length === 0) return 0;
+
+  const bunker = process.env.PREVAIL_VAULT_LOCK === "1" ? false : process.env.PREVAIL_BUNKER === "1";
+  const LOCAL = new Set(["ollama", "lmstudio", "mlx"]);
+  let clis = await detectClis();
+  if (bunker) clis = clis.filter((c) => LOCAL.has(c.kind));
+  const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
+  if (!cli) return 0;
+  if (bunker && !LOCAL.has(cli.kind)) return 0;
+
+  const existing = readAppSuggestions(root);
+  const now = Date.now();
+  const apps = scanCommunityApps();
+  let refreshed = 0;
+  for (const domain of uniq) {
+    const prev = existing[domain];
+    if (prev && now - (prev.generated ?? 0) < APP_SUGGEST_TTL_MS) continue; // still fresh
+    const connected = apps
+      .filter((ap) => (ap.domains ?? []).some((d) => String(d).toLowerCase() === domain))
+      .map((ap) => ap.title || ap.id);
+    try {
+      await suggestAppsForDomain({ vault: root, domain, cli, model: cfg.model || undefined, connected });
+      refreshed += 1;
+    } catch { /* keep going; one domain failing shouldn't stop the rest */ }
+  }
+  return refreshed;
+}
+
 export async function learnOnce(cfg: LearnConfig): Promise<{ domains: number; lines: number }> {
   const root = cfg.vaultPath;
   let domains = 0, lines = 0;
@@ -341,6 +395,8 @@ export async function learnOnce(cfg: LearnConfig): Promise<{ domains: number; li
       writeCursor(t.ledgerDir, c);
     }
   }
+  // Daily app-suggestion refresh (freshness-gated to ~once/day per domain).
+  try { await refreshAppSuggestions(root, cfg); } catch { /* non-fatal */ }
   return { domains, lines };
 }
 
