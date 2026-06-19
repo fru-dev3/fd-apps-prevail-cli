@@ -429,7 +429,16 @@ async function runBriefingLoop(p: {
     const blocked = open.filter((t) => effectiveStatus(t) === "blocked");
     const todo = open.filter((t) => { const s = effectiveStatus(t); return s !== "doing" && s !== "blocked"; });
     const review = tasks.filter((t) => effectiveStatus(t) === "review");
+    // Time-sensitive + important work the briefing should lead with.
+    const today = new Date().toISOString().slice(0, 10);
+    const fmtT = (t: Task) => `${t.text}${t.due ? ` (due ${t.due})` : ""}`;
+    const overdue = open.filter((t) => t.due && t.due < today);
+    const dueSoon = open.filter((t) => t.due && t.due >= today && t.due <= new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10));
+    const critical = open.filter((t) => t.priority === "critical" || t.priority === "high");
     const taskRollup = [
+      overdue.length ? `OVERDUE (${overdue.length}): ${overdue.map(fmtT).join("; ")}` : "",
+      dueSoon.length ? `Due within 7 days (${dueSoon.length}): ${dueSoon.map(fmtT).join("; ")}` : "",
+      critical.length ? `Important/critical (${critical.length}): ${critical.map(fmtT).join("; ")}` : "",
       doing.length ? `In progress (${doing.length}): ${doing.map((t) => t.text).join("; ")}` : "",
       blocked.length ? `Blocked or waiting (${blocked.length}): ${blocked.map((t) => t.text).join("; ")}` : "",
       todo.length ? `To do (${todo.length}): ${todo.slice(0, 12).map((t) => t.text).join("; ")}` : "",
