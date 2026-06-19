@@ -24,6 +24,7 @@ export interface Task {
   status?: string; // "todo"|"doing"|"review"|"blocked"|"done"
   id?: string;
   trashed?: string; // YYYY-MM-DD soft-delete date; "~trashed:" token. Set = in Trash, not removed.
+  priority?: string; // "high" | "critical"; "~priority:" token. Absent = normal.
 }
 
 export const VALID_STATUS = ["todo", "doing", "review", "blocked", "done"] as const;
@@ -68,6 +69,7 @@ function splitMeta(raw: string): { text: string; meta: Partial<Task> } {
           else if (k === "id") meta.id = v;
           else if (k === "src") meta.source = v;
           else if (k === "trashed") meta.trashed = v;
+          else if (k === "priority") meta.priority = v;
           else matched = false;
           if (matched) { text = t.slice(0, idx); continue; }
         }
@@ -95,7 +97,7 @@ export function parseTasks(md: string): Task[] {
     else if (t.startsWith("- [x] ") || t.startsWith("- [X] ")) { done = true; rest = t.slice(t.indexOf("] ") + 2); }
     else continue;
     const { text, meta } = splitMeta(rest);
-    out.push({ text, done, due: meta.due, added: meta.added, source: meta.source, owner: meta.owner, status: meta.status, id: meta.id, trashed: meta.trashed });
+    out.push({ text, done, due: meta.due, added: meta.added, source: meta.source, owner: meta.owner, status: meta.status, id: meta.id, trashed: meta.trashed, priority: meta.priority });
   }
   return out;
 }
@@ -124,6 +126,7 @@ export function renderTasks(tasks: Task[]): string {
     if (t.status && ["doing", "review", "blocked"].includes(t.status)) line += ` ~status:${t.status}`;
     if (t.id) line += ` ~id:${t.id}`;
     if (t.trashed) line += ` ~trashed:${t.trashed}`;
+    if (t.priority && ["high", "critical"].includes(t.priority)) line += ` ~priority:${t.priority}`;
     s += `${line}\n`;
   }
   return s;
