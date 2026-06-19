@@ -30,6 +30,8 @@ interface Args {
   connectorsArgs: string[];
   recommendations: boolean;
   recommendationsArgs: string[];
+  suggestApps: boolean;
+  suggestAppsArgs: string[];
   mcp: boolean;
   mcpUnsafeDetach: boolean;
   mcpNetwork: boolean;
@@ -105,6 +107,8 @@ function parseArgs(argv: string[]): Args {
   let connectorsArgs: string[] = [];
   let recommendations = false;
   let recommendationsArgs: string[] = [];
+  let suggestApps = false;
+  let suggestAppsArgs: string[] = [];
   let mcp = false;
   let mcpUnsafeDetach = false;
   let mcpNetwork = false;
@@ -189,6 +193,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "recommendations" || a === "recommend") {
       recommendations = true;
       recommendationsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "suggest-apps") {
+      suggestApps = true;
+      suggestAppsArgs = argv.slice(i + 1);
       break;
     } else if (a === "mcp") {
       mcp = true;
@@ -340,6 +348,8 @@ function parseArgs(argv: string[]): Args {
     connectorsArgs,
     recommendations,
     recommendationsArgs,
+    suggestApps,
+    suggestAppsArgs,
     mcp,
     mcpUnsafeDetach,
     mcpNetwork,
@@ -3629,6 +3639,45 @@ async function main() {
     if (recs.length === 0) { console.log("no recommendations right now — keep using Prevail and they'll appear."); return; }
     console.log(`${recs.length} recommendation${recs.length === 1 ? "" : "s"}:\n`);
     for (const r of recs) console.log(`  [${r.category}] ${r.title}\n    ${r.detail}\n`);
+    return;
+  }
+  if (args.suggestApps) {
+    // prevail suggest-apps --domain <name|all> [--cli <kind>] [--model <id>] [--json]
+    // Learns from a domain's signals and proposes real apps to connect.
+    const a = args.suggestAppsArgs;
+    const vflag = a.indexOf("--vault");
+    const { readConfig: rc } = await import("./config.ts");
+    const { resolveDefaultVaultPath, scanVault, scanCommunityApps } = await import("./vault.ts");
+    const vault = (vflag >= 0 ? a[vflag + 1] : undefined) ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const json = a.includes("--json");
+    const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
+    const domainArg = (get("--domain") ?? "all").toLowerCase();
+    const cliKind = get("--cli");
+    const model = get("--model");
+    const { suggestAppsForDomain, readAppSuggestions } = await import("./app-suggest.ts");
+    if (a.includes("--read")) { process.stdout.write(`${JSON.stringify(readAppSuggestions(vault!))}\n`); return; }
+    const { detectClis } = await import("./cli-bridge.ts");
+    let clis = await detectClis();
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL = new Set(["ollama", "lmstudio", "mlx"]);
+      clis = clis.filter((c) => LOCAL.has(c.kind));
+    }
+    const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
+    if (!cli) { console.error("no AI CLI available for app suggestions"); process.exit(1); }
+    const domains = domainArg === "all" ? scanVault(vault!).map((d) => d.name.toLowerCase()) : domainArg.split(",").map((d) => d.trim()).filter(Boolean);
+    // Connected apps per domain, to exclude from suggestions.
+    const apps = scanCommunityApps();
+    for (const domain of domains) {
+      if (!json) process.stdout.write(`suggest-apps ${domain}…\n`);
+      const connected = apps.filter((ap) => (ap.domains ?? []).some((d) => String(d).toLowerCase() === domain)).map((ap) => ap.title || ap.id);
+      try {
+        const items = await suggestAppsForDomain({ vault: vault!, domain, cli, model: model ?? undefined, connected });
+        if (!json) for (const it of items) process.stdout.write(`  ${it.name} — ${it.reason}\n`);
+      } catch (e) {
+        if (!json) process.stdout.write(`  (failed: ${(e as Error).message})\n`);
+      }
+    }
+    if (json) process.stdout.write(`${JSON.stringify(readAppSuggestions(vault!))}\n`);
     return;
   }
   if (args.mcp) {
