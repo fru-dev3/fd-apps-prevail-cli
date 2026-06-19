@@ -257,7 +257,7 @@ export const EXTRA_CLI_FAMILIES: { kind: CliKind; bins: string[]; label: string;
   { kind: "cursor", bins: ["cursor-agent", "cursor"], label: "Cursor", protocol: "claude" },
   { kind: "kiro", bins: ["kiro"], label: "Kiro", protocol: "claude" },
   { kind: "paperclip", bins: ["paperclip"], label: "Paperclip", protocol: "claude" },
-  { kind: "motorcar", bins: ["motorcar"], label: "Motorcar", protocol: "claude" },
+  { kind: "motorcar", bins: ["multica", "motorcar"], label: "Multica AI", protocol: "claude" },
 ];
 const EXTRA_PROTOCOL: Record<string, "claude" | "gemini" | "codex"> =
   Object.fromEntries(EXTRA_CLI_FAMILIES.map((f) => [f.kind, f.protocol]));
