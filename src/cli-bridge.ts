@@ -1024,6 +1024,23 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // approve prompts, so without this the action silently no-ops. Gated by the
     // explicit per-action approval upstream.
     if (act) args.push("--dangerously-skip-permissions");
+    // Agent-facing MCP servers (e.g. the Composio gateway): only on agentic act
+    // runs (where --dangerously-skip-permissions already auto-allows MCP tools),
+    // and only once the managed config is present AND authorized. When Composio
+    // isn't connected this is a no-op, so a default turn is byte-for-byte the
+    // same. The vault root comes from the desktop's env, else the configured one.
+    if (act) {
+      try {
+        const { agentMcpConfigForClaude } = await import("./agent-mcp.ts");
+        let vaultRoot = process.env.PREVAIL_VAULT_ROOT;
+        if (!vaultRoot) {
+          const { resolveDefaultVaultPath } = await import("./vault.ts");
+          vaultRoot = resolveDefaultVaultPath();
+        }
+        const mcpCfg = agentMcpConfigForClaude(vaultRoot);
+        if (mcpCfg) args.push("--mcp-config", mcpCfg);
+      } catch { /* never let MCP wiring break a turn */ }
+    }
     args.push(...head);
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }

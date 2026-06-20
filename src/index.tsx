@@ -1822,6 +1822,44 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   process.exit(1);
 }
 
+// Drive the one-time Composio OAuth. Spawns `npx -y mcp-remote <url>`, which
+// opens the browser for the user to sign into Composio, then proxies the remote
+// MCP server. We watch its logs for the "connected" line (success), kill the
+// temp process, and return true. mcp-remote caches the token under ~/.mcp-auth,
+// so future agent runs reuse it without a browser. The only human step is the
+// irreducible login. Resolves false on error or a 5-minute abandonment timeout.
+async function runComposioAuth(url: string): Promise<boolean> {
+  const { spawn } = await import("node:child_process");
+  return await new Promise<boolean>((resolve) => {
+    let done = false;
+    let child: ReturnType<typeof spawn>;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      try { child?.kill(); } catch { /* already gone */ }
+      resolve(ok);
+    };
+    try {
+      child = spawn("npx", ["-y", "mcp-remote", url], { stdio: ["ignore", "pipe", "pipe"] });
+    } catch {
+      resolve(false);
+      return;
+    }
+    const onData = (buf: Buffer) => {
+      const s = buf.toString();
+      process.stderr.write(s); // surface progress to the desktop's stream
+      if (/connected to remote server|proxy established|established successfully|already authenticated|using existing/i.test(s)) {
+        finish(true);
+      }
+    };
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.on("error", () => finish(false));
+    child.on("exit", (code) => finish(code === 0));
+    setTimeout(() => finish(false), 300000);
+  });
+}
+
 async function connectorsCommand(args: string[]): Promise<void> {
   const { scanCommunityApps, resolveDefaultVaultPath, migrateLegacyAppsIntoVault } = await import("./vault.ts");
   const { probeConnector } = await import("./connector-probe.ts");
@@ -1830,7 +1868,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
   // Apps live in <vault>/data/apps (single source of truth). Resolve the
   // configured vault, fold any legacy ~/.prevail/apps into it, then scan from
   // the vault so the desktop only ever sees apps from one location.
-  const connectorsVault = resolveDefaultVaultPath();
+  // PREVAIL_VAULT_ROOT (set by the desktop on every engine call) is the
+  // authoritative vault; resolveDefaultVaultPath() is only a CLI-direct fallback
+  // and can point at a dev-demo vault, so it must NOT win over the env.
+  const connectorsVault = process.env.PREVAIL_VAULT_ROOT || resolveDefaultVaultPath();
   try { migrateLegacyAppsIntoVault(connectorsVault); } catch { /* best effort */ }
   const apps = scanCommunityApps(connectorsVault);
   const sub = args[0];
@@ -2168,6 +2209,44 @@ async function connectorsCommand(args: string[]): Promise<void> {
       } catch (e) { verified = false; proof = `could not run the test: ${e}`; }
     }
     process.stdout.write(`${JSON.stringify({ ok: scaffold.ok, plan, path: scaffold.path, error: scaffold.error, verified, proof })}\n`);
+    process.exit(0);
+  }
+  if (sub === "composio") {
+    // prevail connectors composio [--auth] [--confirm] [--status] [--json]
+    //   (default)   register the Composio gateway in the vault's agent .mcp.json
+    //               + scaffold a "composio" app so it shows as connected.
+    //   --auth      drive the one-time browser OAuth (npx mcp-remote), then mark
+    //               Composio authorized so the agent may use its tools headlessly.
+    //   --confirm   manual "I finished signing in" fallback: mark authorized.
+    //   --status    report { configured, authorized }.
+    const { addComposioToAgentConfig, composioStatus, markServerAuthorized, COMPOSIO_URL } = await import("./agent-mcp.ts");
+    const vault = connectorsVault;
+    if (args.includes("--status")) {
+      process.stdout.write(`${JSON.stringify({ ok: true, ...composioStatus(vault) })}\n`);
+      process.exit(0);
+    }
+    if (args.includes("--confirm")) {
+      markServerAuthorized(vault, "composio");
+      process.stdout.write(`${JSON.stringify({ ok: true, authorized: true })}\n`);
+      process.exit(0);
+    }
+    if (args.includes("--auth")) {
+      const ok = await runComposioAuth(COMPOSIO_URL);
+      if (ok) markServerAuthorized(vault, "composio");
+      process.stdout.write(`${JSON.stringify({ ok, authorized: ok })}\n`);
+      process.exit(0);
+    }
+    const r = addComposioToAgentConfig(vault);
+    const { scaffoldCommunityApp } = await import("./vault.ts");
+    const scaffold = scaffoldCommunityApp({
+      id: "composio",
+      title: "Composio",
+      integration: "mcp",
+      domains: [],
+      vaultRoot: vault,
+      connection: "Composio managed gateway: one OAuth connection fronts 1000+ apps as tools for the agent. Authorize once, then Prevail can act through any app you connect in Composio.",
+    });
+    process.stdout.write(`${JSON.stringify({ ok: true, mcpConfig: r.path, alreadyPresent: r.alreadyPresent, appPath: scaffold.path, next: "auth" })}\n`);
     process.exit(0);
   }
   if (sub === "add") {
