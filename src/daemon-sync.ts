@@ -15,7 +15,7 @@
 // failures, once, so a broken connector becomes a visible task instead of a
 // silent gap.
 
-import { existsSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import type { AppSkill, AppRoute } from "./vault.ts";
 import { scanCommunityApps, scanApps, scanVault } from "./vault.ts";
@@ -427,11 +427,18 @@ async function runGatewaySync(app: AppSkill): Promise<{ outcome: RunOutcome; res
   const outAbs = join(app.path, GATEWAY_SUMMARY_FILE);
   try { mkdirSync(dirname(outAbs), { recursive: true }); } catch { /* best effort */ }
 
+  // The user's own "what to pull" instruction (set in the app detail) takes
+  // priority over the generic "recent activity" default, so each sync fetches
+  // exactly what they asked for.
+  const want = (app.pullInstructions ?? "").trim();
+  const whatToFetch = want
+    ? `Fetch specifically what the user asked for: ${want}`
+    : `fetch the user's latest data (recent items, updates, or activity)`;
   const prompt = [
     `You are syncing the "${gw.toolkit}" app, connected through the ${gw.provider} gateway.`,
     gw.provider === "composio"
-      ? `Use the available Composio MCP tools for the "${gw.toolkit}" toolkit to fetch the user's latest data (recent items, updates, or activity).`
-      : `Use the Nango connection for the "${gw.toolkit}" toolkit (secret key is in the NANGO_SECRET_KEY env var; the REST API is at https://api.nango.dev) to fetch the user's latest data.`,
+      ? `Use the available Composio MCP tools for the "${gw.toolkit}" toolkit to ${whatToFetch}.`
+      : `Use the Nango connection for the "${gw.toolkit}" toolkit (secret key is in the NANGO_SECRET_KEY env var; the REST API is at https://api.nango.dev) to ${whatToFetch}.`,
     `Then write a concise markdown summary of what you found to the file at this exact path:`,
     `  ${outAbs}`,
     `Keep the summary short and skimmable (a few bullets). If you genuinely cannot fetch any data (no connection, auth failed), write a one-line note saying so to that same file.`,
@@ -490,6 +497,54 @@ async function runGatewaySync(app: AppSkill): Promise<{ outcome: RunOutcome; res
     artifacts,
   };
   return { outcome: { ok: true, skillsRun: 1 }, results: [result] };
+}
+
+// Discover what data an app CAN provide through its gateway: one agent turn that
+// asks the gateway (Composio MCP tools / Nango endpoints) to enumerate the data
+// types available for this toolkit, then caches the markdown to the app folder
+// so the desktop can show "what this can pull". Cheap, on-demand (a button), not
+// part of the scheduled sync. Returns { ok, markdown, error? }.
+const GATEWAY_CAPABILITIES_FILE = "data/available-data.md";
+
+export async function discoverGatewayCapabilities(
+  app: AppSkill,
+): Promise<{ ok: boolean; markdown?: string; error?: string }> {
+  const gw = app.gateway;
+  if (!gw) return { ok: false, error: `"${app.id}" is not a gateway app` };
+  const keyEnv = gw.provider === "composio" ? "COMPOSIO_API_KEY" : "NANGO_SECRET_KEY";
+  if (!process.env[keyEnv] || !String(process.env[keyEnv]).trim()) {
+    return { ok: false, error: `${gw.provider} not configured: set ${keyEnv} to discover capabilities` };
+  }
+  const outAbs = join(app.path, GATEWAY_CAPABILITIES_FILE);
+  try { mkdirSync(dirname(outAbs), { recursive: true }); } catch { /* best effort */ }
+  const prompt = [
+    `List the kinds of data the "${gw.toolkit}" app can provide through the ${gw.provider} gateway.`,
+    gw.provider === "composio"
+      ? `Use COMPOSIO_SEARCH_TOOLS (and tool schemas if helpful) for the "${gw.toolkit}" toolkit to see what is available. Do NOT fetch the user's actual data - just enumerate the capabilities.`
+      : `Use the Nango integration metadata for "${gw.toolkit}" (the available syncs / endpoints) to see what is available. Do NOT fetch the user's actual data - just enumerate the capabilities.`,
+    `Write a short markdown list to this exact path: ${outAbs}`,
+    `Each bullet: a data type the user could pull (e.g. "Channel analytics - views, watch time, subscriber changes") and one example of how it could enrich a personal life-OS.`,
+    `End your reply with a line "===SUMMARY===" followed by the same bullet list (concise).`,
+  ].join("\n\n");
+  try {
+    const { runChatTurn, detectSubprocessClis } = await import("./cli-bridge.ts");
+    const claude = detectSubprocessClis().find((c) => c.kind === "claude");
+    if (!claude) return { ok: false, error: "capability discovery needs the claude CLI on PATH" };
+    const ctl = new AbortController();
+    const killer = setTimeout(() => ctl.abort(), 4 * 60_000);
+    let reply = "";
+    try {
+      reply = await runChatTurn({ prompt, cwd: app.path, cli: claude, model: "", isFirst: true, bare: true, act: true, signal: ctl.signal, maxOutputChars: 16_000 });
+    } finally { clearTimeout(killer); }
+    // Prefer the file the agent wrote; fall back to the reply summary.
+    let markdown = "";
+    try { if (existsSync(outAbs)) markdown = readFileSync(outAbs, "utf8"); } catch { /* fall back */ }
+    if (!markdown.trim()) markdown = extractGatewaySummary(reply);
+    if (!markdown.trim()) return { ok: false, error: "the gateway returned no capability list (check the connection)" };
+    return { ok: true, markdown: markdown.slice(0, 8000) };
+  } catch (e) {
+    return { ok: false, error: `capability discovery failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
 
 // Pull a ===SUMMARY=== block out of an agent reply, else the last non-empty line.

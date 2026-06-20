@@ -615,6 +615,10 @@ export interface AppSkill {
   // turn over the gateway's MCP) instead of a per-app skill, and `integration`
   // stays "manual". See agent-mcp.ts + daemon-sync.ts.
   gateway?: AppGateway;
+  // Free-text user instruction for what this app should pull on each sync (e.g.
+  // "my last-30-day channel views + 10 most recent uploads with view counts").
+  // Injected into the gateway sync prompt so the user controls what's fetched.
+  pullInstructions?: string;
 }
 
 export interface AppGateway {
@@ -883,6 +887,7 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     authEnvVars: coerceEnvVarNames(o.auth_env_vars),
     mcpSetup: coerceMcpSetup(o.mcp),
     gateway: coerceGateway(o.gateway),
+    pullInstructions: typeof o.pull_instructions === "string" ? o.pull_instructions : undefined,
   };
 }
 
@@ -971,6 +976,7 @@ export function scanCommunityApps(vaultPath?: string): AppSkill[] {
         authEnvVars: m.authEnvVars,
         mcpSetup: m.mcpSetup,
         gateway: m.gateway,
+        pullInstructions: m.pullInstructions,
       });
     }
   }
@@ -1064,6 +1070,7 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
     let appIntegration: string | undefined;
     let appRefresh: AppRefresh | undefined;
     let appGateway: AppGateway | undefined;
+    let appPullInstructions: string | undefined;
     try {
       const manifestPath = join(appPath, "manifest.json");
       if (existsSync(manifestPath)) {
@@ -1075,6 +1082,7 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
           // a scaffolded vault app on its schedule (and tell gateway apps apart).
           appRefresh = coerceRefresh(m.refresh);
           appGateway = coerceGateway(m.gateway);
+          if (typeof m.pull_instructions === "string") appPullInstructions = m.pull_instructions;
         }
       }
     } catch { /* a malformed manifest just leaves these undefined */ }
@@ -1095,6 +1103,7 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
       authCheck: appAuthCheck,
       refresh: appRefresh,
       gateway: appGateway,
+      pullInstructions: appPullInstructions,
       connectionNotes: conn.notes,
       status: conn.status,
       lastSuccessTs: conn.lastSuccessTs,
@@ -1587,6 +1596,31 @@ export function setCommunityAppSchedule(
     return { ok: true, path: app.manifestPath, refresh: coerced };
   } catch (e2) {
     return { ok: false, error: `update failed: ${e2}` };
+  }
+}
+
+// Set (or clear) the free-text "what to pull" instruction for an app. Persisted
+// to the manifest's `pull_instructions`; the gateway sync injects it so the user
+// controls exactly what each sync fetches. Empty string clears it.
+export function setCommunityAppPullInstructions(
+  id: string,
+  instructions: string,
+  vaultPath?: string,
+): { ok: boolean; path?: string; pullInstructions?: string | null; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  const text = (instructions ?? "").trim().slice(0, 4000);
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    if (!text) { delete raw.pull_instructions; }
+    else { raw.pull_instructions = text; }
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, pullInstructions: text || null };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
   }
 }
 

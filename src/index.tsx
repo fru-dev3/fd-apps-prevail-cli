@@ -1862,6 +1862,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
             // each connection mode's list separate (a Nango app must not appear
             // under Direct) and to label the connection method in the sidebar.
             gateway: a.gateway ?? null,
+            // The user's "what to pull" instruction (drives the gateway sync).
+            pullInstructions: a.pullInstructions ?? null,
             lastSuccessTs: a.lastSuccessTs ?? null,
             lastError: a.lastError ?? null,
             account: a.account ?? null,
@@ -1980,6 +1982,22 @@ async function connectorsCommand(args: string[]): Promise<void> {
     for (const s of skills) {
       console.log(`  ${s.id.padEnd(28)}  runner=${s.runner.padEnd(8)} trigger=${s.trigger ?? "on-demand"}`);
     }
+    return;
+  }
+  if (sub === "gateway-capabilities") {
+    // Discover what data a gateway app CAN provide (one agent turn over the
+    // gateway). On-demand (the desktop's "Discover" button), not the sync.
+    const id = args[1];
+    if (!id) { console.error("usage: prevail connectors gateway-capabilities <id>"); process.exit(1); }
+    const app = apps.find((a) => a.id === id);
+    const failJson = (msg: string) => { if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); } console.error(msg); process.exit(1); };
+    if (!app) return failJson(`no connector with id "${id}"`);
+    if (!app.gateway) return failJson(`"${id}" is not a gateway app`);
+    const { discoverGatewayCapabilities } = await import("./daemon-sync.ts");
+    const r = await discoverGatewayCapabilities(app);
+    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(0); }
+    if (r.ok) console.log(r.markdown);
+    else { console.error(r.error); process.exit(1); }
     return;
   }
   if (sub === "skill-files") {
@@ -2361,6 +2379,15 @@ async function connectorsCommand(args: string[]): Promise<void> {
         process.exit(r.ok ? 0 : 1);
       }
       if (r.ok) console.log(r.refresh ? `schedule for "${id}": every ${r.refresh.every}${r.refresh.at ? ` at ${r.refresh.at}` : ""}${r.refresh.on ? ` on ${r.refresh.on}` : ""}` : `schedule cleared for "${id}"`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
+    // prevail connectors set <id> instructions "<what to pull>"  ("" clears it)
+    if (id && field === "instructions") {
+      const { setCommunityAppPullInstructions } = await import("./vault.ts");
+      const r = setCommunityAppPullInstructions(id, value ?? "", connectorsVault);
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(r.pullInstructions ? `pull instructions for "${id}" set` : `pull instructions for "${id}" cleared`);
       else { console.error(r.error); process.exit(1); }
       return;
     }
