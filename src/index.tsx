@@ -1857,6 +1857,11 @@ async function connectorsCommand(args: string[]): Promise<void> {
             status: a.status,
             configured: a.configured,
             domains: a.domains ?? [],
+            // The gateway block (Composio / Nango) when this app is fronted by a
+            // managed gateway. null for a Direct app. The desktop uses it to keep
+            // each connection mode's list separate (a Nango app must not appear
+            // under Direct) and to label the connection method in the sidebar.
+            gateway: a.gateway ?? null,
             lastSuccessTs: a.lastSuccessTs ?? null,
             lastError: a.lastError ?? null,
             account: a.account ?? null,
@@ -1921,6 +1926,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const id = args[1];
     if (!id) { console.error("usage: prevail connectors remove <id>"); process.exit(1); }
     const app = apps.find((a) => a.id === id);
+    const { appsContainer } = await import("./path-safety.ts");
     const { rmSync } = await import("node:fs");
     const { homedir } = await import("node:os");
     const { resolve, sep } = await import("node:path");
@@ -1929,12 +1935,17 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error(msg); process.exit(1);
     };
     if (!app) return fail(`no connector with id "${id}"`);
-    // Guard: only remove folders under the user apps dir (or the dev override).
-    const userRoots = [resolve(homedir(), ".prevail", "apps")];
+    // Guard: a user app lives in the vault's data/apps (the single source of
+    // truth), the legacy ~/.prevail/apps, or the dev override - any of those is
+    // the user's own and is removable. The ONLY thing we refuse is a connector
+    // that ships read-only inside the app bundle (apps/community), which isn't
+    // in any of these roots. (Gateway apps - Composio/Nango - are scaffolded
+    // into the vault's data/apps too, so they delete like any other.)
+    const userRoots = [resolve(appsContainer(connectorsVault)), resolve(homedir(), ".prevail", "apps")];
     if (process.env.PREVAIL_APPS_DIR) userRoots.push(resolve(process.env.PREVAIL_APPS_DIR));
     const resolved = resolve(app.path);
     const underUser = userRoots.some((root) => resolved === root || resolved.startsWith(root + sep));
-    if (!underUser) return fail(`"${id}" is a bundled connector and cannot be deleted; only connectors you installed (under ~/.prevail/apps) can be removed.`);
+    if (!underUser) return fail(`"${id}" is a built-in connector that ships with Prevail and can't be deleted. Connectors you added live in your vault and can be removed.`);
     try {
       rmSync(app.path, { recursive: true, force: true });
     } catch (e) {
