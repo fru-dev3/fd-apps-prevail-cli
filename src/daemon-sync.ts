@@ -174,6 +174,9 @@ function mirrorConnectionStatus(app: AppSkill, status: string, lastSuccessTs: nu
 
 // Manifest refresh -> 5-field cron. "hourly"/"daily"/"weekly" (+ at/on) go
 // through the shared cadenceToCron; "<N>h" intervals get a */N hour field.
+// "<N>d"/"<N>w" are NOT cron-expressible as true rolling intervals (cron's
+// day-of-month */N resets each month), so they return null here and are
+// driven interval-based via refreshIntervalMs / nextRefreshDue instead.
 export function refreshToCron(r: { every: string; at?: string; on?: string }): string | null {
   const m = r.every.match(/^(\d+)h$/);
   if (m) {
@@ -181,6 +184,39 @@ export function refreshToCron(r: { every: string; at?: string; on?: string }): s
     return `0 */${n} * * *`;
   }
   return cadenceToCron([r.every, r.on, r.at].filter(Boolean).join(" "));
+}
+
+// Rolling interval (ms) for cadences that fire every N days/weeks. "<N>d" =>
+// N*24h, "<N>w" => N*7*24h. Returns null for cron-expressible cadences
+// (hourly / Nh / daily / weekly), which keep flowing through refreshToCron.
+export function refreshIntervalMs(r: { every: string }): number | null {
+  const d = r.every.match(/^(\d+)d$/);
+  if (d) {
+    const n = Math.max(1, Math.min(90, Number(d[1])));
+    return n * 24 * 3600_000;
+  }
+  const w = r.every.match(/^(\d+)w$/);
+  if (w) {
+    const n = Math.max(1, Math.min(12, Number(w[1])));
+    return n * 7 * 24 * 3600_000;
+  }
+  return null;
+}
+
+// Resolve the next-due timestamp for an app's refresh. Interval cadences
+// (Nd/Nw) advance from the last run (or `now` on first run) by their rolling
+// interval; everything else uses the cron schedule. Falls back to 24h if a
+// cadence somehow yields neither.
+export function nextRefreshDue(
+  r: { every: string; at?: string; on?: string },
+  now: number,
+  lastRunTs: number | null,
+): number {
+  const intervalMs = refreshIntervalMs(r);
+  if (intervalMs !== null) return (lastRunTs ?? now) + intervalMs;
+  const cron = refreshToCron(r);
+  const fallback = now + 24 * 3600_000;
+  return cron ? (nextRunWithin(cron, 8) ?? fallback) : fallback;
 }
 
 // Exponential failure backoff: after N consecutive failures, push the next due
@@ -489,8 +525,7 @@ export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: numb
       const probe = app.gateway
         ? { ok: true, status: "connected" as const, message: "", ts: now, activeConnection: undefined }
         : await probeConnector(app, (app.authCheck as AuthCheckSpec | null) ?? null);
-      const cron = refreshToCron(app.refresh!);
-      const nextDue = cron ? nextRunWithin(cron, 8) : now + 24 * 3600_000;
+      const nextDue = nextRefreshDue(app.refresh!, now, now);
 
       if (!probe.ok) {
         failed++;

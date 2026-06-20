@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  syncOnce, syncApp, refreshToCron, globMatch, readSyncState, looksLikeSecretFile, backoffNextDue,
+  syncOnce, syncApp, refreshToCron, refreshIntervalMs, nextRefreshDue, globMatch, readSyncState, looksLikeSecretFile, backoffNextDue,
   producedRealData,
   type SyncConfig,
 } from "./daemon-sync.ts";
@@ -84,6 +84,55 @@ describe("refreshToCron", () => {
     const cron = refreshToCron({ every: "weekly", on: "fri", at: "17:00" });
     expect(cron).toContain("17");
     expect(cron?.endsWith("5") || cron?.includes("fri")).toBe(true);
+  });
+  // Multi-day / multi-week cadences are interval-based, NOT cron, so
+  // refreshToCron returns null for them and refreshIntervalMs carries the ms.
+  test("multi-day/week are not cron", () => {
+    expect(refreshToCron({ every: "2d" })).toBeNull();
+    expect(refreshToCron({ every: "1w" })).toBeNull();
+  });
+});
+
+describe("refreshIntervalMs", () => {
+  const DAY = 24 * 3600_000;
+  test("every other day = 2*24h", () => expect(refreshIntervalMs({ every: "2d" })).toBe(2 * DAY));
+  test("1d = 24h", () => expect(refreshIntervalMs({ every: "1d" })).toBe(DAY));
+  test("90d = 90*24h", () => expect(refreshIntervalMs({ every: "90d" })).toBe(90 * DAY));
+  test("1w = 7*24h", () => expect(refreshIntervalMs({ every: "1w" })).toBe(7 * DAY));
+  test("2w = 14*24h", () => expect(refreshIntervalMs({ every: "2w" })).toBe(14 * DAY));
+  test("cron cadences yield null", () => {
+    expect(refreshIntervalMs({ every: "hourly" })).toBeNull();
+    expect(refreshIntervalMs({ every: "6h" })).toBeNull();
+    expect(refreshIntervalMs({ every: "daily" })).toBeNull();
+    expect(refreshIntervalMs({ every: "weekly" })).toBeNull();
+  });
+});
+
+describe("nextRefreshDue", () => {
+  const DAY = 24 * 3600_000;
+  const now = 1_700_000_000_000;
+  test("2d advances from last run by 2 days", () =>
+    expect(nextRefreshDue({ every: "2d" }, now, now)).toBe(now + 2 * DAY));
+  test("1w advances from last run by 7 days", () =>
+    expect(nextRefreshDue({ every: "1w" }, now, now)).toBe(now + 7 * DAY));
+  test("interval anchors on lastRunTs, not now", () =>
+    expect(nextRefreshDue({ every: "1d" }, now, now - DAY)).toBe(now));
+  test("first run (null lastRun) anchors on now", () =>
+    expect(nextRefreshDue({ every: "3d" }, now, null)).toBe(now + 3 * DAY));
+  // "daily"/"weekly" stay cron-driven. nextRunWithin resolves against the real
+  // clock, so anchor the bound on real Date.now(): the next daily slot is always
+  // within ~24h, and weekly within ~7d.
+  test("daily still resolves within ~24h via cron", () => {
+    const real = Date.now();
+    const due = nextRefreshDue({ every: "daily", at: "07:30" }, real, real);
+    expect(due).toBeGreaterThan(real);
+    expect(due).toBeLessThanOrEqual(real + DAY + 1000);
+  });
+  test("weekly still resolves within ~7d via cron", () => {
+    const real = Date.now();
+    const due = nextRefreshDue({ every: "weekly", on: "fri", at: "17:00" }, real, real);
+    expect(due).toBeGreaterThan(real);
+    expect(due).toBeLessThanOrEqual(real + 7 * DAY + 1000);
   });
 });
 

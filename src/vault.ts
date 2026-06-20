@@ -783,11 +783,11 @@ function coerceMcpSetup(v: unknown): { install?: string; command?: string } | un
 // Defensive coercion for the sync-layer manifest fields. Same philosophy as
 // coerceCommunityManifest: a hostile or malformed block degrades to undefined,
 // never throws, never escapes its caps.
-function coerceRefresh(v: unknown): AppRefresh | undefined {
+export function coerceRefresh(v: unknown): AppRefresh | undefined {
   if (!v || typeof v !== "object") return undefined;
   const o = v as Record<string, unknown>;
   const every = typeof o.every === "string" ? o.every.trim().toLowerCase().slice(0, 16) : "";
-  if (!/^(hourly|([2-9]|1[0-9]|2[0-3])h|daily|weekly)$/.test(every)) return undefined;
+  if (!/^(hourly|([2-9]|1[0-9]|2[0-3])h|daily|weekly|([1-9]|[1-8][0-9]|90)d|([1-9]|1[0-2])w)$/.test(every)) return undefined;
   const at = typeof o.at === "string" && /^\d{1,2}:\d{2}$/.test(o.at.trim()) ? o.at.trim() : undefined;
   const on = typeof o.on === "string" && /^(mon|tue|wed|thu|fri|sat|sun)$/i.test(o.on.trim()) ? o.on.trim().toLowerCase() : undefined;
   const skill = typeof o.skill === "string" && /^[a-z0-9_-]+$/i.test(o.skill.trim()) ? o.skill.trim() : undefined;
@@ -1479,8 +1479,9 @@ export function setCommunityAppIntegration(
 }
 
 // APP-4: set (or clear) an app's autonomous-sync schedule. `every` is the
-// cadence the engine understands (hourly | <2-23>h | daily | weekly), with an
-// optional HH:MM `at` and weekday `on`. "" / "off" / "none" clears the schedule.
+// cadence the engine understands (hourly | <2-23>h | daily | weekly |
+// <1-90>d | <1-12>w), with an optional HH:MM `at` and weekday `on`.
+// "" / "off" / "none" clears the schedule.
 // The value is round-tripped through coerceRefresh — the SAME validator the
 // engine uses when reading the manifest — so anything written here is honored.
 export function setCommunityAppSchedule(
@@ -1508,7 +1509,7 @@ export function setCommunityAppSchedule(
       ? (raw.refresh as Record<string, unknown>).skill : undefined;
     const coerced = coerceRefresh({ every: e, at, on, skill: prevSkill });
     if (!coerced) {
-      return { ok: false, error: `invalid cadence "${every}" (use hourly | 2h..23h | daily | weekly; optional at HH:MM, on mon..sun)` };
+      return { ok: false, error: `invalid cadence "${every}" (use hourly | 2h..23h | daily | weekly | 1d..90d | 1w..12w; optional at HH:MM, on mon..sun)` };
     }
     raw.refresh = coerced;
     writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
