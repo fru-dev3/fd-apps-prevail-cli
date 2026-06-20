@@ -1982,6 +1982,49 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     return;
   }
+  if (sub === "skill-files") {
+    // The app's skills as attachable CONTEXT (not runnable actions): the primary
+    // SKILL.md plus every file under skills/. Returns name + path + a one-line
+    // summary + the full body, so the desktop chat can suggest them and attach
+    // one as context with no second read (handles both the flat skills/<id>.md
+    // and the skills/<id>/SKILL.md layouts). JSON only - this feeds the UI.
+    const id = args[1];
+    if (!id) { console.error("usage: prevail connectors skill-files <connector-id>"); process.exit(1); }
+    const app = apps.find((a) => a.id === id);
+    if (!app) {
+      if (args.includes("--json")) { process.stdout.write("[]\n"); return; }
+      console.error(`no connector with id "${id}"`); process.exit(1);
+    }
+    const { existsSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { loadSkillsForConnector } = await import("./connector-skills.ts");
+    const niceName = (s: string) => s.replace(/[-_]+/g, " ").replace(/\.md$/i, "").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+    const summarize = (raw: string) => {
+      // Drop a leading YAML frontmatter block, then take the first real prose
+      // line (skip headings, table rows, code fences).
+      const fm = raw.match(/^---\n[\s\S]*?\n---\n?/);
+      const body = fm ? raw.slice(fm[0].length) : raw;
+      for (const line of body.split("\n")) {
+        const t = line.trim();
+        if (t && !t.startsWith("#") && !t.startsWith("|") && !t.startsWith("```")) {
+          return t.replace(/[*_`>]/g, "").replace(/^[-\s]+/, "").slice(0, 160);
+        }
+      }
+      return "";
+    };
+    const out: Array<Record<string, unknown>> = [];
+    const primary = join(app.path, "SKILL.md");
+    if (existsSync(primary)) {
+      let body = ""; try { body = readFileSync(primary, "utf8"); } catch { /* unreadable */ }
+      out.push({ id: "__primary__", name: `${app.title} skill`, path: primary, summary: summarize(body), body, primary: true });
+    }
+    for (const s of loadSkillsForConnector(app)) {
+      let body = ""; try { body = readFileSync(s.filePath, "utf8"); } catch { body = s.description ?? ""; }
+      out.push({ id: s.id, name: niceName(s.id), path: s.filePath, summary: summarize(body), body, primary: false, runner: s.runner, trigger: s.trigger ?? "on-demand" });
+    }
+    process.stdout.write(`${JSON.stringify(out)}\n`);
+    return;
+  }
   if (sub === "run") {
     const id = args[1];
     const skillId = args[2];
