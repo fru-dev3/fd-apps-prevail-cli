@@ -1822,44 +1822,6 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   process.exit(1);
 }
 
-// Drive the one-time Composio OAuth. Spawns `npx -y mcp-remote <url>`, which
-// opens the browser for the user to sign into Composio, then proxies the remote
-// MCP server. We watch its logs for the "connected" line (success), kill the
-// temp process, and return true. mcp-remote caches the token under ~/.mcp-auth,
-// so future agent runs reuse it without a browser. The only human step is the
-// irreducible login. Resolves false on error or a 5-minute abandonment timeout.
-async function runComposioAuth(url: string): Promise<boolean> {
-  const { spawn } = await import("node:child_process");
-  return await new Promise<boolean>((resolve) => {
-    let done = false;
-    let child: ReturnType<typeof spawn>;
-    const finish = (ok: boolean) => {
-      if (done) return;
-      done = true;
-      try { child?.kill(); } catch { /* already gone */ }
-      resolve(ok);
-    };
-    try {
-      child = spawn("npx", ["-y", "mcp-remote", url], { stdio: ["ignore", "pipe", "pipe"] });
-    } catch {
-      resolve(false);
-      return;
-    }
-    const onData = (buf: Buffer) => {
-      const s = buf.toString();
-      process.stderr.write(s); // surface progress to the desktop's stream
-      if (/connected to remote server|proxy established|established successfully|already authenticated|using existing/i.test(s)) {
-        finish(true);
-      }
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("error", () => finish(false));
-    child.on("exit", (code) => finish(code === 0));
-    setTimeout(() => finish(false), 300000);
-  });
-}
-
 async function connectorsCommand(args: string[]): Promise<void> {
   const { scanCommunityApps, resolveDefaultVaultPath, migrateLegacyAppsIntoVault } = await import("./vault.ts");
   const { probeConnector } = await import("./connector-probe.ts");
@@ -2212,31 +2174,22 @@ async function connectorsCommand(args: string[]): Promise<void> {
     process.exit(0);
   }
   if (sub === "composio") {
-    // prevail connectors composio [--auth] [--confirm] [--status] [--json]
-    //   (default)   register the Composio gateway in the vault's agent .mcp.json
-    //               + scaffold a "composio" app so it shows as connected.
-    //   --auth      drive the one-time browser OAuth (npx mcp-remote), then mark
-    //               Composio authorized so the agent may use its tools headlessly.
-    //   --confirm   manual "I finished signing in" fallback: mark authorized.
-    //   --status    report { configured, authorized }.
-    const { addComposioToAgentConfig, composioStatus, markServerAuthorized, COMPOSIO_URL } = await import("./agent-mcp.ts");
+    // prevail connectors composio [--status] [--json]
+    //   (default)   materialize the machine-local agent MCP config from the
+    //               COMPOSIO_API_KEY env var (~/.prevail/agent-mcp.json) + scaffold
+    //               a "composio" app so it shows in the connectors list.
+    //   --status    report { configured, authorized } (configured = a key is set).
+    const { writeAgentMcpConfig, composioStatus, composioApiKey, agentMcpConfigPath } = await import("./agent-mcp.ts");
     const vault = connectorsVault;
     if (args.includes("--status")) {
-      process.stdout.write(`${JSON.stringify({ ok: true, ...composioStatus(vault) })}\n`);
+      process.stdout.write(`${JSON.stringify({ ok: true, ...composioStatus() })}\n`);
       process.exit(0);
     }
-    if (args.includes("--confirm")) {
-      markServerAuthorized(vault, "composio");
-      process.stdout.write(`${JSON.stringify({ ok: true, authorized: true })}\n`);
-      process.exit(0);
+    if (!composioApiKey()) {
+      process.stdout.write(`${JSON.stringify({ ok: false, configured: false, error: `set ${"COMPOSIO_API_KEY"} (a ck_... value) to enable the Composio gateway` })}\n`);
+      process.exit(1);
     }
-    if (args.includes("--auth")) {
-      const ok = await runComposioAuth(COMPOSIO_URL);
-      if (ok) markServerAuthorized(vault, "composio");
-      process.stdout.write(`${JSON.stringify({ ok, authorized: ok })}\n`);
-      process.exit(0);
-    }
-    const r = addComposioToAgentConfig(vault);
+    const mcpConfig = writeAgentMcpConfig() ?? agentMcpConfigPath();
     const { scaffoldCommunityApp } = await import("./vault.ts");
     const scaffold = scaffoldCommunityApp({
       id: "composio",
@@ -2244,10 +2197,53 @@ async function connectorsCommand(args: string[]): Promise<void> {
       integration: "mcp",
       domains: [],
       vaultRoot: vault,
-      connection: "Composio managed gateway: one OAuth connection fronts 1000+ apps as tools for the agent. Authorize once, then Prevail can act through any app you connect in Composio.",
+      connection: "Composio managed gateway: one API key fronts 1000+ apps as tools for the agent. The agent can act through any app you connect in Composio.",
     });
-    process.stdout.write(`${JSON.stringify({ ok: true, mcpConfig: r.path, alreadyPresent: r.alreadyPresent, appPath: scaffold.path, next: "auth" })}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, mcpConfig, appPath: scaffold.path })}\n`);
     process.exit(0);
+  }
+  if (sub === "gateway-add") {
+    // prevail connectors gateway-add --provider <composio|nango> --toolkit <slug>
+    //   --id <id> --title <title> [--json]
+    //   Scaffolds a gateway-fronted app into the vault: manifest gets a
+    //   gateway:{provider,toolkit} block, integration stays "manual". Idempotent —
+    //   re-running merges the gateway block into an existing app, never errors.
+    const flag = (name: string): string | undefined => {
+      const i = args.indexOf(name);
+      return i >= 0 ? args[i + 1] : undefined;
+    };
+    const provider = (flag("--provider") ?? "").trim().toLowerCase();
+    const toolkit = (flag("--toolkit") ?? "").trim();
+    const id = (flag("--id") ?? "").trim();
+    const title = flag("--title") ?? id;
+    const asJson = args.includes("--json");
+    if (provider !== "composio" && provider !== "nango") {
+      const msg = "usage: prevail connectors gateway-add --provider <composio|nango> --toolkit <slug> --id <id> --title <title>";
+      if (asJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(1); }
+      console.error(msg); process.exit(1);
+    }
+    if (!toolkit || !id) {
+      const msg = "gateway-add requires --toolkit and --id";
+      if (asJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(1); }
+      console.error(msg); process.exit(1);
+    }
+    const { scaffoldCommunityApp } = await import("./vault.ts");
+    const r = scaffoldCommunityApp({
+      id,
+      title: title!,
+      integration: "manual",
+      domains: [],
+      vaultRoot: connectorsVault,
+      gateway: { provider: provider as "composio" | "nango", toolkit },
+      connection: `${title} via the ${provider} gateway (toolkit: ${toolkit}). The agent acts through ${provider}; sync pulls a summary into the app's data folder.`,
+    });
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify({ ok: r.ok, id, path: r.path, error: r.error })}\n`);
+      process.exit(r.ok ? 0 : 1);
+    }
+    if (r.ok) console.log(`added gateway connector "${id}" (${provider}/${toolkit}) at ${r.path}`);
+    else { console.error(r.error); process.exit(1); }
+    return;
   }
   if (sub === "add") {
     // prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b [--json]

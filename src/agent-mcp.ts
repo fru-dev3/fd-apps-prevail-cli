@@ -3,100 +3,81 @@
 // registry: these are tools the AGENT calls live (e.g. the Composio gateway,
 // which fronts 1000+ apps over one OAuth connection).
 //
-// The config is a Claude-Code-compatible `.mcp.json` at the vault root (single
-// source of truth, travels with the vault backup). cli-bridge passes it to
-// claude via `--mcp-config` ONLY on the agentic `act` path and ONLY once the
-// servers are authorized, so a default chat turn is byte-for-byte unchanged and
-// a headless run never blocks on an un-authorized OAuth server.
+// The Composio gateway is keyed: the desktop hands the engine a Composio API
+// key via the COMPOSIO_API_KEY env var (a "ck_..." value). When that key is
+// present we materialize a machine-local Claude-Code-compatible agent MCP
+// config at ~/.prevail/agent-mcp.json (NOT in the vault — it carries a secret),
+// pointing at the hosted Composio Streamable-HTTP MCP endpoint with the key in
+// the X-CONSUMER-API-KEY header. cli-bridge passes that file to claude via
+// `--mcp-config` ONLY on the agentic `act` path, so a default chat turn is
+// byte-for-byte unchanged and a run with no key never gets the flag at all.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
-// The hosted Composio gateway. Registered as an `npx mcp-remote` stdio bridge:
-// mcp-remote drives the browser OAuth once, caches the token under ~/.mcp-auth,
-// then proxies the remote Streamable-HTTP MCP server for the agent. This is the
-// standard pattern for a remote OAuth MCP server in Claude Desktop / Code.
+// The hosted Composio gateway. HTTP / Streamable-HTTP transport, authenticated
+// with the consumer's Composio API key in the X-CONSUMER-API-KEY header. This is
+// the shared contract the desktop relies on; do not change the URL or header.
 export const COMPOSIO_URL = "https://connect.composio.dev/mcp";
-const COMPOSIO_SERVER = {
-  command: "npx",
-  args: ["-y", "mcp-remote", COMPOSIO_URL],
-};
+export const COMPOSIO_KEY_ENV = "COMPOSIO_API_KEY";
+export const NANGO_KEY_ENV = "NANGO_SECRET_KEY";
 
-export function agentMcpConfigPath(vaultRoot: string): string {
-  return join(vaultRoot, ".mcp.json");
+// The machine-local agent MCP config. Lives under ~/.prevail (always writable,
+// machine-scoped) NOT the vault, because it embeds the Composio API key and the
+// vault is backed up / synced across machines.
+export function agentMcpConfigPath(): string {
+  const base = process.env.PREVAIL_HOME || join(homedir(), ".prevail");
+  return join(base, "agent-mcp.json");
 }
 
-// A per-server "this server completed its OAuth" marker. We only hand a server
-// to a headless agent run once it's authorized, so mcp-remote reuses its cached
-// token instead of trying to pop a browser mid-run.
-export function agentMcpAuthMarker(vaultRoot: string, server: string): string {
-  return join(vaultRoot, `.mcp-${server}-authorized`);
+export function composioApiKey(): string | null {
+  const k = process.env[COMPOSIO_KEY_ENV];
+  return k && k.trim() ? k.trim() : null;
 }
 
-type McpConfigFile = { mcpServers?: Record<string, unknown> };
+// Build the Claude-Code-compatible .mcp.json shape for the Composio gateway.
+function buildComposioConfig(key: string): { mcpServers: Record<string, unknown> } {
+  return {
+    mcpServers: {
+      composio: {
+        type: "http",
+        url: COMPOSIO_URL,
+        headers: { "X-CONSUMER-API-KEY": key },
+      },
+    },
+  };
+}
 
-function readConfig(vaultRoot: string): McpConfigFile {
-  const p = agentMcpConfigPath(vaultRoot);
-  if (!existsSync(p)) return { mcpServers: {} };
+// Materialize ~/.prevail/agent-mcp.json from the COMPOSIO_API_KEY env var and
+// return its path, or null when no key is set. Idempotent: re-running rewrites
+// the file with the current key. chmod 0600 because the file carries a secret.
+export function writeAgentMcpConfig(): string | null {
+  const key = composioApiKey();
+  if (!key) return null;
+  const p = agentMcpConfigPath();
   try {
-    const parsed = JSON.parse(readFileSync(p, "utf8")) as McpConfigFile;
-    if (!parsed.mcpServers || typeof parsed.mcpServers !== "object") parsed.mcpServers = {};
-    return parsed;
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify(buildComposioConfig(key), null, 2));
+    try { chmodSync(p, 0o600); } catch { /* best effort */ }
+    return p;
   } catch {
-    return { mcpServers: {} };
+    return null;
   }
 }
 
-function writeConfig(vaultRoot: string, cfg: McpConfigFile): void {
-  writeFileSync(agentMcpConfigPath(vaultRoot), JSON.stringify(cfg, null, 2));
+// The `--mcp-config` path to hand claude on an agentic run, or null when there
+// is nothing to inject. Returns a path ONLY when COMPOSIO_API_KEY is set (we
+// write/refresh the config on demand); returns null otherwise so the caller
+// adds no flag and the turn is unchanged.
+export function agentMcpConfigForClaude(): string | null {
+  if (!composioApiKey()) return null;
+  return writeAgentMcpConfig();
 }
 
-// Merge the Composio server into the vault's .mcp.json. Idempotent — re-running
-// is a no-op. Never clobbers other servers the user/agent has added.
-export function addComposioToAgentConfig(vaultRoot: string): { ok: boolean; path: string; alreadyPresent: boolean } {
-  const cfg = readConfig(vaultRoot);
-  const present = !!cfg.mcpServers && Object.prototype.hasOwnProperty.call(cfg.mcpServers, "composio");
-  cfg.mcpServers = { ...(cfg.mcpServers ?? {}), composio: COMPOSIO_SERVER };
-  writeConfig(vaultRoot, cfg);
-  return { ok: true, path: agentMcpConfigPath(vaultRoot), alreadyPresent: present };
-}
-
-export function removeFromAgentConfig(vaultRoot: string, server: string): void {
-  const cfg = readConfig(vaultRoot);
-  if (cfg.mcpServers && server in cfg.mcpServers) {
-    delete cfg.mcpServers[server];
-    writeConfig(vaultRoot, cfg);
-  }
-}
-
-export function markServerAuthorized(vaultRoot: string, server: string): void {
-  try { writeFileSync(agentMcpAuthMarker(vaultRoot, server), new Date().toISOString()); } catch { /* best effort */ }
-}
-
-export function isServerAuthorized(vaultRoot: string, server: string): boolean {
-  return existsSync(agentMcpAuthMarker(vaultRoot, server));
-}
-
-// The `--mcp-config` path to hand claude, or null if nothing is ready. Returns a
-// path only when the managed config exists, has at least one server, and every
-// configured server is authorized — so we never inject an un-authorized OAuth
-// server into a headless `-p` run (which would block trying to open a browser).
-export function agentMcpConfigForClaude(vaultRoot: string | undefined | null): string | null {
-  if (!vaultRoot) return null;
-  const p = agentMcpConfigPath(vaultRoot);
-  if (!existsSync(p)) return null;
-  const cfg = readConfig(vaultRoot);
-  const servers = Object.keys(cfg.mcpServers ?? {});
-  if (servers.length === 0) return null;
-  for (const s of servers) {
-    if (!isServerAuthorized(vaultRoot, s)) return null;
-  }
-  return p;
-}
-
-// Status for the UI: is Composio configured, and is it authorized + live.
-export function composioStatus(vaultRoot: string): { configured: boolean; authorized: boolean } {
-  const cfg = readConfig(vaultRoot);
-  const configured = !!cfg.mcpServers && Object.prototype.hasOwnProperty.call(cfg.mcpServers, "composio");
-  return { configured, authorized: configured && isServerAuthorized(vaultRoot, "composio") };
+// Status for the UI: is the Composio gateway configured (a key is present) and
+// is its machine-local config materialized on disk.
+export function composioStatus(): { configured: boolean; authorized: boolean } {
+  const configured = !!composioApiKey();
+  return { configured, authorized: configured && existsSync(agentMcpConfigPath()) };
 }

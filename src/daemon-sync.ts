@@ -358,6 +358,110 @@ async function runAppRefresh(app: AppSkill, state: SyncState, activeConnection?:
   }
 }
 
+// Gateway sync. For apps connected via a gateway (Composio / Nango) there is no
+// per-app skill; the app is fronted by the gateway's own MCP. We run ONE agent
+// turn (claude, act:true so the Composio MCP is wired in by cli-bridge) prompting
+// it to fetch the latest data for this toolkit and write a concise markdown
+// summary into the app's OWN data folder. Then we hand back a SkillRunResult so
+// the existing route/state machinery (fetch gate, first_fetch_ok, run history)
+// works exactly like every other app.
+//
+// Defensive by design: if no gateway key is present (COMPOSIO_API_KEY /
+// NANGO_SECRET_KEY), or the turn errors, we return ok:false with a clear message
+// so the daemon records a failed run rather than crashing.
+const GATEWAY_SUMMARY_FILE = "data/gateway-sync.md";
+
+async function runGatewaySync(app: AppSkill): Promise<{ outcome: RunOutcome; results: SkillRunResult[] }> {
+  const gw = app.gateway!;
+  const started = Date.now();
+  const fail = (error: string): { outcome: RunOutcome; results: SkillRunResult[] } => ({
+    outcome: { ok: false, error, skillsRun: 0 },
+    results: [{ ok: false, message: error, outputsWritten: [], durationMs: Date.now() - started }],
+  });
+
+  // Key gate: Composio needs COMPOSIO_API_KEY (so cli-bridge wires the MCP);
+  // Nango needs NANGO_SECRET_KEY. No key => can't fetch; record a clear failure.
+  const keyEnv = gw.provider === "composio" ? "COMPOSIO_API_KEY" : "NANGO_SECRET_KEY";
+  if (!process.env[keyEnv] || !String(process.env[keyEnv]).trim()) {
+    return fail(`${gw.provider} not configured: set ${keyEnv} to enable gateway sync`);
+  }
+
+  // The agent writes into the app's own data folder. Pass it the absolute target
+  // path so the summary lands in data/apps/<id>/data/gateway-sync.md.
+  const outAbs = join(app.path, GATEWAY_SUMMARY_FILE);
+  try { mkdirSync(dirname(outAbs), { recursive: true }); } catch { /* best effort */ }
+
+  const prompt = [
+    `You are syncing the "${gw.toolkit}" app, connected through the ${gw.provider} gateway.`,
+    gw.provider === "composio"
+      ? `Use the available Composio MCP tools for the "${gw.toolkit}" toolkit to fetch the user's latest data (recent items, updates, or activity).`
+      : `Use the Nango connection for the "${gw.toolkit}" toolkit (secret key is in the NANGO_SECRET_KEY env var; the REST API is at https://api.nango.dev) to fetch the user's latest data.`,
+    `Then write a concise markdown summary of what you found to the file at this exact path:`,
+    `  ${outAbs}`,
+    `Keep the summary short and skimmable (a few bullets). If you genuinely cannot fetch any data (no connection, auth failed), write a one-line note saying so to that same file.`,
+    `End your reply with a line starting "===SUMMARY===" followed by a one-paragraph summary of what you pulled.`,
+  ].join("\n\n");
+
+  let reply = "";
+  try {
+    const { runChatTurn, detectSubprocessClis } = await import("./cli-bridge.ts");
+    // The Composio MCP wiring in cli-bridge is claude-only, so require a claude
+    // binary. (Nango's agent path also rides claude here for a single contract.)
+    const clis = detectSubprocessClis();
+    const claude = clis.find((c) => c.kind === "claude");
+    if (!claude) return fail("gateway sync needs the claude CLI on PATH");
+    const ctl = new AbortController();
+    const killer = setTimeout(() => ctl.abort(), 5 * 60_000);
+    try {
+      reply = await runChatTurn({
+        prompt,
+        cwd: app.path,
+        cli: claude,
+        model: "",
+        isFirst: true,
+        bare: true,
+        act: true, // so cli-bridge injects the Composio MCP config
+        signal: ctl.signal,
+        maxOutputChars: 16_000,
+      });
+    } finally {
+      clearTimeout(killer);
+    }
+  } catch (e) {
+    return fail(`gateway agent turn failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // The artifact is the markdown file IF the agent actually wrote it.
+  const artifacts = existsSync(outAbs) ? [GATEWAY_SUMMARY_FILE] : [];
+  const summary = extractGatewaySummary(reply);
+  const result: SkillRunResult = {
+    ok: true,
+    message: summary || `${gw.provider}/${gw.toolkit} synced`,
+    outputsWritten: artifacts,
+    durationMs: Date.now() - started,
+    raw: reply.slice(0, 8192),
+    summary: summary || `${gw.provider}/${gw.toolkit} synced`,
+    artifacts,
+  };
+  return { outcome: { ok: true, skillsRun: 1 }, results: [result] };
+}
+
+// Pull a ===SUMMARY=== block out of an agent reply, else the last non-empty line.
+function extractGatewaySummary(text: string): string {
+  const m = text.match(/===SUMMARY===\s*\n?([\s\S]*?)(?:\n===|$)/);
+  if (m && m[1].trim()) return m[1].trim().slice(0, 600);
+  const lines = text.trim().split("\n").filter((l) => l.trim());
+  return (lines[lines.length - 1] ?? "").slice(0, 600);
+}
+
+// Dispatcher: gateway apps go through runGatewaySync (one agent turn over the
+// gateway's MCP); everything else through the normal skill runner. Keeps both
+// the scheduled (syncOnce) and manual (syncApp) paths on one branch point.
+async function runAppRefreshOrGateway(app: AppSkill, state: SyncState, activeConnection?: string): Promise<{ outcome: RunOutcome; results: SkillRunResult[] }> {
+  if (app.gateway) return runGatewaySync(app);
+  return runAppRefresh(app, state, activeConnection);
+}
+
 // One pass over every app: run whatever is due, up to maxRunsPerTick.
 export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: number; failed: number }> {
   const apps = [...scanCommunityApps(), ...scanApps(cfg.vaultPath)].filter(
@@ -379,8 +483,12 @@ export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: numb
     if (!lock) continue; // another process is syncing this app right now
     ran++;
     try {
-      // Auth first: a dead token should never burn a run or a model call.
-      const probe = await probeConnector(app, (app.authCheck as AuthCheckSpec | null) ?? null);
+      // Auth first: a dead token should never burn a run or a model call. Gateway
+      // apps (Composio/Nango) have no manifest auth_check — their key presence IS
+      // the gate, enforced inside runGatewaySync — so skip the probe for them.
+      const probe = app.gateway
+        ? { ok: true, status: "connected" as const, message: "", ts: now, activeConnection: undefined }
+        : await probeConnector(app, (app.authCheck as AuthCheckSpec | null) ?? null);
       const cron = refreshToCron(app.refresh!);
       const nextDue = cron ? nextRunWithin(cron, 8) : now + 24 * 3600_000;
 
@@ -401,7 +509,7 @@ export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: numb
         continue;
       }
 
-      const { outcome, results } = await runAppRefresh(app, state, probe.activeConnection);
+      const { outcome, results } = await runAppRefreshOrGateway(app, state, probe.activeConnection);
       const last = results[results.length - 1];
       const durationMs = results.reduce((a, r) => a + r.durationMs, 0);
       const artifacts = results.flatMap((r) => r.artifacts ?? []).filter((p) => !looksLikeSecretFile(p));
@@ -474,7 +582,11 @@ export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolea
   const now = Date.now();
   const state = readSyncState(app);
 
-  const probe = await probeConnector(app, (app.authCheck as AuthCheckSpec | null) ?? null);
+  // Gateway apps have no manifest auth_check (the key presence is the gate,
+  // enforced inside runGatewaySync) — skip the probe for them.
+  const probe = app.gateway
+    ? { ok: true, status: "connected" as const, message: "", ts: now, activeConnection: undefined }
+    : await probeConnector(app, (app.authCheck as AuthCheckSpec | null) ?? null);
   if (!probe.ok) {
     state.last_run_ts = now;
     state.last_run_ok = false;
@@ -485,7 +597,7 @@ export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolea
     return { ok: false, error: state.last_error, artifacts: 0 };
   }
 
-  const { outcome, results } = await runAppRefresh(app, state, probe.activeConnection);
+  const { outcome, results } = await runAppRefreshOrGateway(app, state, probe.activeConnection);
   const last = results[results.length - 1];
   const durationMs = results.reduce((a, r) => a + r.durationMs, 0);
   const artifacts = results.flatMap((r) => r.artifacts ?? []).filter((p) => !looksLikeSecretFile(p));
