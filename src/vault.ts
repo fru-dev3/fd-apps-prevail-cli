@@ -1,4 +1,4 @@
-import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, cpSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { APPS_DIR, DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
@@ -659,10 +659,19 @@ export interface CommunityAppManifest {
   enabled?: boolean;
 }
 
-function communityAppsDirs(): string[] {
+function communityAppsDirs(vaultPath?: string): string[] {
   const dirs: string[] = [];
-  // User-installed connectors live here. Anything they add takes precedence.
-  dirs.push(join(homedir(), ".prevail", "apps"));
+  // The vault's data/apps is the SINGLE source of truth for the user's apps, so
+  // a single backup of the vault captures everything. When a vault is known we
+  // read from there; the machine-local ~/.prevail/apps is only a LEGACY location
+  // we migrate OUT of (migrateLegacyAppsIntoVault), never a live source beside
+  // the vault. With no vault configured we still read ~/.prevail/apps so a
+  // vault-less install keeps working.
+  if (vaultPath) {
+    dirs.push(appsContainer(vaultPath));
+  } else {
+    dirs.push(join(homedir(), ".prevail", "apps"));
+  }
   // Also accept the explicit PREVAIL_APPS_DIR override (useful for
   // development and CI). Keeps the connector discovery hermetic when set.
   if (process.env.PREVAIL_APPS_DIR) dirs.push(process.env.PREVAIL_APPS_DIR);
@@ -871,11 +880,11 @@ export function readAppOverrides(): Record<string, { enabled?: boolean }> {
   }
 }
 
-export function scanCommunityApps(): AppSkill[] {
+export function scanCommunityApps(vaultPath?: string): AppSkill[] {
   const seen = new Set<string>();
   const out: AppSkill[] = [];
   const overrides = readAppOverrides();
-  for (const dir of communityAppsDirs()) {
+  for (const dir of communityAppsDirs(vaultPath)) {
     if (!existsSync(dir)) continue;
     let entries: import("node:fs").Dirent[] = [];
     try {
@@ -1251,7 +1260,43 @@ export function formatRelativeTime(mtimeMs: number | null): string {
   return `${Math.floor(diff / (365 * day))}y ago`;
 }
 
-// Scaffold a new community app under ~/.prevail/apps/<id>/ from a catalog
+// One-time, idempotent migration: apps were historically scaffolded into the
+// machine-local ~/.prevail/apps when no vault root was known. The vault's data/
+// folder is the SINGLE source of truth (so one backup of the vault captures
+// every app + domain), so move any such apps into <vault>/data/apps/. Copy then
+// remove, never clobbers an app already in the vault, and skips on any error so
+// a scan never fails because of migration. Returns the ids that were moved.
+export function migrateLegacyAppsIntoVault(vaultPath: string): { moved: string[] } {
+  const moved: string[] = [];
+  try {
+    if (!vaultPath) return { moved };
+    const legacy = join(homedir(), ".prevail", "apps");
+    if (!existsSync(legacy)) return { moved };
+    const dest = appsContainer(vaultPath); // <vault>/data/apps (v4)
+    mkdirSync(dest, { recursive: true });
+    let entries: import("node:fs").Dirent[] = [];
+    try { entries = readdirSync(legacy, { withFileTypes: true }); } catch { return { moved }; }
+    for (const e of entries) {
+      if (!e.isDirectory() || !isSafeEntryName(e.name)) continue;
+      const src = join(legacy, e.name);
+      // Only migrate real app folders (must carry a manifest), not stray dirs.
+      if (!existsSync(join(src, "manifest.json"))) continue;
+      const dst = join(dest, e.name);
+      if (existsSync(dst)) continue; // never clobber an app already in the vault
+      try {
+        cpSync(src, dst, { recursive: true });
+        // Verify the manifest landed before removing the original.
+        if (existsSync(join(dst, "manifest.json"))) {
+          rmSync(src, { recursive: true, force: true });
+          moved.push(e.name);
+        }
+      } catch { /* leave the original in place on any failure */ }
+    }
+  } catch { /* best effort — never let migration break a scan */ }
+  return { moved };
+}
+
+// Scaffold a new community app under <vault>/data/apps/<id>/ from a catalog
 // pick: a manifest.json + SKILL.md + connection.md. The app then shows up in
 // scanCommunityApps() and the desktop's Connected view, "not-configured" until
 // the user authenticates it. Never overwrites an existing app.
@@ -1261,6 +1306,9 @@ export function scaffoldCommunityApp(opts: {
   integration: "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
   domains: string[];
   connection?: string;
+  // The vault the app belongs to. New apps are written under its data/apps so
+  // the vault stays the single source of truth; pass this whenever it's known.
+  vaultRoot?: string;
   // Autonomous connect: a verifiable test the engine runs to confirm the
   // connection actually works (an HTTP probe or a CLI command). Written into the
   // manifest so probeConnector + the sync daemon can re-verify on a schedule.
@@ -1271,11 +1319,13 @@ export function scaffoldCommunityApp(opts: {
   if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) {
     return { ok: false, error: `invalid app id "${opts.id}" (use lowercase letters, digits, hyphens)` };
   }
-  // New apps live in the vault (<vault>/apps) so the vault is the single source
-  // of truth. PREVAIL_APPS_DIR stays an explicit override (CI/dev); the legacy
-  // ~/.prevail/apps is only the last-resort fallback when no vault is known.
+  // New apps live in the vault's data/apps (the v4 container) so the vault is the
+  // single backup-able source of truth. Resolution order: explicit PREVAIL_APPS_DIR
+  // override (CI/dev) > the passed vaultRoot > PREVAIL_VAULT_ROOT > the legacy
+  // ~/.prevail/apps last-resort fallback only when no vault is known at all.
+  const vaultRoot = opts.vaultRoot || process.env.PREVAIL_VAULT_ROOT;
   const base = process.env.PREVAIL_APPS_DIR
-    || (process.env.PREVAIL_VAULT_ROOT ? join(process.env.PREVAIL_VAULT_ROOT, APPS_DIR) : join(homedir(), ".prevail", "apps"));
+    || (vaultRoot ? appsContainer(vaultRoot) : join(homedir(), ".prevail", "apps"));
   const root = join(base, id);
   if (existsSync(root)) return { ok: false, error: `app "${id}" already exists at ${root}` };
   // Map a connector pattern to the manifest integration vocabulary.

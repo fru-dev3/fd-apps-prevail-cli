@@ -771,7 +771,7 @@ async function buildBriefingHooks(
   const { scanCommunityApps } = await import("./vault.ts");
   const { loadSkillsForConnector, runSkill } = await import("./connector-skills.ts");
   const { probeConnector } = await import("./connector-probe.ts");
-  const apps = scanCommunityApps();
+  const apps = scanCommunityApps(vault);
 
   if (channels.includes("email")) {
     const gmailApp = apps.find((a) => a.id === "gmail");
@@ -1823,11 +1823,16 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
 }
 
 async function connectorsCommand(args: string[]): Promise<void> {
-  const { scanCommunityApps } = await import("./vault.ts");
+  const { scanCommunityApps, resolveDefaultVaultPath, migrateLegacyAppsIntoVault } = await import("./vault.ts");
   const { probeConnector } = await import("./connector-probe.ts");
   const { runOAuthFlow } = await import("./oauth-flow.ts");
   const { readSyncState } = await import("./daemon-sync.ts");
-  const apps = scanCommunityApps();
+  // Apps live in <vault>/data/apps (single source of truth). Resolve the
+  // configured vault, fold any legacy ~/.prevail/apps into it, then scan from
+  // the vault so the desktop only ever sees apps from one location.
+  const connectorsVault = resolveDefaultVaultPath();
+  try { migrateLegacyAppsIntoVault(connectorsVault); } catch { /* best effort */ }
+  const apps = scanCommunityApps(connectorsVault);
   const sub = args[0];
   if (!sub || sub === "list" || sub === "ls") {
     if (args.includes("--json")) {
@@ -2142,7 +2147,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const authCheck = (plan.auth_check && typeof plan.auth_check === "object" && (plan.auth_check as Record<string, unknown>).kind && (plan.auth_check as Record<string, unknown>).kind !== "none")
       ? (plan.auth_check as Record<string, unknown>) : null;
     const refreshEvery = (plan.schedule && typeof plan.schedule === "object") ? ((plan.schedule as Record<string, unknown>).every as string | undefined) ?? null : null;
-    const scaffold = scaffoldCommunityApp({ id: plan.app_id as string, title: (plan.title as string) || name, integration: integ, domains: planDomains, authCheck, refreshEvery });
+    const scaffold = scaffoldCommunityApp({ id: plan.app_id as string, title: (plan.title as string) || name, integration: integ, domains: planDomains, authCheck, refreshEvery, vaultRoot: vaultArg });
     // Autonomous verify: if no user action is required (auth_step.kind === "none")
     // and we have a testable auth_check, run it NOW and report proof — the agent
     // confirms success instead of telling the user to. When a secret IS required,
@@ -2180,7 +2185,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
       process.exit(1);
     }
     const { scaffoldCommunityApp } = await import("./vault.ts");
-    const r = scaffoldCommunityApp({ id, title: title!, integration, domains });
+    const r = scaffoldCommunityApp({ id, title: title!, integration, domains, vaultRoot: connectorsVault });
     if (args.includes("--json")) {
       process.stdout.write(`${JSON.stringify(r)}\n`);
       process.exit(r.ok ? 0 : 1);
@@ -3775,7 +3780,7 @@ async function main() {
     if (!cli) { console.error("no AI CLI available for app suggestions"); process.exit(1); }
     const domains = domainArg === "all" ? scanVault(vault!).map((d) => d.name.toLowerCase()) : domainArg.split(",").map((d) => d.trim()).filter(Boolean);
     // Connected apps per domain, to exclude from suggestions.
-    const apps = scanCommunityApps();
+    const apps = scanCommunityApps(vault!);
     for (const domain of domains) {
       if (!json) process.stdout.write(`suggest-apps ${domain}…\n`);
       const connected = apps.filter((ap) => (ap.domains ?? []).some((d) => String(d).toLowerCase() === domain)).map((ap) => ap.title || ap.id);
