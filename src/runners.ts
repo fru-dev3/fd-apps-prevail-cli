@@ -14,7 +14,7 @@
 // the connector dir, ===SUMMARY=== extraction, cursor updates returned (never
 // written directly — the sync daemon owns sync-state.json).
 
-import { mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync, chmodSync } from "node:fs";
 import { dirname, relative, join } from "node:path";
 import { spawn } from "node:child_process";
 import type { SkillSpec, SkillRunResult, SkillRunOpts } from "./connector-skills.ts";
@@ -502,14 +502,24 @@ export async function runSkillBrowser(
   } catch (e) { return { ok: false, message: String(e instanceof Error ? e.message : e), outputsWritten: [], durationMs: 0 }; }
   if (!/^https?:\/\//.test(url)) return { ok: false, message: `browser url must be http(s): ${url.slice(0, 40)}`, outputsWritten: [], durationMs: 0 };
 
-  // Fixed driver: imports playwright (optional), navigates read-only, prints
-  // {text} or {error} as one JSON line. url/selector come from env, never code.
+  // Reuse a saved login session if one exists (captured by runBrowserLogin during
+  // connect). This is what lets a headless scrape get PAST an auth wall: the
+  // cookies/localStorage from the user's one-time login are restored into the
+  // context. Without it the runner can only read public pages.
+  const statePath = join(skill.connectorDir, "auth", "state.json");
+  const haveState = existsSync(statePath);
+
+  // Fixed driver: imports playwright (optional), restores the saved session if
+  // present, navigates read-only, prints {text} or {error} as one JSON line.
+  // url/selector/state-path come from env, never interpolated into code.
   const driver = [
     "const out=(o)=>{process.stdout.write(JSON.stringify(o)+'\\n');};",
-    "let pw; try { pw = await import('playwright'); } catch { out({error:'playwright not installed — run: npm i -g playwright && npx playwright install chromium'}); process.exit(0); }",
+    "let pw; try { pw = await import('playwright'); } catch { out({error:'playwright not installed - run: npm i -g playwright && npx playwright install chromium'}); process.exit(0); }",
     "try {",
     "  const b = await pw.chromium.launch({ headless: true });",
-    "  const p = await b.newPage();",
+    "  const ctxOpts = process.env.PV_STATE ? { storageState: process.env.PV_STATE } : {};",
+    "  const ctx = await b.newContext(ctxOpts);",
+    "  const p = await ctx.newPage();",
     "  await p.goto(process.env.PV_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });",
     "  const sel = process.env.PV_SELECTOR;",
     "  const text = sel ? await p.locator(sel).first().innerText() : await p.evaluate(() => document.body.innerText);",
@@ -523,7 +533,7 @@ export async function runSkillBrowser(
     mkdirSync(dirname(tmp), { recursive: true });
     writeFileSync(tmp, driver);
     const res = await new Promise<{ code: number | null; out: string }>((resolve) => {
-      const child = spawn("node", [tmp], { env: { ...buildSkillEnv(skill), PV_URL: url, PV_SELECTOR: selector }, stdio: ["ignore", "pipe", "ignore"] });
+      const child = spawn("node", [tmp], { env: { ...buildSkillEnv(skill), PV_URL: url, PV_SELECTOR: selector, ...(haveState ? { PV_STATE: statePath } : {}) }, stdio: ["ignore", "pipe", "ignore"] });
       let o = ""; child.stdout!.on("data", (d: Buffer) => { o += d.toString(); });
       const killer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } resolve({ code: null, out: o }); }, 45000);
       opts.signal?.addEventListener("abort", () => { try { child.kill(); } catch { /* gone */ } }, { once: true });
@@ -545,4 +555,64 @@ export async function runSkillBrowser(
     if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
   }
   return { ok: true, message: extractSummary(text) || `scraped ${url.slice(0, 50)}`, summary: extractSummary(text), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
+}
+
+// Agentic browser login: opens a REAL (non-headless) browser to the site's login
+// page so the user does the one irreducible human step - typing their own
+// password / 2FA - then persists the resulting session (cookies + localStorage)
+// to <app>/auth/state.json at 0600. Every later headless scrape (runSkillBrowser)
+// restores that session, so it is logged in. The session is saved on a short loop
+// so closing the window (the natural "I'm done" signal) keeps the latest state.
+export async function runBrowserLogin(
+  connectorDir: string,
+  loginUrl: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<{ ok: boolean; message: string; statePath?: string }> {
+  if (!/^https?:\/\//.test(loginUrl)) return { ok: false, message: `login url must be http(s): ${loginUrl.slice(0, 40)}` };
+  const authDir = join(connectorDir, "auth");
+  const statePath = join(authDir, "state.json");
+  mkdirSync(authDir, { recursive: true });
+  const timeoutMs = Math.min(20 * 60_000, Math.max(60_000, opts.timeoutMs ?? 10 * 60_000));
+
+  // Fixed driver (no user code). Opens headed chromium, navigates to the login
+  // URL, and every few seconds writes the current storageState to PV_STATE_OUT.
+  // Ends when the user closes the window (context gone) or the deadline passes;
+  // either way PV_STATE_OUT holds the latest captured session.
+  const driver = [
+    "const out=(o)=>{process.stdout.write(JSON.stringify(o)+'\\n');};",
+    "let pw; try { pw = await import('playwright'); } catch { out({error:'playwright not installed - run: npm i -g playwright && npx playwright install chromium'}); process.exit(0); }",
+    "try {",
+    "  const b = await pw.chromium.launch({ headless: false });",
+    "  const ctx = await b.newContext();",
+    "  const p = await ctx.newPage();",
+    "  await p.goto(process.env.PV_URL, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(()=>{});",
+    "  const deadline = Date.now() + Number(process.env.PV_TIMEOUT||600000);",
+    "  let saved = false;",
+    "  while (Date.now() < deadline) {",
+    "    await new Promise(r=>setTimeout(r,3000));",
+    "    try { await ctx.storageState({ path: process.env.PV_STATE_OUT }); saved = true; } catch { break; }",
+    "  }",
+    "  try { await b.close(); } catch {}",
+    "  out({ ok: saved, savedTo: process.env.PV_STATE_OUT });",
+    "} catch (e) { out({ error: String(e && e.message || e) }); }",
+  ].join("\n");
+  const tmp = join(connectorDir, `.browser-login-${process.pid}-${Date.now()}.mjs`);
+  try {
+    writeFileSync(tmp, driver);
+    const res = await new Promise<{ code: number | null; out: string }>((resolve) => {
+      const child = spawn("node", [tmp], { env: { ...process.env, PV_URL: loginUrl, PV_STATE_OUT: statePath, PV_TIMEOUT: String(timeoutMs) }, stdio: ["ignore", "pipe", "ignore"] });
+      let o = ""; child.stdout!.on("data", (d: Buffer) => { o += d.toString(); });
+      const killer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } resolve({ code: null, out: o }); }, timeoutMs + 30_000);
+      child.on("error", () => { clearTimeout(killer); resolve({ code: -1, out: o }); });
+      child.on("close", (code) => { clearTimeout(killer); resolve({ code, out: o }); });
+    });
+    let parsed: { ok?: boolean; error?: string } = {};
+    const line = res.out.trim().split("\n").filter(Boolean).pop() ?? "";
+    try { parsed = JSON.parse(line); } catch { parsed = { error: res.code === -1 ? "node not found (install Node to use browser login)" : `no output (exit ${res.code})` }; }
+    if (parsed.error) return { ok: false, message: parsed.error.slice(0, 200) };
+  } finally { try { rmSync(tmp, { force: true }); } catch { /* ignore */ } }
+
+  if (!existsSync(statePath)) return { ok: false, message: "no session captured (did the login complete?)" };
+  try { chmodSync(statePath, 0o600); } catch { /* best effort */ }
+  return { ok: true, message: "login session saved; headless syncs will reuse it", statePath };
 }

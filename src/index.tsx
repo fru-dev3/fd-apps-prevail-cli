@@ -2035,6 +2035,41 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     return;
   }
+  if (sub === "browser-login") {
+    // Agentic browser auth: open a REAL browser to the site's login page so the
+    // user does only the irreducible step (their own password / 2FA), then persist
+    // the session to <app>/auth/state.json so every later headless scrape reuses
+    // it. This is how a browser-automation connector (Airbnb, Booking, etc.) gets
+    // PAST an auth wall - Prevail drives it, the user just logs in.
+    const id = args[1];
+    const json = args.includes("--json");
+    const fail = (msg: string) => {
+      if (json) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    };
+    if (!id) return fail("usage: prevail connectors browser-login <id> [--url <login-url>]");
+    const app = apps.find((a) => a.id === id);
+    if (!app) return fail(`no connector with id "${id}"`);
+    // Resolve the login URL: explicit --url, else the manifest's login_url/homepage.
+    let url = "";
+    const uflag = args.indexOf("--url");
+    if (uflag >= 0 && args[uflag + 1]) url = args[uflag + 1]!;
+    if (!url) {
+      try {
+        const { readFileSync } = await import("node:fs");
+        const m = JSON.parse(readFileSync(join(app.path, "manifest.json"), "utf8")) as Record<string, unknown>;
+        url = (typeof m.login_url === "string" && m.login_url) || (typeof m.homepage === "string" && m.homepage) || "";
+      } catch { /* no manifest url */ }
+    }
+    if (!url) return fail(`no login URL for "${id}" (set login_url/homepage in its manifest, or pass --url)`);
+    if (!json) console.log(`opening a browser to ${url} - log in, then close the window…`);
+    const { runBrowserLogin } = await import("./runners.ts");
+    const r = await runBrowserLogin(app.path, url);
+    if (json) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(0); }
+    if (r.ok) { console.log(`✓ ${r.message}`); console.log(`\nverify with: prevail connectors sync ${id}`); }
+    else { console.error(`✗ ${r.message}`); process.exit(1); }
+    return;
+  }
   if (sub === "connect") {
     // prevail connectors connect --name <app> --goal <what to pull> --vault <path> [--cli] [--model] [--json]
     // The Connection Agent: research the best way to connect this app RIGHT NOW

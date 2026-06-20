@@ -119,6 +119,34 @@ describe("producedRealData (the fetch-gate predicate)", () => {
     expect(producedRealData({ ...base, raw: "   \n" }, [])).toBe(false);
     expect(producedRealData({ ...base }, [])).toBe(false);
   });
+  test("empty-shaped JSON payloads are NOT real data", () => {
+    for (const raw of ["[]", "{}", "null", '""', "[ ]", "{ }"]) {
+      expect(producedRealData({ ...base, raw }, [])).toBe(false);
+    }
+  });
+  test("auth-challenge / error / help responses are NOT real data (the Credit Karma bug)", () => {
+    const bad = [
+      "You are not authenticated. Please log in to continue.",
+      "Error: 401 Unauthorized",
+      "Please sign in to your account first",
+      '{"error":"unauthorized"}',
+      '{"status":"error","message":"invalid token"}',
+      '{"authenticated":false}',
+      "usage: creditkarma-mcp [options]",
+      "No transactions found yet.",
+      "Sign in to Airbnb to continue",
+    ];
+    for (const raw of bad) {
+      expect(producedRealData({ ...base, raw }, [])).toBe(false);
+      // and even if it wrote a (likely empty) file, an auth/error response still fails.
+      expect(producedRealData({ ...base, raw }, ["data/out.json"])).toBe(false);
+    }
+  });
+  test("genuine authenticated data IS real (and survives the word 'error' deep inside)", () => {
+    expect(producedRealData({ ...base, raw: '[{"merchant":"Acme","amount":42}]' }, [])).toBe(true);
+    expect(producedRealData({ ...base, raw: '{"score":712,"accounts":[{"name":"Checking"}]}' }, [])).toBe(true);
+    expect(producedRealData({ ...base, raw: "Statement for June: 14 transactions, no error flags." }, [])).toBe(true);
+  });
 });
 
 describe("looksLikeSecretFile", () => {
