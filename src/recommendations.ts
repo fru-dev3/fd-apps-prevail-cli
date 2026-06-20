@@ -25,6 +25,30 @@ function titleCase(s: string): string {
   return s.replace(/[-_]+/g, " ").split(" ").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : "")).join(" ");
 }
 
+// Turn a raw model id or benchmark label into a clean, executive-friendly name.
+// "claude-opus-4-6" or "2026-06-04_claude-claude-opus-4-6" -> "Claude Opus 4.6".
+function humanizeModel(model: string, fallback: string): string {
+  let s = (model || "").trim() || (fallback || "").trim();
+  if (!s) return "the top model";
+  s = s.replace(/^\d{4}-\d{2}-\d{2}_/, ""); // drop a leading benchmark-run date
+  const VENDOR: Record<string, string> = {
+    claude: "Claude", gpt: "GPT", gemini: "Gemini", llama: "Llama",
+    opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", mistral: "Mistral",
+    deepseek: "DeepSeek", qwen: "Qwen", grok: "Grok", kimi: "Kimi",
+  };
+  const out: string[] = [];
+  for (const p of s.split(/[-_/]/).filter(Boolean)) {
+    if (/^\d+$/.test(p) && out.length && /\d$/.test(out[out.length - 1])) {
+      out[out.length - 1] += `.${p}`; // join version pieces: 4 then 6 -> 4.6
+      continue;
+    }
+    const low = p.toLowerCase();
+    out.push(VENDOR[low] ?? (/^\d/.test(p) ? p : p.charAt(0).toUpperCase() + p.slice(1)));
+  }
+  const dedup = out.filter((w, i) => i === 0 || w !== out[i - 1]); // Claude Claude -> Claude
+  return dedup.join(" ") || (fallback || "the top model");
+}
+
 export function buildRecommendations(vaultRoot: string): Recommendation[] {
   const recs: Recommendation[] = [];
   const domainList = scanVault(vaultRoot);
@@ -75,8 +99,8 @@ export function buildRecommendations(vaultRoot: string): Recommendation[] {
         recs.push({
           id: `model:${domain}`,
           category: "model",
-          title: `Use ${best.label} for ${titleCase(domain)}`,
-          detail: `It scores ${best.score.toFixed(1)}/10 on your ${titleCase(domain)} benchmark — the best of ${scored} models tested. Set it as this domain's default.`,
+          title: `Use ${humanizeModel(m?.model ?? "", best.label)} for ${titleCase(domain)}`,
+          detail: `Top performer on your ${titleCase(domain)} work: ${best.score.toFixed(1)} out of 10, ahead of ${scored} models tested. Make it the default for ${titleCase(domain)}.`,
           action: { kind: "set_domain_model", domain, model: m?.model ?? "", cli: m?.cli ?? "" },
         });
       }

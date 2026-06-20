@@ -1331,6 +1331,60 @@ export function migrateLegacyAppsIntoVault(vaultPath: string): { moved: string[]
   return { moved };
 }
 
+// Build the SKILL.md body for a gateway-fronted app. When this app is attached
+// to a chat its SKILL.md becomes context, so it must tell the agent HOW to reach
+// the live connection (the Composio/Nango gateway tools) instead of guessing or
+// inventing data. Imperative + concise on purpose.
+function gatewaySkillBody(title: string, gateway: AppGateway): string {
+  const tk = gateway.toolkit;
+  if (gateway.provider === "composio") {
+    return [
+      `# ${title}`,
+      ``,
+      `${title} is connected through the Composio gateway, toolkit "${tk}".`,
+      ``,
+      `To answer questions about ${title} or fetch its latest data, use the Composio MCP tools that are available in this session: call COMPOSIO_SEARCH_TOOLS with a use_case describing what you need (mention the ${tk} toolkit), then run the returned tool(s) via COMPOSIO_MULTI_EXECUTE_TOOL. Do not invent data - if a tool returns nothing, say so. When asked to "refresh", fetch fresh data and summarize it.`,
+      ``,
+      `Pulled data lands in this app's own folder.`,
+      ``,
+    ].join("\n");
+  }
+  // nango
+  return [
+    `# ${title}`,
+    ``,
+    `${title} is connected through the Nango gateway (integration "${tk}").`,
+    ``,
+    `This app is connected via Nango (integration ${tk}). Use the NANGO_SECRET_KEY env var against https://api.nango.dev to read its synced records (e.g. GET /records with the right Provider-Config-Key / Connection-Id), or report that the data lives in this app's folder. Do not invent data.`,
+    ``,
+    `Pulled data lands in this app's own folder.`,
+    ``,
+  ].join("\n");
+}
+
+// Build the connection.md body for a gateway-fronted app - same guidance, framed
+// as connection notes.
+function gatewayConnectionBody(title: string, gateway: AppGateway): string {
+  if (gateway.provider === "composio") {
+    return [
+      `# Connecting ${title}`,
+      ``,
+      `Gateway: Composio | Toolkit: ${gateway.toolkit} | Integration: manual`,
+      ``,
+      `${title} is fronted by Composio. The agent reaches its live data through the Composio MCP tools in-session: COMPOSIO_SEARCH_TOOLS (use_case mentioning the ${gateway.toolkit} toolkit) to discover tools, then COMPOSIO_MULTI_EXECUTE_TOOL to run them. Pulled data lands in this app's folder. Do not invent data.`,
+      ``,
+    ].join("\n");
+  }
+  return [
+    `# Connecting ${title}`,
+    ``,
+    `Gateway: Nango | Integration: ${gateway.toolkit} | Integration kind: manual`,
+    ``,
+    `${title} is fronted by Nango (integration ${gateway.toolkit}). Read its synced records with the NANGO_SECRET_KEY env var against https://api.nango.dev (e.g. GET /records with the right Provider-Config-Key / Connection-Id). Pulled data lands in this app's folder. Do not invent data.`,
+    ``,
+  ].join("\n");
+}
+
 // Scaffold a new community app under <vault>/data/apps/<id>/ from a catalog
 // pick: a manifest.json + SKILL.md + connection.md. The app then shows up in
 // scanCommunityApps() and the desktop's Connected view, "not-configured" until
@@ -1385,6 +1439,12 @@ export function scaffoldCommunityApp(opts: {
       if (typeof raw.integration !== "string") raw.integration = "manual";
       if (!raw.refresh) raw.refresh = { every: opts.refreshEvery || "daily" };
       writeFileSync(manifestPath, JSON.stringify(raw, null, 2));
+      // Refresh ONLY the top-level SKILL.md + connection.md with the gateway
+      // guidance so existing scaffolded gateway apps pick up the new instructions
+      // on the next gateway-add. Never touch the skills/ folder (may be
+      // user-edited).
+      writeFileSync(join(root, "SKILL.md"), gatewaySkillBody(opts.title, opts.gateway));
+      writeFileSync(join(root, "connection.md"), gatewayConnectionBody(opts.title, opts.gateway));
       return { ok: true, path: root };
     } catch (e) {
       return { ok: false, error: `gateway merge failed: ${e}` };
@@ -1412,8 +1472,16 @@ export function scaffoldCommunityApp(opts: {
     }
     if (opts.refreshEvery) manifest.refresh = { every: opts.refreshEvery };
     writeFileSync(join(root, "manifest.json"), JSON.stringify(manifest, null, 2));
-    writeFileSync(join(root, "SKILL.md"), `# ${opts.title}\n\n${manifest.connection}\n`);
-    writeFileSync(join(root, "connection.md"), `# Connecting ${opts.title}\n\nIntegration: ${integ}\nDomains: ${domains.join(", ") || "(none yet)"}\n\nAdd an auth_check + refresh block to manifest.json and a skill under skills/ to enable syncing.\n`);
+    if (opts.gateway) {
+      // Gateway app: the SKILL.md must teach the agent to use the gateway tools
+      // (so the connection is actually used when this app is attached to a chat),
+      // not the generic "connect me" copy.
+      writeFileSync(join(root, "SKILL.md"), gatewaySkillBody(opts.title, opts.gateway));
+      writeFileSync(join(root, "connection.md"), gatewayConnectionBody(opts.title, opts.gateway));
+    } else {
+      writeFileSync(join(root, "SKILL.md"), `# ${opts.title}\n\n${manifest.connection}\n`);
+      writeFileSync(join(root, "connection.md"), `# Connecting ${opts.title}\n\nIntegration: ${integ}\nDomains: ${domains.join(", ") || "(none yet)"}\n\nAdd an auth_check + refresh block to manifest.json and a skill under skills/ to enable syncing.\n`);
+    }
     writeFileSync(join(root, "connection-status.json"), JSON.stringify({ status: "not-configured" }, null, 2));
     return { ok: true, path: root };
   } catch (e) {
