@@ -27,7 +27,7 @@ export interface Task {
   priority?: string; // "high" | "critical"; "~priority:" token. Absent = normal.
 }
 
-export const VALID_STATUS = ["todo", "doing", "review", "blocked", "done"] as const;
+export const VALID_STATUS = ["todo", "doing", "review", "blocked", "done", "icebox"] as const;
 
 function isYmd(s: string): boolean {
   return s.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -123,7 +123,7 @@ export function renderTasks(tasks: Task[]): string {
     if (t.added) line += ` +${t.added}`;
     if (t.source) line += ` ~${t.source}`;
     if (t.owner === "ai") line += " ~owner:ai";
-    if (t.status && ["doing", "review", "blocked"].includes(t.status)) line += ` ~status:${t.status}`;
+    if (t.status && ["doing", "review", "blocked", "icebox"].includes(t.status)) line += ` ~status:${t.status}`;
     if (t.id) line += ` ~id:${t.id}`;
     if (t.trashed) line += ` ~trashed:${t.trashed}`;
     if (t.priority && ["high", "critical"].includes(t.priority)) line += ` ~priority:${t.priority}`;

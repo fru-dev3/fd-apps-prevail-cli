@@ -467,7 +467,9 @@ async function runBriefingLoop(p: {
   try {
     onPhase("read", "Gathering tasks and context");
     const tasks = readTasks(domainDir).filter((t) => !t.trashed); // never surface trashed tasks
-    const open = tasks.filter((t) => !t.done && effectiveStatus(t) !== "done");
+    // icebox = set aside by the user; never actionable, so it's excluded here
+    // along with done (now that icebox is a persisted status, not a no-op).
+    const open = tasks.filter((t) => !t.done && effectiveStatus(t) !== "done" && effectiveStatus(t) !== "icebox");
     const doing = open.filter((t) => effectiveStatus(t) === "doing");
     const blocked = open.filter((t) => effectiveStatus(t) === "blocked");
     const todo = open.filter((t) => { const s = effectiveStatus(t); return s !== "doing" && s !== "blocked"; });
