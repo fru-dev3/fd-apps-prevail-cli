@@ -2050,7 +2050,11 @@ async function connectorsCommand(args: string[]): Promise<void> {
     if (!id) return fail("usage: prevail connectors browser-login <id> [--url <login-url>]");
     const app = apps.find((a) => a.id === id);
     if (!app) return fail(`no connector with id "${id}"`);
-    // Resolve the login URL: explicit --url, else the manifest's login_url/homepage.
+    // Resolve the login URL with fallbacks so login ALWAYS has somewhere to open:
+    //   1) explicit --url, 2) the manifest's login_url/homepage,
+    //   3) a homepage DERIVED from the connector id (e.g. airbnb -> airbnb.com,
+    //      booking-com -> booking.com, credit-karma -> creditkarma.com).
+    // The user never has to hand-edit a manifest just to log in.
     let url = "";
     const uflag = args.indexOf("--url");
     if (uflag >= 0 && args[uflag + 1]) url = args[uflag + 1]!;
@@ -2061,7 +2065,13 @@ async function connectorsCommand(args: string[]): Promise<void> {
         url = (typeof m.login_url === "string" && m.login_url) || (typeof m.homepage === "string" && m.homepage) || "";
       } catch { /* no manifest url */ }
     }
-    if (!url) return fail(`no login URL for "${id}" (set login_url/homepage in its manifest, or pass --url)`);
+    if (!url) {
+      const s = id.toLowerCase().trim();
+      const tld = s.match(/-(com|org|net|io|co|app|ai|dev)$/);
+      url = tld
+        ? `https://www.${s.slice(0, -tld[0].length).replace(/-/g, "")}.${tld[1]}`
+        : `https://www.${s.replace(/[^a-z0-9]/g, "")}.com`;
+    }
     if (!json) console.log(`opening a browser to ${url} - log in, then close the window…`);
     const { runBrowserLogin } = await import("./runners.ts");
     const r = await runBrowserLogin(app.path, url);
