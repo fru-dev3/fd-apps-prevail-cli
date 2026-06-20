@@ -1,4 +1,4 @@
-// Agent-facing MCP servers — the MCP servers Prevail's AI agent (the claude CLI)
+// Agent-facing MCP servers - the MCP servers Prevail's AI agent (the claude CLI)
 // is allowed to use on agentic runs. This is distinct from the ingestion MCP
 // registry: these are tools the AGENT calls live (e.g. the Composio gateway,
 // which fronts 1000+ apps over one OAuth connection).
@@ -6,7 +6,7 @@
 // The Composio gateway is keyed: the desktop hands the engine a Composio API
 // key via the COMPOSIO_API_KEY env var (a "ck_..." value). When that key is
 // present we materialize a machine-local Claude-Code-compatible agent MCP
-// config at ~/.prevail/agent-mcp.json (NOT in the vault — it carries a secret),
+// config at ~/.prevail/agent-mcp.json (NOT in the vault - it carries a secret),
 // pointing at the hosted Composio Streamable-HTTP MCP endpoint with the key in
 // the X-CONSUMER-API-KEY header. cli-bridge passes that file to claude via
 // `--mcp-config` ONLY on the agentic `act` path, so a default chat turn is

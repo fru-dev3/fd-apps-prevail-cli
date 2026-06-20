@@ -484,8 +484,8 @@ export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: numb
     ran++;
     try {
       // Auth first: a dead token should never burn a run or a model call. Gateway
-      // apps (Composio/Nango) have no manifest auth_check — their key presence IS
-      // the gate, enforced inside runGatewaySync — so skip the probe for them.
+      // apps (Composio/Nango) have no manifest auth_check - their key presence IS
+      // the gate, enforced inside runGatewaySync - so skip the probe for them.
       const probe = app.gateway
         ? { ok: true, status: "connected" as const, message: "", ts: now, activeConnection: undefined }
         : await probeConnector(app, (app.authCheck as AuthCheckSpec | null) ?? null);
@@ -583,7 +583,7 @@ export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolea
   const state = readSyncState(app);
 
   // Gateway apps have no manifest auth_check (the key presence is the gate,
-  // enforced inside runGatewaySync) — skip the probe for them.
+  // enforced inside runGatewaySync) - skip the probe for them.
   const probe = app.gateway
     ? { ok: true, status: "connected" as const, message: "", ts: now, activeConnection: undefined }
     : await probeConnector(app, (app.authCheck as AuthCheckSpec | null) ?? null);
