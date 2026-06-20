@@ -233,6 +233,8 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
     "",
     `Think like an operator who PERSISTS: do not repeat actions already tried unless they're genuinely the next step; judge from the state + history whether the gap is closing; if it's stalled, change approach and escalate. Each run should build on the last and get better.`,
     "",
+    `FIRST RUN / MISSING BASELINE: if there is no baseline yet, or the foundational data this loop needs does not exist (common right after setup), do NOT end the run with only a passive "no baseline exists" observation. Your highest-leverage move is to ESTABLISH the baseline by FILING concrete trackable tasks (set "task": true) that build it - for example "Document the current ${domainLabel.toLowerCase()} state in state.md", "List the 3-5 things this loop should track", "Gather the key numbers/dates from <source>". Bootstrapping the baseline IS forward progress, and the next run will build on those tasks. Never stall waiting for a baseline you could create.`,
+    "",
     `RECURRING OBLIGATIONS: this domain has cyclical things that must happen on a cadence (for example: an annual health physical or screening; quarterly estimated taxes; an annual insurance or policy review; a yearly financial/tax filing). From the desired state, memory, and what's been done, infer the obligations that apply to THIS domain. If one appears DUE or OVERDUE for its current period and is not already a tracked task, propose it as a task with a "due" date and a "priority" ("high", or "critical" if overdue / legally or health time-sensitive). Today is ${todayYmd()}.`,
     "",
     `Respond with ONLY a JSON object on a single line. Each action is an object:`,
