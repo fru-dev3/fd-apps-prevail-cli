@@ -435,7 +435,9 @@ async function runGatewaySync(app: AppSkill): Promise<{ outcome: RunOutcome; res
     `Then write a concise markdown summary of what you found to the file at this exact path:`,
     `  ${outAbs}`,
     `Keep the summary short and skimmable (a few bullets). If you genuinely cannot fetch any data (no connection, auth failed), write a one-line note saying so to that same file.`,
-    `End your reply with a line starting "===SUMMARY===" followed by a one-paragraph summary of what you pulled.`,
+    `End your reply with EXACTLY two lines:`,
+    `  ===STATUS=== <ok|empty|error>   (ok = you pulled real data; empty = the connection works but there was nothing to pull; error = you could not connect / auth failed / no data because of a problem)`,
+    `  ===SUMMARY=== <one-paragraph summary of what you pulled, or why you couldn't>`,
   ].join("\n\n");
 
   let reply = "";
@@ -467,9 +469,17 @@ async function runGatewaySync(app: AppSkill): Promise<{ outcome: RunOutcome; res
     return fail(`gateway agent turn failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  const summary = extractGatewaySummary(reply);
+  // INTEGRITY: a gateway turn that wrote an "auth failed / nothing pulled" note
+  // still leaves a file on disk, which would otherwise latch first_fetch_ok and
+  // show a green "Connected" for a connection that never returned data (the
+  // exact bug the user hit). Detect that and report a real failure so the status
+  // stays honest (Needs attention) and the error reaches the run history.
+  if (gatewayLooksFailed(summary, reply)) {
+    return fail(summary || `Could not pull ${gw.toolkit} data: the ${gw.provider} connection returned nothing (check that ${gw.toolkit} is connected in ${gw.provider} and the key is valid).`);
+  }
   // The artifact is the markdown file IF the agent actually wrote it.
   const artifacts = existsSync(outAbs) ? [GATEWAY_SUMMARY_FILE] : [];
-  const summary = extractGatewaySummary(reply);
   const result: SkillRunResult = {
     ok: true,
     message: summary || `${gw.provider}/${gw.toolkit} synced`,
@@ -488,6 +498,23 @@ function extractGatewaySummary(text: string): string {
   if (m && m[1].trim()) return m[1].trim().slice(0, 600);
   const lines = text.trim().split("\n").filter((l) => l.trim());
   return (lines[lines.length - 1] ?? "").slice(0, 600);
+}
+
+// Did a gateway sync actually fail to pull data? Prefers the agent's own
+// ===STATUS=== verdict; falls back to scanning the summary for the common
+// "auth failed / nothing pulled / not configured" shapes when the agent didn't
+// emit a clean tag. Used to keep a no-data run from masquerading as connected.
+function gatewayLooksFailed(summary: string, reply: string): boolean {
+  const tag = (reply.match(/===STATUS===\s*([a-z]+)/i)?.[1] ?? "").toLowerCase();
+  if (tag === "ok" || tag === "empty") return false;
+  if (tag === "error") return true;
+  const text = `${summary}\n${reply}`.toLowerCase();
+  return looksLikeAuthOrErrorResponse(summary)
+    || /\bnothing (?:was )?(?:pulled|fetched|synced|retrieved)\b/.test(text)
+    || /\bno .{0,24}(?:data|items|records|results|pages) (?:was|were|could be) (?:pulled|fetched|found|retrieved)\b/.test(text)
+    || /\bauthentication (?:to|with)\b.*\b(?:failed|error|problem)\b/.test(text)
+    || /\b(?:could not|couldn't|cannot|unable to|failed to) (?:connect|authenticate|fetch|pull|sync|access)\b/.test(text)
+    || /\bnot[- ]configured\b/.test(text);
 }
 
 // Dispatcher: gateway apps go through runGatewaySync (one agent turn over the

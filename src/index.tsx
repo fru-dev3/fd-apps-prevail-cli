@@ -2336,7 +2336,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     if (id && field === "enabled") {
       const enabled = value === "true" || value === "1" || value === "on";
       const { setCommunityAppEnabled } = await import("./vault.ts");
-      const r = setCommunityAppEnabled(id, enabled);
+      const r = setCommunityAppEnabled(id, enabled, connectorsVault);
       if (args.includes("--json")) {
         process.stdout.write(`${JSON.stringify(r)}\n`);
         process.exit(r.ok ? 0 : 1);
@@ -2355,7 +2355,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
         else if (args[k] === "on" && args[k + 1]) { on = args[k + 1]; k++; }
       }
       const { setCommunityAppSchedule } = await import("./vault.ts");
-      const r = setCommunityAppSchedule(id, value ?? "", at, on);
+      const r = setCommunityAppSchedule(id, value ?? "", at, on, connectorsVault);
       if (args.includes("--json")) {
         process.stdout.write(`${JSON.stringify(r)}\n`);
         process.exit(r.ok ? 0 : 1);
@@ -2367,7 +2367,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // A2: prevail connectors set <id> integration <api|oauth|browser|mcp|manual>
     if (id && field === "integration") {
       const { setCommunityAppIntegration } = await import("./vault.ts");
-      const r = setCommunityAppIntegration(id, value ?? "");
+      const r = setCommunityAppIntegration(id, value ?? "", connectorsVault);
       if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
       if (r.ok) console.log(`integration for "${id}" set to ${r.integration}`);
       else { console.error(r.error); process.exit(1); }
@@ -2382,7 +2382,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     const domains = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     const { setCommunityAppDomains } = await import("./vault.ts");
-    const r = setCommunityAppDomains(id, domains);
+    const r = setCommunityAppDomains(id, domains, connectorsVault);
     if (args.includes("--json")) {
       process.stdout.write(`${JSON.stringify(r)}\n`);
       process.exit(r.ok ? 0 : 1);

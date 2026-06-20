@@ -1499,10 +1499,11 @@ export function scaffoldCommunityApp(opts: {
 export function setCommunityAppDomains(
   id: string,
   domains: string[],
+  vaultPath?: string,
 ): { ok: boolean; path?: string; domains?: string[]; error?: string } {
   const cleanId = (id ?? "").trim().toLowerCase();
   if (!cleanId) return { ok: false, error: "missing app id" };
-  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
   if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
   const clean = Array.from(
     new Set((domains ?? []).map((d) => String(d).trim().toLowerCase()).filter(Boolean)),
@@ -1528,12 +1529,13 @@ export function setCommunityAppDomains(
 export function setCommunityAppIntegration(
   id: string,
   integration: string,
+  vaultPath?: string,
 ): { ok: boolean; path?: string; integration?: string; error?: string } {
   const cleanId = (id ?? "").trim().toLowerCase();
   if (!cleanId) return { ok: false, error: "missing app id" };
   const v = (integration ?? "").trim().toLowerCase();
   if (!VALID_INTEGRATIONS.has(v)) return { ok: false, error: `invalid integration "${integration}" (api | oauth | browser | mcp | manual)` };
-  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
   if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
   try {
     const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
@@ -1557,10 +1559,11 @@ export function setCommunityAppSchedule(
   every: string,
   at?: string,
   on?: string,
+  vaultPath?: string,
 ): { ok: boolean; path?: string; refresh?: AppRefresh | null; error?: string } {
   const cleanId = (id ?? "").trim().toLowerCase();
   if (!cleanId) return { ok: false, error: "missing app id" };
-  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
   if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
   const e = (every ?? "").trim().toLowerCase();
   const clearing = e === "" || e === "off" || e === "none";
@@ -1594,10 +1597,11 @@ export function setCommunityAppSchedule(
 export function setCommunityAppEnabled(
   id: string,
   enabled: boolean,
+  vaultPath?: string,
 ): { ok: boolean; path?: string; enabled?: boolean; error?: string } {
   const cleanId = (id ?? "").trim().toLowerCase();
   if (!cleanId) return { ok: false, error: "missing app id" };
-  const app = scanCommunityApps().find((a) => a.id === cleanId);
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
   if (!app) return { ok: false, error: `no app with id "${id}"` };
   // Persist to the always-writable override file rather than the app's own
   // manifest: bundled apps live in the read-only app bundle, so a manifest
