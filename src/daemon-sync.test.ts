@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   syncOnce, syncApp, refreshToCron, globMatch, readSyncState, looksLikeSecretFile, backoffNextDue,
+  producedRealData,
   type SyncConfig,
 } from "./daemon-sync.ts";
 
@@ -17,7 +18,7 @@ const ROOT = join(TMP_BASE, `prevail-sync-${process.pid}`);
 const VAULT = join(ROOT, "vault");
 const APPS = join(ROOT, "apps");
 
-function seedWorld(opts: { command?: string; refresh?: object; routes?: object[]; failProbe?: boolean } = {}) {
+function seedWorld(opts: { command?: string; refresh?: object; routes?: object[]; failProbe?: boolean; noOutputs?: boolean } = {}) {
   rmSync(ROOT, { recursive: true, force: true });
   for (const d of ["wealth", "insurance"]) {
     mkdirSync(join(VAULT, d), { recursive: true });
@@ -46,13 +47,26 @@ function seedWorld(opts: { command?: string; refresh?: object; routes?: object[]
     "id: pull",
     "runner: cli",
     opts.command ?? 'command: printf "===SUMMARY===\\n2 statements downloaded\\n" && printf "st1" > data/statement-jun.pdf && printf "x" > data/token.txt',
-    "outputs:",
-    "  - path: data/run-${date}.log",
-    "    kind: replace",
+    // The fetch gate test needs a run that produces NO artifact and NO payload;
+    // omit the declared output so artifacts[] stays empty.
+    ...(opts.noOutputs ? [] : [
+      "outputs:",
+      "  - path: data/run-${date}.log",
+      "    kind: replace",
+    ]),
     "---",
     "Pull statements.",
   ].join("\n"));
   process.env.PREVAIL_APPS_DIR = APPS;
+}
+
+// Rewrite ONLY the skill to a clean-but-empty command, leaving sync-state.json
+// (and its latched first_fetch_ok) intact, for asserting the latch holds across
+// a later "nothing new" run.
+function seedWorldEmptyKeepState() {
+  writeFileSync(join(APPS, "demo-bank", "skills", "pull", "SKILL.md"), [
+    "---", "id: pull", "runner: cli", 'command: printf ""', "---", "Pull nothing new.",
+  ].join("\n"));
 }
 
 const CFG: SyncConfig = { vaultPath: VAULT, tickSec: 60, maxRunsPerTick: 5 };
@@ -89,6 +103,21 @@ describe("globMatch", () => {
     expect(globMatch("data/attachments/**/*.pdf", "data/attachments/2026/lease.pdf")).toBe(true);
     expect(globMatch("data/*.pdf", "data/sub/lease.pdf")).toBe(false);
     expect(globMatch("data/*.pdf", "data/lease.pdf")).toBe(true);
+  });
+});
+
+describe("producedRealData (the fetch-gate predicate)", () => {
+  const base = { ok: true, message: "", outputsWritten: [], durationMs: 1 };
+  test("an artifact counts as real data", () => {
+    expect(producedRealData({ ...base }, ["data/x.json"])).toBe(true);
+  });
+  test("a non-empty payload counts even with no artifact", () => {
+    expect(producedRealData({ ...base, raw: '{"items":[1]}' }, [])).toBe(true);
+  });
+  test("clean run with no artifact and empty payload is NOT real data", () => {
+    expect(producedRealData({ ...base, raw: "" }, [])).toBe(false);
+    expect(producedRealData({ ...base, raw: "   \n" }, [])).toBe(false);
+    expect(producedRealData({ ...base }, [])).toBe(false);
   });
 });
 
@@ -143,6 +172,42 @@ describe("syncOnce (pattern-agnostic end to end)", () => {
     expect(ledger).toContain("demo-bank");
     const missing = await syncApp(CFG, "no-such-app");
     expect(missing.ok).toBe(false);
+  });
+
+  // The fetch gate: a skill that runs CLEANLY but pulls no data must NOT go
+  // green. It stays "configured" (authorized · verifying), first_fetch_ok false,
+  // and syncApp reports ok:false so the connect flow doesn't claim "verified".
+  test("clean run with no data stays 'configured', never 'connected' (fetch gate)", async () => {
+    seedWorld({ command: 'command: printf ""', noOutputs: true, refresh: { every: "daily", skill: "pull" } });
+    const r = await syncApp(CFG, "demo-bank");
+    expect(r.ok).toBe(false);
+    expect(r.artifacts).toBe(0);
+    const st = readSyncState(appShim());
+    expect(st.last_run_ok).toBe(true);       // the skill itself ran fine
+    expect(st.first_fetch_ok).toBe(false);   // but it never fetched real data
+    expect(st.last_ok_ts).toBeNull();        // lastSuccessTs must not advance
+    const conn = JSON.parse(readFileSync(join(APPS, "demo-bank", "connection-status.json"), "utf8"));
+    expect(conn.status).toBe("configured");
+  });
+
+  // Once a sync DOES pull data, first_fetch_ok latches true and the app is
+  // connected, and a later "nothing new" run keeps it connected (not amber).
+  test("first real fetch latches connected; later empty run stays connected", async () => {
+    seedWorld({ refresh: { every: "daily", skill: "pull" } }); // default skill writes a run-log artifact
+    const first = await syncApp(CFG, "demo-bank");
+    expect(first.ok).toBe(true);
+    let st = readSyncState(appShim());
+    expect(st.first_fetch_ok).toBe(true);
+    expect(st.first_fetch_ts).toBeGreaterThan(0);
+
+    // Re-point the skill at a clean-but-empty command; the latch must hold.
+    seedWorldEmptyKeepState();
+    const second = await syncApp(CFG, "demo-bank");
+    expect(second.ok).toBe(true);            // still connected (latched)
+    st = readSyncState(appShim());
+    expect(st.first_fetch_ok).toBe(true);
+    const conn = JSON.parse(readFileSync(join(APPS, "demo-bank", "connection-status.json"), "utf8"));
+    expect(conn.status).toBe("connected");
   });
 
   test("copy routes place artifacts into <domain>/imports with sidecar, secrets filtered", async () => {

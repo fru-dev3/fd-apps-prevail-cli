@@ -1838,7 +1838,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
             // show "next sync" and a recent-activity log, not just last success.
             let nextDueTs: number | null = null;
             let runs: Array<Record<string, unknown>> = [];
-            try { const st = readSyncState(a); nextDueTs = st.next_due_ts; runs = (st.runs ?? []).slice(-5); } catch { /* none yet */ }
+            let firstFetchOk = false;
+            try { const st = readSyncState(a); nextDueTs = st.next_due_ts; runs = (st.runs ?? []).slice(-5); firstFetchOk = st.first_fetch_ok; } catch { /* none yet */ }
             return {
             id: a.id,
             title: a.title,
@@ -1859,6 +1860,13 @@ async function connectorsCommand(args: string[]): Promise<void> {
             connections: a.connections ?? null,
             nextDueTs,
             runs,
+            // The fetch gate: has this connector EVER pulled real data? The
+            // desktop uses it (with lastSuccessTs) to separate a fetch-verified
+            // "connected" from "authorized · verifying".
+            firstFetchOk,
+            // Generic per-method auth: credential env-var names + MCP setup hint.
+            authEnvVars: a.authEnvVars ?? [],
+            mcpSetup: a.mcpSetup ?? null,
             };
           }),
         )}\n`,
@@ -1897,6 +1905,36 @@ async function connectorsCommand(args: string[]): Promise<void> {
     if (r.fixHint) console.log(`  fix: ${r.fixHint}`);
     if (r.missing && r.missing.length > 0) console.log(`  missing: ${r.missing.join(", ")}`);
     process.exit(r.ok ? 0 : 2);
+  }
+  if (sub === "remove" || sub === "rm" || sub === "delete") {
+    // Fully delete a user-installed connector (its whole folder under
+    // ~/.prevail/apps). Bundled connectors are read-only and refused. This is the
+    // mirror of `connect` - it lets the user recreate a connector cleanly.
+    const id = args[1];
+    if (!id) { console.error("usage: prevail connectors remove <id>"); process.exit(1); }
+    const app = apps.find((a) => a.id === id);
+    const { rmSync } = await import("node:fs");
+    const { homedir } = await import("node:os");
+    const { resolve, sep } = await import("node:path");
+    const fail = (msg: string) => {
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    };
+    if (!app) return fail(`no connector with id "${id}"`);
+    // Guard: only remove folders under the user apps dir (or the dev override).
+    const userRoots = [resolve(homedir(), ".prevail", "apps")];
+    if (process.env.PREVAIL_APPS_DIR) userRoots.push(resolve(process.env.PREVAIL_APPS_DIR));
+    const resolved = resolve(app.path);
+    const underUser = userRoots.some((root) => resolved === root || resolved.startsWith(root + sep));
+    if (!underUser) return fail(`"${id}" is a bundled connector and cannot be deleted; only connectors you installed (under ~/.prevail/apps) can be removed.`);
+    try {
+      rmSync(app.path, { recursive: true, force: true });
+    } catch (e) {
+      return fail(`could not delete "${id}": ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: true, id, removed: app.path })}\n`); process.exit(0); }
+    console.log(`removed connector "${id}" (${app.path})`);
+    return;
   }
   if (sub === "skills") {
     const id = args[1];

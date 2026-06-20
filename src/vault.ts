@@ -598,6 +598,17 @@ export interface AppSkill {
   // takes precedence over the top-level auth_check. Each entry may override
   // which skill is run via its own `skill` field.
   connections?: AppConnection[];
+  // Env-var names this connector needs to authenticate (e.g.
+  // ["PAYPAL_CLIENT_ID","PAYPAL_CLIENT_SECRET"]). Drives the desktop's generic
+  // per-app credential fields. Entered values are stored in the OS keychain
+  // and injected as env. Empty for OAuth (which uses the sign-in flow) and for
+  // connectors that need no secret.
+  authEnvVars?: string[];
+  // For integration === "mcp": how to stand up the local MCP server. `install`
+  // is the one-time shell command the guided setup shows/runs with consent
+  // (e.g. "npx -y @paypal/mcp"); `command` is the binary the runner spawns.
+  // Surfaced so the desktop can render the MCP guided-setup card.
+  mcpSetup?: { install?: string; command?: string };
 }
 
 // One entry in the `connections` priority list. The engine tries them
@@ -624,7 +635,11 @@ export interface AppRoute {
   copy?: boolean; // also copy matched files into <vault>/<domain>/imports/
 }
 
-export type ConnectorStatus = "connected" | "not-configured" | "expired" | "error";
+// "configured" = credentials present and the refresh skill runs cleanly, but no
+// real data has been fetched YET (the fetch gate, see daemon-sync.ts). It is the
+// honest middle state between "not-configured" and a fetch-verified "connected";
+// surfaces render it as "authorized · verifying", never green.
+export type ConnectorStatus = "connected" | "configured" | "not-configured" | "expired" | "error";
 
 export interface CommunityAppManifest {
   id: string;
@@ -700,9 +715,36 @@ interface CoercedManifest {
   account?: { label: string; address?: string };
   routes?: AppRoute[];
   connections?: AppConnection[];
+  authEnvVars: string[];
+  mcpSetup?: { install?: string; command?: string };
 }
 
 const VALID_AUTONOMY = new Set(["read-only", "draft", "act"]);
+
+// An env-var name safe to surface as a credential field and inject as env.
+// Constrained so a hostile manifest can't smuggle shell-significant characters
+// into the keychain account or the child process environment.
+function coerceEnvVarNames(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(x))
+    .slice(0, 12);
+}
+
+// The optional `mcp` install hint. `install` is shown (and only run on explicit
+// user consent) by the guided-setup card; `command` is the spawn target. Both
+// are length-capped strings; the runner re-validates `command` against path
+// traversal before spawning (runners.ts), so this is a display/transport hint,
+// not a trust boundary.
+function coerceMcpSetup(v: unknown): { install?: string; command?: string } | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const cap = (s: unknown): string | undefined =>
+    typeof s === "string" && s.trim().length > 0 ? s.trim().slice(0, 240) : undefined;
+  const install = cap(o.install);
+  const command = cap(o.command);
+  return install || command ? { install, command } : undefined;
+}
 
 // Defensive coercion for the sync-layer manifest fields. Same philosophy as
 // coerceCommunityManifest: a hostile or malformed block degrades to undefined,
@@ -804,6 +846,8 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     account: coerceAccount(o.account),
     routes: coerceRoutes(o.routes),
     connections: coerceConnections(o.connections),
+    authEnvVars: coerceEnvVarNames(o.auth_env_vars),
+    mcpSetup: coerceMcpSetup(o.mcp),
   };
 }
 
@@ -889,6 +933,8 @@ export function scanCommunityApps(): AppSkill[] {
         account: m.account,
         routes: m.routes,
         connections: m.connections,
+        authEnvVars: m.authEnvVars,
+        mcpSetup: m.mcpSetup,
       });
     }
   }
@@ -921,7 +967,7 @@ function readConnector(root: string): ConnectorState {
       const raw = JSON.parse(vreadFile(statusJson));
       if (raw && typeof raw === "object") {
         if (typeof raw.status === "string" &&
-            ["connected", "not-configured", "expired", "error"].includes(raw.status)) {
+            ["connected", "configured", "not-configured", "expired", "error"].includes(raw.status)) {
           status = raw.status as ConnectorStatus;
         }
         if (typeof raw.lastSuccessTs === "number") lastSuccessTs = raw.lastSuccessTs;
