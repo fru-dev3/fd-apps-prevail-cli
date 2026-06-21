@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -31,6 +32,8 @@ export interface CaptureCheckpoint {
   files: Record<string, number>;
   /** High-water epoch-ms for prevail's sessions.db export. */
   prevailLastTs: number;
+  /** High-water epoch-ms for opencode's message DB export. */
+  opencodeLastTs: number;
 }
 
 function checkpointPath(vault: string): string {
@@ -38,7 +41,12 @@ function checkpointPath(vault: string): string {
 }
 
 function readCheckpoint(vault: string): CaptureCheckpoint {
-  const fallback: CaptureCheckpoint = { version: 1, files: {}, prevailLastTs: 0 };
+  const fallback: CaptureCheckpoint = {
+    version: 1,
+    files: {},
+    prevailLastTs: 0,
+    opencodeLastTs: 0,
+  };
   const p = checkpointPath(vault);
   if (!existsSync(p)) return fallback;
   try {
@@ -46,6 +54,7 @@ function readCheckpoint(vault: string): CaptureCheckpoint {
     return {
       version: 1,
       files: c.files && typeof c.files === "object" ? c.files : {},
+      opencodeLastTs: typeof c.opencodeLastTs === "number" ? c.opencodeLastTs : 0,
       prevailLastTs: typeof c.prevailLastTs === "number" ? c.prevailLastTs : 0,
     };
   } catch {
@@ -222,6 +231,91 @@ function scanPrevail(cp: CaptureCheckpoint): { res: ScanResult; newLastTs: numbe
   return { res, newLastTs };
 }
 
+// ── opencode (opencode.db) ────────────────────────────────────────────────────
+// Messages live in a SQLite db: a `message` row (role:"user") joined to its
+// `part` rows (type:"text") that hold the prompt text. Incremental on the
+// message time_created high-water mark.
+function scanOpencode(cp: CaptureCheckpoint): { res: ScanResult; newLastTs: number } {
+  const dbPath = join(homedir(), ".local", "share", "opencode", "opencode.db");
+  const present = existsSync(dbPath);
+  const res: ScanResult = { present, items: [], filesScanned: present ? 1 : 0, touched: {} };
+  if (!present) return { res, newLastTs: cp.opencodeLastTs };
+  let newLastTs = cp.opencodeLastTs;
+  try {
+    // NOT readonly: opencode runs its db in WAL mode, which bun:sqlite can't
+    // open read-only (it needs to touch the -shm file). We only ever SELECT,
+    // so this connection behaves as a plain WAL reader and never mutates data.
+    const db = new Database(dbPath);
+    try {
+      const rows = db
+        .query<{ session_id: string; time_created: number; data: string }, [number]>(
+          `SELECT m.session_id, m.time_created, p.data
+             FROM part p JOIN message m ON p.message_id = m.id
+            WHERE m.data LIKE '%"role":"user"%'
+              AND p.data LIKE '%"type":"text"%'
+              AND m.time_created > ?
+            ORDER BY m.time_created ASC
+            LIMIT 5000`,
+        )
+        .all(cp.opencodeLastTs);
+      for (const row of rows) {
+        let text = "";
+        try {
+          text = (JSON.parse(row.data) as { text?: string }).text ?? "";
+        } catch {
+          continue;
+        }
+        text = text.trim();
+        if (text) {
+          res.items.push({
+            prompt: text,
+            session: row.session_id,
+            cwd: "",
+            epochMs: row.time_created,
+          });
+        }
+        if (row.time_created > newLastTs) newLastTs = row.time_created;
+      }
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* db locked / schema drift: best-effort, leave high-water unchanged */
+  }
+  return { res, newLastTs };
+}
+
+// ── antigravity (history.jsonl) ───────────────────────────────────────────────
+// The Antigravity CLI logs each submitted prompt as a JSONL record with a
+// `display` field. mtime-gated like the other file sources.
+function scanAntigravity(cp: CaptureCheckpoint): ScanResult {
+  const file = join(homedir(), ".gemini", "antigravity-cli", "history.jsonl");
+  const present = existsSync(file);
+  const res: ScanResult = { present, items: [], filesScanned: 0, touched: {} };
+  if (!present) return res;
+  for (const { path, mtime } of changedFiles([file], cp)) {
+    res.filesScanned++;
+    res.touched[path] = mtime;
+    let raw = "";
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    for (const l of raw.split("\n").filter((x) => x.trim())) {
+      let r: Record<string, unknown>;
+      try {
+        r = JSON.parse(l) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const text = typeof r.display === "string" ? r.display.trim() : "";
+      if (text) res.items.push({ prompt: text, session: "antigravity", cwd: "" });
+    }
+  }
+  return res;
+}
+
 // -----------------------------------------------------------------------------
 // Driver
 // -----------------------------------------------------------------------------
@@ -247,15 +341,9 @@ export interface SyncResult {
 const UNSUPPORTED: { tool: string; detect: () => boolean; detail: string }[] = [
   {
     tool: "gemini",
-    detect: () => existsSync(join(homedir(), ".gemini")),
-    detail: "transcript format not yet supported",
+    detect: () => existsSync(join(homedir(), ".gemini", "config")),
+    detail: "Gemini CLI does not persist chat transcripts locally",
   },
-  {
-    tool: "opencode",
-    detect: () => existsSync(join(homedir(), ".local", "share", "opencode")),
-    detail: "stored in opencode.db (SQLite) - extractor pending",
-  },
-  { tool: "antigravity", detect: () => false, detail: "transcript format not yet supported" },
   { tool: "openclaw", detect: () => false, detail: "no transcript source" },
   { tool: "hermes", detect: () => false, detail: "no transcript source" },
   { tool: "pi", detect: () => false, detail: "transcript format not yet supported" },
@@ -291,6 +379,14 @@ export function sync(vault: string): SyncResult {
   const prevail = scanPrevail(cp);
   sources.push(runSource(vault, "prevail", prevail.res));
   cp.prevailLastTs = prevail.newLastTs;
+
+  const opencode = scanOpencode(cp);
+  sources.push(runSource(vault, "opencode", opencode.res));
+  cp.opencodeLastTs = opencode.newLastTs;
+
+  const antigravity = scanAntigravity(cp);
+  sources.push(runSource(vault, "antigravity", antigravity));
+  Object.assign(cp.files, antigravity.touched);
 
   for (const u of UNSUPPORTED) {
     let present = false;

@@ -37,6 +37,7 @@ interface Args {
   mcp: boolean;
   mcpUnsafeDetach: boolean;
   mcpNetwork: boolean;
+  mcpArgs: string[];
   bench: boolean;
   benchArgs: string[];
   usage: boolean;
@@ -118,6 +119,7 @@ function parseArgs(argv: string[]): Args {
   let mcp = false;
   let mcpUnsafeDetach = false;
   let mcpNetwork = false;
+  let mcpArgs: string[] = [];
   let bench = false;
   let benchArgs: string[] = [];
   let usage = false;
@@ -212,6 +214,9 @@ function parseArgs(argv: string[]): Args {
       break;
     } else if (a === "mcp") {
       mcp = true;
+      // Capture the raw tail so the dispatcher can route `mcp install|uninstall|
+      // status` to the MCP-registration handler instead of starting the server.
+      mcpArgs = argv.slice(i + 1);
       // Consume any remaining mcp-specific flags (e.g. --unsafe-detach)
       // without falling back to the generic flag parser — same shape as
       // schedule/daemon/telegram, but mcp has no positional sub-commands
@@ -371,6 +376,7 @@ function parseArgs(argv: string[]): Args {
     mcp,
     mcpUnsafeDetach,
     mcpNetwork,
+    mcpArgs,
     bench,
     benchArgs,
     usage,
@@ -3590,6 +3596,35 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
   return 0;
 }
 
+// `prevail mcp install [--client codex,gemini,...]`   register Prevail as an MCP
+// `prevail mcp uninstall [--client ...]`               server in each CLI's config
+// `prevail mcp status`                                 report where it's wired.
+// With no --client, install/uninstall act on every DETECTED client; status
+// always reports every known client. Machine command: always emits JSON.
+async function mcpInstallCommand(args: string[]): Promise<number> {
+  const sub = args[0];
+  const clients: string[] = [];
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") continue;
+    else if (a === "--client") {
+      const v = args[++i];
+      if (v) clients.push(...v.split(",").map((s) => s.trim()).filter(Boolean));
+    } else if (a.startsWith("--client=")) {
+      clients.push(...a.slice("--client=".length).split(",").map((s) => s.trim()).filter(Boolean));
+    } else if (!a.startsWith("-")) {
+      clients.push(a);
+    }
+  }
+  const { install, uninstall, status } = await import("./mcp-install.ts");
+  const sel = clients.length ? clients : undefined;
+  const result = sub === "status" ? status() : sub === "uninstall" ? uninstall(sel) : install(sel);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  // Always exit 0: per-client success/error lives in the JSON, and the desktop
+  // bridge discards stdout on a non-zero exit.
+  return 0;
+}
+
 // `prevail gateway status --json` — machine-only deterministic routing status.
 // Pure read: scans the vault + manifests, reports configured channels and the
 // per-domain routing keywords. No adapters started, no model called.
@@ -4094,6 +4129,13 @@ async function main() {
     return;
   }
   if (args.mcp) {
+    // `mcp install|uninstall|status [--client X] [--json]` registers Prevail as
+    // an MCP server in each CLI's config, rather than starting the server.
+    const mcpSub = args.mcpArgs[0];
+    if (mcpSub === "install" || mcpSub === "uninstall" || mcpSub === "status") {
+      const code = await mcpInstallCommand(args.mcpArgs);
+      process.exit(code);
+    }
     const cfg = readConfig();
     const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
     const { runMcpServer } = await import("./mcp-server.ts");
