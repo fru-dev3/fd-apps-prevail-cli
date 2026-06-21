@@ -54,12 +54,16 @@ export interface McpClient {
 }
 
 const HOME = homedir();
+// Claude Code's own config. User-scope MCP servers live at top-level
+// `mcpServers`; local/project-scope under `projects[<path>].mcpServers`.
+const CLAUDE_CONFIG = join(HOME, ".claude.json");
 
 export const MCP_CLIENTS: readonly McpClient[] = [
   {
     id: "claude",
     label: "Claude Code",
     kind: "claude",
+    file: CLAUDE_CONFIG,
     present: () => existsSync(join(HOME, ".claude")),
   },
   {
@@ -167,29 +171,96 @@ function installToml(file: string): McpClientResult {
   return { ...base, registered: true };
 }
 
-// ── claude CLI client ─────────────────────────────────────────────────────────
+// ── claude client ─────────────────────────────────────────────────────────────
+// Detection + the install fallback read/write ~/.claude.json DIRECTLY, never
+// spawning `claude`. The desktop app runs with a minimal GUI PATH that usually
+// can't find the `claude` binary, so a spawn-based status check would always say
+// "not registered" (the bug). File I/O has no such dependency, matching how the
+// json/toml clients are detected.
+const claudeBase = (): McpClientResult => ({
+  client: "claude",
+  present: existsSync(join(HOME, ".claude")),
+  registered: false,
+  file: CLAUDE_CONFIG,
+});
+
+/** Is prevail registered in Claude's config at ANY scope? user scope = top-level
+ *  mcpServers; local scope = projects[*].mcpServers. Pure file read, no spawn. */
+function claudeRegistered(): boolean {
+  if (!existsSync(CLAUDE_CONFIG)) return false;
+  try {
+    const cfg = JSON.parse(readFileSync(CLAUDE_CONFIG, "utf8").trim() || "{}") as {
+      mcpServers?: Record<string, unknown>;
+      projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
+    };
+    if (cfg.mcpServers?.prevail) return true;
+    return Object.values(cfg.projects ?? {}).some((p) => p?.mcpServers?.prevail);
+  } catch {
+    return false;
+  }
+}
+
+/** Write prevail into Claude's USER-scope mcpServers, preserving every other key.
+ *  Used as the fallback when the `claude` CLI isn't on the app's PATH. */
+function writeClaudeUserServer(): McpClientResult {
+  const { command } = engineCommand();
+  const base = claudeBase();
+  let cfg: Record<string, unknown> = {};
+  if (existsSync(CLAUDE_CONFIG)) {
+    try {
+      cfg = JSON.parse(readFileSync(CLAUDE_CONFIG, "utf8").trim() || "{}") as Record<string, unknown>;
+    } catch (e) {
+      return { ...base, error: `~/.claude.json is not valid JSON: ${(e as Error).message}` };
+    }
+  }
+  const servers = (cfg.mcpServers ??= {}) as Record<string, unknown>;
+  servers.prevail = { command, args: mcpArgs() };
+  try {
+    writeFileSync(CLAUDE_CONFIG, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+  } catch (e) {
+    return { ...base, error: (e as Error).message };
+  }
+  return { ...base, registered: true };
+}
+
+/** Strip prevail from Claude's config at every scope (top-level + each project).
+ *  The file-level companion to `claude mcp remove`, so removal works without the
+ *  CLI on PATH. */
+function removeClaudeServer(): void {
+  if (!existsSync(CLAUDE_CONFIG)) return;
+  try {
+    const cfg = JSON.parse(readFileSync(CLAUDE_CONFIG, "utf8").trim() || "{}") as {
+      mcpServers?: Record<string, unknown>;
+      projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
+    };
+    let changed = false;
+    if (cfg.mcpServers?.prevail) {
+      delete cfg.mcpServers.prevail;
+      changed = true;
+    }
+    for (const p of Object.values(cfg.projects ?? {})) {
+      if (p?.mcpServers?.prevail) {
+        delete p.mcpServers.prevail;
+        changed = true;
+      }
+    }
+    if (changed) writeFileSync(CLAUDE_CONFIG, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+  } catch {
+    /* best effort */
+  }
+}
+
 function installClaude(): McpClientResult {
-  const base: McpClientResult = {
-    client: "claude",
-    present: existsSync(join(HOME, ".claude")),
-    registered: false,
-  };
   const { command, baseArgs } = engineCommand();
   const run = (args: string[]) =>
     spawnSync("claude", args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 10000 });
-  // Best-effort remove so re-install refreshes rather than erroring.
-  run(["mcp", "remove", "prevail"]);
-  const r = run(["mcp", "add", "prevail", "--", command, ...baseArgs, "mcp"]);
-  if (r.error) {
-    return {
-      ...base,
-      error: `could not run claude (is Claude Code installed?): ${r.error.message}`,
-    };
-  }
-  if (r.status !== 0) {
-    return { ...base, error: (r.stderr || "claude mcp add failed").trim().slice(0, 200) };
-  }
-  return { ...base, registered: true };
+  // Prefer the CLI at USER scope (global, vault-move-proof, not tied to the cwd
+  // the engine happened to run in). Best-effort remove first so re-install
+  // refreshes. If `claude` isn't reachable (GUI PATH) or fails, write the file.
+  run(["mcp", "remove", "prevail", "-s", "user"]);
+  const r = run(["mcp", "add", "prevail", "-s", "user", "--", command, ...baseArgs, "mcp", "--unsafe-detach"]);
+  if (r.error || r.status !== 0) return writeClaudeUserServer();
+  return { ...claudeBase(), registered: true };
 }
 
 function installOne(c: McpClient): McpClientResult {
@@ -209,8 +280,11 @@ function uninstallOne(c: McpClient): McpClientResult {
     file: c.file,
   };
   if (c.kind === "claude") {
-    spawnSync("claude", ["mcp", "remove", "prevail"], { stdio: "ignore" });
-    return { ...base, detail: "removed via claude mcp remove" };
+    // Try the CLI (covers any scope it tracks), then strip the file directly so
+    // removal works even without `claude` on PATH.
+    spawnSync("claude", ["mcp", "remove", "prevail", "-s", "user"], { stdio: "ignore" });
+    removeClaudeServer();
+    return { ...base, detail: "removed from ~/.claude.json" };
   }
   if (!c.file || !existsSync(c.file)) return { ...base, detail: "no config to edit" };
   try {
@@ -250,12 +324,7 @@ function statusOne(c: McpClient): McpClientResult {
     file: c.file,
   };
   if (c.kind === "claude") {
-    const r = spawnSync("claude", ["mcp", "list"], {
-      stdio: ["ignore", "pipe", "ignore"],
-      encoding: "utf8",
-      timeout: 5000,
-    });
-    return { ...base, registered: r.status === 0 && /(^|\s)prevail\b/m.test(r.stdout || "") };
+    return { ...base, registered: claudeRegistered() };
   }
   if (!c.file || !existsSync(c.file)) return base;
   try {
