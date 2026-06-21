@@ -149,7 +149,9 @@ export function parseHookPayload(raw: string): HookPayload | null {
  *  lands in `<vault>/build/_meta` on a migrated vault, else `<vault>/_meta` -
  *  the same resolution every other runtime file uses. */
 export function captureStreamPath(vault: string, slug: string): string {
-  return join(runtimePath(vault, "_meta"), `prompts.${slug}.jsonl`);
+  // One dedicated folder, one file per tool: <vault>/_meta/prompts/<tool>.jsonl
+  // (keeps _meta clean rather than scattering prompts.<tool>.jsonl loose).
+  return join(runtimePath(vault, "_meta"), "prompts", `${slug}.jsonl`);
 }
 
 /** Dedup key for a prompt: tool + session + content hash. Two identical prompts

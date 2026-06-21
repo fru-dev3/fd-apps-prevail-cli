@@ -32,9 +32,13 @@ function engineCommand(): { command: string; baseArgs: string[] } {
   return { command: exec, baseArgs: [] };
 }
 
-/** The full MCP args a client invokes: base args + the `mcp` subcommand. */
+/** The full MCP args a client invokes: base args + `mcp` + `--unsafe-detach`.
+ *  The detach flag bypasses the server's parent-process check, which otherwise
+ *  rejects launches whose parent isn't a recognized TTY/IDE (e.g. when a host
+ *  validates the server on add, or the desktop tests it). Local stdio is still
+ *  token/parent-safe; this just stops false rejections. */
 function mcpArgs(): string[] {
-  return [...engineCommand().baseArgs, "mcp"];
+  return [...engineCommand().baseArgs, "mcp", "--unsafe-detach"];
 }
 
 export type McpClientKind = "claude" | "json" | "toml";
@@ -172,7 +176,7 @@ function installClaude(): McpClientResult {
   };
   const { command, baseArgs } = engineCommand();
   const run = (args: string[]) =>
-    spawnSync("claude", args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+    spawnSync("claude", args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 10000 });
   // Best-effort remove so re-install refreshes rather than erroring.
   run(["mcp", "remove", "prevail"]);
   const r = run(["mcp", "add", "prevail", "--", command, ...baseArgs, "mcp"]);
@@ -249,6 +253,7 @@ function statusOne(c: McpClient): McpClientResult {
     const r = spawnSync("claude", ["mcp", "list"], {
       stdio: ["ignore", "pipe", "ignore"],
       encoding: "utf8",
+      timeout: 5000,
     });
     return { ...base, registered: r.status === 0 && /(^|\s)prevail\b/m.test(r.stdout || "") };
   }
