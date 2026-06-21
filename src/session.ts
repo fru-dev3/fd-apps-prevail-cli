@@ -299,6 +299,34 @@ export function getUserPromptsForDomain(domain: string, limit = 50): UserPromptR
   }
 }
 
+// Returns ALL user prompts (every domain) with ts strictly greater than
+// `sinceTs`, oldest first: the incremental feed the capture-sync backstop
+// exports into _meta/prompts.prevail.jsonl. `domain` is included so the stream
+// can keep prevail's domain context. Cheap, tolerant: returns [] on any error.
+export interface UserPromptRowAllDomains extends UserPromptRecord {
+  domain: string;
+}
+export function getAllUserPromptsSince(sinceTs = 0, limit = 5000): UserPromptRowAllDomains[] {
+  const handle = db();
+  if (!handle) return [];
+  try {
+    return handle
+      .query<
+        { domain: string; ts: number; content: string; session_id: string; cli: string; model: string },
+        [number, number]
+      >(
+        `SELECT domain, ts, content, session_id, cli, model
+         FROM messages
+         WHERE role = 'user' AND ts > ?
+         ORDER BY ts ASC
+         LIMIT ?`,
+      )
+      .all(sinceTs, limit);
+  } catch {
+    return [];
+  }
+}
+
 export function formatRelativeDate(ts: number | null): string {
   if (!ts) return "never";
   const diff = Date.now() - ts;

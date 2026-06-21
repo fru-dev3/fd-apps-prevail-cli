@@ -65,6 +65,8 @@ interface Args {
   onboardArgs: string[];
   heartbeat: boolean;
   heartbeatArgs: string[];
+  capture: boolean;
+  captureArgs: string[];
   gateway: boolean;
   gatewayArgs: string[];
   domains: boolean;
@@ -144,6 +146,8 @@ function parseArgs(argv: string[]): Args {
   let onboardArgs: string[] = [];
   let heartbeat = false;
   let heartbeatArgs: string[] = [];
+  let capture = false;
+  let captureArgs: string[] = [];
   let gateway = false;
   let gatewayArgs: string[] = [];
   let domains = false;
@@ -278,6 +282,10 @@ function parseArgs(argv: string[]): Args {
       heartbeat = true;
       heartbeatArgs = argv.slice(i + 1);
       break;
+    } else if (a === "capture") {
+      capture = true;
+      captureArgs = argv.slice(i + 1);
+      break;
     } else if (a === "gateway") {
       gateway = true;
       gatewayArgs = argv.slice(i + 1);
@@ -391,6 +399,8 @@ function parseArgs(argv: string[]): Args {
     onboardArgs,
     heartbeat,
     heartbeatArgs,
+    capture,
+    captureArgs,
     gateway,
     gatewayArgs,
     domains,
@@ -3486,6 +3496,100 @@ async function heartbeatCommand(args: string[], vaultOverride: string | null): P
   }
 }
 
+// `prevail capture --tool <t>`        ingest a prompt (read from stdin), the
+//                                     keystone every harness hook pipes into.
+// `prevail capture status --json`     stream counts + per-harness wiring.
+// `prevail capture install|uninstall` wire push hooks + stage the sync backstop.
+// `prevail capture sync --json`       pull prompts from native CLI transcripts.
+//
+// Ingest is SAFE for use inside a harness hook: it reads the prompt from stdin,
+// resolves the vault from config.json (so it follows a vault move with no edit),
+// appends one uniform record to <vault>/_meta/prompts.<tool>.jsonl, and ALWAYS
+// exits 0 without writing to stdout unless --json is passed, so it can never
+// block or pollute the harness it runs inside.
+async function captureCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const sub = args[0];
+  const rest = parseJsonSubArgs(args.slice(1), vaultOverride);
+  const vault = rest.vaultPath ?? resolveVault(vaultOverride);
+
+  // status / install / uninstall / sync take an explicit subcommand; everything
+  // else (including a leading flag like `--tool`) is an ingest.
+  if (sub === "status") {
+    if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+    const { statusReport } = await import("./capture.ts");
+    const { handleStatus } = await import("./capture-install.ts");
+    const data = statusReport(vault);
+    const wiring = handleStatus(vault);
+    process.stdout.write(`${JSON.stringify({ ...data, agent: wiring.agent, harnesses: wiring.harnesses })}\n`);
+    return 0;
+  }
+  if (sub === "install" || sub === "uninstall") {
+    if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+    const { handleInstall, handleUninstall } = await import("./capture-install.ts");
+    const result = sub === "install" ? handleInstall(vault) : handleUninstall(vault);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return result.ok ? 0 : 1;
+  }
+  if (sub === "sync") {
+    if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+    const { handleSync } = await import("./capture-sync.ts");
+    const result = handleSync(vault);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return result.ok ? 0 : 1;
+  }
+
+  // --- ingest (default) -------------------------------------------------------
+  // Parse capture-specific flags out of the full arg list (parseJsonSubArgs only
+  // knows --vault/--json). --prompt is mostly for testing; the real path reads
+  // stdin.
+  let tool: string | null = null;
+  let session: string | null = null;
+  let cwd: string | null = null;
+  let promptFlag: string | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--tool") tool = args[++i] ?? null;
+    else if (a.startsWith("--tool=")) tool = a.slice("--tool=".length);
+    else if (a === "--session") session = args[++i] ?? null;
+    else if (a.startsWith("--session=")) session = a.slice("--session=".length);
+    else if (a === "--cwd") cwd = args[++i] ?? null;
+    else if (a.startsWith("--cwd=")) cwd = a.slice("--cwd=".length);
+    else if (a === "--prompt") promptFlag = args[++i] ?? null;
+    else if (a.startsWith("--prompt=")) promptFlag = a.slice("--prompt=".length);
+  }
+
+  // Prompt source: explicit --prompt wins; otherwise read all of stdin (this is
+  // how a harness hook delivers the submitted text). Never block on a TTY.
+  let prompt = promptFlag ?? "";
+  if (promptFlag === null && !process.stdin.isTTY) {
+    try {
+      const { readFileSync } = await import("node:fs");
+      prompt = readFileSync(0, "utf8");
+    } catch {
+      /* no stdin, treated as an empty prompt below (no-op) */
+    }
+  }
+
+  const { ingest, parseHookPayload } = await import("./capture.ts");
+  // A command-type harness hook (e.g. Claude Code) pipes a JSON payload, not the
+  // bare prompt. When stdin is such a payload, pull prompt/session/cwd from it.
+  // The hook stays a dumb one-liner and prevail owns the parsing. Explicit flags
+  // still win (so --session/--cwd from a smarter adapter override the payload).
+  if (promptFlag === null) {
+    const payload = parseHookPayload(prompt);
+    if (payload) {
+      prompt = payload.prompt;
+      session = session ?? payload.session ?? null;
+      cwd = cwd ?? payload.cwd ?? null;
+    }
+  }
+
+  const result = ingest({ vault, tool: tool ?? "", prompt, session, cwd });
+  if (rest.json) process.stdout.write(`${JSON.stringify(result)}\n`);
+  // Hook safety: never fail the harness, even if capture couldn't write.
+  return 0;
+}
+
 // `prevail gateway status --json` — machine-only deterministic routing status.
 // Pure read: scans the vault + manifests, reports configured channels and the
 // per-domain routing keywords. No adapters started, no model called.
@@ -4062,6 +4166,10 @@ async function main() {
   }
   if (args.heartbeat) {
     const code = await heartbeatCommand(args.heartbeatArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.capture) {
+    const code = await captureCommand(args.captureArgs, args.vaultPath);
     process.exit(code);
   }
   if (args.gateway) {
