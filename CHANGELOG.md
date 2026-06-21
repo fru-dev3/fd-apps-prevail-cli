@@ -464,7 +464,7 @@ Updated:
 - `CLI_MODEL_HINT.antigravity` tells the user to run `agy models` for the live list.
 - Tests updated to assert the new flag names.
 
-Smoke-tested live: `detectClis()` picks up `/Users/dev/.local/bin/agy`, dispatches correctly, model replies. End-to-end works.
+Smoke-tested live: `detectClis()` picks up `/Users/you/.local/bin/agy`, dispatches correctly, model replies. End-to-end works.
 
 ---
 

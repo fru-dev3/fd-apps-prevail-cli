@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "archive_path": "/Users/dev/.prevail/backups/vault-2026-06-06T150500Z.tar.gz",
+  "archive_path": "/Users/you/.prevail/backups/vault-2026-06-06T150500Z.tar.gz",
   "scope": "vault",
   "domains": ["wealth", "business", "health", "career", "tax"],
   "file_count": 214,

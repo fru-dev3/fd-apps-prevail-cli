@@ -1,6 +1,6 @@
 {
   "name": "wealth",
-  "path": "/Users/dev/Documents/fru/fd-apps/fd-apps-prevail-life/vault-demo/wealth",
+  "path": "/Users/you/Documents/fru/fd-apps/fd-apps-prevail-life/vault-demo/wealth",
   "hasState": true,
   "openLoopCount": 3,
   "stateMtime": 1749220200000,
@@ -8,12 +8,12 @@
     {
       "id": "wealth-op-weekly-pulse",
       "title": "Weekly Wealth Pulse",
-      "path": "/Users/dev/Documents/fru/fd-apps/fd-apps-prevail-life/vault-demo/wealth/skills/wealth-op-weekly-pulse/SKILL.md"
+      "path": "/Users/you/Documents/fru/fd-apps/fd-apps-prevail-life/vault-demo/wealth/skills/wealth-op-weekly-pulse/SKILL.md"
     },
     {
       "id": "connect-financial-institution",
       "title": "Connect Financial Institution",
-      "path": "/Users/dev/Documents/fru/fd-apps/fd-apps-prevail-life/vault-demo/wealth/skills/connect-financial-institution/SKILL.md"
+      "path": "/Users/you/Documents/fru/fd-apps/fd-apps-prevail-life/vault-demo/wealth/skills/connect-financial-institution/SKILL.md"
     }
   ]
 }

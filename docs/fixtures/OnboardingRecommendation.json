@@ -15,9 +15,9 @@
       "label": "Business",
       "emoji": "🏢",
       "summary": "LLC operations, revenue, and compliance.",
-      "reason": "You build across fru.dev, fd-apps, and AIReadyU — a business domain keeps revenue and obligations in one place.",
+      "reason": "You run a few projects and an LLC — a business domain keeps revenue and obligations in one place.",
       "recommended": true,
-      "starterGoals": ["Ship AIReadyU go-to-market"],
+      "starterGoals": ["Ship a product go-to-market"],
       "suggestedSkills": ["fd-business-review"]
     },
     {
