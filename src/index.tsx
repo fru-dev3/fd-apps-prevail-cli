@@ -3522,11 +3522,13 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
   // else (including a leading flag like `--tool`) is an ingest.
   if (sub === "status") {
     if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
-    const { statusReport } = await import("./capture.ts");
+    const { statusReport, isCaptureDisabled } = await import("./capture.ts");
     const { handleStatus } = await import("./capture-install.ts");
     const data = statusReport(vault);
     const wiring = handleStatus(vault);
-    process.stdout.write(`${JSON.stringify({ ...data, agent: wiring.agent, harnesses: wiring.harnesses })}\n`);
+    // Tag each harness with its on/off state for the per-tool toggle.
+    const harnesses = wiring.harnesses.map((h) => ({ ...h, enabled: !isCaptureDisabled(vault, h.tool) }));
+    process.stdout.write(`${JSON.stringify({ ...data, agent: wiring.agent, harnesses })}\n`);
     return 0;
   }
   if (sub === "install" || sub === "uninstall") {
@@ -3542,6 +3544,20 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
     const result = handleSync(vault);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return result.ok ? 0 : 1;
+  }
+  if (sub === "enable" || sub === "disable") {
+    if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+    let tool: string | null = null;
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === "--tool") tool = args[++i] ?? null;
+      else if (args[i].startsWith("--tool=")) tool = args[i].slice("--tool=".length);
+    }
+    const { safeToolSlug, setCaptureEnabled, isCaptureDisabled } = await import("./capture.ts");
+    const slug = safeToolSlug(tool);
+    if (!slug) emitJsonError("missing or invalid --tool", "BAD_TOOL");
+    setCaptureEnabled(vault, slug, sub === "enable");
+    process.stdout.write(`${JSON.stringify({ ok: true, tool: slug, enabled: !isCaptureDisabled(vault, slug) })}\n`);
+    return 0;
   }
 
   // --- ingest (default) -------------------------------------------------------

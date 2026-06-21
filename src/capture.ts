@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { runtimePath, validateVaultPath } from "./path-safety.ts";
@@ -154,6 +154,45 @@ export function captureStreamPath(vault: string, slug: string): string {
   return join(runtimePath(vault, "_meta"), "prompts", `${slug}.jsonl`);
 }
 
+// ── Per-tool on/off ───────────────────────────────────────────────────────────
+// A tool the user has turned OFF is recorded in <vault>/_meta/prompts/.off.json
+// as { disabled: [slug, ...] }. Both the live push path (ingest) and the
+// automatic reader (ingestBatch / sync) honor it, so "off" means off everywhere.
+
+function captureConfigPath(vault: string): string {
+  return join(runtimePath(vault, "_meta"), "prompts", ".off.json");
+}
+
+/** Is capture turned OFF for this tool? */
+export function isCaptureDisabled(vault: string, slug: string): boolean {
+  try {
+    const d = (JSON.parse(readFileSync(captureConfigPath(vault), "utf8")) as { disabled?: string[] }).disabled;
+    return Array.isArray(d) && d.includes(slug);
+  } catch {
+    return false;
+  }
+}
+
+/** Turn capture on (on=true) or off (on=false) for a tool. */
+export function setCaptureEnabled(vault: string, slug: string, on: boolean): void {
+  const p = captureConfigPath(vault);
+  const set = new Set<string>();
+  try {
+    for (const s of (JSON.parse(readFileSync(p, "utf8")) as { disabled?: string[] }).disabled ?? []) set.add(s);
+  } catch {
+    /* no file yet */
+  }
+  if (on) set.delete(slug);
+  else set.add(slug);
+  try {
+    const dir = dirname(p);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(p, `${JSON.stringify({ disabled: [...set] }, null, 2)}\n`, "utf8");
+  } catch {
+    /* best effort */
+  }
+}
+
 /** Dedup key for a prompt: tool + session + content hash. Two identical prompts
  *  in the same session collapse (push hook + pull sync writing the same line),
  *  but the same prompt in a different session is kept (it's a real re-ask). */
@@ -211,6 +250,9 @@ export function ingest(input: IngestInput): IngestResult {
   if (!v.ok) return { ok: false, written: false, path, tool: slug ?? "", reason: v.reason };
   if (!slug)
     return { ok: false, written: false, path, tool: "", reason: "missing or invalid --tool" };
+  // Honor the per-tool on/off switch (push path).
+  if (isCaptureDisabled(input.vault, slug))
+    return { ok: true, written: false, path, tool: slug, reason: "disabled" };
 
   const prompt = (input.prompt ?? "").trim();
   // Empty prompt (e.g. a slash-command-only line, or a hook firing on a blank
@@ -302,6 +344,8 @@ export function ingestBatch(vault: string, tool: string, items: BatchItem[]): Ba
   const v = validateVaultPath(vault);
   if (!v.ok) return { ok: false, tool: slug ?? "", path, written: 0, skipped: 0, error: v.reason };
   if (!slug) return { ok: false, tool: "", path, written: 0, skipped: 0, error: "invalid tool" };
+  // Honor the per-tool on/off switch (automatic/sync path).
+  if (isCaptureDisabled(vault, slug)) return { ok: true, tool: slug, path, written: 0, skipped: items.length };
 
   const seen = loadKeySet(path, slug);
   const lines: string[] = [];
