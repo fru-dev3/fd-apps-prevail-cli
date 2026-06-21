@@ -1013,9 +1013,13 @@ async function usageCommand(args: string[], vaultOverride: string | null): Promi
   const sub = args[0];
 
   if (sub === "record") {
-    // The JSON payload may be the next arg or read from stdin.
+    // The JSON payload may be the next arg or read from stdin. A leading "--"
+    // token is a FLAG (e.g. the desktop appends --json), never the payload, so
+    // fall through to stdin in that case. (This was the "usage always blank"
+    // bug: `usage record --json` treated "--json" as the payload, JSON.parse
+    // threw, and the turn was never recorded.)
     let payload = args[1];
-    if (!payload) {
+    if (!payload || payload.startsWith("--")) {
       try { payload = readFileSync(0, "utf8"); } catch { payload = ""; }
     }
     let input: Record<string, unknown>;
