@@ -179,9 +179,30 @@ export interface HookWireResult {
   present: boolean;
   wired: boolean;
   target?: string;
+  /** Absolute path of the native transcript dir/file this harness is read from
+   *  (where its prompts originate), so the UI can reveal it. Undefined for tools
+   *  with no readable source on disk. */
+  source?: string;
   action?: "added" | "updated" | "removed" | "noop";
   detail?: string;
   error?: string;
+}
+
+/** Where a harness's prompts originate on disk - the native transcript the sync
+ *  backstop scrapes (and, for Claude Code, what the live hook mirrors). Kept in
+ *  step with the readers in capture-sync.ts. Undefined => no on-disk source. */
+export function captureSourcePath(slug: string, transcript?: string): string | undefined {
+  const home = homedir();
+  switch (slug) {
+    case "antigravity":
+      return join(home, ".gemini", "antigravity-cli", "history.jsonl");
+    case "opencode":
+      return join(home, ".local", "share", "opencode", "opencode.db");
+    case "prevail":
+      return join(home, ".prevail", "sessions.db");
+    default:
+      return transcript ? join(home, transcript) : undefined;
+  }
 }
 
 /** Idempotently merge (or refresh) the prevail capture hook into Claude Code's
@@ -328,6 +349,7 @@ function syncHarness(t: KnownTool): HookWireResult {
       method: "sync",
       present: existsSync(join(homedir(), ".prevail")),
       wired: false,
+      source: captureSourcePath("prevail"),
       detail: "cockpit prompts exported from sessions.db by `capture sync`",
     };
   }
@@ -337,6 +359,7 @@ function syncHarness(t: KnownTool): HookWireResult {
     method: "sync",
     present: bin ? binAvailable(bin) : false,
     wired: false,
+    source: captureSourcePath(t.slug, t.transcript),
     detail: t.transcript
       ? `captured from ~/${t.transcript} by the sync backstop`
       : "captured by the sync backstop",
@@ -411,6 +434,7 @@ export function status(_vaultPath: string): CaptureInstallStatus {
       present: claudePresent(),
       wired: claudeWired,
       target: claudeSettingsPath(),
+      source: captureSourcePath("claude", ".claude/projects"),
     },
   ];
   for (const t of KNOWN_TOOLS) {
