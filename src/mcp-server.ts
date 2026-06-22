@@ -4,6 +4,8 @@ import { timingSafeEqual } from "node:crypto";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
+import { classifyAsCouncilWorthy } from "./auto-council.ts";
+import { readAutoCouncil } from "./config.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
 import { vappendLine } from "./vault-session.ts";
 import { VERSION } from "./version.ts";
@@ -118,7 +120,7 @@ export async function runMcpServer(
     },
     {
       name: "chat",
-      description: "Single-CLI chat turn against the named engine. Faster + cheaper than council for routine questions. Returns the assistant reply as a string.",
+      description: "Single-CLI chat turn against the named engine. Faster + cheaper than council for routine questions. Returns the assistant reply as a string. Note: when the user has auto-council set to \"auto\" for the domain, a high-stakes judgment call is automatically escalated to the full council and you receive the council verdict instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -426,6 +428,24 @@ async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<
   const wantKind = typeof args.cli === "string" ? args.cli : "claude";
   const cli = clis.find((c) => c.kind === wantKind) ?? clis[0]!;
   const model = typeof args.model === "string" ? args.model : "";
+
+  // Auto-council: when the domain is set to "auto", classify the prompt the same
+  // way the preview chat / TUI does. A judgment call is routed to the full
+  // council (which saves its verdict), so escalation fires identically whether
+  // the user typed it in Prevail or a host LLM called prevail.chat over MCP. The
+  // classifier fails safe to "don't escalate", so a flaky call just chats.
+  if (readAutoCouncil(domain.name) === "auto") {
+    let worthy = false;
+    try {
+      worthy = await classifyAsCouncilWorthy({ cwd: domain.path, cli, userPrompt: prompt });
+    } catch {
+      worthy = false;
+    }
+    if (worthy) {
+      return await tCouncil({ prompt, domain: domain.name }, vaultPath);
+    }
+  }
+
   const reply = await runChatTurn({
     prompt,
     cwd: domain.path,
