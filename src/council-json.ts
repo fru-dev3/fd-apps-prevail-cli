@@ -29,6 +29,8 @@ import {
   readCouncilConfig,
   readResponseFramework,
   readResponseLens,
+  readConfig,
+  bundledDemoVaultPath,
 } from "./config.ts";
 import { buildCouncilPanel, runCouncilOneShot, type CouncilPanelist } from "./council-runner.ts";
 import { appendDecision, makeDecisionId } from "./decisions.ts";
@@ -224,7 +226,7 @@ async function councilRunCommand(args: string[], vaultOverride: string | null): 
   let framework: FrameworkId | null | undefined;
   let clis: CliKind[] | undefined;
   let localOnly = false;
-  let vaultPath = vaultOverride ?? "";
+  let vaultPath = vaultOverride ?? readConfig()?.vaultPath ?? bundledDemoVaultPath();
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -270,7 +272,7 @@ async function councilFeedbackCommand(args: string[], vaultOverride: string | nu
   let id = "";
   let rating = "";
   let note: string | undefined;
-  let vaultPath = vaultOverride ?? "";
+  let vaultPath = vaultOverride ?? readConfig()?.vaultPath ?? bundledDemoVaultPath();
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     const next = args[i + 1];

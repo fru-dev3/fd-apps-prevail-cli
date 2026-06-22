@@ -533,7 +533,7 @@ export function ensureManifest(vaultPath: string, domain: string): DomainManifes
   // (symlink-escape guard). resolveSafeChild returns null when the dir
   // doesn't exist yet — that's fine for a brand-new domain, so only refuse
   // when it exists AND escapes.
-  if (existsSync(dir) && resolveSafeChild(vaultPath, domain) === null) {
+  if (existsSync(dir) && resolveSafeChild(vaultPath, dir) === null) {
     throw new Error(`ensureManifest: domain '${domain}' escapes the vault root`);
   }
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
