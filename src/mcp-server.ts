@@ -60,6 +60,29 @@ const SERVER_INFO = {
 
 const PROTOCOL_VERSION = "2024-11-05";
 
+// The connected MCP client, captured from initialize's clientInfo.name and
+// normalized to a surface slug, so prompts captured over MCP carry their TRUE
+// provenance (codex / gemini / claude / antigravity / cursor / …) - not the
+// answering CLI or, worse, the domain. One client per stdio process, so a
+// module-level value is correct.
+let mcpClientSurface = "mcp";
+
+function normalizeClientSurface(name: string | undefined): string {
+  const n = (name ?? "").toLowerCase();
+  if (!n) return "mcp";
+  if (n.includes("claude")) return "claude";
+  if (n.includes("codex")) return "codex";
+  if (n.includes("gemini")) return "gemini";
+  if (n.includes("antigravity") || n.includes("agy")) return "antigravity";
+  if (n.includes("cursor")) return "cursor";
+  if (n.includes("cline")) return "cline";
+  if (n.includes("goose")) return "goose";
+  if (n.includes("continue")) return "continue";
+  if (n.includes("opencode")) return "opencode";
+  const slug = n.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "mcp";
+}
+
 function log(line: string): void {
   process.stderr.write(`[prevail-mcp] ${line}\n`);
 }
@@ -486,12 +509,16 @@ function verifyParentProcess(): ParentVerdict {
 
 async function dispatch(req: JsonRpcReq, tools: McpTool[], vaultPath: string): Promise<unknown> {
   switch (req.method) {
-    case "initialize":
+    case "initialize": {
+      const p = (req.params ?? {}) as { clientInfo?: { name?: string } };
+      mcpClientSurface = normalizeClientSurface(p.clientInfo?.name);
+      log(`client: ${mcpClientSurface}${p.clientInfo?.name ? ` (${p.clientInfo.name})` : ""}`);
       return {
         protocolVersion: PROTOCOL_VERSION,
         serverInfo: SERVER_INFO,
         capabilities: { tools: {} },
       };
+    }
     case "notifications/initialized":
       // Spec-required notification from the client after init. No response.
       return undefined;
@@ -579,10 +606,35 @@ function resolveDomain(vaultPath: string, name: unknown): Domain {
   return found;
 }
 
+// Record an MCP prompt in the domain's intent ledger so it shows up in the
+// journal + feeds the distiller. `surface` carries the true MCP-client identity
+// (codex / gemini / …) so the journal labels it by where it came from, not the
+// answering CLI or the domain. Best-effort, never fatal.
+function logMcpIntent(domain: Domain, prompt: string, cli: string, model: string, ts: number): void {
+  try {
+    const rec = JSON.stringify({
+      kind: "intent",
+      ts,
+      source: "mcp",
+      surface: mcpClientSurface,
+      domain: domain.name,
+      cli,
+      model: model || null,
+      message: prompt,
+    });
+    vappendLine(join(domain.path, "_intents.jsonl"), `${rec}\n`);
+  } catch {
+    /* intent logging is best-effort */
+  }
+}
+
 async function tCouncil(args: Record<string, unknown>, vaultPath: string): Promise<string> {
   const prompt = String(args.prompt ?? "").trim();
   if (!prompt) throw new Error("prompt is required");
   const domain = resolveDomain(vaultPath, args.domain);
+  // Log the prompt up front with its MCP-client provenance (covers both a direct
+  // `council` call and an auto-council escalation from `chat`).
+  logMcpIntent(domain, prompt, "council", "", Date.now());
   const clis = await detectClis();
   if (clis.length === 0) throw new Error("no CLIs detected on the daemon host");
   const panel = buildCouncilPanel(clis);
@@ -596,7 +648,7 @@ async function tCouncil(args: Record<string, unknown>, vaultPath: string): Promi
       domainPath: domain.path,
       userPrompt: prompt,
       assistantReply: r.verdict,
-      cliLabel: `Council ⚖ ${r.chairLabel} (via mcp)`,
+      cliLabel: `Council ⚖ ${r.chairLabel} (via ${mcpClientSurface})`,
       ts: Date.now(),
       kind: "council-verdict",
     });
@@ -659,24 +711,14 @@ async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<
     domainPath: domain.path,
     userPrompt: prompt,
     assistantReply: reply,
-    cliLabel: model ? `${cli.label}·${model} (via mcp)` : `${cli.label} (via mcp)`,
+    cliLabel: `${model ? `${cli.label}·${model}` : cli.label} (via ${mcpClientSurface})`,
     ts,
     kind: "chat",
   });
-  // Append an intent so the distiller picks up MCP-driven chats too - the same
-  // self-learning loop the desktop and Telegram feed. Best-effort, never fatal.
-  try {
-    const rec = JSON.stringify({
-      kind: "intent",
-      ts,
-      source: "mcp",
-      domain: domain.name,
-      cli: cli.kind,
-      model: model || null,
-      message: prompt,
-    });
-    vappendLine(join(domain.path, "_intents.jsonl"), `${rec}\n`);
-  } catch { /* intent logging is best-effort */ }
+  // Append an intent so the distiller + journal pick up MCP-driven chats too,
+  // tagged with the calling client (codex / gemini / …). The escalation path
+  // logs via tCouncil instead, so this runs only on the direct-chat path.
+  logMcpIntent(domain, prompt, cli.kind, model, ts);
   return reply;
 }
 
