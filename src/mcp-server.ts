@@ -2,10 +2,11 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
-import { scanVault, type Domain } from "./vault.ts";
+import { scanVault, scanApps, type Domain } from "./vault.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
 import { classifyAsCouncilWorthy } from "./auto-council.ts";
-import { readAutoCouncil } from "./config.ts";
+import { readAutoCouncil, readBunker } from "./config.ts";
+import { isLockSet } from "./lock.ts";
 import { writeTurnSummary } from "./auto-summary.ts";
 import { appendDecision, readDecisions, domainDir, runtimeFile } from "./decisions.ts";
 import { buildRecommendations } from "./recommendations.ts";
@@ -291,6 +292,16 @@ export async function runMcpServer(
         required: ["domain", "action"],
       },
     },
+    {
+      name: "list_apps",
+      description: "List the connected apps/connectors (Gmail, GitHub, bank feeds, …) with the life domains they feed and how they connect. These are the data sources Prevail pulls into the vault.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "vault_status",
+      description: "Health and privacy status of the vault: passcode lock, Bunker Mode (local-only), and domain count. Check before suggesting anything that depends on network or write access.",
+      inputSchema: { type: "object", properties: {} },
+    },
   ];
 
   // Print the token-discovery hint once, on stderr, so a human launching the
@@ -517,6 +528,10 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(await tRunLoop(args, vaultPath));
     case "approve_loop_action":
       return wrapText(await tApproveLoopAction(args, vaultPath));
+    case "list_apps":
+      return wrapText(tListApps(vaultPath));
+    case "vault_status":
+      return wrapText(tVaultStatus(vaultPath));
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -830,6 +845,32 @@ async function tApproveLoopAction(args: Record<string, unknown>, vaultPath: stri
   if (clis.length === 0) throw new Error("no CLIs detected");
   const result = await executeAction(loopsCfg(vaultPath, clis[0]!.kind), domain.name, action);
   return result || "(action executed)";
+}
+
+// ── apps + vault status ──────────────────────────────────────────────────────
+
+function tListApps(vaultPath: string): string {
+  const apps = scanApps(vaultPath);
+  if (!apps.length) return "(no apps connected)";
+  const lines = apps.map((a) => {
+    const doms = a.domains?.length ? `  ->  ${a.domains.join(", ")}` : "";
+    const tag = a.community ? " [community]" : "";
+    return `- (${a.id}) ${a.title}${doms}${tag}\n  ${a.description ?? ""}`;
+  });
+  return `# Apps (${apps.length})\n${lines.join("\n")}`;
+}
+
+function tVaultStatus(vaultPath: string): string {
+  const locked = isLockSet();
+  const bunker = readBunker();
+  const domains = scanVault(vaultPath);
+  return [
+    "# Vault status",
+    `path: ${vaultPath}`,
+    `passcode lock: ${locked ? "set" : "none"}`,
+    `bunker mode: ${bunker ? "ON (local-only, no cloud/network)" : "off"}`,
+    `domains: ${domains.length}`,
+  ].join("\n");
 }
 
 // Async iterator over stdin lines. Bun + Node both support this via the
