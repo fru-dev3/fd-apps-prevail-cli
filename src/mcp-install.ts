@@ -250,6 +250,30 @@ function removeClaudeServer(): void {
   }
 }
 
+/** Strip prevail from every PROJECT scope (leaving the user-scope entry intact).
+ *  Project/local entries are cwd-specific and take precedence over user scope in
+ *  Claude Code, so a stale one (old binary, a bad --vault) would SHADOW the good
+ *  user-scope server and cause "Failed to reconnect: -32000". Purge them on
+ *  install so the single user-scope registration is the one that runs everywhere. */
+function removeClaudeProjectServers(): void {
+  if (!existsSync(CLAUDE_CONFIG)) return;
+  try {
+    const cfg = JSON.parse(readFileSync(CLAUDE_CONFIG, "utf8").trim() || "{}") as {
+      projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
+    };
+    let changed = false;
+    for (const p of Object.values(cfg.projects ?? {})) {
+      if (p?.mcpServers?.prevail) {
+        delete p.mcpServers.prevail;
+        changed = true;
+      }
+    }
+    if (changed) writeFileSync(CLAUDE_CONFIG, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+  } catch {
+    /* best effort */
+  }
+}
+
 function installClaude(): McpClientResult {
   const { command, baseArgs } = engineCommand();
   const run = (args: string[]) =>
@@ -259,8 +283,11 @@ function installClaude(): McpClientResult {
   // refreshes. If `claude` isn't reachable (GUI PATH) or fails, write the file.
   run(["mcp", "remove", "prevail", "-s", "user"]);
   const r = run(["mcp", "add", "prevail", "-s", "user", "--", command, ...baseArgs, "mcp", "--unsafe-detach"]);
-  if (r.error || r.status !== 0) return writeClaudeUserServer();
-  return { ...claudeBase(), registered: true };
+  const res = (r.error || r.status !== 0) ? writeClaudeUserServer() : { ...claudeBase(), registered: true };
+  // Remove any stale project-scoped entries so they can't shadow the user-scope
+  // server we just wrote (the cause of -32000 even when the panel says OK).
+  removeClaudeProjectServers();
+  return res;
 }
 
 function installOne(c: McpClient): McpClientResult {

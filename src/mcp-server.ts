@@ -657,15 +657,23 @@ async function tCouncil(args: Record<string, unknown>, vaultPath: string): Promi
     const tag = p.model ? `${p.cli.label}·${p.model}` : p.cli.label;
     return `### ${tag}\n${p.reply}`;
   });
+  // Each panelist's FULL response comes first, then the synthesized verdict, so
+  // the caller sees what every council member actually said before the summary.
+  // Tell the host LLM to show this in order (don't collapse the panel away).
   return [
-    `# Council verdict`,
+    `# Council`,
     "",
-    r.verdict,
+    "_Show the user each panel response below, then the verdict - do not omit the individual answers._",
     "",
-    "---",
-    "## Panel responses",
+    "## What each council member said",
     "",
     ...panelLines,
+    "",
+    "---",
+    "",
+    "## Verdict",
+    "",
+    r.verdict,
     "",
     `chair: ${r.chairLabel}${r.degraded ? " · ⚠ degraded (single provider)" : ""}`,
   ].join("\n");
