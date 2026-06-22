@@ -11,7 +11,7 @@ import { appendDecision, readDecisions, domainDir, runtimeFile } from "./decisio
 import { buildRecommendations } from "./recommendations.ts";
 import { runSurface } from "./surface.ts";
 import { readTasks, setTaskStatus, effectiveStatus } from "./tasks.ts";
-import { appendTask } from "./daemon-loops.ts";
+import { appendTask, runOneLoop, executeAction, DEFAULT_LOOPS, type LoopsConfig } from "./daemon-loops.ts";
 import { vappendLine } from "./vault-session.ts";
 import { VERSION } from "./version.ts";
 import { mcpConfigPath, readOrCreateMcpToken } from "./mcp-config.ts";
@@ -258,6 +258,39 @@ export async function runMcpServer(
         required: ["domain", "decision"],
       },
     },
+    {
+      name: "list_loops",
+      description: "List a domain's standing loops (self-driving routines): id, name, purpose, cadence, autonomy level, and whether enabled.",
+      inputSchema: {
+        type: "object",
+        properties: { domain: { type: "string" } },
+        required: ["domain"],
+      },
+    },
+    {
+      name: "run_loop",
+      description: "Run one loop now (by id or name). The loop evaluates the domain's current state and returns proposed next actions; depending on the loop's autonomy it may file tasks or queue approvals. Returns the note + proposed actions + any tasks created.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          loop: { type: "string", description: "Loop id or name (from list_loops)." },
+        },
+        required: ["domain", "loop"],
+      },
+    },
+    {
+      name: "approve_loop_action",
+      description: "Execute a loop action that was queued for approval, using Prevail's agent tools. Pass the exact action text from run_loop. Higher-stakes than other tools - only call when the user has approved this action.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          action: { type: "string", description: "The exact action text to execute." },
+        },
+        required: ["domain", "action"],
+      },
+    },
   ];
 
   // Print the token-discovery hint once, on stderr, so a human launching the
@@ -478,6 +511,12 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(tUpdateTask(args, vaultPath));
     case "log_decision":
       return wrapText(tLogDecision(args, vaultPath));
+    case "list_loops":
+      return wrapText(tListLoops(args, vaultPath));
+    case "run_loop":
+      return wrapText(await tRunLoop(args, vaultPath));
+    case "approve_loop_action":
+      return wrapText(await tApproveLoopAction(args, vaultPath));
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -742,6 +781,55 @@ function tLogDecision(args: Record<string, unknown>, vaultPath: string): string 
     source: "mcp",
   });
   return `Logged decision ${rec.id} in ${domain.name}.`;
+}
+
+// ── loops (self-driving routines) ────────────────────────────────────────────
+
+function loopsCfg(vaultPath: string, providerKind: string): LoopsConfig {
+  return { vaultPath, intervalSec: DEFAULT_LOOPS.intervalSec, provider: providerKind || DEFAULT_LOOPS.provider, model: "" };
+}
+
+function tListLoops(args: Record<string, unknown>, vaultPath: string): string {
+  const domain = resolveDomain(vaultPath, args.domain);
+  let f = join(domain.path, "_loops.json");
+  if (!existsSync(f)) f = join(domainDir(vaultPath, domain.name), "_loops.json");
+  if (!existsSync(f)) return `(no loops defined for ${domain.name})`;
+  let loops: Array<Record<string, unknown>> = [];
+  try {
+    const doc = JSON.parse(readFileSync(f, "utf8")) as { loops?: Array<Record<string, unknown>> };
+    loops = Array.isArray(doc.loops) ? doc.loops : [];
+  } catch {
+    return `(could not read loops for ${domain.name})`;
+  }
+  if (!loops.length) return `(no loops defined for ${domain.name})`;
+  const lines = loops.map((l) => {
+    const state = l.enabled === false ? "disabled" : (l.status ?? "active");
+    return `- (${l.id}) ${l.name}  [${l.cadence}, autonomy:${l.autonomy ?? "suggest"}, ${state}]\n  ${l.purpose ?? ""}`;
+  });
+  return `# Loops - ${domain.name} (${loops.length})\n${lines.join("\n")}`;
+}
+
+async function tRunLoop(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const domain = resolveDomain(vaultPath, args.domain);
+  const loopRef = String(args.loop ?? "").trim();
+  if (!loopRef) throw new Error("loop (id or name) is required");
+  const clis = await detectClis();
+  if (clis.length === 0) throw new Error("no CLIs detected");
+  const r = await runOneLoop(loopsCfg(vaultPath, clis[0]!.kind), domain.name, loopRef);
+  if (!r.ok) return `Loop run failed: ${r.error ?? "unknown error"}`;
+  const acts = r.actions.length ? r.actions.map((a) => `- [${a.disposition}] ${a.text}`).join("\n") : "(no actions proposed)";
+  const tasks = r.tasksCreated.length ? `\n\n## Tasks created\n${r.tasksCreated.map((t) => `- ${t}`).join("\n")}` : "";
+  return `# Loop "${r.loop}" - ${domain.name}${r.done ? " (closed: condition met)" : ""}\n${r.note}\n\n## Proposed actions\n${acts}${tasks}`;
+}
+
+async function tApproveLoopAction(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const domain = resolveDomain(vaultPath, args.domain);
+  const action = String(args.action ?? "").trim();
+  if (!action) throw new Error("action is required");
+  const clis = await detectClis();
+  if (clis.length === 0) throw new Error("no CLIs detected");
+  const result = await executeAction(loopsCfg(vaultPath, clis[0]!.kind), domain.name, action);
+  return result || "(action executed)";
 }
 
 // Async iterator over stdin lines. Bun + Node both support this via the
