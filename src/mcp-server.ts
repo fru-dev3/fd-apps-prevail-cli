@@ -11,8 +11,10 @@ import { writeTurnSummary } from "./auto-summary.ts";
 import { appendDecision, readDecisions, domainDir, runtimeFile } from "./decisions.ts";
 import { buildRecommendations } from "./recommendations.ts";
 import { runSurface } from "./surface.ts";
-import { readTasks, setTaskStatus, effectiveStatus } from "./tasks.ts";
+import { readTasks, writeTasks, setTaskStatus, effectiveStatus } from "./tasks.ts";
 import { appendTask, runOneLoop, executeAction, DEFAULT_LOOPS, type LoopsConfig } from "./daemon-loops.ts";
+import { syncApp } from "./daemon-sync.ts";
+import { connectApp } from "./connect-app.ts";
 import { vappendLine } from "./vault-session.ts";
 import { VERSION } from "./version.ts";
 import { mcpConfigPath, readOrCreateMcpToken } from "./mcp-config.ts";
@@ -235,12 +237,12 @@ export async function runMcpServer(
     },
     {
       name: "update_task",
-      description: "Set the status of an existing task by its id (get ids from list_tasks). Status is one of todo | doing | review | blocked | done | icebox.",
+      description: "Set the status of an existing task. Identify it by its id (from list_tasks) or, if it has none yet, by its exact text. Status is one of todo | doing | review | blocked | done | icebox.",
       inputSchema: {
         type: "object",
         properties: {
           domain: { type: "string" },
-          id: { type: "string" },
+          id: { type: "string", description: "Task id from list_tasks, or the exact task text." },
           status: { type: "string" },
         },
         required: ["domain", "id", "status"],
@@ -301,6 +303,28 @@ export async function runMcpServer(
       name: "vault_status",
       description: "Health and privacy status of the vault: passcode lock, Bunker Mode (local-only), and domain count. Check before suggesting anything that depends on network or write access.",
       inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "sync_app",
+      description: "Sync one connected app NOW (by id from list_apps): runs its connector to pull fresh data into the vault. Returns whether it succeeded and how many artifacts were routed.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "App id from list_apps." } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "connect_app",
+      description: "Connect a new app/data source. Prevail's Connection Agent researches the best way to connect it right now (MCP, an official API/CLI, a gateway, or a browser login), scaffolds it into the vault wired to the given domains, and returns a plan with the ONE auth step the user must complete. Higher-stakes: creates vault files and may require the user to authorize.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The app to connect, e.g. \"GitHub\", \"Strava\"." },
+          goal: { type: "string", description: "What data it should pull in." },
+          domains: { type: "array", items: { type: "string" }, description: "Optional: domains this should feed (informational; the agent also infers)." },
+        },
+        required: ["name"],
+      },
     },
   ];
 
@@ -532,6 +556,10 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(tListApps(vaultPath));
     case "vault_status":
       return wrapText(tVaultStatus(vaultPath));
+    case "sync_app":
+      return wrapText(await tSyncApp(args, vaultPath));
+    case "connect_app":
+      return wrapText(await tConnectApp(args, vaultPath));
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -777,11 +805,29 @@ function tAddTask(args: Record<string, unknown>, vaultPath: string): string {
 
 function tUpdateTask(args: Record<string, unknown>, vaultPath: string): string {
   const domain = resolveDomain(vaultPath, args.domain);
-  const id = String(args.id ?? "").trim();
+  const ref = String(args.id ?? "").trim();
   const status = String(args.status ?? "").trim();
-  if (!id || !status) throw new Error("id and status are required");
-  const ok = setTaskStatus(domainDir(vaultPath, domain.name), id, status);
-  return ok ? `Task ${id} in ${domain.name} set to "${status}".` : `No task with id ${id} in ${domain.name}.`;
+  if (!ref || !status) throw new Error("id and status are required");
+  const dir = domainDir(vaultPath, domain.name);
+  // Prefer an id match (cheap, exact). Loop/appendTask-created tasks have no id
+  // until a desktop write normalizes them, so fall back to an exact-text match
+  // and write (which assigns ids), so a follow-up update can use the id.
+  if (setTaskStatus(dir, ref, status)) return `Task ${ref} in ${domain.name} set to "${status}".`;
+  const tasks = readTasks(dir);
+  const want = ref.toLowerCase();
+  let found = false;
+  for (const t of tasks) {
+    if (!found && t.text.trim().toLowerCase() === want) {
+      t.status = status;
+      t.done = status === "done";
+      found = true;
+    }
+  }
+  if (found) {
+    writeTasks(dir, tasks);
+    return `Task "${ref}" in ${domain.name} set to "${status}".`;
+  }
+  return `No task matching "${ref}" (by id or text) in ${domain.name}.`;
 }
 
 function tLogDecision(args: Record<string, unknown>, vaultPath: string): string {
@@ -871,6 +917,40 @@ function tVaultStatus(vaultPath: string): string {
     `bunker mode: ${bunker ? "ON (local-only, no cloud/network)" : "off"}`,
     `domains: ${domains.length}`,
   ].join("\n");
+}
+
+async function tSyncApp(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const id = String(args.id ?? "").trim();
+  if (!id) throw new Error("id is required (see list_apps)");
+  const r = await syncApp({ vaultPath, tickSec: 60, maxRunsPerTick: 1 }, id);
+  if (r.ok) return `Synced ${id}: ${r.artifacts ?? 0} artifact(s) routed into the vault.`;
+  return `Sync of ${id} failed: ${r.error ?? "unknown error"}`;
+}
+
+async function tConnectApp(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const name = String(args.name ?? "").trim();
+  if (!name) throw new Error("name is required");
+  const goal = typeof args.goal === "string" ? args.goal : "";
+  const res = await connectApp({ vaultPath, name, goal });
+  if (!res.ok) return `Could not connect ${name}: ${res.error ?? "unknown error"}`;
+  const p = res.plan ?? {};
+  const integration = typeof p.integration === "string" ? p.integration : "manual";
+  const why = typeof p.why === "string" ? p.why : "";
+  const step = (p.auth_step && typeof p.auth_step === "object") ? (p.auth_step as Record<string, unknown>) : {};
+  const stepKind = typeof step.kind === "string" ? step.kind : "none";
+  const stepInstr = typeof step.instruction === "string" ? step.instruction : "";
+  const lines = [
+    `# Connected ${(p.title as string) || name}`,
+    `method: ${integration}${why ? ` - ${why}` : ""}`,
+  ];
+  if (res.verified === true) lines.push(`verified: yes${res.proof ? ` (${res.proof})` : ""}`);
+  else if (res.verified === false) lines.push(`verified: no${res.proof ? ` (${res.proof})` : ""}`);
+  if (stepKind && stepKind !== "none" && stepInstr) {
+    lines.push("", `## Action needed (${stepKind})`, stepInstr);
+  } else {
+    lines.push("", "No further action needed.");
+  }
+  return lines.join("\n");
 }
 
 // Async iterator over stdin lines. Bun + Node both support this via the
