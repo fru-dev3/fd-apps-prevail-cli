@@ -233,6 +233,12 @@ export type LegacyCliKind = "gemini";
 // model never voluntarily ran `env`, prompt injection inside vault content
 // could trick it.
 const SECRET_ENV_PREFIXES = [
+  // The vault Data Encryption Key (base64 DEK). It is passed to engine
+  // subprocesses that legitimately need to decrypt via an EXPLICIT env on those
+  // spawns — it must NEVER ride along to a model-CLI child via scrubbedEnv(), or
+  // a prompt-injected panelist could `env`-dump it and decrypt the whole vault.
+  // (Critical: audit B1 / O3 / G2.)
+  "PREVAIL_VAULT_KEY",
   "PREVAIL_TELEGRAM_",
   "ANTHROPIC_API_",
   "OPENAI_API_",
