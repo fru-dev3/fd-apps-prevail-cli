@@ -7,7 +7,7 @@ import { COUNCIL_CLI_COLORS } from "./council-colors.ts";
 // CouncilResponseBubble when that panelist actually returns.
 export function CouncilPendingBubble({ msg, tick }: { msg: ChatMsg; tick: number }) {
   const cli = msg.cli;
-  const color = cli ? COUNCIL_CLI_COLORS[cli] : theme.bubbleAssistant;
+  const color = (cli && COUNCIL_CLI_COLORS[cli]) || theme.bubbleAssistant;
   const labelParts = [cli ?? "unknown"];
   if (msg.model) labelParts.push(msg.model);
   const title = ` ⚖ ${labelParts.join(" · ")} `;

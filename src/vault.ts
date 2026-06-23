@@ -742,6 +742,7 @@ interface CoercedManifest {
   authEnvVars: string[];
   mcpSetup?: { install?: string; command?: string };
   gateway?: AppGateway;
+  pullInstructions?: string;
 }
 
 const VALID_AUTONOMY = new Set(["read-only", "draft", "act"]);

@@ -7,7 +7,7 @@ import { formatMetaBadge } from "./meta-badge.ts";
 
 export function CouncilResponseBubble({ msg }: { msg: ChatMsg }) {
   const cli = msg.cli;
-  const color = cli ? COUNCIL_CLI_COLORS[cli] : theme.bubbleAssistant;
+  const color = (cli && COUNCIL_CLI_COLORS[cli]) || theme.bubbleAssistant;
   const labelParts = [cli ?? "unknown"];
   // Same fallback as the badge below — show the CLI's default model when
   // no model is pinned, so every panelist's title is uniformly informative.
