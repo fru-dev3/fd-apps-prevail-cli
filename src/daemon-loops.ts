@@ -19,6 +19,7 @@ import { runChatTurn, detectClis } from "./cli-bridge.ts";
 import { scanVault } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
+import { auditAction } from "./action-audit.ts";
 import { deliverBriefing, type BriefingEntry } from "./briefings.ts";
 import { generalDir } from "./decisions.ts";
 
@@ -671,6 +672,12 @@ export async function executeAction(cfg: LoopsConfig, domainName: string, action
     detail: report.slice(0, 400),
     status: noConn ? "error" : "ok",
   });
+  // Append-only action audit (C1/O94).
+  auditAction(root, {
+    ts: Date.now(), domain: domainName, action,
+    outcome: noConn ? "no_connector" : "executed",
+    provider: cfg.provider, model: cfg.model || undefined, report,
+  });
   return report;
 }
 
@@ -741,6 +748,13 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
   const head = out.slice(0, 40).toUpperCase();
   const next = head.startsWith("NEEDS_APPROVAL") || head.startsWith("NO_CONNECTOR") ? "blocked" : "review";
   if (task.id) setTaskStatus(domainDir, task.id, next);
+  // Append-only action audit (C1/O94).
+  auditAction(resolve(cfg.vaultPath), {
+    ts: Date.now(), domain: basename(domainDir), action: task.text,
+    outcome: head.startsWith("NO_CONNECTOR") ? "no_connector"
+      : head.startsWith("NEEDS_APPROVAL") ? "proposed" : "executed",
+    provider: cfg.provider, model: cfg.model || undefined, report: out,
+  });
   return next;
 }
 
