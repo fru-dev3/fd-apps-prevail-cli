@@ -20,6 +20,7 @@ import { scanVault } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
 import { auditAction } from "./action-audit.ts";
+import { classifyAction, isConsequential } from "./action-policy.ts";
 import { deliverBriefing, type BriefingEntry } from "./briefings.ts";
 import { generalDir } from "./decisions.ts";
 
@@ -708,9 +709,12 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
   if (!cli) throw new Error("no CLI available to run AI tasks");
   const domainName = basename(domainDir);
   const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
-  // Autonomy gate (B7/O5): only ACT when the user explicitly opted in. Otherwise
-  // the daemon must NOT use tools/connectors — it proposes a plan for review.
-  const autonomous = cfg.autonomousActs === true;
+  // Autonomy gate (B7/O5/A-05): only ACT when the user opted in AND the action
+  // isn't consequential. A financial/irreversible/external-send/credential task
+  // is NEVER auto-executed — it's always proposed for explicit approval, even
+  // with autonomy enabled.
+  const cls = classifyAction(task.text);
+  const autonomous = cfg.autonomousActs === true && !isConsequential(cls);
   const actLines = autonomous
     ? [
         `DECIDE then ACT:`,

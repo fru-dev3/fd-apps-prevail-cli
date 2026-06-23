@@ -12,6 +12,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { vappendLine } from "./vault-session.ts";
 import { redact } from "./privacy.ts";
+import { classifyAction, type ActionClass } from "./action-policy.ts";
 
 export type ActionOutcome = "executed" | "no_connector" | "error" | "proposed";
 
@@ -20,6 +21,7 @@ export interface ActionAuditEntry {
   domain: string;
   action: string;
   outcome: ActionOutcome;
+  cls?: ActionClass; // risk class — derived in auditAction if absent
   provider?: string;
   model?: string;
   report?: string;
@@ -37,6 +39,7 @@ export function auditAction(vaultRoot: string, entry: ActionAuditEntry): void {
     mkdirSync(logDir, { recursive: true });
     const safe: ActionAuditEntry = {
       ...entry,
+      cls: entry.cls ?? classifyAction(entry.action),
       action: redact(entry.action).slice(0, 300),
       report: entry.report ? redact(entry.report).slice(0, 500) : undefined,
     };
