@@ -1850,10 +1850,15 @@ async function connectorsCommand(args: string[]): Promise<void> {
   // Apps live in <vault>/data/apps (single source of truth). Resolve the
   // configured vault, fold any legacy ~/.prevail/apps into it, then scan from
   // the vault so the desktop only ever sees apps from one location.
-  // PREVAIL_VAULT_ROOT (set by the desktop on every engine call) is the
-  // authoritative vault; resolveDefaultVaultPath() is only a CLI-direct fallback
-  // and can point at a dev-demo vault, so it must NOT win over the env.
-  const connectorsVault = process.env.PREVAIL_VAULT_ROOT || resolveDefaultVaultPath();
+  // Resolution order: an explicit `--vault` flag (the desktop now passes this
+  // on writes like `connectors add`, so the vault is unambiguous even when the
+  // env hasn't been injected yet) > PREVAIL_VAULT_ROOT (set on engine calls) >
+  // the persisted config vault > resolveDefaultVaultPath(). The default is the
+  // LAST resort because from a compiled binary it resolves to a bogus root path
+  // (e.g. /fd-apps-prevail-life/vault-demo) and a scaffold there hits EROFS.
+  const vflag = args.indexOf("--vault");
+  const vaultArg = vflag >= 0 ? args[vflag + 1] : undefined;
+  const connectorsVault = vaultArg || process.env.PREVAIL_VAULT_ROOT || readConfig()?.vaultPath || resolveDefaultVaultPath();
   try { migrateLegacyAppsIntoVault(connectorsVault); } catch { /* best effort */ }
   const apps = scanCommunityApps(connectorsVault);
   const sub = args[0];
