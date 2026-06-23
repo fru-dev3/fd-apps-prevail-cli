@@ -11,6 +11,7 @@
 // so it's easy to reason about and back up independently.
 
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { writeSecretFile } from "./secret-file.ts";
 import { join } from "node:path";
 
 import { configDir } from "./config.ts";
@@ -58,12 +59,7 @@ export async function setPasscode(
   }
   const verifier = await Bun.password.hash(passcode, { algorithm: "argon2id" });
   const lock: LockFile = { schema: LOCK_SCHEMA, algorithm: "argon2id", verifier, createdAt };
-  writeFileSync(file, JSON.stringify(lock, null, 2));
-  try {
-    chmodSync(file, 0o600);
-  } catch {
-    /* best effort on platforms without chmod */
-  }
+  writeSecretFile(file, JSON.stringify(lock, null, 2));
 }
 
 /** Verify a passcode against the stored verifier. False if no lock is set. */
