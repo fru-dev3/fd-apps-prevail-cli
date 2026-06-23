@@ -90,9 +90,15 @@ async function substituteFull(
 
 // Pull a ===SUMMARY=== block out of runner output; fall back to the last
 // non-empty line so every run yields something routable.
-export function extractSummary(text: string): string {
-  const m = text.match(/===SUMMARY===\s*\n([\s\S]*?)(?:\n===|$)/);
-  if (m && m[1].trim()) return m[1].trim().slice(0, 600);
+export function extractSummary(text: string, trusted = true): string {
+  // Only honor the ===SUMMARY=== marker from TRUSTED (local cli-runner) output.
+  // Remote/tool output (http/mcp/a2a/browser) is attacker-influenceable, so a
+  // crafted block must not be able to spoof the routed summary (O31) — fall back
+  // to the last non-empty line for untrusted sources.
+  if (trusted) {
+    const m = text.match(/===SUMMARY===\s*\n([\s\S]*?)(?:\n===|$)/);
+    if (m && m[1].trim()) return m[1].trim().slice(0, 600);
+  }
   const lines = text.trim().split("\n").filter((l) => l.trim());
   return (lines[lines.length - 1] ?? "").slice(0, 600);
 }
@@ -334,7 +340,7 @@ export async function runSkillHttp(
     outputsWritten: written,
     durationMs: Date.now() - started,
     raw: text.slice(0, 8192),
-    summary: summary ?? extractSummary(text),
+    summary: summary ?? extractSummary(text, false),
     cursor: Object.keys(cursor).length ? cursor : undefined,
     artifacts: written,
   };
@@ -418,8 +424,8 @@ export async function runSkillMcp(
     }
     return {
       ok: true,
-      message: extractSummary(text) || `${tool} ok`,
-      summary: extractSummary(text),
+      message: extractSummary(text, false) || `${tool} ok`,
+      summary: extractSummary(text, false),
       outputsWritten: written,
       durationMs: Date.now() - started,
       raw: text.slice(0, 8192),
@@ -516,7 +522,7 @@ export async function runSkillA2a(
     const abs = safeOutputPath(skill.connectorDir, rel);
     if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
   }
-  return { ok: true, message: extractSummary(text) || `${tool} ok`, summary: extractSummary(text), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
+  return { ok: true, message: extractSummary(text, false) || `${tool} ok`, summary: extractSummary(text, false), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
 }
 
 // browser runner. Read-only page scrape via Playwright, which the USER installs
@@ -596,7 +602,7 @@ export async function runSkillBrowser(
     const abs = safeOutputPath(skill.connectorDir, rel);
     if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
   }
-  return { ok: true, message: extractSummary(text) || `scraped ${url.slice(0, 50)}`, summary: extractSummary(text), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
+  return { ok: true, message: extractSummary(text, false) || `scraped ${url.slice(0, 50)}`, summary: extractSummary(text, false), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
 }
 
 // Agentic browser login: opens a REAL (non-headless) browser to the site's login
@@ -642,7 +648,19 @@ export async function runBrowserLogin(
   try {
     writeFileSync(tmp, driver);
     const res = await new Promise<{ code: number | null; out: string }>((resolve) => {
-      const child = spawn("node", [tmp], { env: { ...process.env, PV_URL: loginUrl, PV_STATE_OUT: statePath, PV_TIMEOUT: String(timeoutMs) }, stdio: ["ignore", "pipe", "ignore"] });
+      // Minimal env (O46): the fixed driver only needs to find node/playwright
+      // and the browser cache — never inherit the parent's secrets (vault DEK,
+      // provider/gateway keys, tokens) into the spawned browser process.
+      const driverEnv: Record<string, string | undefined> = {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
+        DISPLAY: process.env.DISPLAY,
+        PV_URL: loginUrl,
+        PV_STATE_OUT: statePath,
+        PV_TIMEOUT: String(timeoutMs),
+      };
+      const child = spawn("node", [tmp], { env: driverEnv, stdio: ["ignore", "pipe", "ignore"] });
       let o = ""; child.stdout!.on("data", (d: Buffer) => { o += d.toString(); });
       const killer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } resolve({ code: null, out: o }); }, timeoutMs + 30_000);
       child.on("error", () => { clearTimeout(killer); resolve({ code: -1, out: o }); });
