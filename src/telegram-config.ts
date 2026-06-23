@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeSecretFile } from "./secret-file.ts";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -59,13 +60,7 @@ export function writeTelegramConfig(cfg: TelegramConfig): void {
   const f = telegramConfigFile();
   const dir = dirname(f);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(f, JSON.stringify(cfg, null, 2));
-  try {
-    chmodSync(f, 0o600);
-  } catch {
-    // chmod can fail on some filesystems (Windows, certain network mounts).
-    // The data is still written; just less locked down.
-  }
+  writeSecretFile(f, JSON.stringify(cfg, null, 2));
 }
 
 export function setTelegramToken(token: string): void {

@@ -10,14 +10,17 @@
 // Mirrors daemon-learn.ts: same config/lifecycle shape, same model bridge
 // (runChatTurn), same encryption-aware vault I/O (vread/vwrite). Idempotent and
 // best-effort: a failing loop records its error and never blocks the others.
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { runtimePath } from "./path-safety.ts";
+import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
 import { scanVault } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
+import { auditAction } from "./action-audit.ts";
+import { classifyAction, isConsequential } from "./action-policy.ts";
 import { deliverBriefing, type BriefingEntry } from "./briefings.ts";
 import { generalDir } from "./decisions.ts";
 
@@ -30,6 +33,10 @@ export interface LoopsConfig {
   // to the live connectors. Absent → a briefing falls back to log-only.
   deliverEmail?: (subject: string, body: string) => Promise<string>;
   deliverTelegram?: (text: string) => Promise<number>;
+  // Autonomy gate (B7/O5): when false/absent, the background daemon NEVER executes
+  // consequential actions on AI-owned tasks — it only PROPOSES a plan and routes the
+  // task to the Decision Inbox for the user to approve. Must be explicitly opted in.
+  autonomousActs?: boolean;
 }
 
 export const DEFAULT_LOOPS: Omit<LoopsConfig, "vaultPath"> = {
@@ -666,6 +673,12 @@ export async function executeAction(cfg: LoopsConfig, domainName: string, action
     detail: report.slice(0, 400),
     status: noConn ? "error" : "ok",
   });
+  // Append-only action audit (C1/O94).
+  auditAction(root, {
+    ts: Date.now(), domain: domainName, action,
+    outcome: noConn ? "no_connector" : "executed",
+    provider: cfg.provider, model: cfg.model || undefined, report,
+  });
   return report;
 }
 
@@ -696,6 +709,25 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
   if (!cli) throw new Error("no CLI available to run AI tasks");
   const domainName = basename(domainDir);
   const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
+  // Autonomy gate (B7/O5/A-05): only ACT when the user opted in AND the action
+  // isn't consequential. A financial/irreversible/external-send/credential task
+  // is NEVER auto-executed — it's always proposed for explicit approval, even
+  // with autonomy enabled.
+  const cls = classifyAction(task.text);
+  const autonomous = cfg.autonomousActs === true && !isConsequential(cls);
+  const actLines = autonomous
+    ? [
+        `DECIDE then ACT:`,
+        `- If this task SPENDS money, CONTACTS someone, is IRREVERSIBLE, or needs a decision/info only the user can give: do NOT do it. Reply with exactly "NEEDS_APPROVAL: <one-line what you'd do and why it needs the user>".`,
+        `- Else, actually perform it now using your tools/connectors (MCP servers, file ops, configured app connectors). Don't merely describe it.`,
+        `- If no available tool/connector can perform it, reply with exactly "NO_CONNECTOR: <one-line reason>".`,
+        `- When you DID it, reply with a one-paragraph report of precisely what you did (IDs, links, recipients).`,
+      ]
+    : [
+        `PROPOSE ONLY — autonomous execution is OFF. You must NOT use any tools/connectors, send anything, spend anything, or modify anything.`,
+        `- Produce a concise PLAN of exactly what you would do to complete this task: the steps, who/what each step touches, and anything irreversible.`,
+        `- Reply with "NEEDS_APPROVAL: <your plan>". The user reviews and approves in the Decision Inbox before anything runs.`,
+      ];
   const prompt = [
     `You are working an AI-owned task the user assigned to you on their board, in the "${domainName}" domain of their personal life-OS.`,
     `You are in the LABOR seat, not the decision seat: do the legwork, but the user makes any real call.`,
@@ -705,11 +737,7 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
     "",
     state ? `DOMAIN CONTEXT (from _state.md):\n${state.slice(0, 1500)}` : "",
     "",
-    `DECIDE then ACT:`,
-    `- If this task SPENDS money, CONTACTS someone, is IRREVERSIBLE, or needs a decision/info only the user can give: do NOT do it. Reply with exactly "NEEDS_APPROVAL: <one-line what you'd do and why it needs the user>".`,
-    `- Else, actually perform it now using your tools/connectors (MCP servers, file ops, configured app connectors). Don't merely describe it.`,
-    `- If no available tool/connector can perform it, reply with exactly "NO_CONNECTOR: <one-line reason>".`,
-    `- When you DID it, reply with a one-paragraph report of precisely what you did (IDs, links, recipients).`,
+    ...actLines,
   ].filter(Boolean).join("\n");
   const out = (await runChatTurn({
     prompt,
@@ -718,12 +746,19 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
     model: cfg.model || "",
     isFirst: true,
     bare: false,
-    act: true,
+    act: autonomous,
   })).trim();
 
   const head = out.slice(0, 40).toUpperCase();
   const next = head.startsWith("NEEDS_APPROVAL") || head.startsWith("NO_CONNECTOR") ? "blocked" : "review";
   if (task.id) setTaskStatus(domainDir, task.id, next);
+  // Append-only action audit (C1/O94).
+  auditAction(resolve(cfg.vaultPath), {
+    ts: Date.now(), domain: basename(domainDir), action: task.text,
+    outcome: head.startsWith("NO_CONNECTOR") ? "no_connector"
+      : head.startsWith("NEEDS_APPROVAL") ? "proposed" : "executed",
+    provider: cfg.provider, model: cfg.model || undefined, report: out,
+  });
   return next;
 }
 
@@ -747,31 +782,40 @@ async function consumeAiTasks(domainDir: string, cfg: LoopsConfig): Promise<numb
 // and gets each one's resolved path. Advances due loops AND works AI-owned tasks.
 export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; loops: number; aiTasks: number }> {
   const root = resolve(cfg.vaultPath);
-  const now = Date.now();
-  let domains = 0;
-  let loops = 0;
-  let aiTasks = 0;
+  // Cross-process lock (B7/O25): the desktop and the launchd daemon can both fire
+  // this pass; without a lock they race on _loops/_tasks and can double-run AI
+  // tasks (lost writes / duplicate actions). Skip the pass if another holds it.
+  const logDir = runtimePath(root, "_log");
+  try { mkdirSync(logDir, { recursive: true }); } catch { /* already exists */ }
+  const result = await withLock(join(logDir, "loops.lock"), async () => {
+    const now = Date.now();
+    let domains = 0;
+    let loops = 0;
+    let aiTasks = 0;
 
-  // Include the general domain (data/domains/general on v4, else root) alongside
-  // the scanned domains so its loops run on schedule too.
-  const targets = [...scanVault(root).map((d) => ({ name: d.name, path: d.path })), { name: "general", path: generalDir(root) }];
-  for (const d of targets) {
-    try {
-      let touched = false;
-      if (existsSync(loopsFile(d.path))) {
-        const n = await runDomain(d.path, cfg, now);
-        if (n > 0) { loops += n; touched = true; }
+    // Include the general domain (data/domains/general on v4, else root) alongside
+    // the scanned domains so its loops run on schedule too.
+    const targets = [...scanVault(root).map((d) => ({ name: d.name, path: d.path })), { name: "general", path: generalDir(root) }];
+    for (const d of targets) {
+      try {
+        let touched = false;
+        if (existsSync(loopsFile(d.path))) {
+          const n = await runDomain(d.path, cfg, now);
+          if (n > 0) { loops += n; touched = true; }
+        }
+        // AI tasks are independent of loop definitions — a domain can have AI-owned
+        // tasks without any loops.
+        const a = await consumeAiTasks(d.path, cfg);
+        if (a > 0) { aiTasks += a; touched = true; }
+        if (touched) domains += 1;
+      } catch (e) {
+        console.error(`[loops] ${d.name}: ${String(e).slice(0, 160)}`);
       }
-      // AI tasks are independent of loop definitions — a domain can have AI-owned
-      // tasks without any loops.
-      const a = await consumeAiTasks(d.path, cfg);
-      if (a > 0) { aiTasks += a; touched = true; }
-      if (touched) domains += 1;
-    } catch (e) {
-      console.error(`[loops] ${d.name}: ${String(e).slice(0, 160)}`);
     }
-  }
-  return { domains, loops, aiTasks };
+    return { domains, loops, aiTasks };
+  });
+  // null = another process held the lock; treat as a no-op pass.
+  return result ?? { domains: 0, loops: 0, aiTasks: 0 };
 }
 
 // The long-running daemon: wake on the interval, advance any due loops.

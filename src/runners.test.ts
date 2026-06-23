@@ -148,7 +148,8 @@ describe("pattern runners", () => {
     ].join("\n"));
     const r = await runSkillHttp(spec, {}, {});
     expect(r.ok).toBe(false);
-    expect(r.message).toContain("https");
+    // http:// is rejected by the SSRF guard (https-only is part of the guard).
+    expect(r.message.toLowerCase()).toContain("unsafe");
   });
 });
 

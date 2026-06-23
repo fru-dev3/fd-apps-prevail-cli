@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { writeSecretFile } from "./secret-file.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
@@ -556,11 +557,9 @@ export function writeConfig(cfg: UserConfig): void {
     try { chmodSync(dir, 0o700); } catch { /* best effort */ }
   }
   const file = configFile();
-  writeFileSync(file, JSON.stringify(cfg, null, 2));
-  // SECURITY: config holds the vault path + saved chair / model pins. Not
-  // as sensitive as telegram.json or sessions.db, but still cheap to lock
-  // down to owner-only access.
-  try { chmodSync(file, 0o600); } catch { /* best effort */ }
+  // SECURITY: config holds the vault path + saved chair / model pins; keep it
+  // owner-only (0600-on-create, loud chmod).
+  writeSecretFile(file, JSON.stringify(cfg, null, 2));
 }
 
 export function bundledDemoVaultPath(): string {

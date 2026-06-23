@@ -11,6 +11,7 @@
 // so it's easy to reason about and back up independently.
 
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { writeSecretFile } from "./secret-file.ts";
 import { join } from "node:path";
 
 import { configDir } from "./config.ts";
@@ -51,17 +52,14 @@ export async function setPasscode(
   createdAt: string,
   file: string = lockFilePath(),
 ): Promise<void> {
-  if (!passcode || passcode.length < 4) {
-    throw new Error("passcode must be at least 4 characters");
+  // A 4-char passcode is trivially brute-forced; require at least 8 (O47).
+  // Only enforced on SET — existing shorter passcodes still verify.
+  if (!passcode || passcode.length < 8) {
+    throw new Error("passcode must be at least 8 characters");
   }
   const verifier = await Bun.password.hash(passcode, { algorithm: "argon2id" });
   const lock: LockFile = { schema: LOCK_SCHEMA, algorithm: "argon2id", verifier, createdAt };
-  writeFileSync(file, JSON.stringify(lock, null, 2));
-  try {
-    chmodSync(file, 0o600);
-  } catch {
-    /* best effort on platforms without chmod */
-  }
+  writeSecretFile(file, JSON.stringify(lock, null, 2));
 }
 
 /** Verify a passcode against the stored verifier. False if no lock is set. */

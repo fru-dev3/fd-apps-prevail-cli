@@ -987,7 +987,8 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
 
     // Build DeliveryHooks so email/drive channels actually fire.
     // Extra channels from --channels flag are merged with entry.channels.
-    const activeChannels = [...new Set([...(entry.channels ?? []), ...extraChannels])];
+    const activeChannels = [...new Set([...(entry.channels ?? []), ...extraChannels])]
+      .filter((c): c is "email" | "drive" => c === "email" || c === "drive");
     const hooks = await buildBriefingHooks(vault, activeChannels);
 
     const r = await runBriefing({ ...entry, channels: activeChannels }, vault, undefined, undefined, hooks);
@@ -1785,7 +1786,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         continue;
       }
       let parsed: { questions?: unknown[] } | null = null;
-      try { parsed = JSON.parse(text.slice(startIdx)) as typeof parsed; } catch {}
+      try { parsed = JSON.parse(text.slice(startIdx)) as { questions?: unknown[] }; } catch {}
       if (!parsed || !Array.isArray(parsed.questions) || parsed.questions.length === 0) {
         failures.push(`${domain}: LLM returned no questions`);
         continue;
@@ -4147,15 +4148,17 @@ async function main() {
   if (args.alignment) {
     const { computeAlignment } = await import("./alignment.ts");
     const vault = args.vaultPath;
+    if (!vault) { console.error("alignment: no vault path"); process.exit(1); }
     const useModel = args.alignmentArgs.includes("--model");
     let run: ((prompt: string) => Promise<string>) | undefined;
     if (useModel) {
-      const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+      const { detectClis, runChatTurn, defaultModelFor } = await import("./cli-bridge.ts");
       const { scanVault } = await import("./vault.ts");
       const clis = await detectClis();
-      const cli = clis.find((c) => c.available)?.kind;
+      // detectClis() returns only available CLIs; take the first as the runner.
+      const cli = clis[0];
       const dom = scanVault(vault)[0]?.name ?? "chief";
-      if (cli) run = (prompt) => runChatTurn({ prompt, cwd: `${vault}/${dom}`, cli, isFirst: true, bare: true });
+      if (cli) run = (prompt) => runChatTurn({ prompt, cwd: `${vault}/${dom}`, cli, model: defaultModelFor(cli.kind), isFirst: true, bare: true });
     }
     const report = await computeAlignment(vault, Date.now(), run ? { run } : undefined);
     if (args.alignmentArgs.includes("--json")) process.stdout.write(`${JSON.stringify(report)}\n`);

@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeSecretFile } from "./secret-file.ts";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -57,7 +58,6 @@ export function readOrCreateMcpToken(): string {
     mkdirSync(dir, { recursive: true });
     try { chmodSync(dir, 0o700); } catch { /* best effort */ }
   }
-  writeFileSync(file, JSON.stringify(cfg, null, 2));
-  try { chmodSync(file, 0o600); } catch { /* best effort */ }
+  writeSecretFile(file, JSON.stringify(cfg, null, 2));
   return token;
 }

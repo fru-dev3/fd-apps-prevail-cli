@@ -27,11 +27,25 @@ const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 // with ${cursor.x} (sync cursor) and ${auth.token} (OAuth access token for
 // the connector, resolved lazily so read-only template parsing never hits the
 // network).
+// POSIX single-quote escape: wrap a value so the shell treats it as ONE literal
+// token, neutralizing ;, &&, $(), backticks, redirects, newlines, etc. Embedded
+// single quotes become '\'' (close, escaped-quote, reopen). Used by the cli
+// runner so untrusted substituted values (auth tokens, cursors, inputs from a
+// poisoned/AI-authored manifest) can never break out of the command (B2/O4/G1).
+// Contract: cli `command:` templates must NOT add their own quotes around
+// ${placeholders} — the runner quotes for you.
+export function shellQuote(v: string): string {
+  return `'${String(v).replace(/'/g, "'\\''")}'`;
+}
+
 async function substituteFull(
   template: string,
   skill: SkillSpec,
   inputs: Record<string, unknown>,
   opts: SkillRunOpts,
+  // When set, every substituted VALUE (not the trusted template) is passed
+  // through this guard — the cli runner passes shellQuote to prevent injection.
+  valueGuard?: (v: string) => string,
 ): Promise<string> {
   const needsToken = template.includes("${auth.token}");
   let token = "";
@@ -51,33 +65,40 @@ async function substituteFull(
     }
   }
   const env = buildSkillEnv(skill);
+  const guard = valueGuard ?? ((v: string) => v);
   return template.replace(/\$\{([^}]+)\}/g, (whole, expr: string) => {
     const t = expr.trim();
-    if (t === "auth.token") return token;
+    if (t === "auth.token") return guard(token);
     // Generic time-window tokens for date-ranged APIs (PayPal, etc.). RFC3339,
     // no milliseconds (some APIs reject them). ${now.rfc3339} and
     // ${days_ago.rfc3339:N} → N days before now.
-    if (t === "now.rfc3339") return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    if (t === "now.rfc3339") return guard(new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
     {
       const ago = /^days_ago\.rfc3339:(\d+)$/.exec(t);
-      if (ago) return new Date(Date.now() - Number(ago[1]) * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+      if (ago) return guard(new Date(Date.now() - Number(ago[1]) * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z"));
     }
     if (t.startsWith("cursor.")) {
       const key = t.slice("cursor.".length);
       const v = opts.cursor?.[key];
-      return v === undefined || v === null ? "" : String(v);
+      return guard(v === undefined || v === null ? "" : String(v));
     }
     // Delegate the base forms (ts, date, input.*, env.*) to substitute() so
     // the semantics stay identical everywhere.
-    return substitute(whole, { inputs, env });
+    return guard(substitute(whole, { inputs, env }));
   });
 }
 
 // Pull a ===SUMMARY=== block out of runner output; fall back to the last
 // non-empty line so every run yields something routable.
-export function extractSummary(text: string): string {
-  const m = text.match(/===SUMMARY===\s*\n([\s\S]*?)(?:\n===|$)/);
-  if (m && m[1].trim()) return m[1].trim().slice(0, 600);
+export function extractSummary(text: string, trusted = true): string {
+  // Only honor the ===SUMMARY=== marker from TRUSTED (local cli-runner) output.
+  // Remote/tool output (http/mcp/a2a/browser) is attacker-influenceable, so a
+  // crafted block must not be able to spoof the routed summary (O31) — fall back
+  // to the last non-empty line for untrusted sources.
+  if (trusted) {
+    const m = text.match(/===SUMMARY===\s*\n([\s\S]*?)(?:\n===|$)/);
+    if (m && m[1].trim()) return m[1].trim().slice(0, 600);
+  }
   const lines = text.trim().split("\n").filter((l) => l.trim());
   return (lines[lines.length - 1] ?? "").slice(0, 600);
 }
@@ -114,7 +135,9 @@ export async function runSkillCli(
   }
   let command: string;
   try {
-    command = await substituteFull(commandTpl, skill, inputs, opts);
+    // shellQuote every substituted value so untrusted manifest inputs can't
+    // inject shell metacharacters into the /bin/sh -c command (B2/O4/G1).
+    command = await substituteFull(commandTpl, skill, inputs, opts, shellQuote);
   } catch (e) {
     return { ok: false, message: String(e instanceof Error ? e.message : e), outputsWritten: [], durationMs: 0 };
   }
@@ -239,8 +262,11 @@ export async function runSkillHttp(
   } catch (e) {
     return { ok: false, message: String(e instanceof Error ? e.message : e), outputsWritten: [], durationMs: 0 };
   }
-  if (!/^https:\/\//.test(url)) {
-    return { ok: false, message: `http skill urls must be https:// (got ${url.slice(0, 40)})`, outputsWritten: [], durationMs: 0 };
+  // https-only AND SSRF guard (loopback/private/link-local/etc.) — the http
+  // runner previously only checked the scheme, so a templated url: could reach
+  // internal services (B8/O8).
+  if (isUnsafeRemoteUrl(url)) {
+    return { ok: false, message: `refusing unsafe http url (SSRF guard): ${url.slice(0, 60)}`, outputsWritten: [], durationMs: 0 };
   }
   const method = typeof skill.extra?.method === "string" ? skill.extra.method.toUpperCase() : "GET";
 
@@ -314,7 +340,7 @@ export async function runSkillHttp(
     outputsWritten: written,
     durationMs: Date.now() - started,
     raw: text.slice(0, 8192),
-    summary: summary ?? extractSummary(text),
+    summary: summary ?? extractSummary(text, false),
     cursor: Object.keys(cursor).length ? cursor : undefined,
     artifacts: written,
   };
@@ -398,8 +424,8 @@ export async function runSkillMcp(
     }
     return {
       ok: true,
-      message: extractSummary(text) || `${tool} ok`,
-      summary: extractSummary(text),
+      message: extractSummary(text, false) || `${tool} ok`,
+      summary: extractSummary(text, false),
       outputsWritten: written,
       durationMs: Date.now() - started,
       raw: text.slice(0, 8192),
@@ -412,16 +438,38 @@ export async function runSkillMcp(
   }
 }
 
-// Guard against SSRF for remote (a2a) connectors: https only, no localhost /
-// private / link-local hosts.
+// Guard against SSRF for remote connectors (a2a + http): https only, and reject
+// loopback / private / link-local / ULA / CGNAT / unspecified hosts in their
+// many notations (dotted-quad, decimal/hex IP literals, IPv4-mapped IPv6).
+// NOTE: this is a string-level guard. DNS-rebinding (a public name that resolves
+// to a private IP) is NOT covered here — resolving the host and pinning the
+// resolved IP is the job of the unified ToolRunner (C5). (B8/O8/O9.)
 export function isUnsafeRemoteUrl(raw: string): boolean {
   let u: URL;
   try { u = new URL(raw); } catch { return true; }
   if (u.protocol !== "https:") return true;
-  const h = u.hostname.toLowerCase();
-  if (h === "localhost" || h === "::1" || h.endsWith(".localhost")) return true;
+  let h = u.hostname.toLowerCase();
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1); // strip IPv6 brackets
+  if (!h) return true;
+  // Single-label numeric/hex host with no dot/colon = decimal/hex IP literal that
+  // bypasses dotted-quad checks (e.g. 2130706433 or 0x7f000001 == 127.0.0.1).
+  if (!h.includes(".") && !h.includes(":") && /^(0x)?[0-9a-f]+$/.test(h)) return true;
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  // IPv4 loopback / private / link-local / unspecified / CGNAT (100.64.0.0/10).
+  if (h === "0.0.0.0" || /^0\./.test(h)) return true;
   if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return true;
   if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h)) return true;
+  if (/^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\./.test(h)) return true;
+  // IPv6 loopback / unspecified / ULA (fc00::/7) / link-local (fe80::/10).
+  if (h === "::1" || h === "::") return true;
+  if (/^f[cd][0-9a-f]{0,2}:/.test(h)) return true;
+  if (/^fe[89ab][0-9a-f]:/.test(h)) return true;
+  // IPv4-mapped IPv6 (::ffff:127.0.0.1 / ::ffff:7f00:1) pointing at a private v4.
+  if (h.includes("::ffff:")) {
+    const tail = h.split("::ffff:")[1] ?? "";
+    if (/^(0\.|127\.|10\.|192\.168\.|169\.254\.)/.test(tail)) return true;
+    if (/^7f[0-9a-f]{0,6}/.test(tail.replace(/:/g, ""))) return true;
+  }
   return false;
 }
 
@@ -474,7 +522,7 @@ export async function runSkillA2a(
     const abs = safeOutputPath(skill.connectorDir, rel);
     if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
   }
-  return { ok: true, message: extractSummary(text) || `${tool} ok`, summary: extractSummary(text), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
+  return { ok: true, message: extractSummary(text, false) || `${tool} ok`, summary: extractSummary(text, false), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
 }
 
 // browser runner. Read-only page scrape via Playwright, which the USER installs
@@ -554,7 +602,7 @@ export async function runSkillBrowser(
     const abs = safeOutputPath(skill.connectorDir, rel);
     if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
   }
-  return { ok: true, message: extractSummary(text) || `scraped ${url.slice(0, 50)}`, summary: extractSummary(text), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
+  return { ok: true, message: extractSummary(text, false) || `scraped ${url.slice(0, 50)}`, summary: extractSummary(text, false), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
 }
 
 // Agentic browser login: opens a REAL (non-headless) browser to the site's login
@@ -600,7 +648,19 @@ export async function runBrowserLogin(
   try {
     writeFileSync(tmp, driver);
     const res = await new Promise<{ code: number | null; out: string }>((resolve) => {
-      const child = spawn("node", [tmp], { env: { ...process.env, PV_URL: loginUrl, PV_STATE_OUT: statePath, PV_TIMEOUT: String(timeoutMs) }, stdio: ["ignore", "pipe", "ignore"] });
+      // Minimal env (O46): the fixed driver only needs to find node/playwright
+      // and the browser cache — never inherit the parent's secrets (vault DEK,
+      // provider/gateway keys, tokens) into the spawned browser process.
+      const driverEnv: Record<string, string | undefined> = {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
+        DISPLAY: process.env.DISPLAY,
+        PV_URL: loginUrl,
+        PV_STATE_OUT: statePath,
+        PV_TIMEOUT: String(timeoutMs),
+      };
+      const child = spawn("node", [tmp], { env: driverEnv, stdio: ["ignore", "pipe", "ignore"] });
       let o = ""; child.stdout!.on("data", (d: Buffer) => { o += d.toString(); });
       const killer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } resolve({ code: null, out: o }); }, timeoutMs + 30_000);
       child.on("error", () => { clearTimeout(killer); resolve({ code: -1, out: o }); });
