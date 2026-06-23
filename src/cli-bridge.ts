@@ -851,6 +851,12 @@ export interface ChatTurn {
   // is the safety gate. Without it claude can't write files or call MCP tools in
   // headless -p mode (no TTY to approve), so execution would silently no-op.
   act?: boolean;
+  // Per-turn web-access override. When set it WINS over the global cockpit
+  // setting (readWebAccess) for this turn only - this is how the desktop's
+  // "Web access" Modes toggle reaches the engine. "deny" hard-removes Claude's
+  // WebSearch/WebFetch tools and refuses providers whose web tools can't be
+  // switched off (see runChatTurn). Omitted => fall back to the global setting.
+  webAccess?: "allow" | "deny";
   // Optional cancellation. Aborting the signal SIGTERMs the child process so
   // Escape in the cockpit can drop an in-flight prompt without waiting for
   // the model to finish. runCapture resolves with "(cancelled)" on abort.
@@ -896,14 +902,13 @@ const WEB_DENY_NOTE = [
   "</web-access>",
 ].join("\n");
 
-function augmentManualWithWebGate(manual: string | null): string | null {
-  const mode = readWebAccess();
+function augmentManualWithWebGate(manual: string | null, mode: "allow" | "deny"): string | null {
   if (mode === "allow") return manual;
   if (!manual) return WEB_DENY_NOTE;
   return `${manual}\n\n${WEB_DENY_NOTE}`;
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, maxOutputChars, guard }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, maxOutputChars, guard, webAccess }: ChatTurn): Promise<string> {
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
   const domainKeyForGuard = basename(cwd);
@@ -942,6 +947,28 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     checkBudget(budgetEstimate, guard.budget);
   }
 
+  // --- Web-access lockdown (hard gate) -------------------------------------
+  // Effective web mode for THIS turn: an explicit per-turn override (the
+  // desktop "Web access" Modes toggle, passed as --web) wins; otherwise the
+  // global cockpit setting. When "deny" we must GUARANTEE no outbound web -
+  // a polite prompt note is NOT enough, since the model can ignore it.
+  const webMode: "allow" | "deny" = webAccess ?? readWebAccess();
+  if (webMode === "deny") {
+    // We can only truly switch web OFF for Claude (its WebSearch/WebFetch tools
+    // are removed from the model's context via --disallowedTools, below) and for
+    // local engines (ollama has no web tool and never leaves the machine). Every
+    // other provider - codex, gemini/antigravity, and the claude/gemini/codex
+    // "extra family" CLIs - keeps live web tools we cannot switch off headlessly,
+    // so REFUSE rather than risk a silent outbound call behind the user's back.
+    const webSafe = cli.kind === "claude" || cli.kind === "ollama";
+    if (!webSafe) {
+      throw new Error(
+        `Web access is OFF, and it can't be guaranteed off for the "${cli.kind}" engine (its web tools can't be disabled headlessly). ` +
+        `Switch to Claude or a local model, or turn Web access back on.`,
+      );
+    }
+  }
+
   const m = model.trim();
   // Only claude gets the manual — it has a real --append-system-prompt
   // channel that the model treats as system context (not echoed in output).
@@ -952,7 +979,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   const manualForClaude =
     bare || cli.kind !== "claude"
       ? null
-      : augmentManualWithWebGate(findOperatingManual(vaultPath));
+      : augmentManualWithWebGate(findOperatingManual(vaultPath), webMode);
   // Response framework preamble (BLUF, WIN, SCQA, ...). When set, prepend
   // a bracketed instruction so the model structures its answer in that
   // style. Applies to every CLI and to both single-chat + council. Short
@@ -1024,6 +1051,12 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // approve prompts, so without this the action silently no-ops. Gated by the
     // explicit per-action approval upstream.
     if (act) args.push("--dangerously-skip-permissions");
+    // Web lockdown: remove the web tools from the model's context entirely.
+    // --disallowedTools wins over --dangerously-skip-permissions (a denied tool
+    // stays unavailable even in skip-permissions mode), so this is a HARD block,
+    // not a request. WebSearch + WebFetch are the only built-ins that make
+    // outbound requests. The WEB_DENY_NOTE in the system prompt is belt-and-braces.
+    if (webMode === "deny") args.push("--disallowedTools", "WebSearch", "WebFetch");
     // Agent-facing MCP servers (the Composio gateway): only on agentic act runs
     // (where --dangerously-skip-permissions already auto-allows MCP tools).
     // agentMcpConfigForClaude materializes ~/.prevail/agent-mcp.json from the

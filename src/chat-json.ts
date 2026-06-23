@@ -71,6 +71,9 @@ export interface ChatJsonOptions {
   sessionId?: string;
   // Honor the global --local-only flag: forbid non-local engines for this run.
   localOnly?: boolean;
+  // Per-turn web-access override (desktop "Web access" Modes toggle). "deny"
+  // hard-blocks web for this turn; absent => fall back to the global setting.
+  webAccess?: "allow" | "deny";
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
   write?: (line: string) => void;
@@ -221,6 +224,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       cli,
       model,
       isFirst: !opts.sessionId, // resume → not first (claude uses --continue)
+      webAccess: opts.webAccess,
       onChunk: (delta: string) => {
         if (!delta) return;
         reply += delta;
@@ -290,6 +294,7 @@ export async function chatJsonCommand(
   let model: string | undefined;
   let sessionId: string | undefined;
   let localOnly = false;
+  let webAccess: "allow" | "deny" | undefined;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -306,6 +311,8 @@ export async function chatJsonCommand(
     else if (a === "--session") { sessionId = next; i++; }
     else if (a.startsWith("--session=")) sessionId = a.slice("--session=".length);
     else if (a === "--local-only") localOnly = true;
+    else if (a === "--web") { const v = (next ?? "").toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; i++; }
+    else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
     else if (a === "--vault") { vaultPath = resolve(process.cwd(), next ?? ""); i++; }
     else if (a.startsWith("--vault=")) vaultPath = resolve(process.cwd(), a.slice("--vault=".length));
     // --json is implied by this command path; tolerate it being present.
@@ -330,6 +337,7 @@ export async function chatJsonCommand(
     model,
     sessionId,
     localOnly,
+    webAccess,
   });
 }
 
