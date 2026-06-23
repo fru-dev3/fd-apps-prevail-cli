@@ -1,5 +1,6 @@
 import { randomBytes, createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeSecretFile } from "./secret-file.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -240,9 +241,8 @@ export async function runOAuthFlow(
 
   ensureAuthDir(connectorId);
   const tokPath = refreshTokenPath(connectorId);
-  writeFileSync(tokPath, tokens.refresh_token);
-  try { chmodSync(tokPath, 0o600); } catch {}
-  writeFileSync(
+  writeSecretFile(tokPath, tokens.refresh_token);
+  writeSecretFile(
     oauthMetaPath(connectorId),
     JSON.stringify(
       {
@@ -256,7 +256,6 @@ export async function runOAuthFlow(
       2,
     ),
   );
-  try { chmodSync(oauthMetaPath(connectorId), 0o600); } catch {}
 
   return {
     ok: true,

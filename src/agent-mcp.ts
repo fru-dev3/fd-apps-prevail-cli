@@ -13,6 +13,7 @@
 // byte-for-byte unchanged and a run with no key never gets the flag at all.
 
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { writeSecretFile } from "./secret-file.ts";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -57,9 +58,7 @@ export function writeAgentMcpConfig(): string | null {
   if (!key) return null;
   const p = agentMcpConfigPath();
   try {
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, JSON.stringify(buildComposioConfig(key), null, 2));
-    try { chmodSync(p, 0o600); } catch { /* best effort */ }
+    writeSecretFile(p, JSON.stringify(buildComposioConfig(key), null, 2));
     return p;
   } catch {
     return null;
