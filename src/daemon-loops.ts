@@ -30,6 +30,10 @@ export interface LoopsConfig {
   // to the live connectors. Absent → a briefing falls back to log-only.
   deliverEmail?: (subject: string, body: string) => Promise<string>;
   deliverTelegram?: (text: string) => Promise<number>;
+  // Autonomy gate (B7/O5): when false/absent, the background daemon NEVER executes
+  // consequential actions on AI-owned tasks — it only PROPOSES a plan and routes the
+  // task to the Decision Inbox for the user to approve. Must be explicitly opted in.
+  autonomousActs?: boolean;
 }
 
 export const DEFAULT_LOOPS: Omit<LoopsConfig, "vaultPath"> = {
@@ -696,6 +700,22 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
   if (!cli) throw new Error("no CLI available to run AI tasks");
   const domainName = basename(domainDir);
   const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
+  // Autonomy gate (B7/O5): only ACT when the user explicitly opted in. Otherwise
+  // the daemon must NOT use tools/connectors — it proposes a plan for review.
+  const autonomous = cfg.autonomousActs === true;
+  const actLines = autonomous
+    ? [
+        `DECIDE then ACT:`,
+        `- If this task SPENDS money, CONTACTS someone, is IRREVERSIBLE, or needs a decision/info only the user can give: do NOT do it. Reply with exactly "NEEDS_APPROVAL: <one-line what you'd do and why it needs the user>".`,
+        `- Else, actually perform it now using your tools/connectors (MCP servers, file ops, configured app connectors). Don't merely describe it.`,
+        `- If no available tool/connector can perform it, reply with exactly "NO_CONNECTOR: <one-line reason>".`,
+        `- When you DID it, reply with a one-paragraph report of precisely what you did (IDs, links, recipients).`,
+      ]
+    : [
+        `PROPOSE ONLY — autonomous execution is OFF. You must NOT use any tools/connectors, send anything, spend anything, or modify anything.`,
+        `- Produce a concise PLAN of exactly what you would do to complete this task: the steps, who/what each step touches, and anything irreversible.`,
+        `- Reply with "NEEDS_APPROVAL: <your plan>". The user reviews and approves in the Decision Inbox before anything runs.`,
+      ];
   const prompt = [
     `You are working an AI-owned task the user assigned to you on their board, in the "${domainName}" domain of their personal life-OS.`,
     `You are in the LABOR seat, not the decision seat: do the legwork, but the user makes any real call.`,
@@ -705,11 +725,7 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
     "",
     state ? `DOMAIN CONTEXT (from _state.md):\n${state.slice(0, 1500)}` : "",
     "",
-    `DECIDE then ACT:`,
-    `- If this task SPENDS money, CONTACTS someone, is IRREVERSIBLE, or needs a decision/info only the user can give: do NOT do it. Reply with exactly "NEEDS_APPROVAL: <one-line what you'd do and why it needs the user>".`,
-    `- Else, actually perform it now using your tools/connectors (MCP servers, file ops, configured app connectors). Don't merely describe it.`,
-    `- If no available tool/connector can perform it, reply with exactly "NO_CONNECTOR: <one-line reason>".`,
-    `- When you DID it, reply with a one-paragraph report of precisely what you did (IDs, links, recipients).`,
+    ...actLines,
   ].filter(Boolean).join("\n");
   const out = (await runChatTurn({
     prompt,
@@ -718,7 +734,7 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
     model: cfg.model || "",
     isFirst: true,
     bare: false,
-    act: true,
+    act: autonomous,
   })).trim();
 
   const head = out.slice(0, 40).toUpperCase();
