@@ -51,8 +51,10 @@ export async function setPasscode(
   createdAt: string,
   file: string = lockFilePath(),
 ): Promise<void> {
-  if (!passcode || passcode.length < 4) {
-    throw new Error("passcode must be at least 4 characters");
+  // A 4-char passcode is trivially brute-forced; require at least 8 (O47).
+  // Only enforced on SET — existing shorter passcodes still verify.
+  if (!passcode || passcode.length < 8) {
+    throw new Error("passcode must be at least 8 characters");
   }
   const verifier = await Bun.password.hash(passcode, { algorithm: "argon2id" });
   const lock: LockFile = { schema: LOCK_SCHEMA, algorithm: "argon2id", verifier, createdAt };

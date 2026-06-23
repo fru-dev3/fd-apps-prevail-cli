@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { resolveDomainDir } from "./path-safety.ts";
 import {
   appendFileSync,
@@ -339,7 +340,9 @@ export function formatRelativeDate(ts: number | null): string {
 }
 
 export function makeSessionId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  // crypto-random suffix (48 bits) — Math.random() is not collision-safe and is
+  // predictable, and sessionId can flow into file paths (O47).
+  return `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +376,7 @@ export interface ThreadTurn {
 // Generate a thread-node id. Distinct prefix from makeSessionId so a node id
 // can never be mistaken for a session id at a glance in a JSONL dump.
 export function makeTurnId(): string {
-  return `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `t-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
 }
 
 // Path to a domain's JSONL thread file inside the vault. Lives under the
