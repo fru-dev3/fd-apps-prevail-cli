@@ -10,9 +10,10 @@
 // Mirrors daemon-learn.ts: same config/lifecycle shape, same model bridge
 // (runChatTurn), same encryption-aware vault I/O (vread/vwrite). Idempotent and
 // best-effort: a failing loop records its error and never blocks the others.
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { runtimePath } from "./path-safety.ts";
+import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
 import { scanVault } from "./vault.ts";
@@ -763,31 +764,40 @@ async function consumeAiTasks(domainDir: string, cfg: LoopsConfig): Promise<numb
 // and gets each one's resolved path. Advances due loops AND works AI-owned tasks.
 export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; loops: number; aiTasks: number }> {
   const root = resolve(cfg.vaultPath);
-  const now = Date.now();
-  let domains = 0;
-  let loops = 0;
-  let aiTasks = 0;
+  // Cross-process lock (B7/O25): the desktop and the launchd daemon can both fire
+  // this pass; without a lock they race on _loops/_tasks and can double-run AI
+  // tasks (lost writes / duplicate actions). Skip the pass if another holds it.
+  const logDir = runtimePath(root, "_log");
+  try { mkdirSync(logDir, { recursive: true }); } catch { /* already exists */ }
+  const result = await withLock(join(logDir, "loops.lock"), async () => {
+    const now = Date.now();
+    let domains = 0;
+    let loops = 0;
+    let aiTasks = 0;
 
-  // Include the general domain (data/domains/general on v4, else root) alongside
-  // the scanned domains so its loops run on schedule too.
-  const targets = [...scanVault(root).map((d) => ({ name: d.name, path: d.path })), { name: "general", path: generalDir(root) }];
-  for (const d of targets) {
-    try {
-      let touched = false;
-      if (existsSync(loopsFile(d.path))) {
-        const n = await runDomain(d.path, cfg, now);
-        if (n > 0) { loops += n; touched = true; }
+    // Include the general domain (data/domains/general on v4, else root) alongside
+    // the scanned domains so its loops run on schedule too.
+    const targets = [...scanVault(root).map((d) => ({ name: d.name, path: d.path })), { name: "general", path: generalDir(root) }];
+    for (const d of targets) {
+      try {
+        let touched = false;
+        if (existsSync(loopsFile(d.path))) {
+          const n = await runDomain(d.path, cfg, now);
+          if (n > 0) { loops += n; touched = true; }
+        }
+        // AI tasks are independent of loop definitions — a domain can have AI-owned
+        // tasks without any loops.
+        const a = await consumeAiTasks(d.path, cfg);
+        if (a > 0) { aiTasks += a; touched = true; }
+        if (touched) domains += 1;
+      } catch (e) {
+        console.error(`[loops] ${d.name}: ${String(e).slice(0, 160)}`);
       }
-      // AI tasks are independent of loop definitions — a domain can have AI-owned
-      // tasks without any loops.
-      const a = await consumeAiTasks(d.path, cfg);
-      if (a > 0) { aiTasks += a; touched = true; }
-      if (touched) domains += 1;
-    } catch (e) {
-      console.error(`[loops] ${d.name}: ${String(e).slice(0, 160)}`);
     }
-  }
-  return { domains, loops, aiTasks };
+    return { domains, loops, aiTasks };
+  });
+  // null = another process held the lock; treat as a no-op pass.
+  return result ?? { domains: 0, loops: 0, aiTasks: 0 };
 }
 
 // The long-running daemon: wake on the interval, advance any due loops.

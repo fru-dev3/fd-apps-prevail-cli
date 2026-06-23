@@ -9,9 +9,10 @@
 // (the desktop defers when the headless agent is installed), so they never
 // clobber each other.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
-import { buildRoot } from "./path-safety.ts";
+import { buildRoot, runtimePath } from "./path-safety.ts";
+import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile, vappendLine, vreadTail, vrotateLedgerPrefix } from "./vault-session.ts";
 
 // Ledger hygiene: rotate _intents.jsonl once it grows past this, always keeping
@@ -367,6 +368,17 @@ export async function refreshAppSuggestions(root: string, cfg: LearnConfig): Pro
 }
 
 export async function learnOnce(cfg: LearnConfig): Promise<{ domains: number; lines: number }> {
+  const root = cfg.vaultPath;
+  // Cross-process lock (B7/O25): the desktop in-app distiller and the launchd
+  // learn daemon both distill the same ledgers; without a lock they race on the
+  // read-modify-write of _memory.md/cursors. Skip the pass if another holds it.
+  const logDir = runtimePath(root, "_log");
+  try { mkdirSync(logDir, { recursive: true }); } catch { /* already exists */ }
+  const result = await withLock(join(logDir, "learn.lock"), () => learnPass(cfg));
+  return result ?? { domains: 0, lines: 0 };
+}
+
+async function learnPass(cfg: LearnConfig): Promise<{ domains: number; lines: number }> {
   const root = cfg.vaultPath;
   let domains = 0, lines = 0;
   // General bucket + each domain dir. B2-12: the General ledger reads from build/
