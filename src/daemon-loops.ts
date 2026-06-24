@@ -20,7 +20,7 @@ import { scanVault } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
 import { auditAction } from "./action-audit.ts";
-import { classifyAction, isConsequential } from "./action-policy.ts";
+import { decideAction } from "./broker.ts";
 import { deliverBriefing, type BriefingEntry } from "./briefings.ts";
 import { generalDir } from "./decisions.ts";
 
@@ -713,8 +713,8 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
   // isn't consequential. A financial/irreversible/external-send/credential task
   // is NEVER auto-executed — it's always proposed for explicit approval, even
   // with autonomy enabled.
-  const cls = classifyAction(task.text);
-  const autonomous = cfg.autonomousActs === true && !isConsequential(cls);
+  // Single policy decision via the broker (C1): taxonomy + autonomy gate.
+  const { cls, mayAutoExecute: autonomous } = decideAction(task.text, { autonomousActs: cfg.autonomousActs === true });
   const actLines = autonomous
     ? [
         `DECIDE then ACT:`,
@@ -754,7 +754,7 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
   if (task.id) setTaskStatus(domainDir, task.id, next);
   // Append-only action audit (C1/O94).
   auditAction(resolve(cfg.vaultPath), {
-    ts: Date.now(), domain: basename(domainDir), action: task.text,
+    ts: Date.now(), domain: basename(domainDir), action: task.text, cls,
     outcome: head.startsWith("NO_CONNECTOR") ? "no_connector"
       : head.startsWith("NEEDS_APPROVAL") ? "proposed" : "executed",
     provider: cfg.provider, model: cfg.model || undefined, report: out,
