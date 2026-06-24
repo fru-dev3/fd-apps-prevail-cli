@@ -1092,7 +1092,19 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     const codexPrompt = bare
       ? `(This is a general advisory question — not a software/coding task. Engage with it directly and give your real opinion.)\n\n${framedPrompt}`
       : framedPrompt;
-    const args = m ? [...base, "-m", m, codexPrompt] : [...base, codexPrompt];
+    // Split a "model@effort" id (e.g. "gpt-5.5@high") into the base model + a
+    // reasoning-effort config flag, exactly like the desktop chat path. Passing
+    // the raw "gpt-5.5@high" as -m makes the provider reject it ("model not
+    // supported") - which is why such benchmark runs scored all zeros.
+    const modelArgs: string[] = [];
+    if (m) {
+      const at = m.indexOf("@");
+      const mBase = at >= 0 ? m.slice(0, at) : m;
+      const effort = at >= 0 ? m.slice(at + 1).trim() : "";
+      modelArgs.push("-m", mBase);
+      if (effort) modelArgs.push("-c", `model_reasoning_effort=${effort}`);
+    }
+    const args = [...base, ...modelArgs, codexPrompt];
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractCodexReply(raw);
   }
