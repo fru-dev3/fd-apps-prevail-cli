@@ -437,7 +437,13 @@ function runLabel(args: { targetCli?: AvailableCli; targetModel?: string }): str
   if (!args.targetCli) return "council";
   const parts: string[] = [args.targetCli.kind];
   if (args.targetModel && args.targetModel.trim()) parts.push(args.targetModel.trim());
-  return parts.join("-");
+  // Path-safety: a model id can contain "/" (e.g. OpenRouter's "z-ai/glm-5.2").
+  // Left raw, the join()+mkdirSync(recursive) below would NEST the run inside a
+  // phantom directory, so scoring never writes score.json where the leaderboard
+  // scanner looks - the model silently vanishes from the board. Flatten path
+  // separators and other filesystem-reserved chars to "-" so every run is one
+  // flat directory. The real model id is still preserved verbatim in meta.json.
+  return parts.join("-").replace(/[/\:]+/g, "-");
 }
 
 export function writeRunDirectory(args: {

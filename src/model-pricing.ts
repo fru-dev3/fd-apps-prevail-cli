@@ -53,6 +53,14 @@ const RATES: Array<{ match: RegExp; inUsd: number; outUsd: number }> = [
   // Mistral (hosted)
   { match: /mistral-large/i, inUsd: 2, outUsd: 6 },
   { match: /mistral/i, inUsd: 0.4, outUsd: 2 },
+  // Open / hosted-open families (common via OpenRouter and others). Approximate
+  // published rates; matched on the family substring so the "vendor/" prefix in
+  // an OpenRouter id (e.g. "z-ai/glm-5.2") doesn't matter.
+  { match: /\bglm\b|zhipu/i, inUsd: 0.6, outUsd: 2.2 },
+  { match: /\bkimi\b|moonshot/i, inUsd: 0.6, outUsd: 2.5 },
+  { match: /qwen/i, inUsd: 0.4, outUsd: 1.2 },
+  { match: /\byi-/i, inUsd: 0.3, outUsd: 0.3 },
+  { match: /llama/i, inUsd: 0.2, outUsd: 0.6 },
 ];
 
 export function isLocalCliKind(cli: string | undefined | null): boolean {
