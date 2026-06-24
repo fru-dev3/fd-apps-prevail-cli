@@ -382,6 +382,11 @@ export function makeTurnId(): string {
 // Path to a domain's JSONL thread file inside the vault. Lives under the
 // agent-writable _threads/ zone (VAULT-SPEC §3).
 export function threadJsonlPath(vaultPath: string, domain: string, sessionId: string): string {
+  // H5: sessionId flows in from --session-id / resume APIs and lands in a path.
+  // Reject anything that isn't a plain id so it can't traverse out of _threads/.
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) {
+    throw new Error(`invalid session id: ${sessionId.slice(0, 40)}`);
+  }
   return join(resolveDomainDir(vaultPath, domain), "_threads", `${sessionId}.jsonl`);
 }
 

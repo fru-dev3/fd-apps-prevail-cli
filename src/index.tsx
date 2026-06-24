@@ -2772,7 +2772,15 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         const kr = ops.loadKeyring();
         if (!kr) { out({ ok: false, error: "vault is not encrypted" }); return; }
         if (!crypto.verifyKeyringPasscode(passcode, kr)) { out({ ok: false, error: "wrong passcode" }); return; }
-        out({ ok: true, key: crypto.unwrapDek(passcode, kr).toString("base64") });
+        // O69: never put the DEK on stdout (it can land in a log). Write it to a
+        // 0600 temp file and return only the path; the caller reads + deletes it.
+        const dekB64 = crypto.unwrapDek(passcode, kr).toString("base64");
+        const { writeFileSync } = await import("node:fs");
+        const { tmpdir } = await import("node:os");
+        const { randomBytes } = await import("node:crypto");
+        const keyFile = join(tmpdir(), `prevail-dek-${randomBytes(9).toString("hex")}`);
+        writeFileSync(keyFile, dekB64, { mode: 0o600 });
+        out({ ok: true, keyFile });
         return;
       }
       if (sub === "decrypt") {

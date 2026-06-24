@@ -454,9 +454,17 @@ function shortenHome(p: string): string {
 function isUnsafeUrl(url: string): boolean {
   try {
     const u = new URL(url);
-    const h = u.hostname;
-    if (h === "169.254.169.254" || h === "metadata.google.internal" || h === "metadata") return true;
+    let h = u.hostname.toLowerCase();
+    if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1); // strip IPv6 brackets
+    if (h === "metadata.google.internal" || h === "metadata") return true;
+    // Link-local 169.254.0.0/16 — cloud metadata lives here; never a real connector.
+    if (/^169\.254\./.test(h)) return true;
     if (h === "100.100.100.200") return true; // AliCloud
+    // Obfuscated single-label numeric/hex host (e.g. 2852039166 or 0xA9FEA9FE ==
+    // 169.254.169.254) that bypasses the dotted checks above (M23). NOTE: dotted
+    // localhost / RFC1918 are intentionally still allowed — probing a local MCP
+    // sidecar is a legitimate use.
+    if (!h.includes(".") && !h.includes(":") && /^(0x)?[0-9a-f]+$/.test(h)) return true;
     return false;
   } catch {
     return true; // unparseable URL is unsafe to hit

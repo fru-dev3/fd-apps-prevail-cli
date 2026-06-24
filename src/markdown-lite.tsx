@@ -1,7 +1,19 @@
 import { theme } from "./theme.ts";
 
+// Strip ANSI/terminal control sequences from externally-sourced text before it's
+// rendered to the TUI, so model/connector output can't move the cursor, clear the
+// screen, or spoof UI (M24/O87). Covers CSI (ESC[…), OSC (ESC]…BEL/ST), and bare
+// control chars except tab/newline.
+export function sanitizeAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
+}
+
 export function renderMarkdownLines(content: string) {
-  const lines = content.split("\n");
+  const lines = sanitizeAnsi(content).split("\n");
   return lines.map((raw, i) => {
     const key = `ln-${i}`;
     return <MarkdownLine key={key} line={raw} />;

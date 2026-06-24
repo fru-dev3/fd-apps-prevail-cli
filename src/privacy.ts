@@ -155,7 +155,9 @@ function readManifestLocalOnly(vaultPath: string, domain: string): boolean {
     const m = readManifest(vaultPath, domain);
     return m?.privacy.localOnly ?? false;
   } catch {
-    return false;
+    // M22: fail CLOSED — an unreadable/corrupt manifest is treated as local-only
+    // so a transient read error can't silently allow a cloud send.
+    return true;
   }
 }
 
@@ -223,6 +225,25 @@ const REDACT_RULES: RedactRule[] = [
     label: "api_key",
     re: /\b(?:sk|pk|rk|ghp|gho|ghs|xoxb|xoxp|AKIA)[-_][A-Za-z0-9-_]{12,}\b/g,
     placeholder: "[REDACTED_KEY]",
+  },
+  {
+    // Vendor key formats without a separator after the prefix (M22):
+    // Google AIza…, GitLab glpat-…, xAI xai-…, Anthropic sk-ant-/sk-proj-.
+    label: "api_key_vendor",
+    re: /\b(?:AIza[0-9A-Za-z_-]{20,}|glpat-[0-9A-Za-z_-]{16,}|xai-[0-9A-Za-z]{16,}|sk-(?:ant|proj)-[0-9A-Za-z_-]{16,})\b/g,
+    placeholder: "[REDACTED_KEY]",
+  },
+  {
+    // JWTs (header.payload.signature) — often bearer creds (M22).
+    label: "jwt",
+    re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+    placeholder: "[REDACTED_JWT]",
+  },
+  {
+    // PEM private keys (M22). Bounded by the END marker (no catastrophic backtrack).
+    label: "pem_private_key",
+    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g,
+    placeholder: "[REDACTED_PRIVATE_KEY]",
   },
   {
     // Bearer tokens.
