@@ -456,6 +456,8 @@ USAGE
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
                               (connectors list --json for the machine list)
+                              connectors scopes <id> — show what an OAuth grant requests
+                              connectors disconnect <id> — revoke + delete a stored token
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
                               auth: clients must send Authorization: prevail-<token> from ~/.prevail/mcp.json
                               parent-check: refuses non-TTY / unknown parents — bypass with --unsafe-detach
@@ -1994,8 +1996,18 @@ async function connectorsCommand(args: string[]): Promise<void> {
     } catch (e) {
       return fail(`could not delete "${id}": ${e instanceof Error ? e.message : String(e)}`);
     }
-    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: true, id, removed: app.path })}\n`); process.exit(0); }
-    console.log(`removed connector "${id}" (${app.path})`);
+    // O20/G11: the connector folder lives under apps/, but its OAuth token lives
+    // separately under ~/.prevail/connectors/<id>/auth. Removing the connector
+    // without this would orphan a live refresh token on disk. Revoke + delete it.
+    let disconnected = false;
+    try {
+      const { disconnectConnector } = await import("./oauth-flow.ts");
+      const spec = (app.oauth ?? undefined) as { revoke_url?: string; client_id?: string; client_id_env?: string } | undefined;
+      const r = await disconnectConnector(id, spec);
+      disconnected = r.removed;
+    } catch { /* best-effort: connector is already gone */ }
+    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: true, id, removed: app.path, disconnected })}\n`); process.exit(0); }
+    console.log(`removed connector "${id}" (${app.path})${disconnected ? " — and revoked its OAuth token" : ""}`);
     return;
   }
   if (sub === "skills") {
@@ -2141,7 +2153,18 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error(`connector "${id}" has no oauth block in its manifest`);
       process.exit(1);
     }
+    // O19: disclose exactly what access is being granted BEFORE opening the
+    // browser, so consent is informed rather than blind.
+    const oauthSpec = app.oauth as { provider?: string; scopes?: string[] };
+    const oauthScopes = Array.isArray(oauthSpec.scopes) ? oauthSpec.scopes : [];
     console.log(`starting OAuth flow for ${app.title}…`);
+    if (oauthSpec.provider) console.log(`  provider: ${oauthSpec.provider}`);
+    if (oauthScopes.length) {
+      console.log(`  this will request ${oauthScopes.length} permission${oauthScopes.length === 1 ? "" : "s"}:`);
+      for (const s of oauthScopes) console.log(`    • ${s}`);
+    } else {
+      console.log("  (no scopes declared in the manifest)");
+    }
     const result = await runOAuthFlow(
       id,
       app.oauth as Parameters<typeof runOAuthFlow>[1],
@@ -2154,6 +2177,51 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error(`\n✗ ${result.message}`);
       process.exit(1);
     }
+    return;
+  }
+  // O19 (machine path): report a connector's OAuth scopes + connection state
+  // WITHOUT starting a flow, so the desktop can render a consent screen before
+  // the user authorizes. `prevail connectors scopes <id> [--json]`.
+  if (sub === "scopes") {
+    const id = args[1];
+    const { isConnected } = await import("./oauth-flow.ts");
+    const app = id ? apps.find((a) => a.id === id) : undefined;
+    if (!id || !app) {
+      const msg = !id ? "usage: prevail connectors scopes <id>" : `no connector with id "${id}"`;
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    }
+    const spec = (app.oauth ?? null) as { provider?: string; scopes?: string[]; revoke_url?: string } | null;
+    const scopes = Array.isArray(spec?.scopes) ? spec!.scopes : [];
+    const connected = isConnected(id);
+    if (args.includes("--json")) {
+      process.stdout.write(`${JSON.stringify({ ok: true, id, hasOauth: !!spec, provider: spec?.provider ?? null, scopes, connected, revocable: !!spec?.revoke_url })}\n`);
+      process.exit(0);
+    }
+    if (!spec) { console.log(`"${id}" has no oauth block (nothing to authorize).`); return; }
+    console.log(`${app.title} — ${connected ? "connected" : "not connected"}${spec.provider ? ` (${spec.provider})` : ""}`);
+    console.log(scopes.length ? `requests ${scopes.length} permission(s):` : "(no scopes declared)");
+    for (const s of scopes) console.log(`  • ${s}`);
+    return;
+  }
+  // O20: revoke + delete a connector's OAuth grant without removing the
+  // connector itself. Best-effort provider revocation (RFC 7009 if the manifest
+  // has revoke_url), then deletes the local token. `prevail connectors
+  // disconnect <id> [--json]`.
+  if (sub === "disconnect" || sub === "logout" || sub === "revoke") {
+    const id = args[1];
+    const { disconnectConnector } = await import("./oauth-flow.ts");
+    const app = id ? apps.find((a) => a.id === id) : undefined;
+    if (!id) {
+      const msg = "usage: prevail connectors disconnect <id>";
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    }
+    const spec = (app?.oauth ?? undefined) as { revoke_url?: string; client_id?: string; client_id_env?: string } | undefined;
+    const res = await disconnectConnector(id, spec);
+    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: res.ok, id, revoked: res.revoked, removed: res.removed, message: res.message })}\n`); process.exit(0); }
+    if (res.ok) console.log(res.message);
+    else { console.error(res.message); process.exit(1); }
     return;
   }
   if (sub === "browser-login") {

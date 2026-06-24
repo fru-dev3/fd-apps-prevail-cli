@@ -1,8 +1,9 @@
 import { randomBytes, createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { writeSecretFile } from "./secret-file.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { configDir } from "./config.ts";
 
 // Generic OAuth 2.0 + PKCE runner. Designed to cover the providers most
 // people actually want connected to a personal-AI cockpit — Google (YouTube
@@ -39,6 +40,10 @@ export interface OAuthSpec {
   // {"access_type":"offline","prompt":"consent"} for Google to force a
   // refresh_token on every consent).
   auth_extra_params?: Record<string, string>;
+  // Optional RFC 7009 token-revocation endpoint. When present, `disconnect`
+  // POSTs the stored refresh token here so the provider invalidates it,
+  // not just the local copy. Must be https (asserted at call time).
+  revoke_url?: string;
 }
 
 export interface FlowResult {
@@ -64,7 +69,10 @@ function urlSafeRandom(bytes = 16): string {
 }
 
 export function authDir(connectorId: string): string {
-  return join(homedir(), ".prevail", "connectors", connectorId, "auth");
+  // configDir() is ~/.prevail by default (identical to the previous literal),
+  // but honors PREVAIL_CONFIG_DIR so the token path matches the purge command
+  // and is redirectable under test.
+  return join(configDir(), "connectors", connectorId, "auth");
 }
 
 function refreshTokenPath(connectorId: string): string {
@@ -318,6 +326,65 @@ export async function refreshAccessToken(connectorId: string): Promise<{ ok: boo
   } catch (err) {
     return { ok: false, message: `token refresh failed: ${(err as Error).message}` };
   }
+}
+
+// True when a refresh token is stored for this connector (i.e. it's connected).
+export function isConnected(connectorId: string): boolean {
+  return existsSync(refreshTokenPath(connectorId));
+}
+
+// O20 — disconnect / revoke a connector's OAuth grant. Best-effort revokes the
+// refresh token at the provider (RFC 7009, if the manifest supplies revoke_url),
+// then DELETES the local auth dir (refresh.token + oauth.json) so no credential
+// is left on disk. Returns what happened so the CLI/UI can report honestly.
+export async function disconnectConnector(
+  connectorId: string,
+  spec?: Pick<OAuthSpec, "revoke_url" | "client_id" | "client_id_env">,
+): Promise<{ ok: boolean; revoked: boolean; removed: boolean; message: string }> {
+  const tokPath = refreshTokenPath(connectorId);
+  const had = existsSync(tokPath);
+  let revoked = false;
+  // Provider-side revocation (best-effort): only if we have a token + endpoint.
+  if (had && spec?.revoke_url) {
+    if (!/^https:\/\//i.test(spec.revoke_url)) {
+      return { ok: false, revoked: false, removed: false, message: `revoke_url must be https: ${String(spec.revoke_url).slice(0, 60)}` };
+    }
+    try {
+      const refresh = readFileSync(tokPath, "utf8").trim();
+      const body = new URLSearchParams();
+      body.set("token", refresh);
+      const clientId = (spec.client_id_env && process.env[spec.client_id_env]) || spec.client_id;
+      if (clientId) body.set("client_id", clientId);
+      const res = await fetch(spec.revoke_url, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      });
+      // RFC 7009: a successful revocation returns 200; many providers 200 even
+      // for an already-invalid token. Treat any 2xx as revoked.
+      revoked = res.ok;
+    } catch {
+      // Network failure shouldn't block local deletion — we still remove the
+      // on-disk credential below and report revoked:false.
+      revoked = false;
+    }
+  }
+  // Always delete the local auth dir (the guaranteed-correct part).
+  let removed = false;
+  try {
+    rmSync(authDir(connectorId), { recursive: true, force: true });
+    removed = true;
+  } catch {
+    removed = false;
+  }
+  const message = !had
+    ? `"${connectorId}" was not connected (no stored token)`
+    : revoked
+      ? `disconnected "${connectorId}" — token revoked at provider and removed locally`
+      : spec?.revoke_url
+        ? `disconnected "${connectorId}" — removed local token (provider revoke did not confirm)`
+        : `disconnected "${connectorId}" — removed local token`;
+  return { ok: removed || !had, revoked, removed, message };
 }
 
 function ensureAuthDir(connectorId: string): void {
