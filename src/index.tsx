@@ -50,6 +50,8 @@ interface Args {
   modelsArgs: string[];
   lock: boolean;
   lockArgs: string[];
+  reset: boolean;
+  resetArgs: string[];
   vault: boolean;
   vaultArgs: string[];
   upgrade: boolean;
@@ -132,6 +134,8 @@ function parseArgs(argv: string[]): Args {
   let modelsArgs: string[] = [];
   let lock = false;
   let lockArgs: string[] = [];
+  let reset = false;
+  let resetArgs: string[] = [];
   let vault = false;
   let vaultArgs: string[] = [];
   let upgrade = false;
@@ -258,6 +262,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "lock") {
       lock = true;
       lockArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "reset" || a === "purge") {
+      reset = true;
+      resetArgs = argv.slice(i + 1);
       break;
     } else if (a === "vault") {
       vault = true;
@@ -389,6 +397,8 @@ function parseArgs(argv: string[]): Args {
     modelsArgs,
     lock,
     lockArgs,
+    reset,
+    resetArgs,
     vault,
     vaultArgs,
     upgrade,
@@ -495,6 +505,11 @@ USAGE
                               read/set Bunker Mode (global local-only switch)
   prevail search <query> --json [--limit N]
                               full-text search across indexed chat history
+  prevail reset [--json] [--dry-run] [--include-vault] [--yes]
+                              factory reset: purge local app secrets (OAuth/MCP/
+                              Telegram tokens, config, passcode, session caches).
+                              Vault is kept unless --include-vault; never deletes
+                              without --yes (otherwise prints the dry-run plan).
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
   prevail upgrade [...]       self-update from the latest GitHub release
                               flags: --check (no prompt) --force (no confirm) --pre (include prereleases)
@@ -3956,6 +3971,49 @@ async function lockCommand(args: string[]): Promise<number> {
   return 1;
 }
 
+// `prevail reset --json [--dry-run] [--include-vault] [--yes]` — factory reset /
+// secure purge (G11). Removes machine-local app secrets: OAuth refresh tokens,
+// the MCP & Telegram tokens, the app config, the passcode verifier, and the
+// rebuildable session/index/prompt caches. The user's VAULT (their notes) is
+// PRESERVED unless --include-vault is passed. Destructive, so it never deletes
+// without --yes — absent --yes it reports the plan only (dry-run). An encrypted
+// vault's keyring is preserved whenever the vault is kept (deleting it would
+// make the vault permanently unreadable).
+async function resetCommand(args: string[], vaultPathFlag?: string | null): Promise<number> {
+  const { purge } = await import("./purge.ts");
+  const json = args.includes("--json");
+  const includeVault = args.includes("--include-vault");
+  const yes = args.includes("--yes");
+  // Belt-and-braces: never delete unless explicitly authorized with --yes.
+  const dryRun = args.includes("--dry-run") || !yes;
+  const cfg = readConfig();
+  const { resolveDefaultVaultPath } = await import("./vault.ts");
+  const vaultPath = vaultPathFlag ?? cfg?.vaultPath ?? resolveDefaultVaultPath();
+  const res = purge({ vaultPath: vaultPath ?? undefined, includeVault, dryRun });
+  if (json) {
+    process.stdout.write(`${JSON.stringify({
+      dryRun: res.dryRun,
+      planned: res.planned.map((t) => ({ kind: t.kind, path: t.path, label: t.label })),
+      removed: res.removed.map((t) => ({ kind: t.kind, path: t.path })),
+      kept: res.kept.map((k) => ({ kind: k.target.kind, path: k.target.path, reason: k.reason })),
+    })}\n`);
+    return 0;
+  }
+  if (res.dryRun) {
+    console.log("Factory reset — DRY RUN (nothing deleted). Re-run with --yes to apply.\n");
+    console.log(`Would remove ${res.planned.length} item(s):`);
+    for (const t of res.planned) console.log(`  - ${t.label}  (${t.path})`);
+  } else {
+    console.log(`Factory reset complete — removed ${res.removed.length} item(s):`);
+    for (const t of res.removed) console.log(`  - ${t.label}`);
+  }
+  if (res.kept.length) {
+    console.log("\nPreserved:");
+    for (const k of res.kept) console.log(`  - ${k.target.label}: ${k.reason}`);
+  }
+  return 0;
+}
+
 // `prevail search <query> --json [--limit N]` — full-text search across the
 // indexed chat history (the FTS5 index in ~/.prevail/sessions.db).
 async function searchCommand(args: string[]): Promise<number> {
@@ -4135,6 +4193,9 @@ async function main() {
   }
   if (args.lock) {
     process.exit(await lockCommand(args.lockArgs));
+  }
+  if (args.reset) {
+    process.exit(await resetCommand(args.resetArgs, args.vaultPath));
   }
   if (args.vault) {
     await vaultCommand(args.vaultArgs, args.vaultPath);
