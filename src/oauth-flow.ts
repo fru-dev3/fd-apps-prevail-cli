@@ -112,6 +112,11 @@ export async function runOAuthFlow(
   const { verifier, challenge } = pkcePair();
   const state = urlSafeRandom(16);
 
+  // M20: a manifest-supplied auth/token URL must be https — otherwise the auth
+  // code, client_secret, and refresh tokens could be sent to http://attacker.
+  for (const u of [spec.auth_url, spec.token_url]) {
+    if (!/^https:\/\//i.test(u)) throw new Error(`oauth url must be https: ${String(u).slice(0, 60)}`);
+  }
   const authUrl = new URL(spec.auth_url);
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("response_type", "code");
