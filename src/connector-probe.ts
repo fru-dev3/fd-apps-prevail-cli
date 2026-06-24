@@ -451,7 +451,7 @@ function shortenHome(p: string): string {
 // of trusted-ish config, and probing localhost services is sometimes the
 // point (e.g. mcp_url pointing at a sidecar). We block only the well-known
 // metadata-exfil targets, not all RFC1918.
-function isUnsafeUrl(url: string): boolean {
+export function isUnsafeUrl(url: string): boolean {
   try {
     const u = new URL(url);
     let h = u.hostname.toLowerCase();
