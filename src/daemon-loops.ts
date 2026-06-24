@@ -39,6 +39,10 @@ export interface LoopsConfig {
   autonomousActs?: boolean;
 }
 
+// H19/O26: a single hung model turn must not stall the whole loop pass. Each
+// daemon runChatTurn is aborted after this deadline.
+const LOOP_TURN_TIMEOUT_MS = 5 * 60_000;
+
 export const DEFAULT_LOOPS: Omit<LoopsConfig, "vaultPath"> = {
   intervalSec: 3600, // hourly wake; each loop only runs on its own cadence
   provider: "claude",
@@ -387,6 +391,7 @@ export async function runOneLoop(
     const out = await runChatTurn({
       prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents),
       cwd: domainDir, cli, model: runModel, isFirst: true, bare: true,
+      signal: AbortSignal.timeout(LOOP_TURN_TIMEOUT_MS),
     });
     onPhase("apply", "Applying the decision");
     const res = parseResult(out);
@@ -470,7 +475,10 @@ async function runBriefingLoop(p: {
   onPhase: (phase: string, label: string) => void;
 }): Promise<LoopRunResult> {
   const { cfg, root, domainDir, domainLabel, doc, loop, cli, runModel, state, memory, now, rt, entry, onPhase } = p;
-  const channel = loop.channel ?? "gmail";
+  // O18: default a briefing to the on-device journal, NOT off-device email — a
+  // briefing must not silently mail domain digests off the machine unless the
+  // user explicitly chose gmail/telegram.
+  const channel = loop.channel ?? "log";
   try {
     onPhase("read", "Gathering tasks and context");
     const tasks = readTasks(domainDir).filter((t) => !t.trashed); // never surface trashed tasks
@@ -500,7 +508,7 @@ async function runBriefingLoop(p: {
 
     onPhase("think", `Writing the briefing with ${runModel || cli.label}`);
     const prompt = buildBriefingDigestPrompt(domainLabel, loop, state, memory, taskRollup, pendingAll);
-    const output = (await runChatTurn({ prompt, cwd: domainDir, cli, model: runModel, isFirst: true, bare: true })).trim();
+    const output = (await runChatTurn({ prompt, cwd: domainDir, cli, model: runModel, isFirst: true, bare: true, signal: AbortSignal.timeout(LOOP_TURN_TIMEOUT_MS) })).trim();
 
     onPhase("apply", `Delivering to ${channel}`);
     // Synthetic briefing entry so we reuse the same delivery code paths.
@@ -577,6 +585,7 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
         cli,
         model: cfg.model || "",
         isFirst: true,
+        signal: AbortSignal.timeout(LOOP_TURN_TIMEOUT_MS),
         bare: true,
       });
       const res = parseResult(out);
@@ -660,6 +669,7 @@ export async function executeAction(cfg: LoopsConfig, domainName: string, action
     cli,
     model: cfg.model || "",
     isFirst: true,
+    signal: AbortSignal.timeout(LOOP_TURN_TIMEOUT_MS),
     bare: false, // full operating manual — the agent SHOULD take action here
     act: true,   // user-approved: let the agent actually use its tools/connectors
   });
@@ -745,6 +755,7 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
     cli,
     model: cfg.model || "",
     isFirst: true,
+    signal: AbortSignal.timeout(LOOP_TURN_TIMEOUT_MS),
     bare: false,
     act: autonomous,
   })).trim();

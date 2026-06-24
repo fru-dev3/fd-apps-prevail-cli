@@ -11,10 +11,13 @@ import { homedir } from "node:os";
 // The learn agent keeps its original label so existing status checks + the
 // in-app distiller's "defer when installed" guard keep working unchanged.
 const LABEL = "sh.prevail.learn";
-type AgentDef = { label: string; flag: string; env?: Record<string, string> };
+type AgentDef = { label: string; flag: string; env?: Record<string, string>; runAtLoad?: boolean };
 const AGENTS: AgentDef[] = [
   { label: LABEL, flag: "--learn", env: { PREVAIL_HEADLESS_LEARN: "1" } },
-  { label: "sh.prevail.loops", flag: "--loops" },
+  // Decision: the acting loops daemon does NOT auto-start at login (RunAtLoad
+  // false) — consequential autonomy is opt-in, started explicitly. learn/sync
+  // are background-safe and keep RunAtLoad true.
+  { label: "sh.prevail.loops", flag: "--loops", runAtLoad: false },
   { label: "sh.prevail.sync", flag: "--sync" },
 ];
 
@@ -37,7 +40,7 @@ function enginePath(): string {
   return process.env.PREVAIL_BIN || "prevail";
 }
 
-function buildPlist(label: string, program: string, flag: string, vault: string, logOut: string, env?: Record<string, string>): string {
+function buildPlist(label: string, program: string, flag: string, vault: string, logOut: string, env?: Record<string, string>, runAtLoad = true): string {
   const envXml = env
     ? `\n  <key>EnvironmentVariables</key>\n  <dict>\n${Object.entries(env).map(([k, v]) => `    <key>${k}</key><string>${v}</string>`).join("\n")}\n  </dict>`
     : "";
@@ -54,8 +57,8 @@ function buildPlist(label: string, program: string, flag: string, vault: string,
     <string>--vault</string>
     <string>${vault}</string>
   </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><${runAtLoad}/>
+  <key>KeepAlive</key><${runAtLoad}/>
   <key>StandardOutPath</key><string>${logOut}</string>
   <key>StandardErrorPath</key><string>${logOut}</string>${envXml}
 </dict>
@@ -71,7 +74,7 @@ export async function installLaunchAgent(vault: string, bin?: string): Promise<v
   for (const a of AGENTS) {
     const logOut = join(homedir(), "Library", "Logs", `prevail-${a.flag.replace(/^--/, "")}.log`);
     const path = plistPathFor(a.label);
-    writeFileSync(path, buildPlist(a.label, program, a.flag, vault, logOut, a.env));
+    writeFileSync(path, buildPlist(a.label, program, a.flag, vault, logOut, a.env, a.runAtLoad ?? true));
     // (Re)load it. bootout first so a re-install picks up changes; ignore errors.
     await run(["launchctl", "bootout", `gui/${uid}/${a.label}`]).catch(() => {});
     const r = await run(["launchctl", "bootstrap", `gui/${uid}`, path]);
