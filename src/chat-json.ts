@@ -17,6 +17,7 @@
 // .db a regenerable cache (VAULT-SPEC §4).
 
 import { resolve } from "node:path";
+import { mkdirSync } from "node:fs";
 
 import {
   detectClis,
@@ -25,6 +26,7 @@ import {
   type AvailableCli,
   type CliKind,
 } from "./cli-bridge.ts";
+import { generalDir } from "./decisions.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
 import {
@@ -155,7 +157,16 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const message = opts.message?.trim();
   if (!message) return fail("empty message");
 
-  const domain = findDomain(vaultPath, opts.domain);
+  let domain = findDomain(vaultPath, opts.domain);
+  // General may not be scaffolded on disk yet (no chats stored there). It's a
+  // real, addressable space, so synthesize it at general_dir rather than
+  // failing — this is what lets domainless General chat run.
+  const wantName = (opts.domain ?? "").trim();
+  if (!domain && (wantName === "general" || wantName === "__general__" || wantName === "")) {
+    const gdir = generalDir(vaultPath);
+    try { mkdirSync(gdir, { recursive: true }); } catch { /* best effort */ }
+    domain = { name: "general", path: gdir, hasState: false, openLoopCount: 0, stateMtime: null, skills: [] };
+  }
   if (!domain) return fail(`unknown domain: ${opts.domain}`);
 
   // Lazy back-compat: fold any desktop-style _threads/<slug>.md transcripts
@@ -317,6 +328,12 @@ export async function chatJsonCommand(
     else if (a.startsWith("--vault=")) vaultPath = resolve(process.cwd(), a.slice("--vault=".length));
     // --json is implied by this command path; tolerate it being present.
   }
+
+  // General is a first-class domain: an empty/omitted --domain means the
+  // domainless General space, which lives at general_dir (data/domains/general
+  // or the vault root) — the same place the desktop persists General threads.
+  // Normalizing here lets OpenRouter / LM Studio / MLX chat in General.
+  if (!domain.trim()) domain = "general";
 
   if (message === undefined) {
     // Read the message from stdin (matches ENGINE-JSON-API: "user message is

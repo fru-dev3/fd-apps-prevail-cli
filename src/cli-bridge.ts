@@ -960,17 +960,23 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   // a polite prompt note is NOT enough, since the model can ignore it.
   const webMode: "allow" | "deny" = webAccess ?? readWebAccess();
   if (webMode === "deny") {
-    // We can only truly switch web OFF for Claude (its WebSearch/WebFetch tools
-    // are removed from the model's context via --disallowedTools, below) and for
-    // local engines (ollama has no web tool and never leaves the machine). Every
-    // other provider - codex, gemini/antigravity, and the claude/gemini/codex
-    // "extra family" CLIs - keeps live web tools we cannot switch off headlessly,
-    // so REFUSE rather than risk a silent outbound call behind the user's back.
-    const webSafe = cli.kind === "claude" || cli.kind === "ollama";
+    // A turn is web-safe under "deny" when it CANNOT reach the web:
+    //  - claude: its WebSearch/WebFetch tools are removed via --disallowedTools.
+    //  - plain HTTP completions (ollama, openrouter, and the single-vendor direct
+    //    API providers): they're a bare /chat/completions call with NO agentic
+    //    web tools at all, so there's nothing to reach the web with.
+    // Only the AGENTIC CLIs that ship their own uncontrollable web tools - codex,
+    // gemini/antigravity, and the claude/gemini/codex "extra family" CLIs - get
+    // refused, so a denied turn never silently calls out.
+    const plainCompletion =
+      cli.kind === "ollama" ||
+      cli.kind === "openrouter" ||
+      !!DIRECT_PROVIDER_BY_ID[cli.kind as DirectProviderKind];
+    const webSafe = cli.kind === "claude" || plainCompletion;
     if (!webSafe) {
       throw new Error(
         `Web access is OFF, and it can't be guaranteed off for the "${cli.kind}" engine (its web tools can't be disabled headlessly). ` +
-        `Switch to Claude or a local model, or turn Web access back on.`,
+        `Switch to Claude, a local model, or an API/OpenRouter model — or turn Web access back on.`,
       );
     }
   }
@@ -1092,7 +1098,19 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     const codexPrompt = bare
       ? `(This is a general advisory question — not a software/coding task. Engage with it directly and give your real opinion.)\n\n${framedPrompt}`
       : framedPrompt;
-    const args = m ? [...base, "-m", m, codexPrompt] : [...base, codexPrompt];
+    // Split a "model@effort" id (e.g. "gpt-5.5@high") into the base model + a
+    // reasoning-effort config flag, exactly like the desktop chat path. Passing
+    // the raw "gpt-5.5@high" as -m makes the provider reject it ("model not
+    // supported") - which is why such benchmark runs scored all zeros.
+    const modelArgs: string[] = [];
+    if (m) {
+      const at = m.indexOf("@");
+      const mBase = at >= 0 ? m.slice(0, at) : m;
+      const effort = at >= 0 ? m.slice(at + 1).trim() : "";
+      modelArgs.push("-m", mBase);
+      if (effort) modelArgs.push("-c", `model_reasoning_effort=${effort}`);
+    }
+    const args = [...base, ...modelArgs, codexPrompt];
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractCodexReply(raw);
   }

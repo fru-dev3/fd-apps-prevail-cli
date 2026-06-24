@@ -386,6 +386,17 @@ export async function runCanonicalSet(args: CanonicalRunArgs): Promise<Canonical
           bare: true,
           signal: args.signal,
         });
+        // The runners surface a provider/API failure as the reply TEXT (e.g.
+        // codex prints `ERROR: {"type":"error",...}` when a model id is rejected)
+        // rather than throwing, so a turn that never produced a real answer was
+        // being recorded ok:true and then judged 0 - making a misconfigured model
+        // look terrible. Detect an error-shaped (or empty) reply and mark it
+        // failed so scoring excludes it.
+        const replyText = (reply ?? "").trim();
+        const errored = !replyText
+          || /^ERROR\b/i.test(replyText)
+          || /"type"\s*:\s*"error"/.test(replyText)
+          || /"error"\s*:\s*\{/.test(replyText);
         records.push({
           id: q.id,
           domain: q.domain,
@@ -397,9 +408,10 @@ export async function runCanonicalSet(args: CanonicalRunArgs): Promise<Canonical
           council: false,
           cli: cli.kind,
           model: args.targetModel,
-          ok: true,
+          ok: !errored,
+          ...(errored ? { error: replyText.slice(0, 200) || "empty reply" } : {}),
         });
-        args.onProgress?.(q.id, "ok", `${cli.label}${args.targetModel ? "·" + args.targetModel : ""}`);
+        args.onProgress?.(q.id, errored ? "error" : "ok", errored ? (replyText.slice(0, 80) || "empty reply") : `${cli.label}${args.targetModel ? "·" + args.targetModel : ""}`);
       }
     } catch (err) {
       records.push({
@@ -437,7 +449,13 @@ function runLabel(args: { targetCli?: AvailableCli; targetModel?: string }): str
   if (!args.targetCli) return "council";
   const parts: string[] = [args.targetCli.kind];
   if (args.targetModel && args.targetModel.trim()) parts.push(args.targetModel.trim());
-  return parts.join("-");
+  // Path-safety: a model id can contain "/" (e.g. OpenRouter's "z-ai/glm-5.2").
+  // Left raw, the join()+mkdirSync(recursive) below would NEST the run inside a
+  // phantom directory, so scoring never writes score.json where the leaderboard
+  // scanner looks - the model silently vanishes from the board. Flatten path
+  // separators and other filesystem-reserved chars to "-" so every run is one
+  // flat directory. The real model id is still preserved verbatim in meta.json.
+  return parts.join("-").replace(/[/\:]+/g, "-");
 }
 
 export function writeRunDirectory(args: {
@@ -656,6 +674,23 @@ export async function scoreRun(args: ScoreArgs): Promise<RunScore> {
   const questionScores: QuestionScore[] = [];
   for (const r of records) {
     args.onProgress?.(r.id);
+    // A failed turn (provider/API error or empty reply) isn't a real answer.
+    // Judging/keyword-matching the error text would score it 0 and drag a
+    // misconfigured model's average down to a misleading 0.0. Leave it unscored
+    // (null) so it's excluded from the averages; a run where EVERY answer failed
+    // then scores null ("-"/errored) instead of 0.
+    if (!r.ok) {
+      questionScores.push({
+        id: r.id,
+        domain: r.domain,
+        keyword_score: null,
+        keyword_hits: [],
+        keyword_misses: [],
+        judge_score: null,
+        judge_rationale: r.error ? `errored: ${r.error}` : "errored (no valid reply)",
+      });
+      continue;
+    }
     const km = keywordMatch(r.reply, r.expected_verdict_keywords);
     let judge_score: number | null = null;
     let judge_rationale: string | null = null;
