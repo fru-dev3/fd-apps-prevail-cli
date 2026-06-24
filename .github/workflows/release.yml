@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 # Opt into Node.js 24 on the runner so the warning from any remaining Node-20
-# actions (e.g. softprops/action-gh-release@v2) goes away. checkout is now @v6
+# actions (e.g. softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2) goes away. checkout is now @v6
 # (Node 24 native). GitHub deprecates Node 20 on 2026-09-16; this sets us up
 # ahead of the cutover. Lift the var when the rest ship Node-24 majors.
 env:
@@ -43,12 +43,12 @@ jobs:
             bun-target: bun-linux-arm64
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Scrub gate (no personal data in demo vault)
         run: bash scripts/scrub-gate.sh
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
@@ -78,7 +78,7 @@ jobs:
           ls -la
 
       - name: upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: prevail-${{ matrix.target }}
           path: dist/prevail-*.tar.gz
@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
@@ -103,7 +103,7 @@ jobs:
         run: ls -la artifacts
 
       - name: publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: artifacts/prevail-*.tar.gz
           fail_on_unmatched_files: true
