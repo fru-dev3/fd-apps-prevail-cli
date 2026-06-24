@@ -208,9 +208,11 @@ const REDACT_RULES: RedactRule[] = [
   {
     // North-American phone numbers. Optional country code, common separators
     // and paren area code. Tightened to require at least one separator or
-    // paren so a plain 10-digit id doesn't trip it.
+    // paren so a plain 10-digit id doesn't trip it. Leading (?<!\d) instead of
+    // \b so a paren-format number after a space — "call (555) 123-4567" — is
+    // still caught (\b fails between two non-word chars like " " and "(").
     label: "phone",
-    re: /\b(?:\+?1[ .-]?)?(?:\(\d{3}\)[ .-]?|\d{3}[ .-])\d{3}[ .-]\d{4}\b/g,
+    re: /(?<!\d)(?:\+?1[ .-]?)?(?:\(\d{3}\)[ .-]?|\d{3}[ .-])\d{3}[ .-]\d{4}\b/g,
     placeholder: "[REDACTED_PHONE]",
   },
   {
@@ -228,9 +230,12 @@ const REDACT_RULES: RedactRule[] = [
   },
   {
     // Vendor key formats without a separator after the prefix (M22):
-    // Google AIza…, GitLab glpat-…, xAI xai-…, Anthropic sk-ant-/sk-proj-.
+    // Google AIza…, GitLab glpat-…, xAI xai-…, Anthropic sk-ant-/sk-proj-, and
+    // AWS access-key IDs AKIA…/ASIA… (the generic api_key rule requires a
+    // separator after the prefix, which AWS keys don't have — they'd otherwise
+    // slip through entirely).
     label: "api_key_vendor",
-    re: /\b(?:AIza[0-9A-Za-z_-]{20,}|glpat-[0-9A-Za-z_-]{16,}|xai-[0-9A-Za-z]{16,}|sk-(?:ant|proj)-[0-9A-Za-z_-]{16,})\b/g,
+    re: /\b(?:AIza[0-9A-Za-z_-]{20,}|glpat-[0-9A-Za-z_-]{16,}|xai-[0-9A-Za-z]{16,}|sk-(?:ant|proj)-[0-9A-Za-z_-]{16,}|(?:AKIA|ASIA)[0-9A-Z]{16})\b/g,
     placeholder: "[REDACTED_KEY]",
   },
   {
