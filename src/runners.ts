@@ -540,6 +540,12 @@ export async function runSkillBrowser(
   inputs: Record<string, unknown>,
   opts: SkillRunOpts = {},
 ): Promise<SkillRunResult> {
+  // Recorded skills carry a declarative `steps:` list → run the deterministic
+  // replayer (driver-based, zero model calls). Legacy `url:`-scrape skills with
+  // no steps fall through to the single-page read below.
+  if (Array.isArray(skill.extra?.steps)) {
+    return replaySkillBrowser(skill, skill.extra!.steps as Record<string, unknown>[], inputs, opts);
+  }
   const started = Date.now();
   const urlTpl = typeof skill.extra?.url === "string" ? skill.extra.url : "";
   if (!urlTpl) return { ok: false, message: `browser skill "${skill.id}" needs a url: field`, outputsWritten: [], durationMs: 0 };
@@ -603,6 +609,110 @@ export async function runSkillBrowser(
     if (abs) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); written.push(relative(skill.connectorDir, abs)); }
   }
   return { ok: true, message: extractSummary(text, false) || `scraped ${url.slice(0, 50)}`, summary: extractSummary(text, false), outputsWritten: written, durationMs: Date.now() - started, raw: text.slice(0, 8192), artifacts: written };
+}
+
+// Deterministic replay of a recorded browser skill. Runs the fixed driver
+// (headless by default — the session cookie / persistent profile carries auth),
+// executes each step, and watches for DRIFT: a step that fails or whose expect
+// marker is unmet means the portal changed. On drift we abort cleanly (read-
+// only intent → nothing to corrupt) and return needsRelearn so the daemon can
+// queue a re-learn + notify the user. Steady-state cost is ~zero (no model).
+async function replaySkillBrowser(
+  skill: SkillSpec,
+  rawSteps: Record<string, unknown>[],
+  inputs: Record<string, unknown>,
+  opts: SkillRunOpts = {},
+): Promise<SkillRunResult> {
+  const started = Date.now();
+  const ex = skill.extra ?? {};
+  const startUrl = typeof ex.start_url === "string" ? ex.start_url : "";
+  if (startUrl && !/^https?:\/\//.test(startUrl)) {
+    return { ok: false, message: `replay start_url must be http(s)`, outputsWritten: [], durationMs: Date.now() - started };
+  }
+  const session = ex.session === "state" ? "state" : "profile";
+  const headed = ex.headless === false || ex.headed === true; // default headless
+  const downloadsDir = join(skill.connectorDir, "data", "imports");
+  const profileDir = join(skill.connectorDir, "auth", "profile");
+  const statePath = join(skill.connectorDir, "auth", "state.json");
+  const domainAllow = Array.isArray(ex.domain_allow)
+    ? (ex.domain_allow as unknown[]).filter((x): x is string => typeof x === "string")
+    : undefined;
+
+  // Template ${input.x}/${env.X} into step urls/values before sending to the driver.
+  const env = buildSkillEnv(skill);
+  const steps = rawSteps.map((s) => {
+    const out = { ...s };
+    try {
+      if (typeof s.url === "string") out.url = substitute(s.url, { inputs, env });
+      if (typeof s.value === "string") out.value = substitute(s.value, { inputs, env });
+      if (typeof s.saveAs === "string") out.saveAs = substitute(s.saveAs, { inputs, env });
+    } catch {
+      /* leave unsubstituted */
+    }
+    return out;
+  });
+
+  const { BrowserDriverHost } = await import("./browser-driver.ts");
+  const host = new BrowserDriverHost();
+  const downloads: string[] = [];
+  host.on((e) => {
+    if (e.event === "download") downloads.push(relative(skill.connectorDir, e.path));
+  });
+  host.start();
+  opts.signal?.addEventListener("abort", () => void host.stop(), { once: true });
+
+  try {
+    const opened = await host.request(
+      { cmd: "open", req: { startUrl: startUrl || "about:blank", profileDir: session === "profile" ? profileDir : undefined, statePath: session === "state" ? statePath : undefined, downloadsDir, headed, domainAllow } },
+      ["opened"],
+      60_000,
+    );
+    if (opened.event === "error") {
+      return { ok: false, message: `replay open failed: ${opened.message}`, outputsWritten: [], durationMs: Date.now() - started, needsRelearn: { reason: opened.message } };
+    }
+
+    for (let i = 0; i < steps.length; i++) {
+      const ev = await host.request({ cmd: "replay_step", step: steps[i] as any, index: i }, ["step_done"], 90_000);
+      if (ev.event !== "step_done" || !ev.ok) {
+        const reason = ev.event === "step_done" ? ev.error || "step failed" : ev.event === "error" ? ev.message : "no step result";
+        return {
+          ok: false,
+          message: `replay drifted at step ${i} (${reason})`,
+          outputsWritten: [],
+          durationMs: Date.now() - started,
+          artifacts: downloads,
+          needsRelearn: { reason, failedStep: i },
+        };
+      }
+    }
+
+    // Success check: did we produce the expected artifacts?
+    const sc = ex.success_check as { type?: string; min?: number } | undefined;
+    const minDl = sc && sc.type === "files_match" ? sc.min ?? 1 : 0;
+    if (minDl > 0 && downloads.length < minDl) {
+      return {
+        ok: false,
+        message: `replay produced ${downloads.length} files, expected ≥${minDl}`,
+        outputsWritten: [],
+        durationMs: Date.now() - started,
+        artifacts: downloads,
+        needsRelearn: { reason: "success check not met (too few downloads)" },
+      };
+    }
+
+    return {
+      ok: true,
+      message: `replayed ${steps.length} steps, captured ${downloads.length} file(s)`,
+      summary: `Synced ${skill.connectorId}: ${downloads.length} file(s)`,
+      outputsWritten: downloads,
+      artifacts: downloads,
+      durationMs: Date.now() - started,
+    };
+  } catch (e) {
+    return { ok: false, message: `replay error: ${String((e as Error)?.message || e).slice(0, 160)}`, outputsWritten: [], durationMs: Date.now() - started, needsRelearn: { reason: "driver error" } };
+  } finally {
+    await host.stop();
+  }
 }
 
 // Agentic browser login: opens a REAL (non-headless) browser to the site's login
