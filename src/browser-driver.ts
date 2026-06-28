@@ -110,6 +110,33 @@ function childEnv(extra: Record<string, string | undefined> = {}): Record<string
   };
 }
 
+// Ensure Playwright's Chromium is present, auto-downloading it on first browser
+// use (it is NOT bundled in the signed app). Runs the install in a SEPARATE
+// child so its progress never touches the caller's stdout. Resolves once
+// Chromium is available (or rejects if the download fails / offline). Emits a
+// coarse {phase:"chromium_download"} so the desktop can show a one-time wait.
+export async function ensureChromium(emit?: (e: Record<string, unknown>) => void): Promise<void> {
+  const pw = await import("playwright-core");
+  let exe = "";
+  try {
+    exe = (pw as { chromium: { executablePath(): string } }).chromium.executablePath();
+  } catch {
+    exe = "";
+  }
+  const fs = await import("node:fs");
+  if (exe && fs.existsSync(exe)) return; // already installed
+  emit?.({ phase: "chromium_download", status: "start" });
+  const { cmd, args } = driverSpawnArgs();
+  const installArgs = args.map((a) => (a === "__browser-driver" ? "__install-chromium" : a));
+  if (!installArgs.includes("__install-chromium")) installArgs.push("__install-chromium");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(cmd, installArgs, { env: childEnv(), stdio: ["ignore", "ignore", "inherit"] });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`chromium install exited ${code}`))));
+  });
+  emit?.({ phase: "chromium_download", status: "done" });
+}
+
 export class BrowserDriverHost {
   private child: ChildProcess | null = null;
   private buf = "";

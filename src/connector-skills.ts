@@ -591,6 +591,9 @@ export interface SkillRunOpts {
   autonomy?: string;
   // Sync cursor from sync-state.json, exposed to templates as ${cursor.x}.
   cursor?: Record<string, unknown>;
+  // Optional progress sink. The browser runners emit NDJSON-shaped step/download
+  // events here so the desktop can stream a live learn/replay timeline.
+  onProgress?: (event: Record<string, unknown>) => void;
 }
 
 export async function runSkill(

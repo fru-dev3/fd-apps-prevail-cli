@@ -2296,6 +2296,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
       } catch { /* no manifest */ }
     }
     if (!url) return done(false, { error: "no start url (pass --url or set start_url/login_url in the manifest)" });
+    const stream = args.includes("--stream");
     const { loadSkillsForConnector, runSkill, logSkillRun } = await import("./connector-skills.ts");
     // Prefer an existing browser-agent skill; else synthesize one from the flags.
     const existing = loadSkillsForConnector(app).find((s) => s.runner === "browser-agent");
@@ -2305,6 +2306,15 @@ async function connectorsCommand(args: string[]): Promise<void> {
       connectorId: app.id, connectorDir: app.path,
       extra: { start_url: url, goal: goal || `Fetch the latest data from ${id}`, ...(recordAs ? { record_as: recordAs } : {}) },
     };
+    // --stream: emit the agent's progress as NDJSON for the desktop's live panel
+    // (relayed by run_engine_stream). Otherwise run via the normal dispatch.
+    if (stream) {
+      const emit = (e: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(e)}\n`);
+      const result = await runSkill(skill, {}, { autonomy: "read-only", onProgress: emit });
+      logSkillRun(skill, result);
+      emit({ phase: "complete", ok: result.ok, message: result.message, outputs: result.outputsWritten });
+      process.exit(0);
+    }
     if (!json) console.log(`learning ${id} (headed browser — log in / do 2FA when prompted)…`);
     const result = await runSkill(skill, {}, { autonomy: "read-only" });
     logSkillRun(skill, result);
@@ -2329,6 +2339,13 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const skills = loadSkillsForConnector(app).filter((s) => s.runner === "browser" && Array.isArray(s.extra?.steps));
     const skill = wantSkill ? skills.find((s) => s.id === wantSkill) : skills[0];
     if (!skill) return done(false, { error: wantSkill ? `no recorded browser skill "${wantSkill}"` : `no recorded browser skill for ${id} (run browser-learn first)` });
+    if (args.includes("--stream")) {
+      const emit = (e: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(e)}\n`);
+      const result = await runSkill(skill, {}, { autonomy: "read-only", onProgress: emit });
+      logSkillRun(skill, result);
+      emit({ phase: "complete", ok: result.ok, message: result.message, outputs: result.outputsWritten, needsRelearn: result.needsRelearn });
+      process.exit(0);
+    }
     if (!json) console.log(`replaying ${id}/${skill.id}…`);
     const result = await runSkill(skill, {}, { autonomy: "read-only" });
     logSkillRun(skill, result);
@@ -4206,6 +4223,26 @@ async function main() {
   if (process.argv.includes("__browser-driver")) {
     const { runBrowserDriverChild } = await import("./browser-driver.ts");
     await runBrowserDriverChild();
+    return;
+  }
+
+  // Hidden subcommand: install Playwright's Chromium into PLAYWRIGHT_BROWSERS_PATH
+  // (auto-download on first browser use — Chromium is NOT bundled in the signed
+  // app). Run as a SEPARATE child so its download progress never pollutes the
+  // driver's JSON channel. Replays playwright-core's own `install` command.
+  if (process.argv.includes("__install-chromium")) {
+    try {
+      // @ts-expect-error untyped playwright-core internal (the CLI program lives here)
+      const core = await import("playwright-core/lib/coreBundle");
+      // @ts-expect-error untyped playwright-core internal (commander program)
+      const utils = await import("playwright-core/lib/utilsBundle");
+      const program = (utils as { program: { parseAsync: (a: string[]) => Promise<unknown> } }).program;
+      (core as { libCli: { decorateProgram: (p: unknown) => void } }).libCli.decorateProgram(program);
+      await program.parseAsync(["node", "cli", "install", "chromium"]);
+    } catch (e) {
+      console.error(`chromium install failed: ${String((e as Error)?.message || e)}`);
+      process.exit(1);
+    }
     return;
   }
 

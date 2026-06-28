@@ -652,14 +652,24 @@ async function replaySkillBrowser(
     return out;
   });
 
-  const { BrowserDriverHost } = await import("./browser-driver.ts");
+  const emit = opts.onProgress ?? (() => {});
+  const { BrowserDriverHost, ensureChromium } = await import("./browser-driver.ts");
+  try {
+    await ensureChromium(emit);
+  } catch (e) {
+    return { ok: false, message: `Chromium unavailable (needs a one-time download): ${String((e as Error)?.message || e).slice(0, 120)}`, outputsWritten: [], durationMs: Date.now() - started };
+  }
   const host = new BrowserDriverHost();
   const downloads: string[] = [];
   host.on((e) => {
-    if (e.event === "download") downloads.push(relative(skill.connectorDir, e.path));
+    if (e.event === "download") {
+      downloads.push(relative(skill.connectorDir, e.path));
+      emit({ phase: "download", name: e.name });
+    }
   });
   host.start();
   opts.signal?.addEventListener("abort", () => void host.stop(), { once: true });
+  emit({ phase: "started", mode: "replay", app: skill.connectorId });
 
   try {
     const opened = await host.request(
@@ -672,6 +682,7 @@ async function replaySkillBrowser(
     }
 
     for (let i = 0; i < steps.length; i++) {
+      emit({ phase: "step", n: i, action: (steps[i] as { action?: string }).action });
       const ev = await host.request({ cmd: "replay_step", step: steps[i] as any, index: i }, ["step_done"], 90_000);
       if (ev.event !== "step_done" || !ev.ok) {
         const reason = ev.event === "step_done" ? ev.error || "step failed" : ev.event === "error" ? ev.message : "no step result";

@@ -26,7 +26,7 @@ import {
   type SnapshotElement,
 } from "./browser-actions.ts";
 import type { TraceEntry } from "./browser-record.ts";
-import type { SkillSpec, SkillRunResult } from "./connector-skills.ts";
+import type { SkillSpec, SkillRunResult, SkillRunOpts } from "./connector-skills.ts";
 
 // ---------------------------------------------------------------------------
 // Injectable seams
@@ -348,8 +348,9 @@ export async function makeModelAsker(opts: { cwd: string; panelist?: string; sig
 export async function runSkillBrowserAgent(
   skill: SkillSpec,
   _inputs: Record<string, unknown>,
-  opts: { signal?: AbortSignal; emit?: (e: AgentEvent) => void } = {},
+  opts: SkillRunOpts = {},
 ): Promise<SkillRunResult> {
+  const emitEvent = opts.onProgress;
   const t0 = Date.now();
   const ex = skill.extra ?? {};
   const startUrl = str(ex.start_url) || str(ex.login_url);
@@ -364,7 +365,12 @@ export async function runSkillBrowserAgent(
   const profileDir = join(skill.connectorDir, "auth", "profile");
   const statePath = join(skill.connectorDir, "auth", "state.json");
 
-  const { BrowserDriverHost, makeHostDriver } = await import("./browser-driver.ts");
+  const { BrowserDriverHost, makeHostDriver, ensureChromium } = await import("./browser-driver.ts");
+  try {
+    await ensureChromium(emitEvent);
+  } catch (e) {
+    return { ok: false, message: `Chromium unavailable (needs a one-time download): ${msg(e)}`, outputsWritten: [], durationMs: Date.now() - t0 };
+  }
   const host = new BrowserDriverHost();
   const downloads: string[] = [];
   const driver = makeHostDriver(host, (e) => {
@@ -394,7 +400,7 @@ export async function runSkillBrowserAgent(
         maxTurns: typeof ex.max_turns === "number" ? ex.max_turns : 25,
         headed: true,
       },
-      { driver, askModel, emit: opts.emit },
+      { driver, askModel, emit: emitEvent ? (e) => emitEvent(e as unknown as Record<string, unknown>) : undefined },
     );
   } finally {
     await driver.close();
