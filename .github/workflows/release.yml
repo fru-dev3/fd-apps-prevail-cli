@@ -66,8 +66,9 @@ jobs:
             --target=${{ matrix.bun-target }} \
             --outfile=dist/prevail \
             src/index.tsx
-          # bundle the vault-demo and operating manual alongside the binary
+          # bundle the vault-demo, default skill packs, and operating manual alongside the binary
           cp -R vault-demo dist/vault-demo
+          cp -R skill-packs dist/skill-packs
           cp AGENTS-operating.md dist/AGENTS-operating.md
           chmod +x dist/prevail
 

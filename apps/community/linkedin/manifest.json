@@ -28,7 +28,7 @@
     "every": "weekly",
     "on": "mon",
     "at": "09:00",
-    "skill": "profile-views"
+    "skill": "profile-views-trend"
   },
   "autonomy": "read-only",
   "account": {

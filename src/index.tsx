@@ -32,6 +32,10 @@ interface Args {
   recommendationsArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
+  autonomy: boolean;
+  autonomyArgs: string[];
+  playbook: boolean;
+  playbookArgs: string[];
   scout: boolean;
   scoutArgs: string[];
   mcp: boolean;
@@ -116,6 +120,10 @@ function parseArgs(argv: string[]): Args {
   let recommendationsArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
+  let autonomy = false;
+  let autonomyArgs: string[] = [];
+  let playbook = false;
+  let playbookArgs: string[] = [];
   let scout = false;
   let scoutArgs: string[] = [];
   let mcp = false;
@@ -211,6 +219,14 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "suggest-apps") {
       suggestApps = true;
       suggestAppsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "autonomy") {
+      autonomy = true;
+      autonomyArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "playbook" || a === "playbooks" || a === "run-playbook") {
+      playbook = true;
+      playbookArgs = argv.slice(i + 1);
       break;
     } else if (a === "scout-models") {
       scout = true;
@@ -379,6 +395,10 @@ function parseArgs(argv: string[]): Args {
     recommendationsArgs,
     suggestApps,
     suggestAppsArgs,
+    autonomy,
+    autonomyArgs,
+    playbook,
+    playbookArgs,
     scout,
     scoutArgs,
     mcp,
@@ -1858,6 +1878,100 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   console.error("                                                grade a run (keyword + LLM judge)");
   console.error("  prevail bench leaderboard                     show ranked scoreboard across runs");
   process.exit(1);
+}
+
+// Resolve the active vault from a command's args (--vault) with env/config fallback.
+async function resolveVaultFromArgs(args: string[]): Promise<string> {
+  const vflag = args.indexOf("--vault");
+  const { readConfig: rc } = await import("./config.ts");
+  const { resolveDefaultVaultPath } = await import("./vault.ts");
+  return (vflag >= 0 ? args[vflag + 1] : undefined) ?? process.env.PREVAIL_VAULT_ROOT ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+}
+
+// prevail autonomy status|pause|resume|policy <class> <allow|ask|never>|cap <usd|off>
+async function autonomyCommand(args: string[]): Promise<void> {
+  const sub = args[0];
+  const json = args.includes("--json");
+  const vault = await resolveVaultFromArgs(args);
+  const A = await import("./autonomy.ts");
+  if (!sub || sub === "status") {
+    const r = { state: A.getAutonomyState(vault), policy: A.getActionPolicy(vault), monthlyFinancialCapUsd: A.getMonthlyFinancialCap(vault) };
+    if (json) { process.stdout.write(`${JSON.stringify(r)}\n`); return; }
+    console.log(`autonomy: ${r.state}`);
+    for (const [k, v] of Object.entries(r.policy)) console.log(`  ${k.padEnd(14)} ${v}`);
+    if (r.monthlyFinancialCapUsd != null) console.log(`  monthly financial cap: $${r.monthlyFinancialCapUsd}`);
+    return;
+  }
+  if (sub === "pause" || sub === "resume") {
+    A.setAutonomyState(vault, sub === "pause" ? "paused" : "active");
+    const state = A.getAutonomyState(vault);
+    if (json) { process.stdout.write(`${JSON.stringify({ ok: true, state })}\n`); return; }
+    console.log(`autonomy ${state}`);
+    return;
+  }
+  if (sub === "policy") {
+    const cls = args[1]; const dec = args[2];
+    const validCls = ["read", "reversible", "external_send", "financial", "irreversible", "credential", "unknown"];
+    const validDec = ["allow", "ask", "never"];
+    if (!validCls.includes(cls ?? "") || !validDec.includes(dec ?? "")) {
+      console.error(`usage: prevail autonomy policy <${validCls.join("|")}> <allow|ask|never>`); process.exit(1);
+    }
+    A.setPolicyFor(vault, cls as never, dec as never);
+    if (json) { process.stdout.write(`${JSON.stringify({ ok: true, [cls]: dec })}\n`); return; }
+    console.log(`policy: ${cls} = ${dec}`);
+    return;
+  }
+  if (sub === "cap") {
+    const v = args[1];
+    const cap = v === "off" || v === "none" ? null : Number(v);
+    if (cap !== null && !Number.isFinite(cap)) { console.error("usage: prevail autonomy cap <usd|off>"); process.exit(1); }
+    A.setMonthlyFinancialCap(vault, cap);
+    if (json) { process.stdout.write(`${JSON.stringify({ ok: true, monthlyFinancialCapUsd: cap })}\n`); return; }
+    console.log(`monthly financial cap: ${cap == null ? "off" : `$${cap}`}`);
+    return;
+  }
+  console.error("usage: prevail autonomy status|pause|resume|policy <class> <allow|ask|never>|cap <usd|off>");
+  process.exit(1);
+}
+
+// prevail playbooks  |  prevail playbook list  |  prevail run-playbook <id> [--auto] [--stream] [--json]
+async function playbookCommand(args: string[]): Promise<void> {
+  const json = args.includes("--json");
+  const stream = args.includes("--stream");
+  const vault = await resolveVaultFromArgs(args);
+  const { loadPlaybook, listPlaybooks, runPlaybook } = await import("./orchestrator.ts");
+  // `prevail playbooks` (list) or `prevail playbook list`
+  const first = args[0];
+  if (!first || first === "list" || first.startsWith("--")) {
+    const list = listPlaybooks(vault);
+    if (json) { process.stdout.write(`${JSON.stringify(list)}\n`); return; }
+    if (list.length === 0) { console.log("no playbooks found"); return; }
+    for (const p of list) console.log(`  ${p.id.padEnd(24)} ${p.name}`);
+    return;
+  }
+  // `prevail playbook run <id>` or `prevail run-playbook <id>`
+  const id = first === "run" ? args[1] : first;
+  if (!id) { console.error("usage: prevail run-playbook <id> [--auto] [--stream] [--json]"); process.exit(1); }
+  const pb = loadPlaybook(vault, id);
+  if (!pb) { console.error(`no playbook "${id}" (try: prevail playbooks)`); process.exit(1); }
+  const { readConfig: rc } = await import("./config.ts");
+  const cfg = rc();
+  // Explicit invocation = consent to run; the per-class policy + pause still govern.
+  const autonomousActs = !args.includes("--no-auto");
+  const runId = `pb-${id}-${Date.now()}`;
+  const onProgress = stream ? (e: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(e)}\n`) : undefined;
+  const result = await runPlaybook(runId, pb, {
+    vault,
+    provider: (cfg as { loopsProvider?: string })?.loopsProvider ?? "claude",
+    model: "",
+    autonomousActs,
+    onProgress,
+  });
+  if (stream) { process.stdout.write(`${JSON.stringify({ phase: result.ok ? "complete" : "error", ...result })}\n`); return; }
+  if (json) { process.stdout.write(`${JSON.stringify(result)}\n`); return; }
+  console.log(`${result.ok ? "✓" : "✗"} ${pb.name}: ${result.note}`);
+  for (const s of result.steps) console.log(`  [${s.decision}] ${s.ok ? "✓" : "·"} ${s.label} — ${s.note}`);
+  console.log(`run dir: ${result.runDir}`);
 }
 
 async function connectorsCommand(args: string[]): Promise<void> {
@@ -4342,6 +4456,14 @@ async function main() {
   }
   if (args.connectors) {
     await connectorsCommand(args.connectorsArgs);
+    return;
+  }
+  if (args.autonomy) {
+    await autonomyCommand(args.autonomyArgs);
+    return;
+  }
+  if (args.playbook) {
+    await playbookCommand(args.playbookArgs);
     return;
   }
   if (args.recommendations) {

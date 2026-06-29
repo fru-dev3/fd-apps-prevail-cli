@@ -337,6 +337,20 @@ export async function runMcpServer(
       },
     },
     {
+      name: "list_playbooks",
+      description: "List available playbooks: multi-step routines that run skills across several apps and synthesize a result (e.g. 'net-worth' pulls every financial account + scans email, then writes a summary). Returns [{ id, name, goal }].",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "run_playbook",
+      description: "Run a playbook NOW (by id from list_playbooks). It executes each step through Prevail's safety gate (global pause + per-action-class policy + audit); read-only/allowed steps run, anything needing consent is recorded as 'ask' and skipped. Returns the per-step outcome and the run directory. Use for composite jobs like building a net-worth picture.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Playbook id from list_playbooks." } },
+        required: ["id"],
+      },
+    },
+    {
       name: "connect_app",
       description: "Connect a new app/data source. Prevail's Connection Agent researches the best way to connect it right now (MCP, an official API/CLI, a gateway, or a browser login), scaffolds it into the vault wired to the given domains, and returns a plan with the ONE auth step the user must complete. Higher-stakes: creates vault files and may require the user to authorize.",
       inputSchema: {
@@ -585,6 +599,10 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(tVaultStatus(vaultPath));
     case "sync_app":
       return wrapText(await tSyncApp(args, vaultPath));
+    case "list_playbooks":
+      return wrapText(await tListPlaybooks(vaultPath));
+    case "run_playbook":
+      return wrapText(await tRunPlaybook(args, vaultPath));
     case "connect_app":
       return wrapText(await tConnectApp(args, vaultPath));
     default:
@@ -975,6 +993,24 @@ async function tSyncApp(args: Record<string, unknown>, vaultPath: string): Promi
   const r = await syncApp({ vaultPath, tickSec: 60, maxRunsPerTick: 1 }, id);
   if (r.ok) return `Synced ${id}: ${r.artifacts ?? 0} artifact(s) routed into the vault.`;
   return `Sync of ${id} failed: ${r.error ?? "unknown error"}`;
+}
+
+async function tListPlaybooks(vaultPath: string): Promise<string> {
+  const { listPlaybooks } = await import("./orchestrator.ts");
+  const list = listPlaybooks(vaultPath);
+  if (list.length === 0) return "No playbooks available.";
+  return list.map((p) => `- ${p.id}: ${p.name} — ${p.goal}`).join("\n");
+}
+
+async function tRunPlaybook(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const id = String(args.id ?? "").trim();
+  if (!id) throw new Error("id is required (see list_playbooks)");
+  const { loadPlaybook, runPlaybook } = await import("./orchestrator.ts");
+  const pb = loadPlaybook(vaultPath, id);
+  if (!pb) throw new Error(`no playbook "${id}" (see list_playbooks)`);
+  const result = await runPlaybook(`mcp-${id}-${Date.now()}`, pb, { vault: vaultPath, provider: "claude", model: "", autonomousActs: true });
+  const lines = result.steps.map((s) => `  [${s.decision}] ${s.ok ? "✓" : "·"} ${s.label} — ${s.note}`);
+  return `${result.ok ? "✓" : "✗"} ${pb.name}: ${result.note}\n${lines.join("\n")}\nRun dir: ${result.runDir}`;
 }
 
 async function tConnectApp(args: Record<string, unknown>, vaultPath: string): Promise<string> {

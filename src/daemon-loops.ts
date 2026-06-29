@@ -71,6 +71,10 @@ interface Loop {
   model?: string; // per-loop model override ("" / undefined = use the global loops model)
   kind?: "steward" | "briefing" | "scout"; // briefing = domain digest · scout = web-search AI models for the benchmark · default steward
   channel?: "gmail" | "telegram" | "log"; // briefing delivery target (default gmail)
+  // When set, the loop DELEGATES its whole run to a playbook (the cross-app
+  // orchestrator): on its cadence it runs the named playbook end-to-end instead
+  // of the think→propose flow. The loop's autonomy dial governs auto-run vs ask.
+  playbook?: string;
 }
 
 interface LoopsDoc {
@@ -351,6 +355,30 @@ export async function runOneLoop(
   const now = Date.now();
   const rt = readRuntime(domainDir);
   const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
+
+  // Playbook loops delegate their whole run to the cross-app orchestrator. The
+  // orchestrator applies the same safety spine (pause + per-class policy + audit)
+  // to every step; the loop's autonomy dial maps to the orchestrator opt-in
+  // ("auto" → may auto-run allowed steps; otherwise steps that need consent are
+  // gated to "ask" and skipped this pass).
+  if (loop.playbook) {
+    onPhase("playbook", `Running playbook: ${loop.playbook}`);
+    const { loadPlaybook, runPlaybook } = await import("./orchestrator.ts");
+    const pb = loadPlaybook(root, loop.playbook);
+    if (!pb) return empty(`playbook "${loop.playbook}" not found`, loop.name);
+    const autonomousActs = loop.autonomy === "auto" || cfg.autonomousActs === true;
+    const pr = await runPlaybook(`loop-${loop.id}-${now}`, pb, {
+      vault: root, provider: cfg.provider, model: runModel, autonomousActs,
+      onProgress: (e) => onPhase("playbook", String(e.label ?? e.phase ?? "")),
+    });
+    loop.lastRunTs = now;
+    entry.history = [{ ts: now, actions: pr.steps.map((s) => `[${s.decision}] ${s.label}`), note: pr.note, done: false, tasksCreated: [] }, ...entry.history].slice(0, 6);
+    rt.loops[loop.id] = entry;
+    writeRuntime(domainDir, rt);
+    try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
+    onPhase("done", pr.note);
+    return { ok: pr.ok, loop: loop.name, note: pr.note, done: false, actions: pr.steps.map((s) => ({ text: s.label, disposition: (s.decision === "auto" ? "task" : "approval") as "task" | "approval" | "suggested" })), tasksCreated: [], pending: [], error: pr.ok ? undefined : pr.note };
+  }
 
   // Briefing loops take a different path: synthesize a digest of the domain and
   // deliver it to the configured channel, rather than proposing gap-closing steps.

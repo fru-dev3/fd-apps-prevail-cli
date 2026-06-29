@@ -13,6 +13,21 @@
     "kind": "mcp",
     "mcp_command": "mcp-server-gcal"
   },
+  "oauth": {
+    "provider": "google",
+    "client_id_env": "GOOGLE_CLIENT_ID",
+    "client_secret_env": "GOOGLE_CLIENT_SECRET",
+    "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "scopes": [
+      "https://www.googleapis.com/auth/calendar.readonly"
+    ],
+    "redirect_port": 8724,
+    "auth_extra_params": {
+      "access_type": "offline",
+      "prompt": "consent"
+    }
+  },
   "homepage": "https://calendar.google.com",
   "license": "GPL-3.0-only",
   "author": {

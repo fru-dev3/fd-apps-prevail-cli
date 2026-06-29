@@ -713,6 +713,39 @@ function communityAppsDirs(vaultPath?: string): string[] {
   return dirs;
 }
 
+// Bundled default skill packs shipped with the engine: domains/<d>/_skills/<id>/
+// and apps/<id>/skills/<id>.md. Seeded into new domains/apps on creation so every
+// user gets high-quality skills out of the box. Resolved like communityAppsDirs:
+// an explicit env override, then binary- and source-adjacency.
+function skillPacksDir(): string | null {
+  const cands: string[] = [];
+  if (process.env.PREVAIL_SKILL_PACKS_DIR) cands.push(process.env.PREVAIL_SKILL_PACKS_DIR);
+  try { const e = dirname(process.execPath); cands.push(join(e, "skill-packs"), resolve(e, "..", "skill-packs")); } catch {}
+  if (process.argv[1]) { try { const a = dirname(process.argv[1]); cands.push(join(a, "skill-packs"), resolve(a, "..", "skill-packs")); } catch {} }
+  try { const here = dirname(fileURLToPath(import.meta.url)); cands.push(resolve(here, "..", "skill-packs")); } catch {}
+  for (const c of cands) { if (existsSync(c)) return c; }
+  return null;
+}
+
+// Copy a bundled skill pack into a freshly scaffolded target, NEVER clobbering a
+// user-edited skill. `sub` is the source subpath under skill-packs (e.g.
+// "domains/fitness/_skills" or "apps/alltrails/skills"); `dest` is the target dir
+// (e.g. <vault>/fitness/_skills or <app>/skills). Returns how many entries copied.
+export function seedSkillPack(sub: string, dest: string): number {
+  const root = skillPacksDir();
+  if (!root) return 0;
+  const src = join(root, sub);
+  if (!existsSync(src)) return 0;
+  let copied = 0;
+  try { mkdirSync(dest, { recursive: true }); } catch { return 0; }
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    const to = join(dest, entry.name);
+    if (existsSync(to)) continue; // never overwrite a user's skill
+    try { cpSync(join(src, entry.name), to, { recursive: true }); copied++; } catch { /* best effort */ }
+  }
+  return copied;
+}
+
 // Validate + coerce a parsed manifest.json into a shape that's safe to
 // render. Every field has a defensive fallback so a hostile or malformed
 // manifest cannot crash the scanner or contaminate the AppSkill list.
@@ -1493,6 +1526,9 @@ export function scaffoldCommunityApp(opts: {
       writeFileSync(join(root, "connection.md"), `# Connecting ${opts.title}\n\nIntegration: ${integ}\nDomains: ${domains.join(", ") || "(none yet)"}\n\nAdd an auth_check + refresh block to manifest.json and a skill under skills/ to enable syncing.\n`);
     }
     writeFileSync(join(root, "connection-status.json"), JSON.stringify({ status: "not-configured" }, null, 2));
+    // Seed the bundled default skill pack for this app (catalog apps ship their
+    // skills here) so a freshly-added app arrives with usable skills, not empty.
+    try { seedSkillPack(`apps/${id}/skills`, join(root, "skills")); } catch { /* best effort */ }
     return { ok: true, path: root };
   } catch (e) {
     return { ok: false, error: `scaffold failed: ${e}` };

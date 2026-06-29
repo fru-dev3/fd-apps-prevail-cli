@@ -1,0 +1,14 @@
+{
+  "id": "net-worth",
+  "name": "Full net-worth picture",
+  "goal": "Assemble a complete, current net-worth picture: pull balances and holdings from every linked financial account, scan email for outstanding debt, and write a one-page summary.",
+  "domain": "wealth",
+  "steps": [
+    { "kind": "skill", "app": "plaid", "skill": "net-worth-snapshot", "label": "Bank + investment balances (Plaid)" },
+    { "kind": "skill", "app": "plaid", "skill": "liabilities-summary", "label": "Debts & liabilities (Plaid)" },
+    { "kind": "skill", "app": "coinbase", "skill": "crypto-holdings-summary", "label": "Crypto holdings (Coinbase)" },
+    { "kind": "skill", "app": "paypal", "skill": "monthly-statement-summary", "label": "PayPal balance & flows" },
+    { "kind": "skill", "app": "gmail", "skill": "receipts-and-bills-extract", "label": "Scan email for bills & debt" },
+    { "kind": "synthesize", "domain": "wealth", "output": "net-worth-summary.md", "instruction": "Build a net-worth summary: total assets (cash + investments + crypto) minus total liabilities (loans, cards, mortgages), the month-over-month delta if prior data exists, the largest assets and debts, and one concrete action to improve net worth. Use only the gathered data; flag anything that looks stale or missing.", "label": "Synthesize net-worth summary" }
+  ]
+}

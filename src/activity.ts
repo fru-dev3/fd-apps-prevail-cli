@@ -19,6 +19,8 @@ export type ActivityType =
   | "briefing"     // a briefing was synthesized + delivered
   | "sync"         // a connected app was refreshed
   | "nudge"        // a proactive nudge/prompt fired
+  | "playbook"     // a multi-step orchestrator run (cross-app/cross-domain)
+  | "playbook_step" // one step within a playbook run
   | "other";
 
 export interface ActivityEvent {

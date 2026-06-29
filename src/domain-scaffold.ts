@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { vwriteFile } from "./vault-session.ts";
 import { join } from "node:path";
 import { appsContainer, newDomainDir, resolveDomainDir } from "./path-safety.ts";
+import { seedSkillPack } from "./vault.ts";
 
 export interface ScaffoldResult {
   ok: boolean;
@@ -26,6 +27,9 @@ export function scaffoldDomain(vaultPath: string, rawName: string): ScaffoldResu
     vwriteFile(join(dir, "config.md"), defaultConfig(name));
     vwriteFile(join(dir, "QUICKSTART.md"), defaultQuickstart(name));
     vwriteFile(join(dir, "PROMPTS.md"), defaultPrompts(name));
+    // Seed the bundled default skills for this domain (when a pack exists) so a
+    // new domain arrives with high-quality skills, not an empty _skills/.
+    try { seedSkillPack(`domains/${name}/_skills`, join(dir, "_skills")); } catch { /* best effort */ }
     return { ok: true, message: `created ${name}`, path: dir };
   } catch (err) {
     return { ok: false, message: (err as Error).message };
