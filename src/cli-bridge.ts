@@ -1127,18 +1127,23 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // not a request. WebSearch + WebFetch are the only built-ins that make
     // outbound requests. The WEB_DENY_NOTE in the system prompt is belt-and-braces.
     if (webMode === "deny") args.push("--disallowedTools", "WebSearch", "WebFetch");
-    // Agent-facing MCP servers (the Composio gateway): only on agentic act runs
-    // (where --dangerously-skip-permissions already auto-allows MCP tools).
-    // agentMcpConfigForClaude materializes ~/.prevail/agent-mcp.json from the
-    // COMPOSIO_API_KEY env var and returns its path; it returns null when no key
-    // is set, so this is a byte-for-byte no-op (no flag) without Composio.
-    if (act) {
-      try {
-        const { agentMcpConfigForClaude } = await import("./agent-mcp.ts");
-        const mcpCfg = agentMcpConfigForClaude();
-        if (mcpCfg) args.push("--mcp-config", mcpCfg);
-      } catch { /* never let MCP wiring break a turn */ }
-    }
+    // Agent-facing MCP servers. Two sources, different exposure rules:
+    //   - The Composio gateway (a hosted gateway behind the user's API key) is
+    //     injected ONLY on agentic act runs, where --dangerously-skip-permissions
+    //     already auto-allows MCP tools. This preserves the prior behavior.
+    //   - Connected stdio MCP servers (the user's own local MCP apps, integration
+    //     "mcp" with a mcpSetup.command) are injected on EVERY turn, chat included,
+    //     so the model can see their tools. We do NOT add --dangerously-skip-
+    //     permissions for chat, so on a non-act turn the tools are visible but
+    //     still subject to the normal permission model (safety unchanged).
+    // agentMcpConfigForClaude materializes ~/.prevail/agent-mcp.json and returns
+    // its path, or null when there is nothing to inject (no Composio key and no
+    // connected stdio servers), so this stays a byte-for-byte no-op otherwise.
+    try {
+      const { agentMcpConfigForClaude } = await import("./agent-mcp.ts");
+      const mcpCfg = agentMcpConfigForClaude(vaultPath, { includeComposio: act });
+      if (mcpCfg) args.push("--mcp-config", mcpCfg);
+    } catch { /* never let MCP wiring break a turn */ }
     args.push(...head);
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }

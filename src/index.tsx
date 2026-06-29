@@ -2875,12 +2875,19 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const title = flag("--title") ?? id;
     const integration = (flag("--integration") ?? "manual") as "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
     const domains = (flag("--domains") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    // MCP-client apps: --mcp-command is the full stdio spawn command (e.g.
+    // "npx -y @modelcontextprotocol/server-github"); --mcp-install is an
+    // optional one-time setup shell command. Persisted into the manifest's mcp
+    // block so the agent runtime can connect this app as an MCP server.
+    const mcpCommand = flag("--mcp-command");
+    const mcpInstall = flag("--mcp-install");
+    const mcpSetup = mcpCommand || mcpInstall ? { command: mcpCommand, install: mcpInstall } : undefined;
     if (!id) {
-      console.error("usage: prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b");
+      console.error("usage: prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b [--mcp-command <cmd>] [--mcp-install <cmd>]");
       process.exit(1);
     }
     const { scaffoldCommunityApp } = await import("./vault.ts");
-    const r = scaffoldCommunityApp({ id, title: title!, integration, domains, vaultRoot: connectorsVault });
+    const r = scaffoldCommunityApp({ id, title: title!, integration, domains, vaultRoot: connectorsVault, mcpSetup });
     if (args.includes("--json")) {
       process.stdout.write(`${JSON.stringify(r)}\n`);
       process.exit(r.ok ? 0 : 1);

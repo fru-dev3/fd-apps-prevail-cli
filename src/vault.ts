@@ -1536,6 +1536,12 @@ export function scaffoldCommunityApp(opts: {
   // app already exists, scaffolding merges the gateway block into its manifest
   // (instead of erroring) so a re-add is a no-op.
   gateway?: AppGateway | null;
+  // For integration === "mcp": how to stand up the local MCP server. `command`
+  // is the full stdio spawn command the agent runtime runs (e.g.
+  // "npx -y @modelcontextprotocol/server-github"); `install` is an optional
+  // one-time setup shell command. Written into the manifest's `mcp` block so
+  // scanCommunityApps surfaces it back as mcpSetup (see coerceMcpSetup).
+  mcpSetup?: { install?: string; command?: string } | null;
 }): { ok: boolean; path?: string; error?: string } {
   const id = opts.id.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) {
@@ -1598,6 +1604,15 @@ export function scaffoldCommunityApp(opts: {
       if (!opts.refreshEvery) manifest.refresh = { every: "daily" };
     }
     if (opts.refreshEvery) manifest.refresh = { every: opts.refreshEvery };
+    // MCP-client apps: persist the stdio spawn command (and optional one-time
+    // install command) under the manifest `mcp` key, the shape coerceMcpSetup
+    // reads back. Only written when at least one is present.
+    if (opts.mcpSetup && (opts.mcpSetup.command || opts.mcpSetup.install)) {
+      const mcp: Record<string, string> = {};
+      if (opts.mcpSetup.command) mcp.command = opts.mcpSetup.command;
+      if (opts.mcpSetup.install) mcp.install = opts.mcpSetup.install;
+      manifest.mcp = mcp;
+    }
     writeFileSync(join(root, "manifest.json"), JSON.stringify(manifest, null, 2));
     if (opts.gateway) {
       // Gateway app: the SKILL.md must teach the agent to use the gateway tools
