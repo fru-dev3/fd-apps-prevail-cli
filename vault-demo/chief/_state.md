@@ -15,7 +15,7 @@ schema: 2
 **Top 3:** HVAC: replace ($6,850) vs wait · Q2 tax / FBAR paperwork started · confirm RSU vest earmark
 
 ## Across life right now
-- HVAC $6,850 pending — touches Wealth, Home, Insurance
+- HVAC $6,850 pending, touches Wealth, Home, Insurance
 - Insurance: auto renewal in 22 days; home renewal Sept
 - Tax: FBAR for the BCP account; RSU vest Aug 15 (withholding)
 - Travel: Portland in 3 weeks; Lima in December

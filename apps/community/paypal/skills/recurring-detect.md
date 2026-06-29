@@ -12,7 +12,7 @@ outputs:
 
 # Recurring payment detection
 
-Detect recurring PayPal charges — subscriptions and repeat billers — by
+Detect recurring PayPal charges (subscriptions and repeat billers) by
 clustering transactions to the same counterparty at a regular cadence over
 the last several months. Default lookback 6 months (cap at 12); respect
 `${input.months}`. Read-only.

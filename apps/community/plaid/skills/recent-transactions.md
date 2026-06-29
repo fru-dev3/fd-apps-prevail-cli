@@ -40,4 +40,4 @@ Output one JSON object per line (JSONL). Each line is:
 {"date":"2026-06-01","amount":42.18,"name":"Whole Foods","category":["Food","Groceries"],"account_id":"abc123"}
 ```
 
-No preamble. No markdown — pure JSONL.
+No preamble. No markdown, pure JSONL.

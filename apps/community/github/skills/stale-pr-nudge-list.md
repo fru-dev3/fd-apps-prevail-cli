@@ -12,10 +12,10 @@ outputs:
 
 # Stale PR nudge list
 
-List open PRs that have gone quiet — mine waiting on others, and others'
-waiting on my review — so I know exactly what to nudge or unblock. A PR is
+List open PRs that have gone quiet, mine waiting on others, and others'
+waiting on my review, so I know exactly what to nudge or unblock. A PR is
 stale when its last update is older than `${input.stale_days}` (default 3).
-Read-only — never comment, merge, or close.
+Read-only, never comment, merge, or close.
 
 Authenticate with `GH_TOKEN` (header `Authorization: Bearer <GH_TOKEN>`,
 `Accept: application/vnd.github+json`). Resolve my login via
@@ -33,12 +33,12 @@ since last update.
 Output markdown only (no preamble):
 
 ```
-# Stale PRs (>3d quiet) — 2026-06-29
+# Stale PRs (>3d quiet), 2026-06-29
 
-**Mine — waiting on others (N)**
-- owner/repo #42 — title _(stale 6d · 0 comments)_
-**To review — waiting on me (N)**
-- owner/repo #58 — title _(stale 9d)_
+**Mine, waiting on others (N)**
+- owner/repo #42, title _(stale 6d · 0 comments)_
+**To review, waiting on me (N)**
+- owner/repo #58, title _(stale 9d)_
 
 _Oldest: owner/repo #58, quiet 9d_
 ```

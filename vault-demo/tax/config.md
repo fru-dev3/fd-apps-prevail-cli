@@ -1,4 +1,4 @@
-# Tax — Config
+# Tax, Config
 
 > Skills read this file to personalize their output.
 
@@ -15,7 +15,7 @@ state: Texas (no state income tax)
 - 1098 (mortgage)
 
 ## Foreign reporting
-fbar_required: yes — BCP account ($11,000) exceeds the $10,000 aggregate threshold
+fbar_required: yes, BCP account ($11,000) exceeds the $10,000 aggregate threshold
 fbar_deadline: Apr 15 (auto-ext Oct 15)
 foreign_interest: interest on the BCP account is US-reportable
 

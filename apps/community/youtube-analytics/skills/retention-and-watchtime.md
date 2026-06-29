@@ -64,6 +64,6 @@ Retention (by % of video elapsed):
 
 Sample the retention rows at roughly 0/10/25/50/75/90/100% elapsed so the
 table is readable. After the table, add one line naming the biggest single
-drop-off, e.g. `Sharpest drop: 0%→10% (−<X> pts) — fix the hook.`
+drop-off, e.g. `Sharpest drop: 0%→10% (−<X> pts), fix the hook.`
 
 Replace `retention.md` each run. Read-only. No preamble outside the report.

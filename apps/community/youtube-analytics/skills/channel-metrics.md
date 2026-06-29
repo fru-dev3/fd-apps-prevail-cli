@@ -45,7 +45,7 @@ GET https://youtubeanalytics.googleapis.com/v2/reports
 
 End with one line: `Totals: <V> views · <H>h watched · <±S> subs over <days>d.`
 
-`kind: markdown`, so each run appends a new dated section. Read-only — query
+`kind: markdown`, so each run appends a new dated section. Read-only, query
 reports only. No preamble or commentary outside the table and totals line.
 
 Output: a dated markdown table of daily channel metrics (views, watch hours, net subs, avg view duration) plus a totals line.

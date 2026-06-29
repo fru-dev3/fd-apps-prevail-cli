@@ -13,7 +13,7 @@ outputs:
 
 Snapshot outstanding invoices and any open disputes/chargebacks so the
 business domain can chase unpaid invoices and respond to cases on time.
-Read-only — never create, send, cancel, or resolve anything.
+Read-only, never create, send, cancel, or resolve anything.
 
 Mint an OAuth2 token: POST `https://api-m.paypal.com/v1/oauth2/token` (use
 `api-m.sandbox.paypal.com` when `PAYPAL_ENV=sandbox`) with HTTP Basic auth
@@ -22,7 +22,7 @@ application/x-www-form-urlencoded`, body `grant_type=client_credentials`.
 Read `access_token`. Use `Authorization: Bearer <access_token>` on the
 calls below.
 
-1. **Invoices** — `GET
+1. **Invoices**, `GET
    https://api-m.paypal.com/v2/invoicing/invoices?page_size=100&page=1&total_required=true`.
    Page until all are collected. Per invoice read `id`, `status` (e.g.
    `SENT`, `PAID`, `MARKED_AS_PAID`, `UNPAID`, `PARTIALLY_PAID`, `CANCELLED`),
@@ -32,7 +32,7 @@ calls below.
    `primary_recipients[0].billing_info.name`/`email_address`. Flag any
    non-paid invoice past its `due_date` as overdue.
 
-2. **Disputes** — `GET
+2. **Disputes**, `GET
    https://api-m.paypal.com/v1/customer/disputes?page_size=50`. Per
    `items[]` read `dispute_id`, `reason`, `status`, `dispute_amount.value`,
    `create_time`, and `seller_response_due_date`.

@@ -1,6 +1,6 @@
-# Alex Rivera — Demo Profile
+# Alex Rivera, Demo Profile
 
-> **SYNTHETIC DATA — For demonstration purposes only. All details are fictional.**
+> **SYNTHETIC DATA, For demonstration purposes only. All details are fictional.**
 
 ## Personal
 - **Name:** Alex Rivera
@@ -10,7 +10,7 @@
 - **Child:** Maya Rivera (6, Austin ISD, 1st grade)
 
 ## Employment
-- **Employer:** TechFlow Inc. (Austin, TX) — Series B SaaS startup
+- **Employer:** TechFlow Inc. (Austin, TX), Series B SaaS startup
 - **Title:** Senior Software Engineer
 - **Base Salary:** $145,000/year
 - **Equity:** 5,000 RSUs vesting over 4 years ($12,500/year at current valuation)
@@ -21,7 +21,7 @@
 
 ## Business Entity
 - **LLC:** Alex Rivera Consulting LLC (Texas, formed 2023)
-- **EIN:** [REDACTED — configure in vault/tax/config.md]
+- **EIN:** [REDACTED, configure in vault/tax/config.md]
 - **Revenue 2025:** $8,200 (freelance consulting, 1099)
 - **CPA:** Maria Gonzalez, Austin CPA Group (maria@austincpa.com)
 

@@ -16,7 +16,7 @@ schema: 2
 **In progress:** studying for the Certified Branch Manager (CBM) credential
 
 ## Where things stand
-Jordan Smith runs a Frontera Bank branch in Austin and is on a fast track — teller to branch manager in five years. Being bilingual is a real asset: a large share of the branch's customers are Spanish-speaking, and Jordan is often the reason they stay. The mid-year review in July; comp conversation tied to district numbers.
+Jordan Smith runs a Frontera Bank branch in Austin and is on a fast track, teller to branch manager in five years. Being bilingual is a real asset: a large share of the branch's customers are Spanish-speaking, and Jordan is often the reason they stay. The mid-year review in July; comp conversation tied to district numbers.
 
 ## Open Items
 - [ ] RSU vest 2026-08-15 ($6,180 gross) _(also: wealth, tax)_

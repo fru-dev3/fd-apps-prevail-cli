@@ -1,4 +1,4 @@
-# Chief — Config
+# Chief, Config
 
 > Skills read this file to personalize their output.
 

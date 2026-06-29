@@ -16,10 +16,10 @@ schema: 2
 **Emergency fund:** $10,240 (about 3 months)
 
 ## Where things stand
-Two incomes ($168,000 W2), a starter house in Austin, and the early innings of investing. Most of the net worth is retirement ($35,400) plus $10,800 of home equity. About $46,000 sits in Lima — an inherited 1/3 share of the family home and a BCP savings account. $400/mo goes to Jordan's parents, which is non-negotiable and built into the budget.
+Two incomes ($168,000 W2), a starter house in Austin, and the early innings of investing. Most of the net worth is retirement ($35,400) plus $10,800 of home equity. About $46,000 sits in Lima, an inherited 1/3 share of the family home and a BCP savings account. $400/mo goes to Jordan's parents, which is non-negotiable and built into the budget.
 
 ## The capital question
-The summer's main decision is the HVAC ($6,850). The emergency fund ($10,240) can float it without touching investments, so it's replace-now versus wait — not whether it's affordable. Replacing the 2016 unit before peak Texas summer beats an emergency failure in July.
+The summer's main decision is the HVAC ($6,850). The emergency fund ($10,240) can float it without touching investments, so it's replace-now versus wait, not whether it's affordable. Replacing the 2016 unit before peak Texas summer beats an emergency failure in July.
 
 ## Open Items
 - [ ] Replace the 2016 HVAC ($6,850) before summer _(also: homestead, insurance)_

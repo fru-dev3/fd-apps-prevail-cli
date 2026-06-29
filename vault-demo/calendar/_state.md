@@ -16,7 +16,7 @@ schema: 2
 **Open evenings:** 4 of 5
 
 ## Where things stand
-A normal week with one immovable: Maya's recital Saturday. The dates that matter are further out and easy to forget — the RSU vest in August, the September home renewal, and the December Lima trip whose fares climb if booking slips (see travel).
+A normal week with one immovable: Maya's recital Saturday. The dates that matter are further out and easy to forget, the RSU vest in August, the September home renewal, and the December Lima trip whose fares climb if booking slips (see travel).
 
 ## Open Items
 - [ ] Maya (3): 529, child tax credit, term-life beneficiary, preschool recital Sat _(also: wealth, tax, insurance)_

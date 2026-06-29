@@ -1,4 +1,4 @@
-# Fitness — Config
+# Fitness, Config
 
 > Skills read this file to personalize their output.
 

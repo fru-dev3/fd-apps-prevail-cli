@@ -14,9 +14,9 @@ outputs:
 
 Fetch the open pull requests that need my attention. Three scopes:
 
-- `owned` — PRs I authored that are still open
-- `review-requested` — PRs where I'm requested as a reviewer
-- `all` (default) — both
+- `owned`, PRs I authored that are still open
+- `review-requested`, PRs where I'm requested as a reviewer
+- `all` (default), both
 
 Use the GitHub REST API with the `GH_TOKEN` environment variable. Hit
 `GET https://api.github.com/search/issues` with:
@@ -32,7 +32,7 @@ Output a single markdown table:
 | ... |
 ```
 
-Sort by age (oldest first — those are the most urgent). One row per PR.
+Sort by age (oldest first, those are the most urgent). One row per PR.
 Age formatted as "3d", "2w", "1mo". Keep titles under 60 chars (truncate
 with …).
 

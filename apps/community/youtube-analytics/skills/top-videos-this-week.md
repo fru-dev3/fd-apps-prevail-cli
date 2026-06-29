@@ -22,7 +22,7 @@ an access token at `https://oauth2.googleapis.com/token` using
 `PREVAIL_GOOGLE_CLIENT_ID` + `PREVAIL_GOOGLE_CLIENT_SECRET`, and send it as a
 bearer token on every call.
 
-Step 1 — rank by views (dates `YYYY-MM-DD`, `startDate` = today − `days`,
+Step 1, rank by views (dates `YYYY-MM-DD`, `startDate` = today − `days`,
 default 7; `limit` default 10):
 
 ```
@@ -36,7 +36,7 @@ GET https://youtubeanalytics.googleapis.com/v2/reports
   &maxResults=<limit>
 ```
 
-Step 2 — resolve titles for the returned video IDs (the analytics API returns
+Step 2, resolve titles for the returned video IDs (the analytics API returns
 IDs, not titles):
 
 ```
@@ -54,9 +54,9 @@ highest views first:
 ```
 
 Truncate titles to 50 chars with …. Below the table add one line:
-`Top: "<title>" — <N> views over <days>d.`
+`Top: "<title>", <N> views over <days>d.`
 
 Replace `top-videos.md` each run. Read-only. No preamble or commentary outside
 the table and summary line.
 
-Output: top-videos.md — a ranked table of the channel's top videos over the window (views, watch hours, avg viewed %, subs gained).
+Output: top-videos.md, a ranked table of the channel's top videos over the window (views, watch hours, avg viewed %, subs gained).

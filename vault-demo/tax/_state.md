@@ -16,7 +16,7 @@ schema: 2
 **Foreign:** FBAR required (BCP account $11,000)
 
 ## Where things stand
-Mostly a clean W2 return, with two wrinkles. First, the RSU vest on 2026-08-15 ($6,180 gross) is supplementally withheld at a flat rate and may slightly under-withhold — worth a check before April. Second, the cross-border piece: the BCP account in Lima crosses the $10,000 FBAR threshold, so FinCEN 114 is required, and the interest it earns is US-reportable. Remittances to jordan's parents aren't deductible and stay well under the gift-tax exclusion.
+Mostly a clean W2 return, with two wrinkles. First, the RSU vest on 2026-08-15 ($6,180 gross) is supplementally withheld at a flat rate and may slightly under-withhold, worth a check before April. Second, the cross-border piece: the BCP account in Lima crosses the $10,000 FBAR threshold, so FinCEN 114 is required, and the interest it earns is US-reportable. Remittances to jordan's parents aren't deductible and stay well under the gift-tax exclusion.
 
 ## Open Items
 - [ ] RSU vest 2026-08-15 ($6,180 gross) _(also: career, wealth)_

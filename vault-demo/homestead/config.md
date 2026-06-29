@@ -1,4 +1,4 @@
-# Home — Config
+# Home, Config
 
 > Skills read this file to personalize their output.
 

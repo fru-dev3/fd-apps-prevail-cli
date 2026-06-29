@@ -11,12 +11,12 @@ schema: 2
 
 **Last updated:** 2026-06-10
 
-**Next trip:** Portland, OR — in 3 weeks
+**Next trip:** Portland, OR, in 3 weeks
 **Planned:** Lima, Peru in December
 **Wishlist:** Cusco / Machu Picchu with Maya, Japan 2027
 
 ## Where things stand
-A Portland long weekend is three weeks out ($1,800 budget). The big one is December: the annual trip to Lima to see Rosa & Miguel — and to show Maya more of where Jordan grew up. Booking early keeps the holiday fares sane (see calendar), and the trip is already penciled into the wealth budget.
+A Portland long weekend is three weeks out ($1,800 budget). The big one is December: the annual trip to Lima to see Rosa & Miguel, and to show Maya more of where Jordan grew up. Booking early keeps the holiday fares sane (see calendar), and the trip is already penciled into the wealth budget.
 
 ## Open Items
 - [ ] December family visit to Lima _(also: calendar, wealth)_

@@ -16,7 +16,7 @@ schema: 2
 **Gap flagged:** umbrella policy
 
 ## Where things stand
-Coverage is solid for a young family: $500,000 term on Jordan, $350,000 on Sam, both cheap at this age, with Maya as the reason they exist. Two threads to watch: the aging HVAC (see home) is the kind of thing the homeowner's carrier asks about at the September renewal, and there's still no umbrella — a $1M policy is roughly $180/yr and protects the home and savings.
+Coverage is solid for a young family: $500,000 term on Jordan, $350,000 on Sam, both cheap at this age, with Maya as the reason they exist. Two threads to watch: the aging HVAC (see home) is the kind of thing the homeowner's carrier asks about at the September renewal, and there's still no umbrella, a $1M policy is roughly $180/yr and protects the home and savings.
 
 ## Open Items
 - [ ] Replace the 2016 HVAC ($6,850) before summer _(also: wealth, homestead)_

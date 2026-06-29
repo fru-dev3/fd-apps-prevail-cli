@@ -5,7 +5,7 @@ date,description,category,amount_usd
 2026-06-05,Honda CR-V loan payment,auto,-322.00
 2026-06-04,H-E-B groceries,food,-186.50
 2026-06-07,Haven Life term premiums (both),insurance,-55.00
-2026-06-08,PaySend remittance — Rosa & Miguel,family,-400.00
+2026-06-08,PaySend remittance, Rosa & Miguel,family,-400.00
 2026-06-09,Whole Foods,food,-74.20
 2026-06-09,Maya preschool tuition,childcare,-820.00
 2026-06-02,Austin Energy + water,utilities,-178.00
@@ -17,10 +17,10 @@ date,description,category,amount_usd
 2026-05-25,Austin Physical Therapy payroll (Sam net),income,4940.00
 2026-05-01,Rocket Mortgage PITI,housing,-2410.00
 2026-05-05,Honda CR-V loan payment,auto,-322.00
-2026-05-08,PaySend remittance — Rosa & Miguel,family,-400.00
+2026-05-08,PaySend remittance, Rosa & Miguel,family,-400.00
 2026-05-10,H-E-B groceries,food,-194.80
 2026-05-12,Target (household),household,-112.40
-2026-05-15,Jordan annual physical — Dr. Marquez,health,-30.00
+2026-05-15,Jordan annual physical, Dr. Marquez,health,-30.00
 2026-05-18,REI (running gear for half-marathon training),fitness,-89.00
 2026-05-20,Geico auto insurance (semi-annual),insurance,-1140.00
 2026-05-01,Fidelity auto-invest (brokerage),investment,-650.00

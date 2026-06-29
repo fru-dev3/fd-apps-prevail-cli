@@ -29,7 +29,7 @@ response root).
 
 Auth: requires a one-time `prevail connectors oauth google-calendar` (PKCE,
 scope `calendar.readonly`). The api runner refreshes the access token from the
-stored refresh token via `${auth.token}`. Read-only — never creates, edits, or
+stored refresh token via `${auth.token}`. Read-only, never creates, edits, or
 responds to events.
 
 Output: data/today-${date}.json with the next block of events (start time, title, attendees, location, video link).

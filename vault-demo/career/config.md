@@ -1,4 +1,4 @@
-# Career — Config
+# Career, Config
 
 > Skills read this file to personalize their output.
 
@@ -11,6 +11,6 @@ base_salary: $90,000
 rsu_grant: $50,000 unvested · next vest 2026-08-15 ($6,180 gross)
 
 ## Edge
-- bilingual — serves the branch's Spanish-speaking customers
+- bilingual, serves the branch's Spanish-speaking customers
 - team leadership
 - deposit growth
