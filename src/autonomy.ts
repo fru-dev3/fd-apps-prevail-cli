@@ -13,7 +13,7 @@
 
 import { join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
-import { vreadFile, vwriteFile } from "./vault-session.ts";
+import { vreadFile, vwriteFile, vappendLine } from "./vault-session.ts";
 import type { ActionClass } from "./action-policy.ts";
 
 export type AutonomyState = "active" | "paused";
@@ -104,4 +104,40 @@ export function setMonthlyFinancialCap(vault: string, capUsd: number | null): vo
   const doc = read(vault);
   doc.monthlyFinancialCapUsd = capUsd;
   write(vault, doc);
+}
+
+// Spend ledger — records each executed financial action's amount so the broker
+// can enforce the monthly cap. Append-only at <vault>/_meta/spend.jsonl.
+function spendPath(vault: string): string {
+  return join(vault, "_meta", "spend.jsonl");
+}
+
+export function recordSpend(vault: string, amountUsd: number, ts: number = Date.now()): void {
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) return;
+  try {
+    const dir = join(vault, "_meta");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    vappendLine(spendPath(vault), JSON.stringify({ ts, amountUsd }));
+  } catch { /* best effort */ }
+}
+
+// Total executed financial spend for the calendar month containing `nowMs`.
+export function monthSpendUsd(vault: string, nowMs: number = Date.now()): number {
+  try {
+    const p = spendPath(vault);
+    if (!existsSync(p)) return 0;
+    const now = new Date(nowMs);
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    let sum = 0;
+    for (const line of vreadFile(p).split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line) as { ts: number; amountUsd: number };
+        const d = new Date(e.ts);
+        if (d.getFullYear() === y && d.getMonth() === m && Number.isFinite(e.amountUsd)) sum += e.amountUsd;
+      } catch { /* skip bad line */ }
+    }
+    return sum;
+  } catch { return 0; }
 }

@@ -3,8 +3,8 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initVaultSession } from "./vault-session.ts";
-import { getAutonomyState, setAutonomyState, setPolicyFor, getActionPolicy } from "./autonomy.ts";
-import { gateAction } from "./broker.ts";
+import { getAutonomyState, setAutonomyState, setPolicyFor, getActionPolicy, setMonthlyFinancialCap, recordSpend, monthSpendUsd } from "./autonomy.ts";
+import { gateAction, parseAmountUsd } from "./broker.ts";
 
 function freshVault(): string {
   const v = mkdtempSync(join(tmpdir(), "prevail-autonomy-"));
@@ -49,5 +49,22 @@ describe("autonomy + gateAction — the global brake", () => {
   it("default consequential classes route to ask, not auto", () => {
     const v = freshVault();
     expect(gateAction("send an email to the team", { vault: v, autonomousActs: true }).decision).toBe("ask");
+  });
+
+  it("parses dollar amounts from action text", () => {
+    expect(parseAmountUsd("pay the $1,200.50 invoice")).toBe(1200.5);
+    expect(parseAmountUsd("transfer money to savings")).toBe(null);
+  });
+
+  it("enforces the monthly financial cap: allowed+auto downgrades to ask once the cap would be exceeded", () => {
+    const v = freshVault();
+    setPolicyFor(v, "financial", "allow"); // user opts financial into allow
+    setMonthlyFinancialCap(v, 100);
+    // Under cap → auto.
+    expect(gateAction("pay the $40 invoice", { vault: v, autonomousActs: true }).decision).toBe("auto");
+    // Record spend, then a charge that would exceed → ask.
+    recordSpend(v, 80);
+    expect(monthSpendUsd(v)).toBe(80);
+    expect(gateAction("pay the $40 invoice", { vault: v, autonomousActs: true }).decision).toBe("ask");
   });
 });

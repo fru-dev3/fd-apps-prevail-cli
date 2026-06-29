@@ -4,7 +4,15 @@
 // opt-in) so every caller asks one question instead of re-deriving the rule.
 
 import { classifyAction, isConsequential, type ActionClass } from "./action-policy.ts";
-import { isPaused, policyFor } from "./autonomy.ts";
+import { isPaused, policyFor, getMonthlyFinancialCap, monthSpendUsd } from "./autonomy.ts";
+
+// Best-effort dollar amount from an action's text ("pay the $1,200.50 invoice" → 1200.5).
+export function parseAmountUsd(text: string): number | null {
+  const m = /\$\s?([0-9][0-9,]*(?:\.[0-9]{1,2})?)/.exec(text ?? "");
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
 
 export interface ActionDecision {
   cls: ActionClass;
@@ -41,9 +49,18 @@ export function gateAction(
   if (pol === "never") return { cls, decision: "block", reason: `policy: "${cls}" actions are never allowed` };
   if (pol === "ask") return { cls, decision: "ask", reason: `policy: "${cls}" actions need approval` };
   // pol === "allow": still requires the global autonomy opt-in to run unattended.
-  return {
-    cls,
-    decision: opts.autonomousActs ? "auto" : "ask",
-    reason: opts.autonomousActs ? undefined : "autonomy not enabled — approve to run",
-  };
+  let decision: GateDecision = opts.autonomousActs ? "auto" : "ask";
+  // Spend cap: even an allowed+auto financial action is downgraded to "ask" when
+  // it would push this month's executed spend past the user's monthly cap.
+  if (decision === "auto" && cls === "financial") {
+    const cap = getMonthlyFinancialCap(opts.vault);
+    if (cap != null) {
+      const amount = parseAmountUsd(action) ?? 0;
+      const spent = monthSpendUsd(opts.vault);
+      if (spent + amount > cap) {
+        return { cls, decision: "ask", reason: `monthly financial cap $${cap} would be exceeded (spent $${spent.toFixed(2)} this month)` };
+      }
+    }
+  }
+  return { cls, decision, reason: decision === "ask" ? "autonomy not enabled — approve to run" : undefined };
 }

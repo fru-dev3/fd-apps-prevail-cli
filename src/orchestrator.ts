@@ -26,8 +26,8 @@ import { vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis, type AvailableCli } from "./cli-bridge.ts";
 import { scanCommunityApps } from "./vault.ts";
 import { loadSkillsForConnector, runSkill } from "./connector-skills.ts";
-import { gateAction, type GateDecision } from "./broker.ts";
-import { isPaused } from "./autonomy.ts";
+import { gateAction, parseAmountUsd, type GateDecision } from "./broker.ts";
+import { isPaused, recordSpend } from "./autonomy.ts";
 import { auditAction, type ActionOutcome } from "./action-audit.ts";
 import { logActivity } from "./activity.ts";
 import { resolveDomainDir } from "./path-safety.ts";
@@ -188,6 +188,8 @@ async function runAgentStep(step: Extract<PlaybookStep, { kind: "agent" }>, ctx:
   const out = await runChatTurn({ prompt, cwd, cli, model: ctx.model || "", isFirst: true, bare: false, act: true, webAccess: step.web ? "allow" : "deny", signal: ctx.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS), maxOutputChars: 8000 });
   res.ok = true;
   res.note = (out || "").trim().slice(0, 400) || "done";
+  // A financial action that actually ran counts against the monthly cap.
+  if (gate.cls === "financial") { const amt = parseAmountUsd(step.goal); if (amt) recordSpend(ctx.vault, amt); }
 }
 
 // A synthesize step reads everything gathered and writes a summary doc into a
