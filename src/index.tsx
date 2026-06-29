@@ -64,6 +64,8 @@ interface Args {
   manifestArgs: string[];
   chat: boolean;
   chatArgs: string[];
+  agentRun: boolean;
+  agentRunArgs: string[];
   score: boolean;
   scoreArgs: string[];
   alignment: boolean;
@@ -152,6 +154,8 @@ function parseArgs(argv: string[]): Args {
   let manifestArgs: string[] = [];
   let chat = false;
   let chatArgs: string[] = [];
+  let agentRun = false;
+  let agentRunArgs: string[] = [];
   let score = false;
   let scoreArgs: string[] = [];
   let alignment = false;
@@ -295,6 +299,10 @@ function parseArgs(argv: string[]): Args {
       chat = true;
       chatArgs = argv.slice(i + 1);
       break;
+    } else if (a === "agent-run") {
+      agentRun = true;
+      agentRunArgs = argv.slice(i + 1);
+      break;
     } else if (a === "score") {
       score = true;
       scoreArgs = argv.slice(i + 1);
@@ -427,6 +435,8 @@ function parseArgs(argv: string[]): Args {
     manifestArgs,
     chat,
     chatArgs,
+    agentRun,
+    agentRunArgs,
     score,
     scoreArgs,
     alignment,
@@ -1902,11 +1912,15 @@ async function autonomyCommand(args: string[]): Promise<void> {
     if (r.monthlyFinancialCapUsd != null) console.log(`  monthly financial cap: $${r.monthlyFinancialCapUsd}`);
     return;
   }
-  if (sub === "pause" || sub === "resume") {
-    A.setAutonomyState(vault, sub === "pause" ? "paused" : "active");
+  // Mode: paused (kill switch) | ask (propose, you approve) | auto (run allow-policy
+  // actions unattended). Aliases: resume/active → ask.
+  if (sub === "pause" || sub === "resume" || sub === "ask" || sub === "auto" || sub === "active" || sub === "mode") {
+    const want = sub === "mode" ? (args[1] ?? "") : sub;
+    const mode = want === "pause" || want === "paused" ? "paused" : want === "auto" ? "auto" : "ask";
+    A.setAutonomyState(vault, mode as never);
     const state = A.getAutonomyState(vault);
     if (json) { process.stdout.write(`${JSON.stringify({ ok: true, state })}\n`); return; }
-    console.log(`autonomy ${state}`);
+    console.log(`autonomy: ${state}`);
     return;
   }
   if (sub === "policy") {
@@ -1956,8 +1970,10 @@ async function playbookCommand(args: string[]): Promise<void> {
   if (!pb) { console.error(`no playbook "${id}" (try: prevail playbooks)`); process.exit(1); }
   const { readConfig: rc } = await import("./config.ts");
   const cfg = rc();
-  // Explicit invocation = consent to run; the per-class policy + pause still govern.
-  const autonomousActs = !args.includes("--no-auto");
+  const { isAuto } = await import("./autonomy.ts");
+  // Default to the vault's autonomy mode (auto vs ask); --auto/--no-auto override.
+  // The per-class policy + global pause still govern every step regardless.
+  const autonomousActs = args.includes("--auto") ? true : args.includes("--no-auto") ? false : isAuto(vault);
   const runId = `pb-${id}-${Date.now()}`;
   const onProgress = stream ? (e: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(e)}\n`) : undefined;
   const result = await runPlaybook(runId, pb, {
@@ -4599,6 +4615,11 @@ async function main() {
   if (args.manifest) {
     await manifestCommand(args.manifestArgs, args.vaultPath);
     return;
+  }
+  if (args.agentRun) {
+    const { agentRunCommand } = await import("./agent-run.ts");
+    const code = await agentRunCommand(args.agentRunArgs, args.vaultPath);
+    process.exit(code);
   }
   if (args.chat) {
     const { chatJsonCommand } = await import("./chat-json.ts");

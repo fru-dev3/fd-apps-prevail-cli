@@ -8,6 +8,7 @@ import { readResponseFramework, readWebAccess } from "./config.ts";
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
 import { buildRoot } from "./path-safety.ts";
+import { buildHarnessArgs } from "./harness-profiles.ts";
 import {
   type BudgetCaps,
   checkBudget,
@@ -1146,16 +1147,27 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     return extractGeminiReply(raw);
   }
   if (EXTRA_PROTOCOL[cli.kind] === "claude") {
-    // Best-effort headless dispatch for the additional agent CLIs (codebuddy,
-    // copilot, opencode, openclaw, hermes, pi, cursor, kiro, paperclip, motorcar):
-    // the de-facto `<bin> -p "<prompt>"` convention. No claude-only flags
-    // (--append-system-prompt / --dangerously-skip-permissions) since other CLIs
-    // may reject them. Families with non-standard invocations can get per-family
-    // args later; until then a wrong-flag turn surfaces as a visible error (never
-    // a silent or data-losing failure).
-    const args: string[] = [];
-    if (m) args.push("--model", m);
-    args.push("-p", framedPrompt);
+    // Harnesses with a known headless invocation (hermes/pi/opencode) get their
+    // real, verified flags from HARNESS_PROFILES — the old guessed `<bin> -p`
+    // convention only happened to be valid for pi. `act` (an approved/auto run)
+    // maps to the harness's own full-agency switch (e.g. hermes --yolo); a normal
+    // turn maps to its safe/propose mode (--safe-mode). Families without a
+    // profile (codebuddy/copilot/openclaw/cursor/kiro/paperclip/motorcar) keep
+    // the best-effort `-p` fallback; a wrong-flag turn surfaces as a visible
+    // error, never a silent or data-losing failure.
+    const profileArgs = buildHarnessArgs(cli.kind, {
+      prompt: framedPrompt,
+      model: m,
+      autonomy: act ? "auto" : "safe",
+    });
+    let args: string[];
+    if (profileArgs) {
+      args = profileArgs;
+    } else {
+      args = [];
+      if (m) args.push("--model", m);
+      args.push("-p", framedPrompt);
+    }
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }
   if (cli.kind === "ollama") {
