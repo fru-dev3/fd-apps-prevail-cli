@@ -156,6 +156,15 @@ prevail briefing ...             scheduled domain briefings
 prevail telegram ...             configure the Telegram bridge
 prevail connectors ...           list / test / oauth
 prevail daemon --telegram        headless mode (bot + ticker)
+prevail agent-run --cli <h> ...  hand a task to an agent harness (Hermes/Pi/OpenCode), streamed
+```
+
+### Agent harnesses (new)
+
+Beyond chat CLIs, prevAIl can now drive **agent harnesses** — `hermes`, `pi`, `opencode`, `openclaw` — as autonomous task runners. Each is invoked with its *real* headless flags (verified per-harness, not a guessed `-p`: Hermes uses `-z`, OpenCode uses `run`, …), the run is gated by the autonomy broker (safe/propose by default, `--autonomy auto` for full agency), and output streams as the same `ChatEvent` NDJSON as `chat`:
+
+```
+prevail agent-run --domain wealth --goal "summarize my open tasks" --cli hermes --json
 ```
 
 Inside the TUI: `↑ ↓` between domains, `s` swap to apps, `e` edit the active markdown tab, `q` quit. `/help` lists every slash command.
