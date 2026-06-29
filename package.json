@@ -1,7 +1,7 @@
 {
   "name": "fd-apps-prevail-cli",
   "version": "1.7.6",
-  "description": "prevAIl \u2014 a terminal cockpit for your life domains.",
+  "description": "prevAIl — a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,
   "license": "GPL-3.0-only",
@@ -38,11 +38,11 @@
     "dev": "bun --watch run src/index.tsx",
     "demo": "bun run src/index.tsx demo",
     "doctor": "bun run src/index.tsx doctor",
-    "build": "bun build --compile --outfile=dist/prevail src/index.tsx",
-    "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 --outfile=dist/prevail-darwin-arm64 src/index.tsx",
-    "build:darwin-x64": "bun build --compile --target=bun-darwin-x64 --outfile=dist/prevail-darwin-x64 src/index.tsx",
-    "build:linux-x64": "bun build --compile --target=bun-linux-x64 --outfile=dist/prevail-linux-x64 src/index.tsx",
-    "build:linux-arm64": "bun build --compile --target=bun-linux-arm64 --outfile=dist/prevail-linux-arm64 src/index.tsx",
+    "build": "bun build --compile --external chromium-bidi --outfile=dist/prevail src/index.tsx",
+    "build:darwin-arm64": "bun build --compile --external chromium-bidi --target=bun-darwin-arm64 --outfile=dist/prevail-darwin-arm64 src/index.tsx",
+    "build:darwin-x64": "bun build --compile --external chromium-bidi --target=bun-darwin-x64 --outfile=dist/prevail-darwin-x64 src/index.tsx",
+    "build:linux-x64": "bun build --compile --external chromium-bidi --target=bun-linux-x64 --outfile=dist/prevail-linux-x64 src/index.tsx",
+    "build:linux-arm64": "bun build --compile --external chromium-bidi --target=bun-linux-arm64 --outfile=dist/prevail-linux-arm64 src/index.tsx",
     "typecheck": "bun node_modules/typescript/bin/tsc --noEmit",
     "test": "bun test src/",
     "test:integration": "INTEGRATION_TESTS=1 bun test src/cli-bridge.integration.test.ts",
@@ -53,6 +53,7 @@
   "dependencies": {
     "@opentui/core": "^0.3.0",
     "@opentui/react": "^0.3.0",
+    "playwright-core": "^1.61.1",
     "react": "^19.2.0"
   },
   "devDependencies": {

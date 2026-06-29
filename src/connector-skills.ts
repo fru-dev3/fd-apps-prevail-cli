@@ -23,7 +23,7 @@ import type { AppSkill } from "./vault.ts";
 // applied PLUS only the auth keys the manifest explicitly declares it
 // needs. Output writes are confined to the connector's data/ directory.
 
-export type SkillRunner = "llm" | "api" | "cli" | "browser" | "mcp" | "a2a";
+export type SkillRunner = "llm" | "api" | "cli" | "browser" | "browser-agent" | "mcp" | "a2a";
 
 export interface SkillSpec {
   id: string;
@@ -105,6 +105,11 @@ export interface SkillRunResult {
   // New files this run created under the connector dir (relative paths).
   // The daemon matches routes[] against these for copy/pointer routing.
   artifacts?: string[];
+  // Set by the browser REPLAY runner when a recorded skill drifts (a selector
+  // missed, a success marker failed, the login wall reappeared). The daemon
+  // uses this to queue a re-learn + notify the user, rather than auto-launching
+  // a headed browser. Carries why it broke and which step.
+  needsRelearn?: { reason: string; failedStep?: number };
 }
 
 // Load every skill declared by a connector. Reads connector/skills/*.md
@@ -177,7 +182,7 @@ function isSafeId(s: string): boolean {
 }
 
 function isValidRunner(s: string): s is SkillRunner {
-  return s === "llm" || s === "api" || s === "cli" || s === "browser" || s === "mcp" || s === "a2a";
+  return s === "llm" || s === "api" || s === "cli" || s === "browser" || s === "browser-agent" || s === "mcp" || s === "a2a";
 }
 
 function coerceInputs(items: unknown[]): SkillInput[] {
@@ -273,6 +278,15 @@ function parseScalar(s: string): unknown {
   if (t === "null") return null;
   if (/^-?\d+$/.test(t)) return Number(t);
   if (/^-?\d*\.\d+$/.test(t)) return Number(t);
+  // Strict JSON flow object/array (e.g. an inline `success_check:` or
+  // `domain_allow:` written by the recorder). Lenient handling follows below.
+  if ((t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"))) {
+    try {
+      return JSON.parse(t);
+    } catch {
+      /* not strict JSON — fall through to lenient handling */
+    }
+  }
   // String — strip surrounding quotes if present.
   if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
     return t.slice(1, -1);
@@ -324,6 +338,16 @@ function parseItem(lines: string[]): unknown {
   // Inline object on a single line: { name: x, type: string }
   if (lines.length === 1) {
     const t = lines[0]!.trim();
+    // Strict JSON flow object/array first (e.g. recorded browser `steps:` use
+    // JSON.stringify, which has nested objects the loose splitter can't handle).
+    // Falls through to the lenient unquoted-object parse for legacy skill files.
+    if ((t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"))) {
+      try {
+        return JSON.parse(t);
+      } catch {
+        /* not strict JSON — fall through */
+      }
+    }
     if (t.startsWith("{") && t.endsWith("}")) {
       const obj: Record<string, unknown> = {};
       const body = t.slice(1, -1);
@@ -567,6 +591,9 @@ export interface SkillRunOpts {
   autonomy?: string;
   // Sync cursor from sync-state.json, exposed to templates as ${cursor.x}.
   cursor?: Record<string, unknown>;
+  // Optional progress sink. The browser runners emit NDJSON-shaped step/download
+  // events here so the desktop can stream a live learn/replay timeline.
+  onProgress?: (event: Record<string, unknown>) => void;
 }
 
 export async function runSkill(
@@ -613,6 +640,10 @@ export async function runSkill(
   if (skill.runner === "browser") {
     const { runSkillBrowser } = await import("./runners.ts");
     return runSkillBrowser(skill, inputs, opts);
+  }
+  if (skill.runner === "browser-agent") {
+    const { runSkillBrowserAgent } = await import("./browser-agent.ts");
+    return runSkillBrowserAgent(skill, inputs, opts);
   }
   return {
     ok: false,

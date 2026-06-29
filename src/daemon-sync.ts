@@ -324,6 +324,24 @@ function elevateFailure(app: AppSkill, error: string, dirs: Map<string, string>)
   }
 }
 
+// A recorded browser skill drifted (the portal redesigned). Replay can't fix
+// itself unattended — re-learning needs the user present (headed browser, maybe
+// 2FA). So queue a re-learn task with the exact command and NEVER auto-launch a
+// headed browser from the daemon. Deduped by the stable "Re-learn <app>" prefix.
+function elevateRelearn(app: AppSkill, reason: string, dirs: Map<string, string>): void {
+  const line = `- [ ] Re-learn ${app.id} browser sync (site changed: ${reason.slice(0, 100)}) — run: prevail connectors browser-learn ${app.id} ~source:sync +added:${new Date().toISOString().slice(0, 10)}`;
+  for (const domain of app.domains) {
+    const dir = dirs.get(domain.toLowerCase());
+    if (!dir) continue;
+    const tasksPath = join(dir, "_tasks.md");
+    try {
+      const existing = existsSync(tasksPath) ? vreadFile(tasksPath) : "";
+      if (existing.includes(`- [ ] Re-learn ${app.id} browser sync`)) continue; // still open
+      vappendLine(tasksPath, line + "\n");
+    } catch { /* skip */ }
+  }
+}
+
 // NEVER let anything credential-shaped land inside the vault. Belt-and-
 // suspenders check on artifact copies.
 export function looksLikeSecretFile(name: string): boolean {
@@ -334,6 +352,10 @@ interface RunOutcome {
   ok: boolean;
   error?: string;
   skillsRun: number;
+  // Set when a recorded browser skill DRIFTED (the site changed). The replay
+  // can't self-heal unattended — re-learning is headed/interactive — so this
+  // routes to a re-learn task instead of a silent retry. See elevateRelearn.
+  needsRelearn?: { reason: string; failedStep?: number };
 }
 
 // Run one app's refresh: the refresh skill plus any `after:` chained skills.
@@ -381,7 +403,7 @@ async function runAppRefresh(app: AppSkill, state: SyncState, activeConnection?:
       logSkillRun(spec, r);
       results.push(r);
       if (!r.ok) {
-        return { outcome: { ok: false, error: `${spec.id}: ${r.message}`, skillsRun: results.length }, results };
+        return { outcome: { ok: false, error: `${spec.id}: ${r.message}`, skillsRun: results.length, needsRelearn: r.needsRelearn }, results };
       }
       if (r.cursor) cursor = { ...cursor, ...r.cursor };
     }
@@ -662,11 +684,16 @@ export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: numb
         state.last_run_ok = false;
         state.last_error = outcome.error ?? "unknown failure";
         state.consecutive_failures += 1;
-        if (state.consecutive_failures >= 3 && !state.elevated) {
+        if (outcome.needsRelearn && !state.elevated) {
+          // Drift → surface a re-learn task NOW (don't silently retry a broken
+          // recipe). Re-learn is interactive, so the daemon never runs it itself.
+          elevateRelearn(app, outcome.needsRelearn.reason, dirs);
+          state.elevated = true;
+        } else if (state.consecutive_failures >= 3 && !state.elevated) {
           elevateFailure(app, state.last_error, dirs);
           state.elevated = true;
         }
-        mirrorConnectionStatus(app, "error", app.lastSuccessTs, state.last_error);
+        mirrorConnectionStatus(app, outcome.needsRelearn ? "expired" : "error", app.lastSuccessTs, state.last_error);
       }
       state.last_run_ts = now;
       // Backoff applies on failure (consecutive_failures>0); a success resets it
@@ -691,7 +718,7 @@ export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: numb
 
 // Sync ONE app on demand (the "Sync now" button), regardless of schedule.
 // Reuses the same probe → run → route → state machinery as syncOnce.
-export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolean; error?: string; artifacts: number }> {
+export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolean; error?: string; artifacts: number; needsRelearn?: { reason: string; failedStep?: number } }> {
   const app = [...scanCommunityApps(), ...scanApps(cfg.vaultPath)].find((a) => a.id === id);
   if (!app) return { ok: false, error: `no app "${id}"`, artifacts: 0 };
   if (!app.refresh) return { ok: false, error: `app "${id}" has no refresh config yet`, artifacts: 0 };
@@ -758,13 +785,17 @@ export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolea
   state.last_run_ok = false;
   state.last_error = outcome.error ?? "unknown failure";
   state.consecutive_failures += 1;
+  if (outcome.needsRelearn && !state.elevated) {
+    elevateRelearn(app, outcome.needsRelearn.reason, dirs);
+    state.elevated = true;
+  }
   state.runs = [...state.runs, {
     ts: now, ok: false, skill: app.refresh?.skill ?? "(refresh)",
     error: state.last_error ?? undefined, duration_ms: durationMs, artifacts: 0,
   }].slice(-20);
   writeSyncState(app, state);
-  mirrorConnectionStatus(app, "error", app.lastSuccessTs, state.last_error);
-  return { ok: false, error: state.last_error, artifacts: 0 };
+  mirrorConnectionStatus(app, outcome.needsRelearn ? "expired" : "error", app.lastSuccessTs, state.last_error);
+  return { ok: false, error: state.last_error, artifacts: 0, needsRelearn: outcome.needsRelearn };
 }
 
 // The daemon loop. Runs alongside --learn/--brief in the same process.

@@ -19,7 +19,7 @@ import { scrubbedEnv } from "./cli-bridge.ts";
 // runs it in the background and updates state when it resolves.
 
 export interface AuthCheckSpec {
-  kind: "env-keys" | "file-exists" | "command" | "http" | "mcp" | "manual";
+  kind: "env-keys" | "file-exists" | "command" | "http" | "mcp" | "manual" | "browser-session";
   // env-keys: every listed key must be set + non-empty in process.env
   env_keys?: string[];
   // file-exists: every listed path must exist (~ and $HOME expanded).
@@ -47,6 +47,13 @@ export interface AuthCheckSpec {
   manual_steps?: string[];
   freshness_file?: string;
   freshness_max_age_days?: number;
+  // browser-session: a saved Playwright session (storageState file and/or a
+  // persistent profile dir) must exist AND be fresh enough to still be logged
+  // in. Paths are relative to the connector dir (default auth/state.json +
+  // auth/profile). max_age_days defaults to 25 (under a typical 30-day cookie).
+  state_file?: string;
+  profile_dir?: string;
+  max_age_days?: number;
 }
 
 export interface ProbeResult {
@@ -122,6 +129,8 @@ export async function probeConnector(app: AppSkill, spec: AuthCheckSpec | null):
         return await probeMcp(spec, ts);
       case "manual":
         return probeManual(spec, ts);
+      case "browser-session":
+        return probeBrowserSession(app, spec, ts);
       default:
         return {
           ok: false,
@@ -138,6 +147,50 @@ export async function probeConnector(app: AppSkill, spec: AuthCheckSpec | null):
       ts,
     };
   }
+}
+
+// browser-session: is there a saved login session that's still fresh? A stale
+// or missing session means the user must re-run browser-login / re-learn before
+// a headless replay can get past the auth wall — so the fetch gate stays honest
+// instead of green-checking an app that would actually fail to fetch.
+function probeBrowserSession(app: AppSkill, spec: AuthCheckSpec, ts: number): ProbeResult {
+  const { join } = require("node:path") as typeof import("node:path");
+  const stateFile = join(app.path, spec.state_file ?? "auth/state.json");
+  const profileDir = join(app.path, spec.profile_dir ?? "auth/profile");
+  const maxAgeDays = spec.max_age_days ?? 25;
+  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+
+  const freshness = (p: string): number | null => {
+    try {
+      return existsSync(p) ? statSync(p).mtimeMs : null;
+    } catch {
+      return null;
+    }
+  };
+  const stateMtime = freshness(stateFile);
+  const profileMtime = freshness(profileDir);
+  const newest = Math.max(stateMtime ?? 0, profileMtime ?? 0);
+  if (newest === 0) {
+    return {
+      ok: false,
+      status: "not-configured",
+      message: "no saved browser session — log in once to capture it",
+      missing: ["auth/state.json"],
+      fixHint: `prevail connectors browser-learn ${app.id}`,
+      ts,
+    };
+  }
+  const ageDays = Math.round((ts - newest) / (24 * 60 * 60 * 1000));
+  if (ts - newest > maxAgeMs) {
+    return {
+      ok: false,
+      status: "expired",
+      message: `browser session is ${ageDays}d old (likely expired) — log in again`,
+      fixHint: `prevail connectors browser-login ${app.id}`,
+      ts,
+    };
+  }
+  return { ok: true, status: "connected", message: `browser session fresh (${ageDays}d old)`, ts };
 }
 
 function probeEnvKeys(spec: AuthCheckSpec, ts: number): ProbeResult {

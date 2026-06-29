@@ -2037,6 +2037,16 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     return;
   }
+  if (sub === "soul") {
+    // The app's soul (same construct domains use): prevail connectors soul <id> → reads soul.md.
+    const id = args[1];
+    if (!id) { console.error("usage: prevail connectors soul <connector-id>"); process.exit(1); }
+    const { getCommunityAppSoul } = await import("./vault.ts");
+    const r = getCommunityAppSoul(id, connectorsVault);
+    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); return; }
+    console.log(r.soul || "(no soul set)");
+    return;
+  }
   if (sub === "gateway-capabilities") {
     // Discover what data a gateway app CAN provide (one agent turn over the
     // gateway). On-demand (the desktop's "Discover" button), not the sync.
@@ -2269,6 +2279,162 @@ async function connectorsCommand(args: string[]): Promise<void> {
     else { console.error(`✗ ${r.message}`); process.exit(1); }
     return;
   }
+  if (sub === "browser-learn") {
+    // prevail connectors browser-learn <id> [--goal "..."] [--url <start>] [--record-as <skill>] [--json]
+    // Drive the agentic loop ONCE to learn how to fetch data from a site, then
+    // record a deterministic replay skill. Headed: the user watches + does 2FA.
+    const id = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+    const json = args.includes("--json");
+    const stream = args.includes("--stream");
+    const flag = (n: string) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
+    const done = (ok: boolean, payload: Record<string, unknown>) => {
+      // --stream callers (the desktop live panel) need a JSON event even for
+      // early failures, or the panel sees nothing and closes silently.
+      if (stream) { process.stdout.write(`${JSON.stringify({ phase: ok ? "complete" : "error", ok, ...payload, message: payload.message ?? payload.error })}\n`); process.exit(0); }
+      if (json) { process.stdout.write(`${JSON.stringify({ ok, ...payload })}\n`); process.exit(0); }
+      if (ok) console.log(`✓ ${payload.message ?? "done"}`);
+      else { console.error(`✗ ${payload.error ?? payload.message ?? "failed"}`); process.exit(1); }
+      process.exit(0);
+    };
+    if (!id) return done(false, { error: "usage: prevail connectors browser-learn <id> [--goal ...] [--url ...]" });
+    const app = apps.find((a) => a.id === id);
+    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    const goal = flag("--goal") ?? "";
+    const recordAs = flag("--record-as");
+    let url = flag("--url") ?? "";
+    if (!url) {
+      try {
+        const { readFileSync } = await import("node:fs");
+        const m = JSON.parse(readFileSync(join(app.path, "manifest.json"), "utf8")) as Record<string, unknown>;
+        url = (typeof m.start_url === "string" && m.start_url) || (typeof m.login_url === "string" && m.login_url) || (typeof m.homepage === "string" && m.homepage) || "";
+      } catch { /* no manifest */ }
+    }
+    if (!url) return done(false, { error: "no start url (pass --url or set start_url/login_url in the manifest)" });
+    // The app's soul (apps/<id>/soul.md) — fold it in as context so the agent
+    // always knows WHY this app is in the user's harness.
+    const { getCommunityAppSoul } = await import("./vault.ts");
+    const soul = getCommunityAppSoul(id, connectorsVault).soul;
+    const baseGoal = goal || `Fetch the latest data from ${id}`;
+    const effectiveGoal = soul
+      ? `Why ${app.title || id} is in the user's harness (their soul note): ${soul}\n\nTask: ${baseGoal}`
+      : baseGoal;
+    const { loadSkillsForConnector, runSkill, logSkillRun } = await import("./connector-skills.ts");
+    // Prefer an existing browser-agent skill; else synthesize one from the flags.
+    const existing = loadSkillsForConnector(app).find((s) => s.runner === "browser-agent");
+    const skill = existing ?? {
+      id: "learn", filePath: join(app.path, "skills", "learn.md"), runner: "browser-agent" as const,
+      auth: [], inputs: [], outputs: [], description: goal || `learn ${id}`,
+      connectorId: app.id, connectorDir: app.path,
+      extra: { start_url: url, goal: effectiveGoal, ...(recordAs ? { record_as: recordAs } : {}) },
+    };
+    // --stream: emit the agent's progress as NDJSON for the desktop's live panel
+    // (relayed by run_engine_stream). Otherwise run via the normal dispatch.
+    if (stream) {
+      const emit = (e: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(e)}\n`);
+      const result = await runSkill(skill, {}, { autonomy: "read-only", onProgress: emit });
+      logSkillRun(skill, result);
+      emit({ phase: "complete", ok: result.ok, message: result.message, outputs: result.outputsWritten });
+      process.exit(0);
+    }
+    if (!json) console.log(`learning ${id} (headed browser — log in / do 2FA when prompted)…`);
+    const result = await runSkill(skill, {}, { autonomy: "read-only" });
+    logSkillRun(skill, result);
+    return done(result.ok, { message: result.message, outputs: result.outputsWritten, summary: result.summary });
+  }
+  if (sub === "browser-replay") {
+    // prevail connectors browser-replay <id> [<skill-id>] [--json]
+    // Fast deterministic replay of a recorded browser skill (no model).
+    const id = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+    const json = args.includes("--json");
+    const stream = args.includes("--stream");
+    const wantSkill = args[2] && !args[2].startsWith("--") ? args[2] : undefined;
+    const done = (ok: boolean, payload: Record<string, unknown>) => {
+      if (stream) { process.stdout.write(`${JSON.stringify({ phase: ok ? "complete" : "error", ok, ...payload, message: payload.message ?? payload.error })}\n`); process.exit(0); }
+      if (json) { process.stdout.write(`${JSON.stringify({ ok, ...payload })}\n`); process.exit(0); }
+      if (ok) console.log(`✓ ${payload.message ?? "done"}`);
+      else { console.error(`✗ ${payload.error ?? payload.message ?? "failed"}`); process.exit(1); }
+      process.exit(0);
+    };
+    if (!id) return done(false, { error: "usage: prevail connectors browser-replay <id> [<skill-id>]" });
+    const app = apps.find((a) => a.id === id);
+    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    const { loadSkillsForConnector, runSkill, logSkillRun } = await import("./connector-skills.ts");
+    const skills = loadSkillsForConnector(app).filter((s) => s.runner === "browser" && Array.isArray(s.extra?.steps));
+    const skill = wantSkill ? skills.find((s) => s.id === wantSkill) : skills[0];
+    if (!skill) return done(false, { error: wantSkill ? `no recorded browser skill "${wantSkill}"` : `no recorded browser skill for ${id} (run browser-learn first)` });
+    if (args.includes("--stream")) {
+      const emit = (e: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(e)}\n`);
+      const result = await runSkill(skill, {}, { autonomy: "read-only", onProgress: emit });
+      logSkillRun(skill, result);
+      emit({ phase: "complete", ok: result.ok, message: result.message, outputs: result.outputsWritten, needsRelearn: result.needsRelearn });
+      process.exit(0);
+    }
+    if (!json) console.log(`replaying ${id}/${skill.id}…`);
+    const result = await runSkill(skill, {}, { autonomy: "read-only" });
+    logSkillRun(skill, result);
+    return done(result.ok, { message: result.message, outputs: result.outputsWritten, needsRelearn: result.needsRelearn });
+  }
+  if (sub === "import-login") {
+    // prevail connectors import-login <id> [--host <domain>] [--json]
+    // One-time: copy the user's existing login cookies for the site into the
+    // connector's dedicated Prevail profile (Chrome must be quit). Scoped to the
+    // site's host(s) only — never the whole browser.
+    const id = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+    const json = args.includes("--json");
+    const flag = (n: string) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
+    const done = (ok: boolean, payload: Record<string, unknown>) => {
+      if (json) { process.stdout.write(`${JSON.stringify({ ok, ...payload })}\n`); process.exit(0); }
+      if (ok) console.log(`✓ ${payload.message ?? "done"}`); else { console.error(`✗ ${payload.error ?? payload.message ?? "failed"}`); process.exit(1); }
+      process.exit(0);
+    };
+    if (!id) return done(false, { error: "usage: prevail connectors import-login <id> [--host <domain>]" });
+    const app = apps.find((a) => a.id === id);
+    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    // Host(s): explicit --host wins; else manifest start_url/login_url/homepage; else derive from id.
+    let host = flag("--host") ?? "";
+    if (!host) {
+      try {
+        const { readFileSync } = await import("node:fs");
+        const m = JSON.parse(readFileSync(join(app.path, "manifest.json"), "utf8")) as Record<string, unknown>;
+        host = (typeof m.start_url === "string" && m.start_url) || (typeof m.login_url === "string" && m.login_url) || (typeof m.homepage === "string" && m.homepage) || "";
+      } catch { /* no manifest */ }
+    }
+    if (!host) host = `${id.toLowerCase().replace(/-(com|org|net|io|co|app|ai|dev)$/, ".$1").replace(/[^a-z0-9.]/g, "")}`;
+    const profileDir = join(app.path, "auth", "profile");
+    const { importChromeLogins } = await import("./browser-import.ts");
+    const r = await importChromeLogins(profileDir, [host]);
+    return done(r.ok, { message: r.message, imported: r.imported, error: r.ok ? undefined : r.message });
+  }
+  if (sub === "seed-recipe") {
+    // prevail connectors seed-recipe <id> [--recipe <recipeId>] [--skill <skillId>] [--json]
+    // Seed a deterministic replay skill from a bundled portal recipe (no LLM) —
+    // the browser connector works from day one for a known bank/broker/portal.
+    const id = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+    const json = args.includes("--json");
+    const flag = (n: string) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
+    const done = (ok: boolean, payload: Record<string, unknown>) => {
+      if (json) { process.stdout.write(`${JSON.stringify({ ok, ...payload })}\n`); process.exit(0); }
+      if (ok) console.log(`✓ ${payload.message ?? "done"}`);
+      else { console.error(`✗ ${payload.error ?? payload.message ?? "failed"}`); process.exit(1); }
+      process.exit(0);
+    };
+    if (!id) return done(false, { error: "usage: prevail connectors seed-recipe <id> [--recipe <recipeId>] [--skill <skillId>]" });
+    const app = apps.find((a) => a.id === id);
+    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    const { matchRecipe, seedSkillFromRecipe } = await import("./recipes.ts");
+    const recipe = matchRecipe(flag("--recipe") ?? id);
+    if (!recipe) return done(false, { error: `no bundled recipe matches "${flag("--recipe") ?? id}" (list: prevail connectors recipes)` });
+    const r = seedSkillFromRecipe(app.path, app.id, recipe, flag("--skill") ?? "sync");
+    return done(r.ok, { message: r.message, path: r.path, error: r.ok ? undefined : r.message });
+  }
+  if (sub === "recipes") {
+    // prevail connectors recipes [--json] — list the bundled portal recipes.
+    const { loadRecipes } = await import("./recipes.ts");
+    const recipes = loadRecipes().map((r) => ({ id: r.id, label: r.label, automatable: !!(r.actions && r.actions.length) }));
+    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(recipes)}\n`); process.exit(0); }
+    for (const r of recipes) console.log(`${r.automatable ? "▶" : "·"} ${r.id.padEnd(18)} ${r.label}`);
+    return;
+  }
   if (sub === "connect") {
     // prevail connectors connect --name <app> --goal <what to pull> --vault <path> [--cli] [--model] [--json]
     // The Connection Agent: research the best way to connect this app RIGHT NOW
@@ -2440,6 +2606,15 @@ async function connectorsCommand(args: string[]): Promise<void> {
       const r = setCommunityAppPullInstructions(id, value ?? "", connectorsVault);
       if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
       if (r.ok) console.log(r.pullInstructions ? `pull instructions for "${id}" set` : `pull instructions for "${id}" cleared`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
+    // prevail connectors set <id> soul "<why this app is in your harness>"  ("" clears it)
+    if (id && field === "soul") {
+      const { setCommunityAppSoul } = await import("./vault.ts");
+      const r = setCommunityAppSoul(id, value ?? "", connectorsVault);
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(r.soul ? `soul for "${id}" set` : `soul for "${id}" cleared`);
       else { console.error(r.error); process.exit(1); }
       return;
     }
@@ -4104,6 +4279,36 @@ async function searchCommand(args: string[]): Promise<number> {
 }
 
 async function main() {
+  // Hidden subcommand: the fixed Playwright browser driver. It is spawned as a
+  // CHILD of the engine (by BrowserDriverHost) with a minimal env and NO vault
+  // DEK — so it must short-circuit here, before any vault-session init, and
+  // never run the normal CLI. It only speaks JSON over stdin/stdout.
+  if (process.argv.includes("__browser-driver")) {
+    const { runBrowserDriverChild } = await import("./browser-driver.ts");
+    await runBrowserDriverChild();
+    return;
+  }
+
+  // Hidden subcommand: install Playwright's Chromium into PLAYWRIGHT_BROWSERS_PATH
+  // (auto-download on first browser use — Chromium is NOT bundled in the signed
+  // app). Run as a SEPARATE child so its download progress never pollutes the
+  // driver's JSON channel. Replays playwright-core's own `install` command.
+  if (process.argv.includes("__install-chromium")) {
+    try {
+      // @ts-expect-error untyped playwright-core internal (the CLI program lives here)
+      const core = await import("playwright-core/lib/coreBundle");
+      // @ts-expect-error untyped playwright-core internal (commander program)
+      const utils = await import("playwright-core/lib/utilsBundle");
+      const program = (utils as { program: { parseAsync: (a: string[]) => Promise<unknown> } }).program;
+      (core as { libCli: { decorateProgram: (p: unknown) => void } }).libCli.decorateProgram(program);
+      await program.parseAsync(["node", "cli", "install", "chromium"]);
+    } catch (e) {
+      console.error(`chromium install failed: ${String((e as Error)?.message || e)}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // Pick up an encrypted-vault session key (base64 DEK in PREVAIL_VAULT_KEY,
   // supplied by the host) before any vault read happens. No key / plaintext
   // vault = pure passthrough, so this is a no-op for the common case.
