@@ -333,9 +333,16 @@ export async function runOneLoop(
   // (data/domains/general on a v4 vault, else the legacy vault root).
   const isGeneral = domainName.toLowerCase() === "general";
   const gdir = generalDir(root);
-  const scanned = scanVault(root).find((d) => d.name === domainName)?.path;
-  const candidates = [scanned, isGeneral ? gdir : null, join(root, "data", "domains", domainName), join(root, "domains", domainName), join(root, domainName)].filter(Boolean) as string[];
-  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? (isGeneral ? gdir : scanned ?? join(root, "domains", domainName));
+  // Match the domain by name case-INSENSITIVELY and prefer the path scanVault
+  // actually found on disk. This matters for encrypted vaults, where files are
+  // keyed by their canonical (lowercased slug) relative path: a mis-cased name
+  // (e.g. "Career" vs the on-disk "career") still resolves via the case-
+  // insensitive macOS filesystem for existsSync, but then fails to decrypt -
+  // which surfaced as a bogus "no loops in this domain" on Run now.
+  const dl = domainName.toLowerCase().trim();
+  const scanned = scanVault(root).find((d) => d.name.toLowerCase() === dl)?.path;
+  const candidates = [scanned, isGeneral ? gdir : null, join(root, "data", "domains", dl), join(root, "domains", dl), join(root, dl)].filter(Boolean) as string[];
+  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? (isGeneral ? gdir : scanned ?? join(root, "data", "domains", dl));
   const doc = readDoc(domainDir);
   if (!doc) return empty("no loops in this domain");
   const loop = doc.loops.find((l) => l.id === loopRef || l.name === loopRef);
