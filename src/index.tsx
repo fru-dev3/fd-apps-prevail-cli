@@ -64,6 +64,8 @@ interface Args {
   manifestArgs: string[];
   chat: boolean;
   chatArgs: string[];
+  agentRun: boolean;
+  agentRunArgs: string[];
   score: boolean;
   scoreArgs: string[];
   alignment: boolean;
@@ -152,6 +154,8 @@ function parseArgs(argv: string[]): Args {
   let manifestArgs: string[] = [];
   let chat = false;
   let chatArgs: string[] = [];
+  let agentRun = false;
+  let agentRunArgs: string[] = [];
   let score = false;
   let scoreArgs: string[] = [];
   let alignment = false;
@@ -295,6 +299,10 @@ function parseArgs(argv: string[]): Args {
       chat = true;
       chatArgs = argv.slice(i + 1);
       break;
+    } else if (a === "agent-run") {
+      agentRun = true;
+      agentRunArgs = argv.slice(i + 1);
+      break;
     } else if (a === "score") {
       score = true;
       scoreArgs = argv.slice(i + 1);
@@ -427,6 +435,8 @@ function parseArgs(argv: string[]): Args {
     manifestArgs,
     chat,
     chatArgs,
+    agentRun,
+    agentRunArgs,
     score,
     scoreArgs,
     alignment,
@@ -4605,6 +4615,11 @@ async function main() {
   if (args.manifest) {
     await manifestCommand(args.manifestArgs, args.vaultPath);
     return;
+  }
+  if (args.agentRun) {
+    const { agentRunCommand } = await import("./agent-run.ts");
+    const code = await agentRunCommand(args.agentRunArgs, args.vaultPath);
+    process.exit(code);
   }
   if (args.chat) {
     const { chatJsonCommand } = await import("./chat-json.ts");
