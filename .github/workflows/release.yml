@@ -62,6 +62,7 @@ jobs:
         run: |
           mkdir -p dist
           bun build --compile \
+            --external chromium-bidi \
             --target=${{ matrix.bun-target }} \
             --outfile=dist/prevail \
             src/index.tsx
