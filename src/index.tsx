@@ -2037,6 +2037,16 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     return;
   }
+  if (sub === "soul") {
+    // The app's soul (same construct domains use): prevail connectors soul <id> → reads soul.md.
+    const id = args[1];
+    if (!id) { console.error("usage: prevail connectors soul <connector-id>"); process.exit(1); }
+    const { getCommunityAppSoul } = await import("./vault.ts");
+    const r = getCommunityAppSoul(id, connectorsVault);
+    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); return; }
+    console.log(r.soul || "(no soul set)");
+    return;
+  }
   if (sub === "gateway-capabilities") {
     // Discover what data a gateway app CAN provide (one agent turn over the
     // gateway). On-demand (the desktop's "Discover" button), not the sync.
@@ -2300,6 +2310,14 @@ async function connectorsCommand(args: string[]): Promise<void> {
       } catch { /* no manifest */ }
     }
     if (!url) return done(false, { error: "no start url (pass --url or set start_url/login_url in the manifest)" });
+    // The app's soul (apps/<id>/soul.md) — fold it in as context so the agent
+    // always knows WHY this app is in the user's harness.
+    const { getCommunityAppSoul } = await import("./vault.ts");
+    const soul = getCommunityAppSoul(id, connectorsVault).soul;
+    const baseGoal = goal || `Fetch the latest data from ${id}`;
+    const effectiveGoal = soul
+      ? `Why ${app.title || id} is in the user's harness (their soul note): ${soul}\n\nTask: ${baseGoal}`
+      : baseGoal;
     const { loadSkillsForConnector, runSkill, logSkillRun } = await import("./connector-skills.ts");
     // Prefer an existing browser-agent skill; else synthesize one from the flags.
     const existing = loadSkillsForConnector(app).find((s) => s.runner === "browser-agent");
@@ -2307,7 +2325,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
       id: "learn", filePath: join(app.path, "skills", "learn.md"), runner: "browser-agent" as const,
       auth: [], inputs: [], outputs: [], description: goal || `learn ${id}`,
       connectorId: app.id, connectorDir: app.path,
-      extra: { start_url: url, goal: goal || `Fetch the latest data from ${id}`, ...(recordAs ? { record_as: recordAs } : {}) },
+      extra: { start_url: url, goal: effectiveGoal, ...(recordAs ? { record_as: recordAs } : {}) },
     };
     // --stream: emit the agent's progress as NDJSON for the desktop's live panel
     // (relayed by run_engine_stream). Otherwise run via the normal dispatch.
@@ -2588,6 +2606,15 @@ async function connectorsCommand(args: string[]): Promise<void> {
       const r = setCommunityAppPullInstructions(id, value ?? "", connectorsVault);
       if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
       if (r.ok) console.log(r.pullInstructions ? `pull instructions for "${id}" set` : `pull instructions for "${id}" cleared`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
+    // prevail connectors set <id> soul "<why this app is in your harness>"  ("" clears it)
+    if (id && field === "soul") {
+      const { setCommunityAppSoul } = await import("./vault.ts");
+      const r = setCommunityAppSoul(id, value ?? "", connectorsVault);
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(r.soul ? `soul for "${id}" set` : `soul for "${id}" cleared`);
       else { console.error(r.error); process.exit(1); }
       return;
     }

@@ -1625,6 +1625,72 @@ export function setCommunityAppPullInstructions(
   }
 }
 
+// The app's "soul": a free-form markdown note declaring WHY this app is in the
+// user's harness and what it feeds their world — the same construct domains use
+// (soul.md). Stored as <app>/soul.md so the agent can always read it as standing
+// context. Reading prefers the writable vault mirror; writing targets the app
+// dir and falls back to the writable apps container when the app is a read-only
+// bundle.
+function appSoulPaths(id: string, vaultPath?: string): { primary: string | null; mirror: string; name: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
+  const vaultRoot = vaultPath || process.env.PREVAIL_VAULT_ROOT;
+  const base = process.env.PREVAIL_APPS_DIR
+    || (vaultRoot ? appsContainer(vaultRoot) : join(homedir(), ".prevail", "apps"));
+  const mirror = join(base, cleanId, "soul.md");
+  return { primary: app?.path ? join(app.path, "soul.md") : null, mirror, name: app?.title || cleanId };
+}
+
+// soul.md mirrors the domain format (`# Title` / `> north-star` / body). The UI
+// frames it with the app name + "Soul" label, so for display/context we return
+// just the soul prose — dropping the heading and the instructional blockquote.
+function soulBody(raw: string): string {
+  return stripFrontmatter(raw)
+    .split("\n")
+    .filter((line) => { const t = line.trim(); return !t.startsWith("#") && !t.startsWith(">"); })
+    .join("\n")
+    .trim();
+}
+
+export function getCommunityAppSoul(
+  id: string,
+  vaultPath?: string,
+): { ok: boolean; soul: string; path?: string } {
+  if (!(id ?? "").trim()) return { ok: false, soul: "" };
+  const { primary, mirror } = appSoulPaths(id, vaultPath);
+  for (const p of [mirror, primary].filter(Boolean) as string[]) {
+    if (existsSync(p)) {
+      try { return { ok: true, soul: soulBody(vreadFile(p)), path: p }; }
+      catch { /* try next */ }
+    }
+  }
+  return { ok: true, soul: "" };
+}
+
+export function setCommunityAppSoul(
+  id: string,
+  soul: string,
+  vaultPath?: string,
+): { ok: boolean; path?: string; soul?: string; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const { primary, mirror, name } = appSoulPaths(id, vaultPath);
+  const body = soulBody(soul ?? "").slice(0, 8000); // accept either raw body or a full soul.md
+  // Persist in the same shape domains use, so the file stands on its own too.
+  const file = body ? `# ${name}\n\n> Why this app is in your harness — what it feeds your world.\n\n${body}\n` : "";
+  const targets = [primary, mirror].filter(Boolean) as string[];
+  let lastErr = "no writable location";
+  for (const target of targets) {
+    try {
+      mkdirSync(dirname(target), { recursive: true });
+      if (!file) { if (existsSync(target)) rmSync(target); }
+      else { writeFileSync(target, file); }
+      return { ok: true, path: target, soul: body };
+    } catch (e) { lastErr = String(e); }
+  }
+  return { ok: false, error: `update failed: ${lastErr}` };
+}
+
 // Enable / disable a connector's autonomous sync. A disabled connector stays
 // fully configured and chattable; the sync daemon simply skips it (see
 // daemon-sync.ts). We persist only when disabling — enabling clears the key so
