@@ -70,13 +70,20 @@ jobs:
           cp -R vault-demo dist/vault-demo
           cp -R skill-packs dist/skill-packs
           cp AGENTS-operating.md dist/AGENTS-operating.md
+          # Ship playwright-core as an ON-DISK SIDECAR next to the binary (#6).
+          # bun --compile cannot make playwright-core resolvable inside /$bunfs
+          # (its internals look for their package.json at the build-time
+          # node_modules path), so the engine loads this real copy at runtime via
+          # src/playwright-resolve.ts -> dirname(execPath)/node_modules/playwright-core.
+          mkdir -p dist/node_modules
+          cp -R node_modules/playwright-core dist/node_modules/playwright-core
           chmod +x dist/prevail
 
       - name: package
         working-directory: dist
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
-          tar -czf "prevail-${VERSION}-${{ matrix.target }}.tar.gz" prevail vault-demo AGENTS-operating.md
+          tar -czf "prevail-${VERSION}-${{ matrix.target }}.tar.gz" prevail vault-demo AGENTS-operating.md node_modules
           ls -la
 
       - name: upload build artifact

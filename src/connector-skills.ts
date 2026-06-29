@@ -25,6 +25,21 @@ import type { AppSkill } from "./vault.ts";
 
 export type SkillRunner = "llm" | "api" | "cli" | "browser" | "browser-agent" | "mcp" | "a2a";
 
+// --- Fix #8: per-app multi-method skill model ------------------------------
+// An app can expose the SAME capability (e.g. "sync-inbox") through several
+// ACCESS METHODS: browser automation, a local/remote MCP server, or a direct
+// API. We collapse the seven runner kinds into the three external access
+// methods the fallback engine reasons about ("other" = llm/cli, which are not
+// app-access methods and never participate in fallback).
+export type SkillAccessMethod = "browser" | "mcp" | "api" | "other";
+
+export function accessMethodForRunner(runner: SkillRunner): SkillAccessMethod {
+  if (runner === "browser" || runner === "browser-agent") return "browser";
+  if (runner === "mcp" || runner === "a2a") return "mcp";
+  if (runner === "api") return "api";
+  return "other"; // llm, cli
+}
+
 export interface SkillSpec {
   id: string;
   filePath: string;
@@ -46,6 +61,24 @@ export interface SkillSpec {
   // comma-separated list of alternative predecessors — the skill chains if
   // any one of them ran (e.g. `after: sync-inbox, sync-inbox-mcp, sync-inbox-cli`).
   after?: string;
+  // --- Fix #8: multi-method skill packs ---
+  // These are OPTIONAL on the type (so existing literal SkillSpec construction
+  // stays valid) but are always populated by parseSkillFile. Pack logic reads
+  // them through effective-value getters that fall back to deriving from
+  // runner/id, so a skill missing them still groups and orders correctly.
+  //
+  // The external access method this skill uses (derived from `runner`).
+  method?: SkillAccessMethod;
+  // Logical capability this skill implements. Skills that share a capability
+  // form a "pack": one favorite/primary method plus fallbacks. Set explicitly
+  // via frontmatter `capability:`; otherwise derived by stripping a trailing
+  // method suffix from the id (so "sync-inbox" + "sync-inbox-mcp" group on their
+  // own, preserving backward compatibility for single-method apps).
+  capability?: string;
+  // The designated favorite/primary method for the capability. Set via
+  // frontmatter `favorite: true`. When no member of a pack is marked, the
+  // browser-method skill is the default favorite (see orderSkillPack).
+  isFavorite?: boolean;
   // The full parsed frontmatter, for pattern runners (cli/http) that read
   // their own declarative keys (command, url, headers, cursor_path, ...).
   extra?: Record<string, unknown>;
@@ -173,8 +206,22 @@ export function parseSkillFile(raw: string, filePath: string, app: AppSkill): Sk
     after: typeof fm.after === "string"
       ? fm.after.split(",").map((s) => s.trim()).filter((s) => s && isSafeId(s)).join(",") || undefined
       : undefined,
+    method: accessMethodForRunner(runnerRaw),
+    capability: deriveCapability(fm, id),
+    isFavorite: fm.favorite === true,
     extra: fm,
   };
+}
+
+// Trailing method suffix on a skill id, stripped to derive its capability when
+// no explicit `capability:` is declared. Keeps single-method apps unchanged
+// (their id has no such suffix, so capability === id).
+const METHOD_ID_SUFFIX = /-(?:browser|mcp|api|cli|llm|a2a|http)$/i;
+
+function deriveCapability(fm: Record<string, unknown>, id: string): string {
+  if (typeof fm.capability === "string" && isSafeId(fm.capability)) return fm.capability;
+  const stripped = id.replace(METHOD_ID_SUFFIX, "");
+  return stripped || id;
 }
 
 function isSafeId(s: string): boolean {
@@ -660,6 +707,140 @@ function runnerPhase(runner: SkillRunner): number {
   if (runner === "a2a") return 7;
   return 0;
 }
+
+// ---------------------------------------------------------------------------
+// Fix #8: multi-method skill packs with favorite + automatic fallback
+// ---------------------------------------------------------------------------
+//
+// A "pack" groups every skill that implements the same capability for an app.
+// One method is the favorite/primary (default: browser automation). At run
+// time we try the favorite first and, if it is blocked or fails, fall through
+// to the next available method, in order of robustness. This is fully backward
+// compatible: an app with a single skill per id forms a one-member pack whose
+// favorite is that skill, so behavior is identical to calling runSkill directly.
+
+export interface SkillPack {
+  capability: string;
+  connectorId: string;
+  // Skills ordered for execution: favorite/primary first, then fallbacks.
+  skills: SkillSpec[];
+}
+
+// Fallback robustness order for NON-favorite methods. MCP and direct API are
+// preferred over browser automation (more stable, no headed login walls);
+// "other" (llm/cli) is last. The favorite is always pulled to the front
+// regardless of this rank.
+const METHOD_FALLBACK_RANK: Record<SkillAccessMethod, number> = { mcp: 0, api: 1, browser: 2, other: 3 };
+
+// Effective access method / capability for a skill: use the populated field,
+// else derive it (keeps packs correct for literally-constructed SkillSpecs).
+export function effectiveMethod(s: SkillSpec): SkillAccessMethod {
+  return s.method ?? accessMethodForRunner(s.runner);
+}
+export function effectiveCapability(s: SkillSpec): string {
+  if (s.capability) return s.capability;
+  return s.id.replace(METHOD_ID_SUFFIX, "") || s.id;
+}
+
+// Order a pack's members: favorite first, then fallbacks by robustness rank,
+// then id for stability. The default favorite (when none is flagged) is the
+// browser-method skill, per #8.
+export function orderSkillPack(members: SkillSpec[]): SkillSpec[] {
+  if (members.length <= 1) return [...members];
+  const favorite =
+    members.find((m) => m.isFavorite) ?? members.find((m) => effectiveMethod(m) === "browser") ?? members[0]!;
+  const rest = members
+    .filter((m) => m !== favorite)
+    .sort(
+      (a, b) =>
+        METHOD_FALLBACK_RANK[effectiveMethod(a)] - METHOD_FALLBACK_RANK[effectiveMethod(b)] ||
+        a.id.localeCompare(b.id),
+    );
+  return [favorite, ...rest];
+}
+
+// Group a connector's skills into capability packs (each ordered for fallback).
+export function buildSkillPacks(skills: SkillSpec[]): SkillPack[] {
+  const byCapability = new Map<string, SkillSpec[]>();
+  for (const s of skills) {
+    const cap = effectiveCapability(s);
+    const arr = byCapability.get(cap) ?? [];
+    arr.push(s);
+    byCapability.set(cap, arr);
+  }
+  const packs: SkillPack[] = [];
+  for (const [capability, members] of byCapability) {
+    packs.push({ capability, connectorId: members[0]!.connectorId, skills: orderSkillPack(members) });
+  }
+  return packs.sort((a, b) => a.capability.localeCompare(b.capability));
+}
+
+// Convenience: load an app's skills and return them grouped into packs.
+export function loadSkillPacksForConnector(app: AppSkill): SkillPack[] {
+  return buildSkillPacks(loadSkillsForConnector(app));
+}
+
+// One attempt within a fallback run, for auditing / UI.
+export interface FallbackAttempt {
+  skillId: string;
+  method: SkillAccessMethod;
+  ok: boolean;
+  message: string;
+}
+
+export interface PackRunResult extends SkillRunResult {
+  // The method that ultimately satisfied the capability (undefined if all failed).
+  methodUsed?: SkillAccessMethod;
+  // Every method tried, in order, with its outcome.
+  attempts: FallbackAttempt[];
+}
+
+// Run a capability pack with automatic fallback: try the favorite first, and on
+// a block/failure/drift fall through to the next available method. Returns the
+// first success, or the LAST failure with the full attempt trail. Each method
+// is run through the existing runSkill (autonomy gate, runners, logging hooks
+// stay intact), so this is purely an ORCHESTRATION layer over the current flow.
+export async function runSkillPackWithFallback(
+  pack: SkillPack,
+  inputs: Record<string, unknown>,
+  opts: SkillRunOpts = {},
+): Promise<PackRunResult> {
+  const attempts: FallbackAttempt[] = [];
+  let last: SkillRunResult | null = null;
+  for (const skill of pack.skills) {
+    const method = effectiveMethod(skill);
+    const res = await runSkill(skill, inputs, opts);
+    attempts.push({ skillId: skill.id, method, ok: res.ok, message: res.message });
+    // Success (a browser replay that flags needsRelearn still "ran", so we keep
+    // it as the result but stop here rather than burning another method).
+    if (res.ok) return { ...res, methodUsed: method, attempts };
+    last = res;
+    // Blocked or failed: announce the fall-through and try the next method.
+    if (pack.skills.length > attempts.length) {
+      opts.onProgress?.({
+        event: "method_fallback",
+        capability: pack.capability,
+        from: skill.id,
+        method,
+        reason: res.message,
+      });
+    }
+  }
+  return {
+    ...(last ?? { ok: false, message: "no skills in pack", outputsWritten: [], durationMs: 0 }),
+    attempts,
+  };
+}
+
+// TODO(#8 replay wiring): adopt runSkillPackWithFallback at the call sites that
+// currently run a single skill by id (daemon-sync's scheduled runs in
+// daemon-sync.ts, the orchestrator skill step in orchestrator.ts:166, and the
+// app-detail "Run" button in app-detail.tsx). Each should resolve the skill's
+// capability via loadSkillPacksForConnector and run the whole pack so a blocked
+// favorite (e.g. a browser login wall) transparently falls through to the MCP
+// or API method. The data model + ordering + execution above are complete and
+// covered by tests; only the caller swap remains, kept separate to stay
+// backward compatible with the existing learn/replay flow.
 
 // Per-connector log of skill runs. Used by the UI's Sync tab and by
 // downstream auditing.

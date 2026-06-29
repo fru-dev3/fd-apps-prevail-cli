@@ -14,6 +14,7 @@
 import { join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
+import { loadPlaywrightCore } from "./playwright-resolve.ts";
 
 // The user's real Chrome "User Data" dir (the parent that holds Default/). On
 // macOS this is the only location; we keep it mac-first (Prevail is mac-first).
@@ -50,7 +51,7 @@ export async function importChromeLogins(prevailProfileDir: string, rawHosts: st
   const userDataDir = realChromeUserDataDir();
   if (!userDataDir) return { ok: false, imported: 0, message: "no Google Chrome profile found on this machine" };
 
-  const pw = await import("playwright-core");
+  const pw = await loadPlaywrightCore();
 
   // 1) Read cookies from the user's REAL Chrome (Chrome decrypts its own store).
   //    Requires Chrome to be quit — otherwise the profile is locked.

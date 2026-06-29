@@ -4425,10 +4425,11 @@ async function main() {
   // driver's JSON channel. Replays playwright-core's own `install` command.
   if (process.argv.includes("__install-chromium")) {
     try {
-      // @ts-expect-error untyped playwright-core internal (the CLI program lives here)
-      const core = await import("playwright-core/lib/coreBundle");
-      // @ts-expect-error untyped playwright-core internal (commander program)
-      const utils = await import("playwright-core/lib/utilsBundle");
+      // Resolve the install CLI from the on-disk sidecar playwright-core so it
+      // works inside the compiled binary too (see playwright-resolve.ts).
+      const { loadPlaywrightSubmodule } = await import("./playwright-resolve.ts");
+      const core = await loadPlaywrightSubmodule("lib/coreBundle");
+      const utils = await loadPlaywrightSubmodule("lib/utilsBundle");
       const program = (utils as { program: { parseAsync: (a: string[]) => Promise<unknown> } }).program;
       (core as { libCli: { decorateProgram: (p: unknown) => void } }).libCli.decorateProgram(program);
       await program.parseAsync(["node", "cli", "install", "chromium"]);

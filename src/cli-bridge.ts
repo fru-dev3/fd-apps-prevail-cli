@@ -904,7 +904,7 @@ const WEB_DENY_NOTE = [
   "The user has globally disabled web access for this cockpit session.",
   "Do NOT use WebSearch, WebFetch, fetch(), curl, or any other tool that",
   "makes outbound HTTP requests. Work only from the vault and local files.",
-  "If a question genuinely requires the web, say so plainly and stop —",
+  "If a question genuinely requires the web, say so plainly and stop;",
   "do not silently proceed without web access.",
   "</web-access>",
 ].join("\n");
@@ -915,7 +915,57 @@ function augmentManualWithWebGate(manual: string | null, mode: "allow" | "deny")
   return `${manual}\n\n${WEB_DENY_NOTE}`;
 }
 
+// --- Fix #10: no em dashes in AI-generated output ---------------------------
+//
+// (a) A prompt directive injected into every turn (Claude via its system
+//     channel, other CLIs prepended to the prompt). Prompt directives are
+//     unreliable on their own, so (b) the sanitizer below is the hard guarantee.
+const NO_EM_DASH_DIRECTIVE = [
+  "# OUTPUT STYLE (HARD RULE)",
+  "Never use em dashes (Unicode U+2014) anywhere in your responses, and do not use en dashes (Unicode U+2013) as sentence punctuation.",
+  "Use commas, periods, colons, semicolons, or parentheses instead.",
+  "This applies to all prose you write.",
+].join("\n");
+
+function buildNoEmDashPreamble(): string {
+  return `${NO_EM_DASH_DIRECTIVE}\n\n---\n\n`;
+}
+
+// (b) The hard guarantee: strip em dashes from model output before it is
+// returned / streamed / persisted. We replace the em dash (U+2014) and any
+// SPACED en dash used as a sentence dash (U+2013 with a space on each side)
+// with a comma, the safest general substitute. Hyphens, en-dash NUMBER RANGES
+// ("3-5" with no surrounding spaces), and code are left intact. Fenced code
+// blocks and inline code spans are preserved verbatim so we never mangle source
+// that legitimately contains these characters.
+function stripEmDashesProse(s: string): string {
+  return s
+    // Em dash (U+2014), with any surrounding spaces collapsed -> ", ".
+    .replace(/\s*—\s*/g, ", ")
+    // En dash (U+2013) used as a sentence dash (spaces on BOTH sides) -> ", ".
+    // A bare numeric range like "3–5" has no surrounding spaces, untouched.
+    .replace(/\s+–\s+/g, ", ");
+}
+
+export function sanitizeEmDashes(text: string): string {
+  if (!text || (!text.includes("—") && !text.includes("–"))) return text;
+  // Split out fenced code blocks and inline code spans (kept verbatim). The
+  // capturing group lands code segments at ODD indices, prose at EVEN indices.
+  const segments = text.split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+  for (let i = 0; i < segments.length; i += 2) {
+    segments[i] = stripEmDashesProse(segments[i]!);
+  }
+  return segments.join("");
+}
+
 export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, maxOutputChars, guard, webAccess }: ChatTurn): Promise<string> {
+  // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
+  // never shows them. The final returned reply is sanitized again below (the
+  // authoritative, code-block-aware pass). Per-delta stripping is best-effort
+  // for display; the final pass is the hard guarantee.
+  const upstreamOnChunk = onChunk;
+  onChunk = upstreamOnChunk ? (delta: string) => upstreamOnChunk(sanitizeEmDashes(delta)) : undefined;
+
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
   const domainKeyForGuard = basename(cwd);
@@ -1027,7 +1077,11 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   // system-prompt flag get it prepended to the prompt so it still governs.
   const vaultLockPreamble = vaultLockOn() ? buildVaultLockPreamble() : null;
   const promptVaultLock = vaultLockPreamble && cli.kind !== "claude" ? vaultLockPreamble : "";
-  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + buildFrameworkPreamble(framework) + prompt;
+  // Fix #10 (a): the no-em-dash style directive. Claude gets it via the system
+  // channel (in claudeSystem below); CLIs without a system-prompt flag get it
+  // prepended to the prompt so it still governs the turn.
+  const promptNoEmDash = cli.kind !== "claude" ? buildNoEmDashPreamble() : "";
+  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
   // A prompt that begins with '-' makes the runtime CLI's option parser treat the
   // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
   // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
@@ -1046,7 +1100,10 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   // the per-day wall honest against a runaway loop.
   const reply = await dispatchTurn();
   if (budgetEstimate && guard) recordSpend(budgetEstimate, guard.budget);
-  return reply;
+  // Fix #10 (b): the hard guarantee. Strip em dashes from the complete reply
+  // before it is returned to ANY caller (persisted to the vault, rendered, fed
+  // into a council/skill). Code-block aware so code is never mangled.
+  return sanitizeEmDashes(reply);
 
   async function dispatchTurn(): Promise<string> {
   if (cli.kind === "claude") {
@@ -1057,7 +1114,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to
