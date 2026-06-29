@@ -151,13 +151,26 @@ export interface SkillRunResult {
 // list. Caller can list the parse errors via parseSkillFile directly if
 // they need diagnostics.
 export function loadSkillsForConnector(app: AppSkill): SkillSpec[] {
-  const skillsDir = join(app.path, "skills");
+  return loadSkillsFromDir(join(app.path, "skills"), app);
+}
+
+// Parse every skill file under an explicit `skills` directory, attributing each
+// to `app` (connectorId/connectorDir). Used both for an app's own skills dir
+// (loadSkillsForConnector) and for shipped starter-pack dirs that have not been
+// seeded into the vault yet (listAvailableSkills).
+export function loadSkillsFromDir(skillsDir: string, app: AppSkill): SkillSpec[] {
   if (!existsSync(skillsDir)) return [];
   const out: SkillSpec[] = [];
   // Two layouts supported: a flat `skills/<id>.md` file, or a
   // `skills/<id>/SKILL.md` subdirectory (mirrors how a connector itself is a
   // folder with a SKILL.md). Real community apps use the subdirectory form.
-  for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+  let entries: import("node:fs").Dirent[] = [];
+  try {
+    entries = readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
     let filePath: string | null = null;
     if (entry.isDirectory()) {
       const inner = join(skillsDir, entry.name, "SKILL.md");
@@ -174,6 +187,72 @@ export function loadSkillsForConnector(app: AppSkill): SkillSpec[] {
     }
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// One entry in the AVAILABLE-skills listing the desktop renders. This is the
+// stable wire contract for `prevail connectors skills <id> --json`: every field
+// is required so the desktop can render + run a skill with no second call. The
+// `spec` is carried for in-process callers (skill-run) and is NOT serialized.
+export interface AvailableSkill {
+  id: string;
+  name: string;
+  method: SkillAccessMethod;
+  primary: boolean;                 // the favorite/lead of its capability pack
+  source: "starter" | "learned";    // shipped pack vs browser-learned in the vault
+  trigger: string;
+  summary: string;
+  spec: SkillSpec;
+}
+
+// A human label for a skill id: "sync-inbox-browser" -> "Sync Inbox Browser".
+function niceSkillName(id: string): string {
+  return id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim() || id;
+}
+
+// First real prose line of a skill body (skip headings, tables, code fences),
+// capped, for the listing summary.
+function skillSummary(description: string): string {
+  for (const raw of (description ?? "").split("\n")) {
+    const t = raw.trim();
+    if (t && !t.startsWith("#") && !t.startsWith("|") && !t.startsWith("```") && !t.startsWith(">")) {
+      return t.replace(/[*_`>]/g, "").replace(/^[-\s]+/, "").slice(0, 200);
+    }
+  }
+  return "";
+}
+
+// The app's AVAILABLE skills: shipped starter-pack skills (parsed directly from
+// the bundled `shippedDirs`, even when the app is not connected or seeded)
+// MERGED with any skills already on disk in the app's own skills dir (seeded
+// starters and browser-learned skills), deduped by id. The on-disk spec wins as
+// the runnable spec; `source` is "starter" whenever the id ships in a pack, else
+// "learned". `primary` marks the favorite/lead of each capability pack.
+export function listAvailableSkills(app: AppSkill, shippedDirs: string[]): AvailableSkill[] {
+  const byId = new Map<string, SkillSpec>();
+  const shippedIds = new Set<string>();
+  for (const dir of shippedDirs) {
+    for (const s of loadSkillsFromDir(dir, app)) {
+      shippedIds.add(s.id);
+      if (!byId.has(s.id)) byId.set(s.id, s);
+    }
+  }
+  // On-disk skills are authoritative (the seeded/edited/learned versions).
+  for (const s of loadSkillsForConnector(app)) byId.set(s.id, s);
+
+  const specs = [...byId.values()];
+  const primaryIds = new Set(buildSkillPacks(specs).map((p) => p.skills[0]!.id));
+  return specs
+    .map((spec) => ({
+      id: spec.id,
+      name: niceSkillName(spec.id),
+      method: effectiveMethod(spec),
+      primary: primaryIds.has(spec.id),
+      source: (shippedIds.has(spec.id) ? "starter" : "learned") as "starter" | "learned",
+      trigger: spec.trigger ?? "on-demand",
+      summary: skillSummary(spec.description),
+      spec,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export function parseSkillFile(raw: string, filePath: string, app: AppSkill): SkillSpec | null {

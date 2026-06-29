@@ -746,21 +746,88 @@ export function seedSkillPack(sub: string, dest: string): number {
   return copied;
 }
 
+// Bundled (read-only, ship-with-the-binary) community app roots: the
+// apps/community adjacency only, WITHOUT the user/legacy ~/.prevail/apps or the
+// vault's data/apps. Used to locate an app's SHIPPED starter skills regardless
+// of whether the app has been scaffolded into a vault.
+function bundledCommunityRoots(): string[] {
+  const dirs: string[] = [];
+  try {
+    const e = dirname(process.execPath);
+    dirs.push(resolve(e, "apps", "community"), resolve(e, "..", "apps", "community"));
+  } catch {}
+  if (process.argv[1]) {
+    try {
+      const a = dirname(process.argv[1]);
+      dirs.push(resolve(a, "apps", "community"), resolve(a, "..", "apps", "community"));
+    } catch {}
+  }
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    dirs.push(resolve(here, "..", "apps", "community"));
+  } catch {}
+  return dirs;
+}
+
+// Absolute paths to an app's SHIPPED starter-skill directories, across both
+// bundled locations: skill-packs/apps/<id>/skills and apps/community/<id>/skills.
+// Only existing dirs are returned, deduped. This lets the skills listing and
+// skill-run surface starter-pack skills BEFORE an app is connected or seeded.
+// A PREVAIL_APPS_DIR override is honored last so CI can ship test packs.
+export function shippedSkillDirsForApp(appId: string): string[] {
+  const id = appId.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (d: string) => {
+    const r = resolve(d);
+    if (!seen.has(r) && existsSync(r)) { seen.add(r); out.push(r); }
+  };
+  const packRoot = skillPacksDir();
+  if (packRoot) add(join(packRoot, "apps", id, "skills"));
+  for (const base of bundledCommunityRoots()) add(join(base, id, "skills"));
+  if (process.env.PREVAIL_APPS_DIR) add(join(process.env.PREVAIL_APPS_DIR, id, "skills"));
+  return out;
+}
+
+// Copy every entry from `src` into `dest`, NEVER clobbering an existing file
+// (edit-safe), returning the number of new entries copied. Shared by the
+// starter-pack seeders.
+function copyNewSkillEntries(src: string, dest: string): number {
+  if (!existsSync(src)) return 0;
+  let copied = 0;
+  try { mkdirSync(dest, { recursive: true }); } catch { return 0; }
+  let entries: import("node:fs").Dirent[] = [];
+  try { entries = readdirSync(src, { withFileTypes: true }); } catch { return 0; }
+  for (const entry of entries) {
+    const to = join(dest, entry.name);
+    if (existsSync(to)) continue; // never overwrite a user's skill
+    try { cpSync(join(src, entry.name), to, { recursive: true }); copied++; } catch { /* best effort */ }
+  }
+  return copied;
+}
+
 // Seed (or top up) an app's STARTER skill pack from the shipped packs at
-// skill-packs/apps/<id>/skills. Idempotent and edit-safe: seedSkillPack never
-// overwrites an existing file, so this is safe to call on connect AND on first
-// access of an already-scaffolded app. Newly shipped methods (e.g. an added
-// browser fallback) land without touching a user's hand-edited skill. Apps with
-// no shipped pack simply no-op (they keep the learn-from-scratch flow). Returns
-// the number of skill files copied (0 when nothing new or no pack exists).
+// skill-packs/apps/<id>/skills AND the bundled apps/community/<id>/skills.
+// Idempotent and edit-safe: never overwrites an existing file, so this is safe
+// to call on connect AND on first access/run of an already-scaffolded app.
+// Newly shipped methods (e.g. an added browser fallback) land without touching a
+// user's hand-edited skill. Apps with no shipped pack simply no-op (they keep
+// the learn-from-scratch flow). Returns the number of skill files copied.
 export function seedAppStarterSkills(appId: string, appPath: string): number {
   const id = appId.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) return 0;
+  const dest = join(appPath, "skills");
+  let copied = 0;
   try {
-    return seedSkillPack(`apps/${id}/skills`, join(appPath, "skills"));
+    for (const src of shippedSkillDirsForApp(id)) {
+      if (resolve(src) === resolve(dest)) continue; // don't copy a dir onto itself
+      copied += copyNewSkillEntries(src, dest);
+    }
   } catch {
-    return 0;
+    /* best effort */
   }
+  return copied;
 }
 
 // Validate + coerce a parsed manifest.json into a shape that's safe to
@@ -1548,8 +1615,20 @@ export function scaffoldCommunityApp(opts: {
     try { seedSkillPack(`apps/${id}/skills`, join(root, "skills")); } catch { /* best effort */ }
     return { ok: true, path: root };
   } catch (e) {
-    return { ok: false, error: `scaffold failed: ${e}` };
+    return { ok: false, error: scaffoldErrorMessage(e, root) };
   }
+}
+
+// Turn a raw write failure into a cause the desktop can show the user. The
+// common real-world failures are a read-only filesystem (packaged install), a
+// permissions problem, or a locked/encrypted vault that hasn't been unlocked.
+function scaffoldErrorMessage(e: unknown, root: string): string {
+  const code = (e as { code?: string } | null)?.code;
+  const msg = e instanceof Error ? e.message : String(e);
+  if (code === "EROFS") return `scaffold failed: the vault location is read-only (${root}). Check the vault path is writable.`;
+  if (code === "EACCES" || code === "EPERM") return `scaffold failed: permission denied writing to ${root}. The vault may be locked or owned by another user.`;
+  if (code === "ENOENT") return `scaffold failed: the vault path does not exist (${root}). Unlock or re-create the vault first.`;
+  return `scaffold failed: ${msg}`;
 }
 
 // Rewrite the many-to-many app→domain binding for an existing community app.

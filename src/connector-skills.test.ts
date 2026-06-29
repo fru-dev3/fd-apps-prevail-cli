@@ -13,6 +13,7 @@ import {
   buildSkillPacks,
   effectiveMethod,
   runSkillPackWithFallback,
+  listAvailableSkills,
   type SkillSpec,
 } from "./connector-skills.ts";
 import type { AppSkill } from "./vault.ts";
@@ -249,6 +250,79 @@ describe("packForSkill (#8 fallback wiring)", () => {
     expect(packs.length).toBe(1);
     expect(packs[0]!.skills[0]!.id).toBe("sync-browser");
     expect(effectiveMethod(packs[0]!.skills[0]!)).toBe("browser");
+  });
+});
+
+describe("listAvailableSkills (starter packs surfaced pre-seed)", () => {
+  // A shipped starter pack with a browser favorite + an api fallback for the
+  // same capability, NOT yet seeded into the app's own vault dir.
+  function shippedPack(): string {
+    const dir = mkdtempSync(join(tmpdir(), "shipped-"));
+    writeFileSync(
+      join(dir, "sync-inbox-browser.md"),
+      [
+        "---",
+        "id: sync-inbox-browser",
+        "runner: browser-agent",
+        "trigger: refresh",
+        "favorite: true",
+        "method: browser",
+        "capability: sync-inbox",
+        "---",
+        "Pull recent important mail using the logged-in browser session.",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(dir, "sync-inbox.md"),
+      [
+        "---",
+        "id: sync-inbox",
+        "runner: api",
+        "trigger: refresh",
+        "capability: sync-inbox",
+        "---",
+        "Pull recent mail via the API as a fallback.",
+      ].join("\n"),
+    );
+    return dir;
+  }
+
+  test("returns shipped starter skills even when the app dir has no skills/ folder", () => {
+    const shipped = shippedPack();
+    const emptyApp = mkdtempSync(join(tmpdir(), "app-")); // no skills/ subdir => not seeded
+    const skills = listAvailableSkills(fakeApp(emptyApp), [shipped]);
+    expect(skills.map((s) => s.id).sort()).toEqual(["sync-inbox", "sync-inbox-browser"]);
+    // Every shipped skill is tagged source "starter".
+    expect(skills.every((s) => s.source === "starter")).toBe(true);
+    // The favorite (browser) leads its capability pack and is marked primary.
+    const browser = skills.find((s) => s.id === "sync-inbox-browser")!;
+    const api = skills.find((s) => s.id === "sync-inbox")!;
+    expect(browser.primary).toBe(true);
+    expect(api.primary).toBe(false);
+    expect(browser.method).toBe("browser");
+    expect(api.method).toBe("api");
+    // Contract fields are all present and non-empty where expected.
+    expect(browser.name).toBe("Sync Inbox Browser");
+    expect(browser.trigger).toBe("refresh");
+    expect(browser.summary.length).toBeGreaterThan(0);
+  });
+
+  test("dedupes shipped + on-disk by id and tags a non-shipped on-disk skill as learned", () => {
+    const shipped = shippedPack();
+    const app = mkdtempSync(join(tmpdir(), "app-"));
+    mkdirSync(join(app, "skills"));
+    // A seeded copy of a shipped skill (same id) plus a browser-learned skill
+    // whose id is NOT in any shipped pack.
+    writeFileSync(join(app, "skills", "sync-inbox.md"), "---\nid: sync-inbox\nrunner: api\ncapability: sync-inbox\n---\nseeded copy");
+    writeFileSync(join(app, "skills", "export-archive.md"), "---\nid: export-archive\nrunner: browser-agent\n---\nlearned by recording");
+    const skills = listAvailableSkills(fakeApp(app), [shipped]);
+    // No duplicate sync-inbox row.
+    expect(skills.filter((s) => s.id === "sync-inbox").length).toBe(1);
+    expect(skills.find((s) => s.id === "sync-inbox")!.source).toBe("starter");
+    // The recorded skill is learned, not starter.
+    expect(skills.find((s) => s.id === "export-archive")!.source).toBe("learned");
+    // And the shipped favorite still surfaces even though it's not on disk.
+    expect(skills.some((s) => s.id === "sync-inbox-browser" && s.source === "starter")).toBe(true);
   });
 });
 

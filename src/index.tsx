@@ -9,6 +9,7 @@ import { resolveDomainDir, buildRoot } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, } from "./config.ts";
+import type { ChatEvent } from "./chat-json.ts";
 
 interface Args {
   vaultPath: string | null;
@@ -1990,6 +1991,174 @@ async function playbookCommand(args: string[]): Promise<void> {
   console.log(`run dir: ${result.runDir}`);
 }
 
+// Render one runner progress event (from runSkillPackWithFallback's onProgress)
+// as a short human line for the delta stream. Returns "" for events we don't
+// surface, so the caller can skip emitting an empty delta.
+function formatSkillProgress(event: Record<string, unknown>): string {
+  const ev = typeof event.event === "string" ? event.event : "";
+  if (ev === "method_fallback") {
+    return `falling back from ${String(event.from ?? "")} (${String(event.method ?? "")}): ${String(event.reason ?? "")}`;
+  }
+  if (ev === "step" || ev === "browser_step") {
+    const label = event.label ?? event.action ?? event.description ?? "";
+    return label ? `step: ${String(label)}` : "";
+  }
+  if (ev === "download") return `downloaded: ${String(event.path ?? event.file ?? "")}`;
+  // Generic fallthrough: surface any event that carries a message/note.
+  if (typeof event.message === "string") return event.message;
+  if (typeof event.note === "string") return event.note;
+  return "";
+}
+
+// `prevail connectors skill-run`: run one skill (favorite-first with fallback)
+// and stream ChatEvent NDJSON to stdout in the SAME shape as src/chat-json.ts.
+// Order: start -> (delta*) -> assistant -> usage -> done, or a single error.
+// On first run of a browser skill this drives the existing learn/login path via
+// the browser runner. A missing/locked vault yields a clear error event, never a
+// crash.
+async function connectorSkillRun(args: string[], vaultDefault: string): Promise<void> {
+  const flag = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const appId = (flag("--app") ?? "").trim().toLowerCase();
+  const skillId = (flag("--skill") ?? "").trim();
+  const vaultArg = flag("--vault");
+  const cliWanted = (flag("--cli") ?? "").trim();
+  const inputs: Record<string, unknown> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--input" && args[i + 1]) {
+      const kv = args[i + 1]!.split("=");
+      if (kv.length >= 2) inputs[kv[0]!] = kv.slice(1).join("=");
+      i++;
+    }
+  }
+
+  const thread = `skillrun-${Date.now().toString(36)}`;
+  const emit = (ev: ChatEvent) => process.stdout.write(`${JSON.stringify(ev)}\n`);
+  const fail = (error: string): never => {
+    emit({ type: "error", thread, ts: Date.now(), error });
+    process.exit(1);
+  };
+
+  if (!appId || !skillId) {
+    fail("usage: prevail connectors skill-run --app <appId> --skill <skillId> --vault <path> [--cli <provider>] --json");
+  }
+
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { appsContainer } = await import("./path-safety.ts");
+  const {
+    scanCommunityApps,
+    scaffoldCommunityApp,
+    seedAppStarterSkills,
+    migrateLegacyAppsIntoVault,
+    shippedSkillDirsForApp,
+  } = await import("./vault.ts");
+
+  const vault = (vaultArg || vaultDefault || "").trim();
+  if (!vault || !existsSync(vault)) {
+    fail(`vault is missing or locked: ${vault || "(none configured)"}. Pass --vault <path> to an unlocked vault.`);
+  }
+  try { migrateLegacyAppsIntoVault(vault); } catch { /* best effort */ }
+
+  // Resolve the app from TWO shipped registries, so a skill runs without a
+  // separate Connect step even when the vault has never seen the app:
+  //   1. scanCommunityApps — bundled apps/community (manifest + SKILL.md) and any
+  //      vault-scaffolded apps; these carry title/integration/domains.
+  //   2. the shipped skill-pack registry (skill-packs/apps/<id>/skills) — apps
+  //      that ship ONLY a starter pack, no community manifest (e.g. alltrails).
+  // Only when NEITHER knows the id is it a genuinely unknown connector.
+  let app = scanCommunityApps(vault).find((a) => a.id === appId);
+  const shippedDirs = shippedSkillDirsForApp(appId);
+  if (!app && shippedDirs.length === 0) {
+    fail(`no connector with id "${appId}" (try: prevail connectors list --json)`);
+  }
+
+  // Ensure a writable vault copy so outputs land in the vault (not a read-only
+  // bundled dir) and starter skills exist even pre-connect. Idempotent. For a
+  // skill-pack-only app, derive the scaffold metadata from the id (there is no
+  // community manifest to read).
+  const vaultAppPath = join(appsContainer(vault), appId);
+  if (!existsSync(vaultAppPath)) {
+    const title = app?.title ?? appId.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+    const r = scaffoldCommunityApp({
+      id: appId,
+      title,
+      integration: (app?.integration ?? "manual"),
+      domains: app?.domains ?? [],
+      vaultRoot: vault,
+    });
+    if (!r.ok && !existsSync(vaultAppPath)) {
+      fail(`could not prepare "${appId}" in the vault: ${r.error ?? "scaffold failed (vault may be locked or read-only)"}`);
+    }
+  }
+  try { seedAppStarterSkills(appId, vaultAppPath); } catch { /* best effort */ }
+
+  // Reload so the vault copy (with its writable data dir) is authoritative. A
+  // skill-pack-only app is now a real vault app, so this resolves it.
+  app = scanCommunityApps(vault).find((a) => a.id === appId) ?? app;
+  if (!app) {
+    fail(`could not prepare "${appId}" in the vault (scaffold produced no readable connector)`);
+  }
+
+  const {
+    loadSkillsForConnector,
+    packForSkill,
+    runSkillPackWithFallback,
+    logSkillRun,
+    effectiveMethod,
+  } = await import("./connector-skills.ts");
+
+  const skills = loadSkillsForConnector(app!);
+  const skill = skills.find((s) => s.id === skillId);
+  if (!skill) {
+    fail(`no skill "${skillId}" for connector "${appId}" (try: prevail connectors skills ${appId} --json)`);
+  }
+
+  // Honor --cli by steering the panelist the llm/browser-agent runners pick.
+  if (cliWanted) for (const s of skills) if (!s.panelist) s.panelist = cliWanted;
+
+  const method = effectiveMethod(skill!);
+  const engine = `${appId}/${skillId}:${method}`;
+  const startTs = Date.now();
+  emit({ type: "start", thread, ts: startTs, engine });
+
+  const onProgress = (event: Record<string, unknown>) => {
+    const line = formatSkillProgress(event);
+    if (line) emit({ type: "delta", thread, ts: Date.now(), text: `${line}\n` });
+  };
+
+  const pack = packForSkill(skill!, skills);
+  let result: Awaited<ReturnType<typeof runSkillPackWithFallback>>;
+  try {
+    result = await runSkillPackWithFallback(pack, inputs, {
+      autonomy: app!.autonomy ?? "read-only",
+      onProgress,
+    });
+  } catch (err) {
+    fail((err as Error)?.message ?? "skill run crashed");
+    return;
+  }
+  try { logSkillRun(skill!, result); } catch { /* best effort */ }
+
+  const doneTs = Date.now();
+  if (!result.ok) {
+    emit({ type: "error", thread, ts: doneTs, error: result.message || "skill run failed" });
+    process.exit(1);
+  }
+  const text = (result.summary && result.summary.trim()) || result.raw || result.message;
+  emit({ type: "assistant", thread, ts: doneTs, role: "assistant", text, engine });
+  emit({
+    type: "usage",
+    thread,
+    ts: doneTs,
+    usage: { input_tokens: 0, output_tokens: Math.ceil((result.raw?.length ?? text.length) / 4), cost_usd: 0 },
+  });
+  emit({ type: "done", thread, ts: Date.now() });
+  process.exit(0);
+}
+
 async function connectorsCommand(args: string[]): Promise<void> {
   const { scanCommunityApps, resolveDefaultVaultPath, migrateLegacyAppsIntoVault } = await import("./vault.ts");
   const { probeConnector } = await import("./connector-probe.ts");
@@ -2151,20 +2320,47 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error(`no connector with id "${id}"`);
       process.exit(1);
     }
-    const { loadSkillsForConnector } = await import("./connector-skills.ts");
-    const skills = loadSkillsForConnector(app);
+    const { listAvailableSkills } = await import("./connector-skills.ts");
+    const { shippedSkillDirsForApp } = await import("./vault.ts");
+    // AVAILABLE skills = shipped starter-pack skills (surfaced even pre-connect)
+    // merged with any already-seeded/learned skills on disk, deduped by id.
+    const skills = listAvailableSkills(app, shippedSkillDirsForApp(app.id));
     if (args.includes("--json")) {
-      process.stdout.write(`${JSON.stringify(skills.map((s) => ({ id: s.id, runner: s.runner, trigger: s.trigger ?? "on-demand" })))}\n`);
+      process.stdout.write(
+        `${JSON.stringify(
+          // Contract for the desktop lane: id, name, method, primary, source,
+          // trigger, summary. `runner` is kept additively for existing consumers.
+          skills.map((s) => ({
+            id: s.id,
+            name: s.name,
+            method: s.method,
+            primary: s.primary,
+            source: s.source,
+            trigger: s.trigger,
+            summary: s.summary,
+            runner: s.spec.runner,
+          })),
+        )}\n`,
+      );
       return;
     }
     if (skills.length === 0) {
-      console.log(`${app.title} has no skill files under ${app.path}/skills/`);
+      console.log(`${app.title} has no skills (no shipped pack and nothing learned yet).`);
       return;
     }
     console.log(`${app.title} · ${skills.length} skill${skills.length === 1 ? "" : "s"}:`);
     for (const s of skills) {
-      console.log(`  ${s.id.padEnd(28)}  runner=${s.runner.padEnd(8)} trigger=${s.trigger ?? "on-demand"}`);
+      const mark = s.primary ? "*" : " ";
+      console.log(`  ${mark} ${s.id.padEnd(28)}  method=${s.method.padEnd(8)} source=${s.source.padEnd(8)} trigger=${s.trigger}`);
     }
+    return;
+  }
+  if (sub === "skill-run") {
+    // prevail connectors skill-run --app <id> --skill <id> --vault <v> [--cli <p>] [--input k=v ...] --json
+    // Run a single skill (favorite-first with fallback, via runSkillPackWithFallback)
+    // and STREAM ChatEvent NDJSON to stdout. Lets the desktop "click a skill and
+    // run it" with no separate Connect step.
+    await connectorSkillRun(args, connectorsVault);
     return;
   }
   if (sub === "soul") {
@@ -2591,6 +2787,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const { connectApp } = await import("./connect-app.ts");
     const result = await connectApp({ vaultPath: vaultArg, name, goal, provider, model, reevaluate, current });
     process.stdout.write(`${JSON.stringify(result)}\n`);
+    // Make the failure cause visible on stderr too (the JSON `ok`/`error` stays
+    // the machine contract; this is for logs and any non-JSON observer), so a
+    // locked vault / write failure surfaces instead of a silent exit.
+    if (!result.ok && result.error) console.error(`connect failed: ${result.error}`);
     process.exit(0);
   }
   if (sub === "composio") {
@@ -2841,8 +3041,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
   console.error("  prevail connectors list");
   console.error("  prevail connectors test <id>");
   console.error("  prevail connectors oauth <id>");
-  console.error("  prevail connectors skills <id>                       — list runnable skills");
+  console.error("  prevail connectors skills <id>                       (list available skills, incl. starter packs)");
   console.error("  prevail connectors run <id> <skill> [--input k=v]   — execute a skill");
+  console.error("  prevail connectors skill-run --app <id> --skill <s> --vault <v> [--cli <p>] --json  (run + stream a skill)");
   console.error("  prevail connectors add --id <id> --title <t> --integration <type> --domains a,b");
   console.error("  prevail connectors set <id> domains <a,b,c>          — rewrite app→domain binding");
   console.error("  prevail connectors set <id> enabled <true|false>     — toggle autonomous sync");

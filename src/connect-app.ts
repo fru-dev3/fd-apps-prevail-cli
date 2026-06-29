@@ -54,7 +54,15 @@ export async function connectApp(a: ConnectAppArgs): Promise<ConnectAppResult> {
     `Return ONLY a JSON object (no prose, no fences):`,
     `{"app_id":"kebab-case-id","title":"display name","integration":"mcp|api|cli|composio|browser","why":"one line: why this is the best method now","auth_step":{"kind":"none|oauth-cli|api-key|browser-login|manual","instruction":"the ONE thing the user must do to authorize, or empty if none"},"auth_check":{"kind":"command|http|none","command":"","args":[],"url":"","auth_header_env":"","expect_status":200},"schedule":{"every":"1d"},"domains":["which of the user's domains this should feed"],"data":"one line: what it will pull in"}`,
   ].join("\n");
-  const out = await runChatTurn({ prompt, cwd: a.vaultPath, cli, model, isFirst: true, bare: true, act: true });
+  let out: string;
+  try {
+    out = await runChatTurn({ prompt, cwd: a.vaultPath, cli, model, isFirst: true, bare: true, act: true });
+  } catch (err) {
+    // The connection-research turn failed (engine crashed, network down, CLI
+    // not authed). Return a clear error instead of throwing, so the connect
+    // command surfaces the real cause rather than a generic exit 1.
+    return { ok: false, error: `connection research failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
   const s = out.indexOf("{");
   const e = out.lastIndexOf("}");
   let plan: Record<string, unknown> | null = null;
