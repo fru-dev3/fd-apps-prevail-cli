@@ -15,9 +15,9 @@ function freshVault(): string {
 describe("autonomy + gateAction — the global brake", () => {
   beforeEach(() => { initVaultSession({}); });
 
-  it("defaults: active, money asks, destructive/credential never", () => {
+  it("defaults: ask mode, money asks, destructive/credential never", () => {
     const v = freshVault();
-    expect(getAutonomyState(v)).toBe("active");
+    expect(getAutonomyState(v)).toBe("ask");
     const p = getActionPolicy(v);
     expect(p.financial).toBe("ask");
     expect(p.irreversible).toBe("never");

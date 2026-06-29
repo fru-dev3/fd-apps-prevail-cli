@@ -1006,9 +1006,10 @@ async function tRunPlaybook(args: Record<string, unknown>, vaultPath: string): P
   const id = String(args.id ?? "").trim();
   if (!id) throw new Error("id is required (see list_playbooks)");
   const { loadPlaybook, runPlaybook } = await import("./orchestrator.ts");
+  const { isAuto } = await import("./autonomy.ts");
   const pb = loadPlaybook(vaultPath, id);
   if (!pb) throw new Error(`no playbook "${id}" (see list_playbooks)`);
-  const result = await runPlaybook(`mcp-${id}-${Date.now()}`, pb, { vault: vaultPath, provider: "claude", model: "", autonomousActs: true });
+  const result = await runPlaybook(`mcp-${id}-${Date.now()}`, pb, { vault: vaultPath, provider: "claude", model: "", autonomousActs: isAuto(vaultPath) });
   const lines = result.steps.map((s) => `  [${s.decision}] ${s.ok ? "✓" : "·"} ${s.label} — ${s.note}`);
   return `${result.ok ? "✓" : "✗"} ${pb.name}: ${result.note}\n${lines.join("\n")}\nRun dir: ${result.runDir}`;
 }

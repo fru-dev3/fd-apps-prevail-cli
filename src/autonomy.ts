@@ -16,7 +16,12 @@ import { existsSync, mkdirSync } from "node:fs";
 import { vreadFile, vwriteFile, vappendLine } from "./vault-session.ts";
 import type { ActionClass } from "./action-policy.ts";
 
-export type AutonomyState = "active" | "paused";
+// The master mode (one clear control instead of two overlapping flags):
+//   paused → nothing runs at all (kill switch)
+//   ask    → agents propose; you approve everything (default — safe)
+//   auto   → agents run "allow"-policy actions on their own; consequential
+//            classes still follow the policy (ask/never).
+export type AutonomyState = "paused" | "ask" | "auto";
 export type PolicyDecision = "allow" | "ask" | "never";
 
 // Safe-by-default policy: reads/reversible edits are fine; anything that leaves
@@ -50,15 +55,17 @@ function read(vault: string): AutonomyDoc {
     const p = autonomyPath(vault);
     if (existsSync(p)) {
       const d = JSON.parse(vreadFile(p)) as Partial<AutonomyDoc>;
+      // Migrate the legacy "active" state → "ask" (the safe default).
+      const state: AutonomyState = d.state === "paused" ? "paused" : d.state === "auto" ? "auto" : "ask";
       return {
         schema: 1,
-        state: d.state === "paused" ? "paused" : "active",
+        state,
         policy: (d.policy && typeof d.policy === "object" ? d.policy : {}) as AutonomyDoc["policy"],
         monthlyFinancialCapUsd: typeof d.monthlyFinancialCapUsd === "number" ? d.monthlyFinancialCapUsd : null,
       };
     }
   } catch { /* fall through to default */ }
-  return { schema: 1, state: "active", policy: {}, monthlyFinancialCapUsd: null };
+  return { schema: 1, state: "ask", policy: {}, monthlyFinancialCapUsd: null };
 }
 
 function write(vault: string, doc: AutonomyDoc): void {
@@ -79,6 +86,13 @@ export function setAutonomyState(vault: string, state: AutonomyState): void {
 
 export function isPaused(vault: string): boolean {
   return getAutonomyState(vault) === "paused";
+}
+
+// True when the user has opted into unattended execution of "allow"-policy
+// actions (mode = auto). This is the single source of truth callers pass to
+// the broker as `autonomousActs`.
+export function isAuto(vault: string): boolean {
+  return getAutonomyState(vault) === "auto";
 }
 
 // The full effective policy (defaults merged with the user's overrides).

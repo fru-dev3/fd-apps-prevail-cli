@@ -364,9 +364,10 @@ export async function runOneLoop(
   if (loop.playbook) {
     onPhase("playbook", `Running playbook: ${loop.playbook}`);
     const { loadPlaybook, runPlaybook } = await import("./orchestrator.ts");
+    const { isAuto } = await import("./autonomy.ts");
     const pb = loadPlaybook(root, loop.playbook);
     if (!pb) return empty(`playbook "${loop.playbook}" not found`, loop.name);
-    const autonomousActs = loop.autonomy === "auto" || cfg.autonomousActs === true;
+    const autonomousActs = loop.autonomy === "auto" || cfg.autonomousActs === true || isAuto(root);
     const pr = await runPlaybook(`loop-${loop.id}-${now}`, pb, {
       vault: root, provider: cfg.provider, model: runModel, autonomousActs,
       onProgress: (e) => onPhase("playbook", String(e.label ?? e.phase ?? "")),
