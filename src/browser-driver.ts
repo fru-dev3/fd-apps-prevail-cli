@@ -408,25 +408,30 @@ export async function runBrowserDriverChild(): Promise<void> {
     downloadsDir = req.downloadsDir;
     domainAllow = req.domainAllow;
     mkdirSync(downloadsDir, { recursive: true });
+    // Drive the user's INSTALLED Google Chrome (channel:"chrome") so logins use
+    // their real browser, and ALWAYS run in a persistent profile so a one-time
+    // Google sign-in survives across every later run — no 120MB Chromium
+    // download. An explicit chromiumPath (a bundled Chromium) overrides as a
+    // fallback for machines without Chrome.
     const execPath = req.chromiumPath || process.env.PREVAIL_CHROMIUM_PATH || undefined;
-    const launchOpts: any = { headless: !req.headed, acceptDownloads: true };
-    if (execPath) launchOpts.executablePath = execPath;
-    if (req.profileDir) {
-      mkdirSync(req.profileDir, { recursive: true });
-      context = await pw.chromium.launchPersistentContext(req.profileDir, {
-        ...launchOpts,
-        viewport: req.viewport || { width: 1280, height: 860 },
-      });
-      page = context.pages()[0] || (await context.newPage());
-    } else {
-      const browser = await pw.chromium.launch(launchOpts);
-      context = await browser.newContext({
-        acceptDownloads: true,
-        storageState: req.statePath && require("node:fs").existsSync(req.statePath) ? req.statePath : undefined,
-        viewport: req.viewport || { width: 1280, height: 860 },
-      });
-      page = await context.newPage();
+    const baseOpts: any = { headless: !req.headed, acceptDownloads: true, viewport: req.viewport || { width: 1280, height: 860 } };
+    if (execPath) baseOpts.executablePath = execPath;
+    else baseOpts.channel = "chrome";
+    const profileDir = req.profileDir || join(downloadsDir, "..", "auth", "profile");
+    mkdirSync(profileDir, { recursive: true });
+    try {
+      context = await pw.chromium.launchPersistentContext(profileDir, baseOpts);
+    } catch (e) {
+      // Chrome not found (no channel) and no bundled Chromium → last-resort the
+      // default Playwright Chromium (requires ensureChromium to have installed it).
+      if (baseOpts.channel) {
+        delete baseOpts.channel;
+        context = await pw.chromium.launchPersistentContext(profileDir, baseOpts);
+      } else {
+        throw e;
+      }
     }
+    page = context.pages()[0] || (await context.newPage());
     attachDownloads(page);
     context.on("page", (p: any) => attachDownloads(p));
     // Domain pinning: block top-level navigations off the allowlist.

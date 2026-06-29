@@ -365,12 +365,7 @@ export async function runSkillBrowserAgent(
   const profileDir = join(skill.connectorDir, "auth", "profile");
   const statePath = join(skill.connectorDir, "auth", "state.json");
 
-  const { BrowserDriverHost, makeHostDriver, ensureChromium } = await import("./browser-driver.ts");
-  try {
-    await ensureChromium(emitEvent);
-  } catch (e) {
-    return { ok: false, message: `Chromium unavailable (needs a one-time download): ${msg(e)}`, outputsWritten: [], durationMs: Date.now() - t0 };
-  }
+  const { BrowserDriverHost, makeHostDriver } = await import("./browser-driver.ts");
   const host = new BrowserDriverHost();
   const downloads: string[] = [];
   const driver = makeHostDriver(host, (e) => {
@@ -391,8 +386,8 @@ export async function runSkillBrowserAgent(
       {
         objective: goal,
         startUrl,
-        profileDir: session === "profile" ? profileDir : undefined,
-        statePath: session === "state" ? statePath : undefined,
+        // Always a persistent Chrome profile so the Google sign-in persists.
+        profileDir,
         downloadsDir,
         domainAllow,
         successUrlContains: str(ex.success_url_contains) || undefined,

@@ -653,12 +653,7 @@ async function replaySkillBrowser(
   });
 
   const emit = opts.onProgress ?? (() => {});
-  const { BrowserDriverHost, ensureChromium } = await import("./browser-driver.ts");
-  try {
-    await ensureChromium(emit);
-  } catch (e) {
-    return { ok: false, message: `Chromium unavailable (needs a one-time download): ${String((e as Error)?.message || e).slice(0, 120)}`, outputsWritten: [], durationMs: Date.now() - started };
-  }
+  const { BrowserDriverHost } = await import("./browser-driver.ts");
   const host = new BrowserDriverHost();
   const downloads: string[] = [];
   host.on((e) => {
@@ -673,7 +668,7 @@ async function replaySkillBrowser(
 
   try {
     const opened = await host.request(
-      { cmd: "open", req: { startUrl: startUrl || "about:blank", profileDir: session === "profile" ? profileDir : undefined, statePath: session === "state" ? statePath : undefined, downloadsDir, headed, domainAllow } },
+      { cmd: "open", req: { startUrl: startUrl || "about:blank", profileDir, downloadsDir, headed, domainAllow } },
       ["opened"],
       60_000,
     );

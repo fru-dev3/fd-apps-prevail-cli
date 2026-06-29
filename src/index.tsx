@@ -2275,8 +2275,12 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // record a deterministic replay skill. Headed: the user watches + does 2FA.
     const id = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
     const json = args.includes("--json");
+    const stream = args.includes("--stream");
     const flag = (n: string) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
     const done = (ok: boolean, payload: Record<string, unknown>) => {
+      // --stream callers (the desktop live panel) need a JSON event even for
+      // early failures, or the panel sees nothing and closes silently.
+      if (stream) { process.stdout.write(`${JSON.stringify({ phase: ok ? "complete" : "error", ok, ...payload, message: payload.message ?? payload.error })}\n`); process.exit(0); }
       if (json) { process.stdout.write(`${JSON.stringify({ ok, ...payload })}\n`); process.exit(0); }
       if (ok) console.log(`✓ ${payload.message ?? "done"}`);
       else { console.error(`✗ ${payload.error ?? payload.message ?? "failed"}`); process.exit(1); }
@@ -2296,7 +2300,6 @@ async function connectorsCommand(args: string[]): Promise<void> {
       } catch { /* no manifest */ }
     }
     if (!url) return done(false, { error: "no start url (pass --url or set start_url/login_url in the manifest)" });
-    const stream = args.includes("--stream");
     const { loadSkillsForConnector, runSkill, logSkillRun } = await import("./connector-skills.ts");
     // Prefer an existing browser-agent skill; else synthesize one from the flags.
     const existing = loadSkillsForConnector(app).find((s) => s.runner === "browser-agent");
@@ -2325,8 +2328,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // Fast deterministic replay of a recorded browser skill (no model).
     const id = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
     const json = args.includes("--json");
+    const stream = args.includes("--stream");
     const wantSkill = args[2] && !args[2].startsWith("--") ? args[2] : undefined;
     const done = (ok: boolean, payload: Record<string, unknown>) => {
+      if (stream) { process.stdout.write(`${JSON.stringify({ phase: ok ? "complete" : "error", ok, ...payload, message: payload.message ?? payload.error })}\n`); process.exit(0); }
       if (json) { process.stdout.write(`${JSON.stringify({ ok, ...payload })}\n`); process.exit(0); }
       if (ok) console.log(`✓ ${payload.message ?? "done"}`);
       else { console.error(`✗ ${payload.error ?? payload.message ?? "failed"}`); process.exit(1); }
@@ -2350,6 +2355,37 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const result = await runSkill(skill, {}, { autonomy: "read-only" });
     logSkillRun(skill, result);
     return done(result.ok, { message: result.message, outputs: result.outputsWritten, needsRelearn: result.needsRelearn });
+  }
+  if (sub === "import-login") {
+    // prevail connectors import-login <id> [--host <domain>] [--json]
+    // One-time: copy the user's existing login cookies for the site into the
+    // connector's dedicated Prevail profile (Chrome must be quit). Scoped to the
+    // site's host(s) only — never the whole browser.
+    const id = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+    const json = args.includes("--json");
+    const flag = (n: string) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
+    const done = (ok: boolean, payload: Record<string, unknown>) => {
+      if (json) { process.stdout.write(`${JSON.stringify({ ok, ...payload })}\n`); process.exit(0); }
+      if (ok) console.log(`✓ ${payload.message ?? "done"}`); else { console.error(`✗ ${payload.error ?? payload.message ?? "failed"}`); process.exit(1); }
+      process.exit(0);
+    };
+    if (!id) return done(false, { error: "usage: prevail connectors import-login <id> [--host <domain>]" });
+    const app = apps.find((a) => a.id === id);
+    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    // Host(s): explicit --host wins; else manifest start_url/login_url/homepage; else derive from id.
+    let host = flag("--host") ?? "";
+    if (!host) {
+      try {
+        const { readFileSync } = await import("node:fs");
+        const m = JSON.parse(readFileSync(join(app.path, "manifest.json"), "utf8")) as Record<string, unknown>;
+        host = (typeof m.start_url === "string" && m.start_url) || (typeof m.login_url === "string" && m.login_url) || (typeof m.homepage === "string" && m.homepage) || "";
+      } catch { /* no manifest */ }
+    }
+    if (!host) host = `${id.toLowerCase().replace(/-(com|org|net|io|co|app|ai|dev)$/, ".$1").replace(/[^a-z0-9.]/g, "")}`;
+    const profileDir = join(app.path, "auth", "profile");
+    const { importChromeLogins } = await import("./browser-import.ts");
+    const r = await importChromeLogins(profileDir, [host]);
+    return done(r.ok, { message: r.message, imported: r.imported, error: r.ok ? undefined : r.message });
   }
   if (sub === "seed-recipe") {
     // prevail connectors seed-recipe <id> [--recipe <recipeId>] [--skill <skillId>] [--json]
