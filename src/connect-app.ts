@@ -1,5 +1,5 @@
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
-import { scanVault, scaffoldCommunityApp, scanApps } from "./vault.ts";
+import { scanVault, scaffoldCommunityApp, scanApps, seedAppStarterSkills } from "./vault.ts";
 import { probeConnector, type AuthCheckSpec } from "./connector-probe.ts";
 
 // The Connection Agent, extracted so BOTH the CLI (`prevail connectors connect`)
@@ -71,6 +71,14 @@ export async function connectApp(a: ConnectAppArgs): Promise<ConnectAppResult> {
     ? (plan.auth_check as Record<string, unknown>) : null;
   const refreshEvery = (plan.schedule && typeof plan.schedule === "object") ? ((plan.schedule as Record<string, unknown>).every as string | undefined) ?? null : null;
   const scaffold = scaffoldCommunityApp({ id: plan.app_id as string, title: (plan.title as string) || name, integration: integ, domains: planDomains, authCheck, refreshEvery, vaultRoot: a.vaultPath });
+  // #8/#7: seed (or top up) the app's shipped starter skill pack on connect.
+  // scaffoldCommunityApp already seeds a brand-new app; this also covers a
+  // re-connect of an already-scaffolded app, so newly shipped methods (e.g. a
+  // browser favorite + its api/mcp fallback) reach it. Idempotent and edit-safe.
+  try {
+    const seeded = scanApps(a.vaultPath).find((app) => app.id === (plan!.app_id as string));
+    if (seeded) seedAppStarterSkills(seeded.id, seeded.path);
+  } catch { /* best effort: seeding must never fail a connect */ }
   // Autonomous verify: when no user action is required and we have a testable
   // auth_check, run it now and report proof instead of telling the user to.
   let verified: boolean | null = null;

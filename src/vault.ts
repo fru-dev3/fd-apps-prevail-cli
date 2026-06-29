@@ -746,6 +746,23 @@ export function seedSkillPack(sub: string, dest: string): number {
   return copied;
 }
 
+// Seed (or top up) an app's STARTER skill pack from the shipped packs at
+// skill-packs/apps/<id>/skills. Idempotent and edit-safe: seedSkillPack never
+// overwrites an existing file, so this is safe to call on connect AND on first
+// access of an already-scaffolded app. Newly shipped methods (e.g. an added
+// browser fallback) land without touching a user's hand-edited skill. Apps with
+// no shipped pack simply no-op (they keep the learn-from-scratch flow). Returns
+// the number of skill files copied (0 when nothing new or no pack exists).
+export function seedAppStarterSkills(appId: string, appPath: string): number {
+  const id = appId.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) return 0;
+  try {
+    return seedSkillPack(`apps/${id}/skills`, join(appPath, "skills"));
+  } catch {
+    return 0;
+  }
+}
+
 // Validate + coerce a parsed manifest.json into a shape that's safe to
 // render. Every field has a defensive fallback so a hostile or malformed
 // manifest cannot crash the scanner or contaminate the AppSkill list.

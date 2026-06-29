@@ -206,7 +206,12 @@ export function parseSkillFile(raw: string, filePath: string, app: AppSkill): Sk
     after: typeof fm.after === "string"
       ? fm.after.split(",").map((s) => s.trim()).filter((s) => s && isSafeId(s)).join(",") || undefined
       : undefined,
-    method: accessMethodForRunner(runnerRaw),
+    // Access method: honor an explicit frontmatter `method:` ONLY when it names a
+    // valid access method (browser|mcp|api|other); otherwise derive it from the
+    // runner. This keeps the api runner's `method: GET` HTTP-verb convention
+    // intact (a verb is not a valid access method, so it falls through to the
+    // runner-derived value) while letting a skill declare its method explicitly.
+    method: coerceAccessMethod(fm.method) ?? accessMethodForRunner(runnerRaw),
     capability: deriveCapability(fm, id),
     isFavorite: fm.favorite === true,
     extra: fm,
@@ -222,6 +227,13 @@ function deriveCapability(fm: Record<string, unknown>, id: string): string {
   if (typeof fm.capability === "string" && isSafeId(fm.capability)) return fm.capability;
   const stripped = id.replace(METHOD_ID_SUFFIX, "");
   return stripped || id;
+}
+
+// A frontmatter `method:` value, accepted only when it names a real access
+// method. Anything else (notably an HTTP verb like GET, which the api runner
+// reads from the same key) returns undefined so the runner-derived method wins.
+function coerceAccessMethod(v: unknown): SkillAccessMethod | undefined {
+  return v === "browser" || v === "mcp" || v === "api" || v === "other" ? v : undefined;
 }
 
 function isSafeId(s: string): boolean {
@@ -832,15 +844,36 @@ export async function runSkillPackWithFallback(
   };
 }
 
-// TODO(#8 replay wiring): adopt runSkillPackWithFallback at the call sites that
-// currently run a single skill by id (daemon-sync's scheduled runs in
-// daemon-sync.ts, the orchestrator skill step in orchestrator.ts:166, and the
-// app-detail "Run" button in app-detail.tsx). Each should resolve the skill's
-// capability via loadSkillPacksForConnector and run the whole pack so a blocked
-// favorite (e.g. a browser login wall) transparently falls through to the MCP
-// or API method. The data model + ordering + execution above are complete and
-// covered by tests; only the caller swap remains, kept separate to stay
-// backward compatible with the existing learn/replay flow.
+// Build the capability pack that CONTAINS a chosen skill, ordered for a fallback
+// run that LEADS with the explicitly chosen skill. Used by the autonomous call
+// sites (daemon-sync refresh, orchestrator playbook step) so a blocked favorite
+// (e.g. a browser login wall, an unconfigured MCP server) transparently falls
+// through to the same capability's other method.
+//
+// Ordering: the explicitly chosen `primary` runs first (it encodes the manifest
+// refresh.skill / connection override / playbook step's deliberate choice), then
+// the remaining members of its capability follow in robustness order (see
+// orderSkillPack / METHOD_FALLBACK_RANK). When `primary` is the only member of
+// its capability this returns a one-skill pack, so runSkillPackWithFallback is
+// byte-for-byte equivalent to a single runSkill call (backward compatible).
+export function packForSkill(primary: SkillSpec, allSkills: SkillSpec[]): SkillPack {
+  const cap = effectiveCapability(primary);
+  const members = allSkills.filter((s) => effectiveCapability(s) === cap);
+  // orderSkillPack puts the favorite first; we then pull the explicitly chosen
+  // primary to the very front so an explicit method choice always leads, while
+  // the favorite flag still governs the order of the remaining fallbacks.
+  const ordered = orderSkillPack(members.length > 0 ? members : [primary]);
+  const skills = [primary, ...ordered.filter((s) => s.id !== primary.id)];
+  return { capability: cap, connectorId: primary.connectorId, skills };
+}
+
+// NOTE on the third #8 call site: the app-detail Skills-tab "Run" button is
+// deliberately LEFT as a single runSkill. That UI lists every skill method as
+// its own row with its own Run control, so a click is a user explicitly invoking
+// ONE named method (often to test/debug a specific runner). Silently falling
+// through to a different method there would be surprising and hide which method
+// actually works. Autonomous paths (the sync daemon and the orchestrator) use
+// packForSkill + runSkillPackWithFallback instead.
 
 // Per-connector log of skill runs. Used by the UI's Sync tab and by
 // downstream auditing.

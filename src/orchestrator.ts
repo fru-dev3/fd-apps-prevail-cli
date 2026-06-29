@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis, type AvailableCli } from "./cli-bridge.ts";
 import { scanCommunityApps } from "./vault.ts";
-import { loadSkillsForConnector, runSkill } from "./connector-skills.ts";
+import { loadSkillsForConnector, packForSkill, runSkillPackWithFallback } from "./connector-skills.ts";
 import { gateAction, parseAmountUsd, type GateDecision } from "./broker.ts";
 import { isPaused, recordSpend } from "./autonomy.ts";
 import { auditAction, type ActionOutcome } from "./action-audit.ts";
@@ -163,10 +163,16 @@ async function runSkillStep(step: Extract<PlaybookStep, { kind: "skill" }>, ctx:
   const apps = scanCommunityApps(ctx.vault);
   const app = apps.find((a) => a.id === step.app);
   if (!app) { res.note = `no connected app "${step.app}"`; return; }
-  const spec = loadSkillsForConnector(app).find((s) => s.id === step.skill);
+  const skills = loadSkillsForConnector(app);
+  const spec = skills.find((s) => s.id === step.skill);
   if (!spec) { res.note = `app "${step.app}" has no skill "${step.skill}"`; return; }
   if (gate.decision === "ask") { res.note = `needs approval (${gate.reason}); skipped this run`; return; }
-  const r = await runSkill(spec, step.inputs ?? {}, { signal: ctx.signal, autonomy: app.autonomy ?? "read-only" });
+  // #8: run the named skill's capability PACK with fallback, so a blocked
+  // favorite (e.g. a browser login wall mid-playbook) transparently falls
+  // through to the app's MCP/API method for the same capability. The named
+  // skill leads; a single-method skill forms a one-member pack (unchanged).
+  const pack = packForSkill(spec, skills);
+  const r = await runSkillPackWithFallback(pack, step.inputs ?? {}, { signal: ctx.signal, autonomy: app.autonomy ?? "read-only" });
   res.ok = r.ok;
   res.note = r.ok ? (r.summary ?? r.message ?? "ok") : (r.message || "skill failed");
   // Record produced files (absolute) so a synthesize step can read them.
