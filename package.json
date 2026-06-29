@@ -1,6 +1,6 @@
 {
   "name": "fd-apps-prevail-cli",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "description": "prevAIl — a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,
