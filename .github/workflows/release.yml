@@ -32,14 +32,13 @@ jobs:
           - target: darwin-arm64
             os: macos-14
             bun-target: bun-darwin-arm64
-          # Cross-compiled from Linux (Bun's --target produces the darwin-x64
-          # binary regardless of host). The scarce GitHub-hosted Intel-mac
-          # (macos-13) runner queued over an hour and blocked the whole release;
-          # ubuntu removes that bottleneck. playwright-core is plain JS so the
-          # copy is host-agnostic; only darwin-arm64 still needs a (plentiful) mac.
-          - target: darwin-x64
-            os: ubuntu-latest
-            bun-target: bun-darwin-x64
+          # darwin-x64 (Intel Mac) is intentionally NOT built. It required the
+          # scarce GitHub macos-13 runner (which queued >1h and blocked releases),
+          # and it can't be cross-compiled elsewhere because @opentui/core ships
+          # os/cpu-gated native subpackages (@opentui/core-darwin-x64 won't install
+          # on Linux or arm-mac). The desktop app is arm64-Mac only (no Intel dmg),
+          # so a standalone Intel-Mac CLI serves a platform the product doesn't
+          # support. arm64 Mac + Linux x64/arm64 cover every supported target.
           - target: linux-x64
             os: ubuntu-latest
             bun-target: bun-linux-x64
