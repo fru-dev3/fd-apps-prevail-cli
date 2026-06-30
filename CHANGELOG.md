@@ -7,6 +7,12 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.3] — 2026-06-30 · App-loop "Run now", honest Google auth messaging
+
+### Fixed
+- **App loops run from "Run now"**: `runOneLoop` now resolves app ids (`data/apps/<id>`) in addition to domains, so an app loop's per-loop run works from the desktop, not just the scheduled daemon pass.
+- **Honest Google auth messaging**: `calendar-sync` and `gws-gateway` now explain that the account is signed in but the required scope (Calendar/Gmail) was not granted, and to re-authorize approving all permissions, instead of the misleading "not authenticated yet (run gws auth login)".
+
 ## [1.9.2] — 2026-06-30 · Disabled apps fully inert, app/domain parity, Google multi-account
 
 ### Added
