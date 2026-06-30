@@ -32,8 +32,13 @@ jobs:
           - target: darwin-arm64
             os: macos-14
             bun-target: bun-darwin-arm64
+          # Cross-compiled from Linux (Bun's --target produces the darwin-x64
+          # binary regardless of host). The scarce GitHub-hosted Intel-mac
+          # (macos-13) runner queued over an hour and blocked the whole release;
+          # ubuntu removes that bottleneck. playwright-core is plain JS so the
+          # copy is host-agnostic; only darwin-arm64 still needs a (plentiful) mac.
           - target: darwin-x64
-            os: macos-13
+            os: ubuntu-latest
             bun-target: bun-darwin-x64
           - target: linux-x64
             os: ubuntu-latest
