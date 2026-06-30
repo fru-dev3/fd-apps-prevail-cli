@@ -9,8 +9,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
-import { resolveGwsBinary } from "./calendar-sync.ts";
+import { resolveGwsBinary, gwsSpawnEnv } from "./calendar-sync.ts";
 import { auditAction } from "./action-audit.ts";
 import { runtimePath } from "./path-safety.ts";
 
@@ -20,6 +19,10 @@ export interface PendingGws {
   summary: string;
   args: string[];
   ts: number;
+  // The Google account (label or config dir) this command targets. Carried
+  // through the approval spine so the approved write runs against the same
+  // account the read/queue was scoped to. Undefined = the default profile.
+  account?: string;
 }
 
 export interface GwsResult {
@@ -96,17 +99,6 @@ export function classifyGwsCommand(args: string[]): { kind: "read" | "write"; su
   return { kind: sawRead ? "read" : "write", summary };
 }
 
-// A PATH that includes the common package-manager bin dirs so a Homebrew /
-// user-local `gws` is found even under a sparse spawn env. (calendar-sync has a
-// private copy; this is the small re-implementation the gateway needs.)
-function augmentedPath(): string {
-  const extra = ["/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local", "bin"), join(homedir(), ".cargo", "bin")];
-  const current = (process.env.PATH || "").split(":").filter(Boolean);
-  const seen = new Set(current);
-  for (const d of extra) if (!seen.has(d)) { current.push(d); seen.add(d); }
-  return current.join(":");
-}
-
 function truncate(out: string): string {
   if (out.length <= MAX_OUTPUT) return out;
   return out.slice(0, MAX_OUTPUT) + "\n…(output truncated)";
@@ -114,13 +106,14 @@ function truncate(out: string): string {
 
 // Run a READ-only gws command live and return its stdout. Never used for writes
 // — the classifier routes those to the pending queue. Resolves the binary,
-// spawns, and maps spawn failure / non-zero exit to a friendly error.
-export function runGwsRead(args: string[]): GwsResult {
+// spawns, and maps spawn failure / non-zero exit to a friendly error. `account`
+// (label or config dir) targets a specific Google account; undefined = default.
+export function runGwsRead(args: string[], account?: string): GwsResult {
   const gws = resolveGwsBinary();
   if (!gws) return { ok: false, error: NOT_INSTALLED };
   const run = spawnSync(gws, args, {
     encoding: "utf8",
-    env: { ...process.env, PATH: augmentedPath() },
+    env: gwsSpawnEnv(account),
     maxBuffer: 16 * 1024 * 1024,
   });
   if (run.error) return { ok: false, error: NOT_AUTHED };
@@ -164,7 +157,7 @@ function shortId(): string {
 
 export function addPendingGws(
   vaultRoot: string,
-  entry: { domain: string; summary: string; args: string[] },
+  entry: { domain: string; summary: string; args: string[]; account?: string },
 ): PendingGws {
   const items = readPendingGws(vaultRoot);
   const rec: PendingGws = {
@@ -173,6 +166,7 @@ export function addPendingGws(
     summary: entry.summary,
     args: entry.args,
     ts: Date.now(),
+    ...(entry.account && entry.account.trim() ? { account: entry.account.trim() } : {}),
   };
   items.push(rec);
   writePending(vaultRoot, items);
@@ -195,9 +189,11 @@ export function runGwsApproved(vaultRoot: string, id: string): GwsResult {
   if (!item) return { ok: false, error: "no such pending action" };
   const gws = resolveGwsBinary();
   if (!gws) return { ok: false, error: NOT_INSTALLED };
+  // Run against the SAME account the write was queued under (the approval spine
+  // preserves it), so an approved send/delete targets the intended account.
   const run = spawnSync(gws, item.args, {
     encoding: "utf8",
-    env: { ...process.env, PATH: augmentedPath() },
+    env: gwsSpawnEnv(item.account),
     maxBuffer: 16 * 1024 * 1024,
   });
   let result: GwsResult;

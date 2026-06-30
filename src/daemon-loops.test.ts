@@ -43,7 +43,44 @@ test("appendTask: writes the ledger line once, dedupes case-insensitively", () =
 import { mkdirSync as _mkdir, writeFileSync as _write, rmSync as _rm } from "node:fs";
 import { tmpdir as _tmp } from "node:os";
 import { join as _join } from "node:path";
-import { readDomainIntents } from "./daemon-loops.ts";
+import { readDomainIntents, discoverLoopTargets } from "./daemon-loops.ts";
+
+// #32 app-scoped loops: the loop runner discovers connected apps as loop targets
+// the SAME way it discovers domains, and a DISABLED app is fully inert (never a
+// target, so its loops never run).
+test("discoverLoopTargets: includes an enabled app with loops, excludes a disabled one", () => {
+  // scanVault refuses paths under /var (forbidden prefix), and macOS tmpdir()
+  // lives there — use /tmp (symlinked to /private/tmp, which is allowed).
+  const TMP_BASE = process.platform === "darwin" ? "/tmp" : _tmp();
+  const root = _join(TMP_BASE, `prevail-looptargets-${process.pid}-${Math.floor(performance.now())}`);
+  // v4 layout: vault root must hold only data/ + build/. Domains + apps live in data/.
+  const domain = _join(root, "data", "domains", "health");
+  const onApp = _join(root, "data", "apps", "myapp");
+  const offApp = _join(root, "data", "apps", "offapp");
+  _mkdir(domain, { recursive: true });
+  _mkdir(onApp, { recursive: true });
+  _mkdir(offApp, { recursive: true });
+  // A domain (detected by state.md) with a loop.
+  _write(_join(domain, "state.md"), "# Health\n");
+  _write(_join(domain, "_loops.json"), JSON.stringify({ schema: 1, desiredState: "", loops: [] }));
+  // An enabled app (manifest with no enabled field => on) carrying its own loops.
+  _write(_join(onApp, "SKILL.md"), "# My App\n");
+  _write(_join(onApp, "manifest.json"), JSON.stringify({ id: "myapp", name: "My App", integration: "manual" }));
+  _write(_join(onApp, "_loops.json"), JSON.stringify({ schema: 1, desiredState: "", loops: [] }));
+  // A disabled app: enabled:false in the manifest => never a loop target.
+  _write(_join(offApp, "SKILL.md"), "# Off App\n");
+  _write(_join(offApp, "manifest.json"), JSON.stringify({ id: "offapp", name: "Off App", integration: "manual", enabled: false }));
+  _write(_join(offApp, "_loops.json"), JSON.stringify({ schema: 1, desiredState: "", loops: [] }));
+  try {
+    const names = discoverLoopTargets(root).map((t) => t.name);
+    expect(names).toContain("health");  // domain discovered
+    expect(names).toContain("general"); // general always present
+    expect(names).toContain("myapp");   // enabled app is a loop target
+    expect(names).not.toContain("offapp"); // disabled app is inert
+  } finally {
+    _rm(root, { recursive: true, force: true });
+  }
+});
 
 test("readDomainIntents: only intents touching the domain + not resolved, with recs", () => {
   const root = _join(_tmp(), `prevail-di-${process.pid}-${Math.floor(performance.now())}`);

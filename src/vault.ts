@@ -1151,6 +1151,11 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
   const appsRoot = appsContainer(vaultPath);
   if (!existsSync(appsRoot)) return [];
   const out: AppSkill[] = [];
+  // The enabled flag must round-trip for vault apps too: a user-set override
+  // (always writable) wins over the manifest's own enabled field. Without this
+  // a disabled vault app would still sync / inject / run loops, because nothing
+  // read the flag back off disk. enabled === false means fully inert.
+  const overrides = readAppOverrides();
   let entries: import("node:fs").Dirent[] = [];
   try {
     entries = readdirSync(appsRoot, { withFileTypes: true });
@@ -1189,6 +1194,7 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
     let appRefresh: AppRefresh | undefined;
     let appGateway: AppGateway | undefined;
     let appPullInstructions: string | undefined;
+    let appEnabled: boolean | undefined;
     try {
       const manifestPath = join(appPath, "manifest.json");
       if (existsSync(manifestPath)) {
@@ -1201,6 +1207,8 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
           appRefresh = coerceRefresh(m.refresh);
           appGateway = coerceGateway(m.gateway);
           if (typeof m.pull_instructions === "string") appPullInstructions = m.pull_instructions;
+          // Only an explicit `false` disables; any other value leaves it on.
+          if (m.enabled === false) appEnabled = false;
         }
       }
     } catch { /* a malformed manifest just leaves these undefined */ }
@@ -1222,6 +1230,9 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
       refresh: appRefresh,
       gateway: appGateway,
       pullInstructions: appPullInstructions,
+      // A user override (always writable) wins over the manifest, so toggling a
+      // vault app actually sticks for the sync daemon + loop runner + agent.
+      enabled: overrides[entry.name]?.enabled === false ? false : appEnabled,
       connectionNotes: conn.notes,
       status: conn.status,
       lastSuccessTs: conn.lastSuccessTs,
@@ -1516,6 +1527,47 @@ function gatewayConnectionBody(title: string, gateway: AppGateway): string {
 // pick: a manifest.json + SKILL.md + connection.md. The app then shows up in
 // scanCommunityApps() and the desktop's Connected view, "not-configured" until
 // the user authenticates it. Never overwrites an existing app.
+// Bring a connected app to DOMAIN PARITY. An app is "a domain with a little bit
+// more", so on creation it gets the SAME standing-context files a domain does,
+// in ADDITION to its skills/ + manifest: soul.md (declared intent), state.md,
+// MEMORY.md (durable facts), an empty _intents.jsonl ledger, and the agent-owned
+// _journal/ + _threads/ zones. Idempotent and edit-safe: it NEVER clobbers an
+// existing file, so it is safe to call on connect AND re-connect. Writes ONLY
+// under the app dir (data/apps/<id>/), never the vault root. The regenerable
+// _surface.json cache is intentionally NOT pre-created here: it is rebuilt on
+// demand with a freshness TTL, so an empty stale copy would serve no purpose.
+export function seedAppParityFiles(appRoot: string, title: string): void {
+  const label = title || appRoot.split(/[\\/]/).filter(Boolean).pop() || "App";
+  const seedFile = (name: string, body: string): void => {
+    const f = join(appRoot, name);
+    if (existsSync(f)) return; // never clobber user / earlier content
+    try { writeFileSync(f, body); } catch { /* best effort */ }
+  };
+  const seedDir = (name: string): void => {
+    const d = join(appRoot, name);
+    if (existsSync(d)) return;
+    try { mkdirSync(d, { recursive: true }); } catch { /* best effort */ }
+  };
+  seedFile(
+    "soul.md",
+    `# ${label}\n\n> Why this app is in your harness, and what it feeds your world.\n\n`,
+  );
+  seedFile(
+    "state.md",
+    `# ${label} State\n\n> Placeholder. Fill this in as you connect and use the app.\n\n## Overview\n\nWhat this app covers and which domains it feeds.\n\n## Open Items\n\n- [ ] First thing to track for ${label}\n`,
+  );
+  seedFile(
+    "MEMORY.md",
+    `# ${label} Memory\n\n> Durable facts that outlive any single chat turn: account names, identifiers,\n> standing preferences. Agents read this for context and append new facts here.\n`,
+  );
+  // Empty append-only ledger, the same shape every domain surface writes to.
+  seedFile("_intents.jsonl", "");
+  // Agent-owned zones, created empty so the first journal / thread write lands
+  // without a directory race.
+  seedDir("_journal");
+  seedDir("_threads");
+}
+
 export function scaffoldCommunityApp(opts: {
   id: string;
   title: string;
@@ -1578,6 +1630,10 @@ export function scaffoldCommunityApp(opts: {
       // user-edited).
       writeFileSync(join(root, "SKILL.md"), gatewaySkillBody(opts.title, opts.gateway));
       writeFileSync(join(root, "connection.md"), gatewayConnectionBody(opts.title, opts.gateway));
+      // Idempotently bring an existing gateway app up to domain parity too, so a
+      // re-add backfills the standing-context files for apps scaffolded before
+      // parity shipped.
+      seedAppParityFiles(root, opts.title);
       return { ok: true, path: root };
     } catch (e) {
       return { ok: false, error: `gateway merge failed: ${e}` };
@@ -1628,6 +1684,10 @@ export function scaffoldCommunityApp(opts: {
     // Seed the bundled default skill pack for this app (catalog apps ship their
     // skills here) so a freshly-added app arrives with usable skills, not empty.
     try { seedSkillPack(`apps/${id}/skills`, join(root, "skills")); } catch { /* best effort */ }
+    // Domain parity: a freshly connected app gets the same standing-context
+    // files a domain does (soul.md, state.md, MEMORY.md, _intents.jsonl,
+    // _journal/, _threads/), in addition to its skills/ + manifest.
+    seedAppParityFiles(root, opts.title);
     return { ok: true, path: root };
   } catch (e) {
     return { ok: false, error: scaffoldErrorMessage(e, root) };

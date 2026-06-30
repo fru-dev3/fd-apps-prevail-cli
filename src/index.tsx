@@ -2136,13 +2136,20 @@ async function calendarCommand(args: string[], vaultDefault: string | null): Pro
     (vaultArg || vaultDefault || process.env.PREVAIL_VAULT_ROOT || readConfig()?.vaultPath || "").trim();
 
   if (sub === "pull-google") {
-    const { pullGoogleCalendar } = await import("./calendar-sync.ts");
-    const result = await pullGoogleCalendar(vault);
+    // --all fans out across every connected Google account (events tagged by
+    // account); --account <label> targets one; default pulls the default profile.
+    const all = args.includes("--all");
+    const aflag = args.indexOf("--account");
+    const account = aflag >= 0 ? args[aflag + 1] : undefined;
+    const { pullGoogleCalendar, pullAllGoogleCalendars } = await import("./calendar-sync.ts");
+    const result = all
+      ? await pullAllGoogleCalendars(vault)
+      : await pullGoogleCalendar(vault, account ? { account } : undefined);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     process.exit(0);
   }
 
-  console.error("usage: prevail calendar pull-google --vault <path> [--json]");
+  console.error("usage: prevail calendar pull-google --vault <path> [--account <label> | --all] [--json]");
   process.exit(1);
 }
 

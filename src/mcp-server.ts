@@ -969,7 +969,8 @@ async function tApproveLoopAction(args: Record<string, unknown>, vaultPath: stri
 // ── apps + vault status ──────────────────────────────────────────────────────
 
 function tListApps(vaultPath: string): string {
-  const apps = scanApps(vaultPath);
+  // Disabled apps are inert: never present them to the agent as usable apps.
+  const apps = scanApps(vaultPath).filter((a) => a.enabled !== false);
   if (!apps.length) return "(no apps connected)";
   const lines = apps.map((a) => {
     const doms = a.domains?.length ? `  ->  ${a.domains.join(", ")}` : "";

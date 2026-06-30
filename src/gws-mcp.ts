@@ -74,6 +74,10 @@ function tools(): McpTool[] {
             type: "string",
             description: "Optional life-domain context for the approval record (defaults to the launch --domain or \"general\").",
           },
+          account: {
+            type: "string",
+            description: "Optional Google account to target when more than one is connected: a profile label (e.g. \"work\") or the literal \"default\". Omit to use the default account. Reads run against it; queued writes run against the same account after approval.",
+          },
         },
         required: ["args"],
       },
@@ -100,15 +104,18 @@ function callGoogleWorkspace(
   const domain = (typeof rawArgs.domain === "string" && rawArgs.domain.trim())
     ? rawArgs.domain.trim()
     : defaultDomain;
+  const account = (typeof rawArgs.account === "string" && rawArgs.account.trim())
+    ? rawArgs.account.trim()
+    : undefined;
 
   const { kind, summary } = classifyGwsCommand(args);
   if (kind === "read") {
-    const r = runGwsRead(args);
+    const r = runGwsRead(args, account);
     if (r.ok) return wrapText(r.output ?? "(no output)");
     return wrapText(`Error: ${r.error ?? "gws read failed"}`);
   }
-  // Write: queue it. NEVER execute here.
-  const rec = addPendingGws(vaultPath, { domain, summary, args });
+  // Write: queue it (with its target account). NEVER execute here.
+  const rec = addPendingGws(vaultPath, { domain, summary, args, account });
   return wrapText(
     `Queued for your approval: ${summary}. ` +
     `It will run only after you approve it under Needs you. ` +

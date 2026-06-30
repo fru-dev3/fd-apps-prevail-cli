@@ -62,6 +62,10 @@ function buildConnectedMcpServers(vaultPath?: string): Record<string, unknown> {
   const servers: Record<string, unknown> = {};
   try {
     for (const app of scanCommunityApps(vaultPath)) {
+      // A disabled app is fully inert: never inject its MCP server into the
+      // agent's tool set (enabled === false means do-not-sync, do-not-expose,
+      // do-not-run). Absent / true stays available.
+      if (app.enabled === false) continue;
       if (app.integration !== "mcp") continue;
       const cmd = app.mcpSetup?.command?.trim();
       if (!cmd) continue;

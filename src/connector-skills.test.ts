@@ -326,6 +326,23 @@ describe("listAvailableSkills (starter packs surfaced pre-seed)", () => {
   });
 });
 
+describe("disabled apps are inert on the agent surface (#31)", () => {
+  test("loadSkillsForConnector returns none for a disabled app, but listAvailableSkills still shows them", () => {
+    const app = mkdtempSync(join(tmpdir(), "disabled-app-"));
+    mkdirSync(join(app, "skills"));
+    writeFileSync(join(app, "skills", "sync-inbox.md"), "---\nid: sync-inbox\nrunner: api\n---\npull mail");
+
+    const enabled = fakeApp(app); // no enabled field => on
+    expect(loadSkillsForConnector(enabled).map((s) => s.id)).toEqual(["sync-inbox"]);
+
+    const disabled = { ...fakeApp(app), enabled: false };
+    // Execution surface (sync daemon + playbook orchestrator) sees no skills.
+    expect(loadSkillsForConnector(disabled)).toEqual([]);
+    // The desktop listing still shows what re-enabling would unlock.
+    expect(listAvailableSkills(disabled, []).map((s) => s.id)).toEqual(["sync-inbox"]);
+  });
+});
+
 describe("runSkillPackWithFallback (#8 orchestration)", () => {
   test("falls through to the next method when the favorite is blocked, returns first success with trail", async () => {
     // read-only autonomy blocks the act-class first member, so the second

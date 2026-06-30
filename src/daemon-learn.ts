@@ -354,7 +354,7 @@ export async function refreshAppSuggestions(root: string, cfg: LearnConfig): Pro
 
   const existing = readAppSuggestions(root);
   const now = Date.now();
-  const apps = scanCommunityApps();
+  const apps = scanCommunityApps().filter((ap) => ap.enabled !== false);
   let refreshed = 0;
   for (const domain of uniq) {
     const prev = existing[domain];

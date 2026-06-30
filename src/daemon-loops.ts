@@ -16,7 +16,7 @@ import { runtimePath } from "./path-safety.ts";
 import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
-import { scanVault } from "./vault.ts";
+import { scanVault, scanApps } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
 import { auditAction } from "./action-audit.ts";
@@ -595,7 +595,9 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   // The general domain dir maps to the label "general"; everything else by dir name.
   const domainLabel = resolve(domainDir) === resolve(generalDir(cfg.vaultPath)) || resolve(domainDir) === resolve(cfg.vaultPath) ? "general" : basename(domainDir);
   const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
-  const memory = safeRead(join(domainDir, "_memory.md"));
+  // Domains keep durable memory in _memory.md; apps (domain parity) use MEMORY.md.
+  // Read whichever exists so an app loop gets the same standing context.
+  const memory = safeRead(join(domainDir, "_memory.md")) || safeRead(join(domainDir, "MEMORY.md"));
   // Curated high-level intents touching this domain — the compounding signal.
   const domainIntents = readDomainIntents(resolve(cfg.vaultPath), domainLabel);
 
@@ -824,9 +826,36 @@ async function consumeAiTasks(domainDir: string, cfg: LoopsConfig): Promise<numb
   return handled;
 }
 
-// One pass across every domain. Domain discovery goes through scanVault so it
-// finds domains in BOTH the v3 (vault/domains/<d>) and legacy (vault/<d>) layouts
-// and gets each one's resolved path. Advances due loops AND works AI-owned tasks.
+// Every loop/AI-task target in the vault, by display name + resolved path:
+// scanned domains (v3 + legacy layouts), the general domain, AND connected apps
+// (#32 app-scoped loops: an app is "a domain with a little bit more", so it can
+// carry _loops.json + AI tasks just like a domain). A DISABLED app is fully
+// inert and never returned, so its loops never run. Deduped by resolved path so
+// an app surfaced by more than one scanner is visited once.
+export function discoverLoopTargets(root: string): { name: string; path: string }[] {
+  const out: { name: string; path: string }[] = [];
+  const seen = new Set<string>();
+  const add = (name: string, path: string): void => {
+    const r = resolve(path);
+    if (seen.has(r)) return;
+    seen.add(r);
+    out.push({ name, path });
+  };
+  for (const d of scanVault(root)) add(d.name, d.path);
+  add("general", generalDir(root));
+  // App targets: vault apps (data/apps/<id>) that aren't disabled. They run the
+  // SAME runDomain path as a domain (reads <dir>/_loops.json, state.md, MEMORY.md).
+  for (const a of scanApps(root)) {
+    if (a.enabled === false) continue;
+    add(a.id, a.path);
+  }
+  return out;
+}
+
+// One pass across every domain AND connected app. Discovery goes through
+// scanVault + scanApps so it finds domains in BOTH the v3 (vault/domains/<d>)
+// and legacy (vault/<d>) layouts, the general domain, and every enabled app,
+// with each one's resolved path. Advances due loops AND works AI-owned tasks.
 export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; loops: number; aiTasks: number }> {
   const root = resolve(cfg.vaultPath);
   // Cross-process lock (B7/O25): the desktop and the launchd daemon can both fire
@@ -840,9 +869,8 @@ export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; lo
     let loops = 0;
     let aiTasks = 0;
 
-    // Include the general domain (data/domains/general on v4, else root) alongside
-    // the scanned domains so its loops run on schedule too.
-    const targets = [...scanVault(root).map((d) => ({ name: d.name, path: d.path })), { name: "general", path: generalDir(root) }];
+    // Domains + the general domain + every enabled app (app-scoped loops).
+    const targets = discoverLoopTargets(root);
     for (const d of targets) {
       try {
         let touched = false;

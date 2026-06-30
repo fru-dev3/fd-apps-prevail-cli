@@ -151,6 +151,12 @@ export interface SkillRunResult {
 // list. Caller can list the parse errors via parseSkillFile directly if
 // they need diagnostics.
 export function loadSkillsForConnector(app: AppSkill): SkillSpec[] {
+  // A disabled app is fully inert on every agent / autonomous surface: the sync
+  // daemon and the playbook orchestrator both load an app's runnable skills
+  // through here, so returning none keeps a disabled app's skills from running.
+  // (The desktop's "available skills" listing reads the dir directly via
+  // listAvailableSkills, so it still SHOWS what re-enabling would unlock.)
+  if (app.enabled === false) return [];
   return loadSkillsFromDir(join(app.path, "skills"), app);
 }
 
@@ -236,8 +242,11 @@ export function listAvailableSkills(app: AppSkill, shippedDirs: string[]): Avail
       if (!byId.has(s.id)) byId.set(s.id, s);
     }
   }
-  // On-disk skills are authoritative (the seeded/edited/learned versions).
-  for (const s of loadSkillsForConnector(app)) byId.set(s.id, s);
+  // On-disk skills are authoritative (the seeded/edited/learned versions). Read
+  // the app's skills dir directly (not loadSkillsForConnector, which is the
+  // agent/execution surface and intentionally returns none for a disabled app):
+  // the desktop listing should still show what's there regardless of enabled.
+  for (const s of loadSkillsFromDir(join(app.path, "skills"), app)) byId.set(s.id, s);
 
   const specs = [...byId.values()];
   const primaryIds = new Set(buildSkillPacks(specs).map((p) => p.skills[0]!.id));
