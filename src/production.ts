@@ -58,6 +58,14 @@ export function initProduction(opts: { vault?: string; clearDemo?: string }): Pr
   const vault = resolve((opts.vault ?? "").trim() || embeddedVaultPath());
   const created = !existsSync(vault);
   mkdirSync(vault, { recursive: true });
+  // Seed the canonical layout up front so a brand-new vault starts as exactly
+  // build/ + data/{apps,domains} (no flat/legacy root). The resolvers prefer
+  // data/ + build/ the moment those dirs exist, so all new content lands
+  // canonically. The marker tells re-runs this is already a data root.
+  mkdirSync(join(vault, "data", "domains"), { recursive: true });
+  mkdirSync(join(vault, "data", "apps"), { recursive: true });
+  mkdirSync(join(vault, "build"), { recursive: true });
+  try { writeFileSync(join(vault, "data", ".prevail-data-layout"), "canonical layout (build/ + data/{apps,domains})\n"); } catch { /* best effort */ }
 
   let demoCleared = false;
   let refusedClear: string | undefined;

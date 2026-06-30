@@ -43,7 +43,12 @@ describe("production transition", () => {
     expect(res.ok).toBe(true);
     expect(res.created).toBe(true);
     expect(existsSync(prod)).toBe(true);
-    expect(readdirSync(prod).length).toBe(0); // empty, ready for real use
+    // A fresh production vault now starts in the canonical layout: the root
+    // holds exactly build/ + data/{apps,domains} (no flat/legacy root).
+    expect(readdirSync(prod).filter((n) => !n.startsWith(".")).sort()).toEqual(["build", "data"]);
+    expect(existsSync(join(prod, "data", "domains"))).toBe(true);
+    expect(existsSync(join(prod, "data", "apps"))).toBe(true);
+    expect(existsSync(join(prod, "build"))).toBe(true);
   });
 
   test("clears a demo-marked vault when asked", () => {
