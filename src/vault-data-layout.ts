@@ -188,6 +188,7 @@ export const BUILD_SUPPORTING_ENTRIES: readonly string[] = [
   "omega.md",
   "AGENTS-operating.md",
   "calendar-external.json",
+  "notes.json",
   "_log",
 ];
 

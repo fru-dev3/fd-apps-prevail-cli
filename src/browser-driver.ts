@@ -22,7 +22,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { redactSnapshot } from "./browser-actions.ts";
 import type { Locator, PageSnapshot, SnapshotElement } from "./browser-actions.ts";
-import { loadPlaywrightCore } from "./playwright-resolve.ts";
+import { loadPlaywrightCore, PLAYWRIGHT_UNAVAILABLE_MESSAGE } from "./playwright-resolve.ts";
 
 // ---------------------------------------------------------------------------
 // Wire protocol (host ⇄ child)
@@ -383,7 +383,14 @@ export async function runBrowserDriverChild(): Promise<void> {
     // playwright-resolve.ts. Falls back to the bundled specifier in dev.
     pw = await loadPlaywrightCore();
   } catch (e) {
-    emit({ event: "error", message: "playwright-core unavailable: " + String((e as Error)?.message || e) });
+    // Keep the raw cause on stderr (inherited) for debugging, but surface a
+    // clear, actionable message to the user instead of the module-not-found dump.
+    try {
+      process.stderr.write("prevail: browser engine unavailable: " + String((e as Error)?.message || e) + "\n");
+    } catch {
+      /* ignore */
+    }
+    emit({ event: "error", message: PLAYWRIGHT_UNAVAILABLE_MESSAGE });
     return;
   }
 

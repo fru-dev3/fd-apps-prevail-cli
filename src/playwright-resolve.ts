@@ -30,6 +30,26 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
+// User-facing message shown when the bundled browser engine (playwright-core)
+// cannot be resolved on disk. Replaces the raw "Cannot find module .../$bunfs/..."
+// dump, which is meaningless to a user and exposes the CI build path. Actionable:
+// the only real remedy for a packaging miss is a fresh install / update.
+export const PLAYWRIGHT_UNAVAILABLE_MESSAGE =
+  "Browser automation isn't available in this build. The bundled browser engine could not be found. Try updating Prevail; if it persists, reinstall.";
+
+// True when an error/message originates from playwright-core being unavailable
+// (failed on-disk resolution, then the in-binary fallback throwing a
+// module-not-found). Used to swap the raw dump for PLAYWRIGHT_UNAVAILABLE_MESSAGE
+// wherever a browser skill surfaces the failure.
+export function isPlaywrightUnavailable(err: unknown): boolean {
+  const s = typeof err === "string" ? err : String((err as { message?: unknown })?.message ?? err ?? "");
+  return (
+    s.includes("playwright-core") ||
+    s.includes("playwright") && s.includes("Cannot find module") ||
+    s === PLAYWRIGHT_UNAVAILABLE_MESSAGE
+  );
+}
+
 // Resolved playwright-core package directory (absolute), or "" to mean "fall
 // back to the bare specifier". Computed once.
 let cachedDir: string | null = null;
@@ -48,8 +68,13 @@ function candidateDirs(): string[] {
     exeDir = "";
   }
   if (exeDir) {
+    // macOS .app: sidecar lives in Contents/MacOS, resources in Contents/Resources.
+    // Windows/Linux: resources sit beside the exe (or under a resources/ subdir).
+    // Tauri v2 may or may not preserve the declared `resources/` path segment, so
+    // probe both `<base>/node_modules/...` and `<base>/resources/node_modules/...`.
     for (const base of [exeDir, join(exeDir, ".."), join(exeDir, "..", "Resources"), join(exeDir, "resources")]) {
       dirs.push(join(base, "node_modules", "playwright-core"));
+      dirs.push(join(base, "resources", "node_modules", "playwright-core"));
     }
   }
   // Dev / source layout: repo node_modules relative to this module.
@@ -107,7 +132,14 @@ export async function loadPlaywrightCore(): Promise<any> {
       }
     }
   }
-  return import("playwright-core");
+  // Last resort: the in-binary copy. Inside the compiled binary this throws the
+  // raw "Cannot find module .../$bunfs/..." dump, so translate any failure into
+  // the actionable, build-path-free message rather than leaking it to the user.
+  try {
+    return await import("playwright-core");
+  } catch {
+    throw new Error(PLAYWRIGHT_UNAVAILABLE_MESSAGE);
+  }
 }
 
 // Import a playwright-core SUBMODULE (e.g. "lib/coreBundle", "lib/utilsBundle")

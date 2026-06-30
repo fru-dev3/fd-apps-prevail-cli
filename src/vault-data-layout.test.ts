@@ -151,6 +151,7 @@ describe("migrateToBuildLayout", () => {
     writeFileSync(join(v, "_meta", "alignment.json"), "{}");
     mkdirSync(join(v, "benchmark"), { recursive: true });
     writeFileSync(join(v, "benchmark", "q.json"), "{}");
+    writeFileSync(join(v, "notes.json"), "[]");
     // CONTENT must NOT move.
     writeFileSync(join(v, "_memory.md"), "# mem");
 
@@ -161,6 +162,7 @@ describe("migrateToBuildLayout", () => {
     expect(existsSync(join(v, "build", "_decisions.jsonl"))).toBe(true);
     expect(existsSync(join(v, "build", "_meta", "alignment.json"))).toBe(true);
     expect(existsSync(join(v, "build", "benchmark", "q.json"))).toBe(true);
+    expect(existsSync(join(v, "build", "notes.json"))).toBe(true);
     // Originals LEFT in place (non-destructive).
     expect(existsSync(join(v, "_decisions.jsonl"))).toBe(true);
     // CONTENT never moved.
