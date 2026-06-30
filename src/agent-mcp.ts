@@ -87,10 +87,13 @@ function buildConnectedMcpServers(vaultPath?: string): Record<string, unknown> {
 // Idempotent: re-running rewrites the file with the current state. chmod 0600
 // because the file may carry the Composio key. includeComposio defaults to true
 // so existing callers keep emitting the gateway.
-export function writeAgentMcpConfig(
+// Build the full mcpServers map that will be injected, keyed by server id. This
+// is the single source of truth for BOTH the written config and the list of
+// server ids the caller allow-lists, so the two can never drift apart.
+function buildAgentMcpServers(
   vaultPath?: string,
   opts?: { includeComposio?: boolean; domain?: string },
-): string | null {
+): Record<string, unknown> {
   const includeComposio = opts?.includeComposio !== false;
   const key = composioApiKey();
   const mcpServers: Record<string, unknown> = { ...buildConnectedMcpServers(vaultPath) };
@@ -114,6 +117,14 @@ export function writeAgentMcpConfig(
       // gws detection must never break agent wiring.
     }
   }
+  return mcpServers;
+}
+
+export function writeAgentMcpConfig(
+  vaultPath?: string,
+  opts?: { includeComposio?: boolean; domain?: string },
+): string | null {
+  const mcpServers = buildAgentMcpServers(vaultPath, opts);
   if (Object.keys(mcpServers).length === 0) return null;
   const p = agentMcpConfigPath();
   try {
@@ -133,6 +144,19 @@ export function agentMcpConfigForClaude(
   opts?: { includeComposio?: boolean; domain?: string },
 ): string | null {
   return writeAgentMcpConfig(vaultPath, opts);
+}
+
+// The ids (server keys) of the MCP servers that WILL be injected for these
+// opts. The caller uses these to allow exactly those servers' tools in headless
+// chat (claude `-p` auto-denies un-allowed tool use, so without this the agent
+// could not call them outside of skip-permissions act runs). Building from the
+// same map as writeAgentMcpConfig guarantees the allow-list matches what was
+// written.
+export function agentMcpServerIds(
+  vaultPath?: string,
+  opts?: { includeComposio?: boolean; domain?: string },
+): string[] {
+  return Object.keys(buildAgentMcpServers(vaultPath, opts));
 }
 
 // Status for the UI: is the Composio gateway configured (a key is present) and

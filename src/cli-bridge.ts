@@ -1140,9 +1140,24 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // its path, or null when there is nothing to inject (no Composio key and no
     // connected stdio servers), so this stays a byte-for-byte no-op otherwise.
     try {
-      const { agentMcpConfigForClaude } = await import("./agent-mcp.ts");
+      const { agentMcpConfigForClaude, agentMcpServerIds } = await import("./agent-mcp.ts");
       const mcpCfg = agentMcpConfigForClaude(vaultPath, { includeComposio: act });
-      if (mcpCfg) args.push("--mcp-config", mcpCfg);
+      if (mcpCfg) {
+        args.push("--mcp-config", mcpCfg);
+        // In headless `-p` there is no TTY to approve tool use, so on a non-act
+        // (chat) turn the injected MCP tools would be auto-denied and the agent
+        // could never call them. Explicitly allow exactly the servers we
+        // injected (mcp__<serverId> permits all of that server's tools). This is
+        // additive - it does not disable the model's other behavior - and safe:
+        // the google_workspace tool gates its own writes (it only QUEUES them
+        // for approval), and connected stdio MCP servers are user-added. On act
+        // runs --dangerously-skip-permissions already allows everything, so we
+        // only need this on chat turns.
+        if (!act) {
+          const ids = agentMcpServerIds(vaultPath, { includeComposio: act });
+          if (ids.length) args.push("--allowedTools", ...ids.map((id) => `mcp__${id}`));
+        }
+      }
     } catch { /* never let MCP wiring break a turn */ }
     args.push(...head);
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
