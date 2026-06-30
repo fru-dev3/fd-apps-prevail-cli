@@ -26,13 +26,14 @@ function findOperatingManual(vaultPath: string): string | null {
   if (operatingManualCache && operatingManualCache.vaultPath === vaultPath) {
     return operatingManualCache.content;
   }
-  // Canonical layout: PREVAIL.md at the vault root is the operating doc. Fall back
-  // to the legacy AGENTS-operating.md (root, then build/), then ~/.prevail, then the
-  // bundled copy beside the binary.
+  // Canonical layout keeps the operating doc under build/ (build/ wins), so look
+  // there first, then fall back to the legacy vault-root locations (PREVAIL.md /
+  // AGENTS-operating.md), then ~/.prevail, then the bundled copy beside the binary.
   const candidates: string[] = [
+    join(buildRoot(vaultPath), PREVAIL_DOC_FILE),
+    join(buildRoot(vaultPath), OPERATING_MANUAL_FILE),
     join(vaultPath, PREVAIL_DOC_FILE),
     join(vaultPath, OPERATING_MANUAL_FILE),
-    join(buildRoot(vaultPath), OPERATING_MANUAL_FILE),
     join(homedir(), ".prevail", PREVAIL_DOC_FILE),
     join(homedir(), ".prevail", OPERATING_MANUAL_FILE),
   ];

@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
+import { buildRoot } from "./path-safety.ts";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
 import { scanVault, scanApps, type Domain } from "./vault.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
@@ -840,7 +841,11 @@ function tReadMemory(args: Record<string, unknown>, vaultPath: string): string {
     if (!existsSync(f)) return `(no learned MEMORY.md for ${domain.name} yet)`;
     return readFileSync(f, "utf8");
   }
-  const f = join(vaultPath, "omega.md");
+  // Canonical layout keeps omega.md under build/ (build/ wins); fall back to the
+  // legacy vault-root location for pre-build vaults. Mirrors findOmega in cli-bridge.
+  const buildF = join(buildRoot(vaultPath), "omega.md");
+  const rootF = join(vaultPath, "omega.md");
+  const f = existsSync(buildF) ? buildF : rootF;
   if (!existsSync(f)) return "(no omega.md yet - vault-wide learned memory is empty)";
   return readFileSync(f, "utf8");
 }

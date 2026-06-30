@@ -20,6 +20,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { buildRoot } from "./path-safety.ts";
 
 // The normalized event shape the desktop Calendar view reads. `domain` is
 // optional in the contract and left unset by an external pull.
@@ -194,9 +195,11 @@ export async function pullGoogleCalendar(vaultRoot: string): Promise<PullResult>
     // 3. Normalize into the desktop event shape.
     const events = normalizeGoogleEvents(parsed);
 
-    // 4. Write the normalized array to <vaultRoot>/calendar-external.json as
-    //    PLAINTEXT (plain fs — the desktop reads this file raw, not decrypted).
-    const outPath = join(vault, "calendar-external.json");
+    // 4. Write the normalized array to calendar-external.json as PLAINTEXT (plain
+    //    fs — the desktop reads this file raw, not decrypted). Canonical layout
+    //    keeps it under build/ (buildRoot falls back to the vault root on a legacy
+    //    vault); the desktop reader prefers build/ then the root.
+    const outPath = join(buildRoot(vault), "calendar-external.json");
     try {
       writeFileSync(outPath, `${JSON.stringify(events, null, 2)}\n`);
     } catch (e) {

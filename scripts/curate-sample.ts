@@ -14,6 +14,11 @@ import { join } from "node:path";
 const vault = process.argv[2];
 if (!vault || !existsSync(vault)) { console.error("usage: curate-sample.ts <vault>"); process.exit(1); }
 
+// Canonical layout keeps domains under data/domains. Resolve the domains base so
+// this works on a canonical vault (data/domains) and a legacy flat vault (root).
+const dataBase = existsSync(join(vault, "data")) ? join(vault, "data") : vault;
+const DOMAINS = existsSync(join(dataBase, "domains")) ? join(dataBase, "domains") : dataBase;
+
 const TS = new Date().toISOString();
 const fm = `---\nderived_from:\n  data: "synthetic-sample"\n  ledger: 0\nat: "${TS}"\nby: "sample-author"\nschema: 2\n---\n\n`;
 
@@ -138,14 +143,14 @@ const MAIL_SKILLS: Record<string, string> = {
 function write(p: string, c: string) { mkdirSync(join(p, ".."), { recursive: true }); writeFileSync(p, c); }
 function gitkeep(d: string) { mkdirSync(d, { recursive: true }); if (readdirSync(d).length === 0) writeFileSync(join(d, ".gitkeep"), ""); }
 
-// 1. delete domains not in KEEP (+ stray root junk)
+// 1. delete domains not in KEEP (+ stray junk), within the domains container
 let deleted = 0;
-for (const e of readdirSync(vault, { withFileTypes: true })) {
+for (const e of readdirSync(DOMAINS, { withFileTypes: true })) {
   if (!e.isDirectory()) continue;
   const reserved = ["apps", "benchmark", "core", "complete"].includes(e.name);
   if (reserved) continue;
   if (e.name.startsWith("_") || (!KEEP[e.name] && e.name !== "mail")) {
-    rmSync(join(vault, e.name), { recursive: true, force: true });
+    rmSync(join(DOMAINS, e.name), { recursive: true, force: true });
     console.log(`  deleted: ${e.name}`);
     deleted++;
   }
@@ -154,7 +159,7 @@ for (const e of readdirSync(vault, { withFileTypes: true })) {
 // 2. write real soul.md + goals.md + _state.md for each kept/new domain
 let written = 0;
 for (const [name, d] of Object.entries(KEEP)) {
-  const dir = join(vault, name);
+  const dir = join(DOMAINS, name);
   const isNew = !existsSync(dir);
   if (isNew) { // scaffold the full v2 skeleton for `mail`
     for (const sub of ["data", "_meta", "_artifacts", "_skills", "_log", "_threads"]) gitkeep(join(dir, sub));
@@ -168,6 +173,6 @@ for (const [name, d] of Object.entries(KEEP)) {
 }
 
 // 3. mail skills
-for (const [slug, body] of Object.entries(MAIL_SKILLS)) write(join(vault, "mail", "_skills", slug, "SKILL.md"), body);
+for (const [slug, body] of Object.entries(MAIL_SKILLS)) write(join(DOMAINS, "mail", "_skills", slug, "SKILL.md"), body);
 
 console.log(`\ndone — ${deleted} deleted, ${written} domains written (incl. new mail). Final set: ${Object.keys(KEEP).sort().join(", ")}`);

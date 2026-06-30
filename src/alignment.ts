@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { scanVault } from "./vault.ts";
 import { computeContextScore } from "./score.ts";
 import { vreadFile, vappendLine } from "./vault-session.ts";
-import { runtimePath } from "./path-safety.ts";
+import { buildRoot, runtimePath } from "./path-safety.ts";
 
 export interface PillarScore {
   pillar: string;
@@ -47,7 +47,7 @@ const PILLAR_MAP: Record<string, string[]> = {
 };
 
 function readIdealState(vaultPath: string): string | null {
-  for (const p of [join(vaultPath, "ideal-state.md"), join(homedir(), ".prevail", "ideal-state.md")]) {
+  for (const p of [join(buildRoot(vaultPath), "ideal-state.md"), join(vaultPath, "ideal-state.md"), join(homedir(), ".prevail", "ideal-state.md")]) {
     if (!existsSync(p)) continue;
     try { return vreadFile(p); } catch { try { return readFileSync(p, "utf8"); } catch { /* skip */ } }
   }

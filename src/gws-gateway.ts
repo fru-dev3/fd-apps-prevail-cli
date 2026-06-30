@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveGwsBinary } from "./calendar-sync.ts";
 import { auditAction } from "./action-audit.ts";
+import { runtimePath } from "./path-safety.ts";
 
 export interface PendingGws {
   id: string;
@@ -133,7 +134,7 @@ export function runGwsRead(args: string[]): GwsResult {
 // ── pending store (plaintext; read by the desktop) ──────────────────────────
 
 function pendingPath(vaultRoot: string): string {
-  return join(vaultRoot, "_meta", "pending_gws.json");
+  return join(runtimePath(vaultRoot, "_meta"), "pending_gws.json");
 }
 
 export function readPendingGws(vaultRoot: string): PendingGws[] {
@@ -150,7 +151,7 @@ export function readPendingGws(vaultRoot: string): PendingGws[] {
 }
 
 function writePending(vaultRoot: string, items: PendingGws[]): void {
-  const dir = join(vaultRoot, "_meta");
+  const dir = runtimePath(vaultRoot, "_meta");
   mkdirSync(dir, { recursive: true });
   // PLAINTEXT via node:fs on purpose — the desktop reads this file directly to
   // render the approval queue, so it must not be vault-encrypted.

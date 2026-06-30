@@ -13,6 +13,7 @@
 
 import { join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
+import { runtimePath } from "./path-safety.ts";
 import { vreadFile, vwriteFile, vappendLine } from "./vault-session.ts";
 import type { ActionClass } from "./action-policy.ts";
 
@@ -47,7 +48,7 @@ interface AutonomyDoc {
 }
 
 function autonomyPath(vault: string): string {
-  return join(vault, "_meta", "autonomy.json");
+  return join(runtimePath(vault, "_meta"), "autonomy.json");
 }
 
 function read(vault: string): AutonomyDoc {
@@ -69,7 +70,7 @@ function read(vault: string): AutonomyDoc {
 }
 
 function write(vault: string, doc: AutonomyDoc): void {
-  const dir = join(vault, "_meta");
+  const dir = runtimePath(vault, "_meta");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   vwriteFile(autonomyPath(vault), `${JSON.stringify({ ...doc, schema: 1, updatedTs: Date.now() }, null, 2)}\n`);
 }
@@ -123,13 +124,13 @@ export function setMonthlyFinancialCap(vault: string, capUsd: number | null): vo
 // Spend ledger — records each executed financial action's amount so the broker
 // can enforce the monthly cap. Append-only at <vault>/_meta/spend.jsonl.
 function spendPath(vault: string): string {
-  return join(vault, "_meta", "spend.jsonl");
+  return join(runtimePath(vault, "_meta"), "spend.jsonl");
 }
 
 export function recordSpend(vault: string, amountUsd: number, ts: number = Date.now()): void {
   if (!Number.isFinite(amountUsd) || amountUsd <= 0) return;
   try {
-    const dir = join(vault, "_meta");
+    const dir = runtimePath(vault, "_meta");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     vappendLine(spendPath(vault), JSON.stringify({ ts, amountUsd }));
   } catch { /* best effort */ }

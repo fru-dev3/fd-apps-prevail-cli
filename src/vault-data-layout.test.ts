@@ -169,7 +169,11 @@ describe("migrateToBuildLayout", () => {
   });
 
   test("BUILD_SUPPORTING_ENTRIES excludes content files", () => {
-    for (const c of ["_memory.md", "_state.md", "_skills", "profile.md", "domains", "apps"]) {
+    // Per-domain/app CONTENT must never be swept into build/. profile.md and the
+    // other config files (ideal-state.md, omega.md, AGENTS-operating.md,
+    // calendar-external.json) ARE supporting entries now (build/ is their canonical
+    // home), so they are intentionally not listed here.
+    for (const c of ["_memory.md", "_state.md", "_skills", "domains", "apps"]) {
       expect(BUILD_SUPPORTING_ENTRIES).not.toContain(c);
     }
   });

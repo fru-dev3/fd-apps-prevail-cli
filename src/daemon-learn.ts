@@ -186,7 +186,10 @@ function titleCase(slug: string): string {
 }
 
 function readIdealPreamble(vaultPath: string): string {
-  const p = join(vaultPath, "ideal-state.md");
+  // Canonical layout keeps ideal-state.md under build/ (build/ wins); fall back to
+  // the legacy vault-root location for pre-build vaults.
+  const buildP = join(buildRoot(vaultPath), "ideal-state.md");
+  const p = existsSync(buildP) ? buildP : join(vaultPath, "ideal-state.md");
   if (!existsSync(p)) return "";
   let raw = "";
   try { raw = vreadFile(p).trim(); } catch { return ""; }
