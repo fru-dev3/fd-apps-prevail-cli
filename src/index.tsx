@@ -101,6 +101,10 @@ interface Args {
   privacyArgs: string[];
   search: boolean;
   searchArgs: string[];
+  gwsMcp: boolean;
+  gwsMcpDomain: string | null;
+  gws: boolean;
+  gwsArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -193,6 +197,10 @@ function parseArgs(argv: string[]): Args {
   let privacyArgs: string[] = [];
   let search = false;
   let searchArgs: string[] = [];
+  let gwsMcp = false;
+  let gwsMcpDomain: string | null = null;
+  let gws = false;
+  let gwsArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -375,6 +383,23 @@ function parseArgs(argv: string[]): Args {
       search = true;
       searchArgs = argv.slice(i + 1);
       break;
+    } else if (a === "gws-mcp") {
+      // Top-level MCP entrypoint the agent launches: `prevail gws-mcp --vault
+      // <path> [--domain <d>]`. The launch flags follow the subcommand, so parse
+      // --vault / --domain inline (same shape as the `mcp` branch) before break.
+      gwsMcp = true;
+      for (let j = i + 1; j < argv.length; j++) {
+        const f = argv[j];
+        if (f === "--vault" || f === "-d") { if (argv[j + 1]) { vaultPath = resolve(process.cwd(), argv[j + 1]); j++; } }
+        else if (f.startsWith("--vault=")) { vaultPath = resolve(process.cwd(), f.slice("--vault=".length)); }
+        else if (f === "--domain") { if (argv[j + 1]) { gwsMcpDomain = argv[j + 1]; j++; } }
+        else if (f.startsWith("--domain=")) { gwsMcpDomain = f.slice("--domain=".length); }
+      }
+      break;
+    } else if (a === "gws") {
+      gws = true;
+      gwsArgs = argv.slice(i + 1);
+      break;
     } else if (a === "upgrade" || a === "update" || a === "self-update") {
       upgrade = true;
       upgradeArgs = argv.slice(i + 1);
@@ -479,6 +504,10 @@ function parseArgs(argv: string[]): Args {
     privacyArgs,
     search,
     searchArgs,
+    gwsMcp,
+    gwsMcpDomain,
+    gws,
+    gwsArgs,
   };
 }
 
@@ -504,6 +533,14 @@ USAGE
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
                               auth: clients must send Authorization: prevail-<token> from ~/.prevail/mcp.json
                               parent-check: refuses non-TTY / unknown parents — bypass with --unsafe-detach
+  prevail gws-mcp --vault <v> [--domain <d>]
+                              run the gated Google Workspace MCP server (stdio) —
+                              exposes the authenticated gws CLI to the agent as one
+                              tool: reads run live, writes are queued for approval
+  prevail gws pending-list --json
+                              list Google Workspace writes awaiting your approval
+  prevail gws run --id <id> --json
+                              execute one approved Google Workspace write
   prevail bench [...]         run the public council benchmark suite
                               (bench list --json for the machine question list)
   prevail vault [...]         prune old logs, snapshot/restore the vault
@@ -4651,6 +4688,39 @@ async function searchCommand(args: string[]): Promise<number> {
   }
 }
 
+// `prevail [--vault <v>] gws <sub> --json` — the desktop's control surface for
+// the queued Google Workspace write actions:
+//   gws pending-list --json      → the PendingGws[] awaiting approval
+//   gws run --id <id> --json     → execute one approved write (the ONLY write path)
+// Reads/writes through gws-gateway; never starts the interactive TUI.
+async function gwsCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const sub = args[0];
+  const { json, flags } = parseKvArgs(args.slice(1), vaultOverride);
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  if (sub === "pending-list") {
+    const { readPendingGws } = await import("./gws-gateway.ts");
+    const items = readPendingGws(vault);
+    process.stdout.write(`${JSON.stringify(items)}\n`);
+    return 0;
+  }
+  if (sub === "run") {
+    const id = (flags.id ?? "").trim();
+    if (!id) {
+      if (json) emitJsonError("missing --id", "MISSING_ARG");
+      console.error("gws run requires --id <id>");
+      return 1;
+    }
+    const { runGwsApproved } = await import("./gws-gateway.ts");
+    const result = runGwsApproved(vault, id);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return result.ok ? 0 : 1;
+  }
+  if (json) emitJsonError(`unknown gws subcommand: ${sub ?? "(none)"}`, "BAD_SUBCOMMAND");
+  console.error(`unknown gws subcommand: ${sub ?? "(none)"} (try: pending-list | run --id <id>)`);
+  return 1;
+}
+
 async function main() {
   // Hidden subcommand: the fixed Playwright browser driver. It is spawned as a
   // CHILD of the engine (by BrowserDriverHost) with a minimal env and NO vault
@@ -4958,6 +5028,18 @@ async function main() {
   }
   if (args.search) {
     const code = await searchCommand(args.searchArgs);
+    process.exit(code);
+  }
+  if (args.gwsMcp) {
+    // The gated Google Workspace MCP server the agent launches over stdio.
+    const cfg = readConfig();
+    const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+    const { runGwsMcpServer } = await import("./gws-mcp.ts");
+    await runGwsMcpServer(vault, args.gwsMcpDomain ?? undefined);
+    return;
+  }
+  if (args.gws) {
+    const code = await gwsCommand(args.gwsArgs, args.vaultPath);
     process.exit(code);
   }
   if (args.daemon) {

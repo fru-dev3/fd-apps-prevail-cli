@@ -17,6 +17,7 @@ import { writeSecretFile } from "./secret-file.ts";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { scanCommunityApps } from "./vault.ts";
+import { resolveGwsBinary } from "./calendar-sync.ts";
 
 // The hosted Composio gateway. HTTP / Streamable-HTTP transport, authenticated
 // with the consumer's Composio API key in the X-CONSUMER-API-KEY header. This is
@@ -88,12 +89,31 @@ function buildConnectedMcpServers(vaultPath?: string): Record<string, unknown> {
 // so existing callers keep emitting the gateway.
 export function writeAgentMcpConfig(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean },
+  opts?: { includeComposio?: boolean; domain?: string },
 ): string | null {
   const includeComposio = opts?.includeComposio !== false;
   const key = composioApiKey();
   const mcpServers: Record<string, unknown> = { ...buildConnectedMcpServers(vaultPath) };
   if (includeComposio && key) mcpServers.composio = composioServerEntry(key);
+  // The gated Google Workspace tool: only wired in when (a) we know the vault to
+  // queue approvals into and (b) the user has an authenticated gws CLI on this
+  // machine. The agent reaches it as a stdio MCP server launched from THIS
+  // executable (process.execPath is the prevail binary in the compiled build).
+  // Reads run live; writes are queued to <vault>/_meta/pending_gws.json and only
+  // run after explicit approval.
+  if (vaultPath) {
+    try {
+      if (resolveGwsBinary()) {
+        const domain = opts?.domain?.trim();
+        mcpServers["google_workspace"] = {
+          command: process.execPath,
+          args: ["gws-mcp", "--vault", vaultPath, ...(domain ? ["--domain", domain] : [])],
+        };
+      }
+    } catch {
+      // gws detection must never break agent wiring.
+    }
+  }
   if (Object.keys(mcpServers).length === 0) return null;
   const p = agentMcpConfigPath();
   try {
@@ -110,7 +130,7 @@ export function writeAgentMcpConfig(
 // adds no flag and the turn is unchanged.
 export function agentMcpConfigForClaude(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean },
+  opts?: { includeComposio?: boolean; domain?: string },
 ): string | null {
   return writeAgentMcpConfig(vaultPath, opts);
 }
