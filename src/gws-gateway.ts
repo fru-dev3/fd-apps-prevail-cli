@@ -36,7 +36,7 @@ export interface GwsResult {
 const MAX_OUTPUT = 16 * 1024;
 
 const NOT_INSTALLED = "Google Workspace CLI (gws) is not installed";
-const NOT_AUTHED = "Google Workspace is not authenticated yet (run: gws auth login)";
+const NOT_AUTHED = "This Google action needs a scope that was not granted. You may be signed in, but the required permission (e.g. Gmail or Calendar) is missing. Re-authorize from the Google panel and approve ALL requested permissions; if it still fails, your OAuth client is not enabled for that API.";
 
 // READ method tokens — operations that only observe state.
 const READ_TOKENS = new Set([

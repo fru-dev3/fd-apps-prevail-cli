@@ -96,7 +96,7 @@ export interface PullResult {
 
 const SOURCE = "gws";
 const NOT_INSTALLED = "Google Workspace CLI (gws) is not installed";
-const NOT_AUTHED = "Google Workspace CLI is not authenticated yet (run: gws auth login)";
+const NOT_AUTHED = "Google Calendar access was not granted for this account. You may be signed in, but the Calendar scope is missing. Re-authorize from the Google panel and approve ALL requested permissions. If it still fails, your OAuth client is not enabled for Calendar (set one up with `gws auth setup`).";
 
 // One-line, human, no-secrets failure reason. Kept short for the desktop JSON.
 function shortReason(e: unknown): string {
