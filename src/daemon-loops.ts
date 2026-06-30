@@ -341,8 +341,12 @@ export async function runOneLoop(
   // which surfaced as a bogus "no loops in this domain" on Run now.
   const dl = domainName.toLowerCase().trim();
   const scanned = scanVault(root).find((d) => d.name.toLowerCase() === dl)?.path;
-  const candidates = [scanned, isGeneral ? gdir : null, join(root, "data", "domains", dl), join(root, "domains", dl), join(root, dl)].filter(Boolean) as string[];
-  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? (isGeneral ? gdir : scanned ?? join(root, "data", "domains", dl));
+  // Apps run loops too (app/domain parity): a "Run now" target may be an app id
+  // whose home is data/apps/<id>, not a domain. Resolve it the same way so the
+  // desktop per-loop run works for an app's loop, not just a domain's.
+  const scannedApp = scanApps(root).find((a) => a.id.toLowerCase() === dl)?.path;
+  const candidates = [scanned, scannedApp, isGeneral ? gdir : null, join(root, "data", "domains", dl), join(root, "domains", dl), join(root, "data", "apps", dl), join(root, dl)].filter(Boolean) as string[];
+  const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? (isGeneral ? gdir : scanned ?? scannedApp ?? join(root, "data", "domains", dl));
   const doc = readDoc(domainDir);
   if (!doc) return empty("no loops in this domain");
   const loop = doc.loops.find((l) => l.id === loopRef || l.name === loopRef);
