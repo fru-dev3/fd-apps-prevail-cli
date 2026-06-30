@@ -1,7 +1,7 @@
 {
   "name": "fd-apps-prevail-cli",
-  "version": "1.9.1",
-  "description": "prevAIl — a terminal cockpit for your life domains.",
+  "version": "1.9.2",
+  "description": "prevAIl \u2014 a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,
   "license": "GPL-3.0-only",

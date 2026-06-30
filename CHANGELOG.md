@@ -7,6 +7,17 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.2] — 2026-06-30 · Disabled apps fully inert, app/domain parity, Google multi-account
+
+### Added
+- **App/domain parity**: connecting an app now seeds the same standing-context file set a domain gets (soul.md, state.md, MEMORY.md, _intents.jsonl, _journal/, _threads/) under `data/apps/<id>/`, idempotent and edit-safe.
+- **App-scoped loops**: `discoverLoopTargets` runs an app's `data/apps/<id>/_loops.json` through the same path as domain loops; disabled apps are never returned.
+- **Google multi-account plumbing**: `calendar-sync`, `gws-gateway`, and `gws-mcp` take an optional account/profile param (default unchanged); `pullAllGoogleCalendars` fans out across connected accounts read-only; `calendar pull-google --account/--all`.
+
+### Fixed
+- **Disabled apps are fully inert**: `enabled === false` now blocks agent-MCP injection, skill loading and execution, loop discovery, the agent-facing `list_apps` tool, and learn suggestions; `scanVaultApps` reads the `enabled` flag (prior gap).
+- **Browser skills in packaged builds**: playwright-core resolves relative to the executable with a friendly unavailable message instead of a baked-in CI path.
+
 ## [1.7.1] — 2026-06-13 · Multi-connection strategies, briefing delivery channels, connector completeness
 
 ### Added
