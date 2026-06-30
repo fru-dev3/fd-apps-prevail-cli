@@ -29,6 +29,8 @@ interface Args {
   briefingArgs: string[];
   connectors: boolean;
   connectorsArgs: string[];
+  calendar: boolean;
+  calendarArgs: string[];
   recommendations: boolean;
   recommendationsArgs: string[];
   suggestApps: boolean;
@@ -119,6 +121,8 @@ function parseArgs(argv: string[]): Args {
   let briefingArgs: string[] = [];
   let connectors = false;
   let connectorsArgs: string[] = [];
+  let calendar = false;
+  let calendarArgs: string[] = [];
   let recommendations = false;
   let recommendationsArgs: string[] = [];
   let suggestApps = false;
@@ -216,6 +220,9 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "connectors" || a === "connector") {
       connectors = true;
       connectorsArgs = argv.slice(i + 1);
+    } else if (a === "calendar") {
+      calendar = true;
+      calendarArgs = argv.slice(i + 1);
       break;
     } else if (a === "recommendations" || a === "recommend") {
       recommendations = true;
@@ -400,6 +407,8 @@ function parseArgs(argv: string[]): Args {
     briefingArgs,
     connectors,
     connectorsArgs,
+    calendar,
+    calendarArgs,
     recommendations,
     recommendationsArgs,
     suggestApps,
@@ -489,6 +498,9 @@ USAGE
                               (connectors list --json for the machine list)
                               connectors scopes <id> — show what an OAuth grant requests
                               connectors disconnect <id> — revoke + delete a stored token
+  prevail calendar [...]      calendar sync (read-only)
+                              calendar pull-google --json — pull Google Calendar events
+                              into <vault>/calendar-external.json for the desktop view
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
                               auth: clients must send Authorization: prevail-<token> from ~/.prevail/mcp.json
                               parent-check: refuses non-TTY / unknown parents — bypass with --unsafe-detach
@@ -2157,6 +2169,29 @@ async function connectorSkillRun(args: string[], vaultDefault: string): Promise<
   });
   emit({ type: "done", thread, ts: Date.now() });
   process.exit(0);
+}
+
+// `prevail calendar <sub>`: calendar sync commands. Stage A is a one-way,
+// READ-ONLY pull of Google Calendar events into <vaultRoot>/calendar-external.json
+// (the plaintext file the desktop Calendar view reads). It ALWAYS prints a single
+// line of parseable JSON and exits 0 — so the desktop never gets a crash, only a
+// result it can render.
+async function calendarCommand(args: string[], vaultDefault: string | null): Promise<void> {
+  const sub = args[0];
+  const vflag = args.indexOf("--vault");
+  const vaultArg = vflag >= 0 ? args[vflag + 1] : undefined;
+  const vault =
+    (vaultArg || vaultDefault || process.env.PREVAIL_VAULT_ROOT || readConfig()?.vaultPath || "").trim();
+
+  if (sub === "pull-google") {
+    const { pullGoogleCalendar } = await import("./calendar-sync.ts");
+    const result = await pullGoogleCalendar(vault);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exit(0);
+  }
+
+  console.error("usage: prevail calendar pull-google --vault <path> [--json]");
+  process.exit(1);
 }
 
 async function connectorsCommand(args: string[]): Promise<void> {
@@ -4681,6 +4716,10 @@ async function main() {
   }
   if (args.connectors) {
     await connectorsCommand(args.connectorsArgs);
+    return;
+  }
+  if (args.calendar) {
+    await calendarCommand(args.calendarArgs, args.vaultPath);
     return;
   }
   if (args.autonomy) {
