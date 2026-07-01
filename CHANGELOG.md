@@ -7,6 +7,14 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.4] — 2026-06-30 · App ideal-state AI draft, darwin-x64 build fix
+
+### Added
+- **`connectors draft-ideal <id>`**: AI-drafts an app's ideal state from its catalog description, feeds-domains, skills, integration method, and existing soul, plus web research (what it is, value, data it collects, insights/metrics, how it helps). Honors Bunker Mode. Powers the desktop "Draft with AI" button.
+
+### Fixed
+- **Release build**: darwin-x64 (Intel Mac) dropped from the matrix - it can't be cross-compiled (`@opentui/core` native subpackages) and the scarce macos-13 runner blocked releases. Ships arm64 Mac + Linux x64/arm64 (the desktop app is arm64-Mac only anyway).
+
 ## [1.9.3] — 2026-06-30 · App-loop "Run now", honest Google auth messaging
 
 ### Fixed
