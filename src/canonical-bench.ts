@@ -274,7 +274,31 @@ export interface CanonicalRunArgs {
   targetModel?: string;
   signal?: AbortSignal;
   onProgress?: (id: string, status: "start" | "ok" | "error", info?: string) => void;
+  // RESUMABLE RUN. When set, each answer is flushed to disk (via this
+  // callback) the instant it completes, so a crash loses at most the one
+  // in-flight question - not the whole model's work. The caller wires this
+  // to writeRecordsIncremental(runDir, records). Without it the run still
+  // works, it just only persists at the end (the legacy behavior).
+  onRecord?: (records: CanonicalRunRecord[]) => void;
+  // Already-answered question ids to SKIP (their records are supplied via
+  // priorRecords). A resume passes the ids that already succeeded on a
+  // previous, interrupted run so those questions never re-run and never
+  // re-burn tokens. Only questions NOT in this set execute.
+  skipIds?: Set<string>;
+  // Records carried over from a prior interrupted run, merged into the
+  // output so the flushed results.json stays complete across a resume.
+  priorRecords?: CanonicalRunRecord[];
+  // Per-question wall-clock ceiling. A single slow/hung model call fails
+  // just THAT question (recorded ok:false, retried on the next continue)
+  // instead of blocking the whole batch. Generous by default; 0 disables.
+  perQuestionTimeoutMs?: number;
 }
+
+// Default per-question ceiling: generous enough for a slow local model or a
+// deliberating frontier model on a hard question, tight enough that a truly
+// hung call doesn't wedge the run. One slow question failing is recoverable
+// (it retries on continue); a hung one blocking 999 others is not.
+export const DEFAULT_PER_QUESTION_TIMEOUT_MS = 8 * 60_000;
 
 export interface CanonicalRunRecord {
   id: string;
@@ -341,13 +365,46 @@ function buildQuestionPrompt(q: CanonicalQuestion, vaultPath: string): string {
 // record per question. Caller writes the records to disk via
 // writeRunDirectory below.
 export async function runCanonicalSet(args: CanonicalRunArgs): Promise<CanonicalRunRecord[]> {
-  const records: CanonicalRunRecord[] = [];
+  // Start from any carried-over records (a resume of an interrupted run), so
+  // the flushed results.json is always the COMPLETE set - answered + newly
+  // answered - never just the new slice.
+  const records: CanonicalRunRecord[] = args.priorRecords ? [...args.priorRecords] : [];
+  const skip = args.skipIds ?? new Set<string>();
+  const timeoutMs = args.perQuestionTimeoutMs ?? DEFAULT_PER_QUESTION_TIMEOUT_MS;
+  // Flush the full record set to disk after every question so a crash loses at
+  // most the in-flight one. No-op when the caller didn't wire persistence.
+  const flush = () => { try { args.onRecord?.(records); } catch { /* best effort */ } };
   for (const q of args.questions) {
+    // Idempotent RESUME: a question already answered on a prior run is skipped
+    // entirely - never re-run, never re-billed. Its record is already in
+    // `records` (via priorRecords).
+    if (skip.has(q.id)) {
+      args.onProgress?.(q.id, "ok", "already answered (resumed)");
+      continue;
+    }
     args.onProgress?.(q.id, "start");
     const prompt = buildQuestionPrompt(q, args.vaultPath);
     const cwd = join(args.vaultPath, q.domain);
     const effectiveCwd = existsSync(cwd) ? cwd : args.vaultPath;
     const start = Date.now();
+    // Per-question timeout, composed with the batch-level abort signal. When
+    // it fires we abort just this call; the question is recorded as errored
+    // below and the loop moves on. A single hung call cannot wedge the run.
+    const qController = new AbortController();
+    let timedOut = false;
+    const timer = timeoutMs > 0
+      ? setTimeout(() => { timedOut = true; qController.abort(); }, timeoutMs)
+      : null;
+    const onParentAbort = () => qController.abort();
+    if (args.signal) {
+      if (args.signal.aborted) qController.abort();
+      else args.signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+    const questionSignal = qController.signal;
+    const cleanupTimeout = () => {
+      if (timer) clearTimeout(timer);
+      args.signal?.removeEventListener("abort", onParentAbort);
+    };
     // When the question is council-flagged AND no specific target CLI
     // was passed, run the whole council. When a target IS pinned, run
     // it as a single chat against that CLI — that's the "test new
@@ -360,20 +417,34 @@ export async function runCanonicalSet(args: CanonicalRunArgs): Promise<Canonical
           prompt,
           cwd: effectiveCwd,
           panelists: panel,
-          signal: args.signal,
+          signal: questionSignal,
         });
-        records.push({
-          id: q.id,
-          domain: q.domain,
-          prompt,
-          expected_decision: q.expected_decision,
-          expected_verdict_keywords: q.expected_verdict_keywords,
-          reply: result.verdict,
-          ms: Date.now() - start,
-          council: true,
-          ok: !result.degraded,
-        });
-        args.onProgress?.(q.id, "ok", `council · ${result.panel.length} panelists`);
+        // A per-question timeout aborts the call; the runner returns a degraded
+        // verdict rather than throwing, so treat a timeout as a retryable error
+        // (ok:false) instead of persisting a partial/empty verdict as an answer.
+        if (timedOut) {
+          records.push({
+            id: q.id, domain: q.domain, prompt,
+            expected_decision: q.expected_decision,
+            expected_verdict_keywords: q.expected_verdict_keywords,
+            reply: "", ms: Date.now() - start, council: true,
+            ok: false, error: `timed out after ${Math.round(timeoutMs / 1000)}s`,
+          });
+          args.onProgress?.(q.id, "error", `timed out after ${Math.round(timeoutMs / 1000)}s`);
+        } else {
+          records.push({
+            id: q.id,
+            domain: q.domain,
+            prompt,
+            expected_decision: q.expected_decision,
+            expected_verdict_keywords: q.expected_verdict_keywords,
+            reply: result.verdict,
+            ms: Date.now() - start,
+            council: true,
+            ok: !result.degraded,
+          });
+          args.onProgress?.(q.id, "ok", `council · ${result.panel.length} panelists`);
+        }
       } else {
         const cli = args.targetCli ?? args.clis[0];
         if (!cli) throw new Error("no CLI available");
@@ -384,34 +455,41 @@ export async function runCanonicalSet(args: CanonicalRunArgs): Promise<Canonical
           model: args.targetModel ?? "",
           isFirst: true,
           bare: true,
-          signal: args.signal,
+          signal: questionSignal,
         });
         // The runners surface a provider/API failure as the reply TEXT (e.g.
         // codex prints `ERROR: {"type":"error",...}` when a model id is rejected)
         // rather than throwing, so a turn that never produced a real answer was
         // being recorded ok:true and then judged 0 - making a misconfigured model
         // look terrible. Detect an error-shaped (or empty) reply and mark it
-        // failed so scoring excludes it.
+        // failed so scoring excludes it. A per-question TIMEOUT also lands here
+        // (runCapture returns "(cancelled)" on abort) - force it errored so the
+        // question retries on the next continue instead of banking a fake answer.
         const replyText = (reply ?? "").trim();
-        const errored = !replyText
+        const errored = timedOut
+          || !replyText
+          || replyText === "(cancelled)"
           || /^ERROR\b/i.test(replyText)
           || /"type"\s*:\s*"error"/.test(replyText)
           || /"error"\s*:\s*\{/.test(replyText);
+        const errMsg = timedOut
+          ? `timed out after ${Math.round(timeoutMs / 1000)}s`
+          : (replyText.slice(0, 200) || "empty reply");
         records.push({
           id: q.id,
           domain: q.domain,
           prompt,
           expected_decision: q.expected_decision,
           expected_verdict_keywords: q.expected_verdict_keywords,
-          reply,
+          reply: timedOut ? "" : reply,
           ms: Date.now() - start,
           council: false,
           cli: cli.kind,
           model: args.targetModel,
           ok: !errored,
-          ...(errored ? { error: replyText.slice(0, 200) || "empty reply" } : {}),
+          ...(errored ? { error: errMsg } : {}),
         });
-        args.onProgress?.(q.id, errored ? "error" : "ok", errored ? (replyText.slice(0, 80) || "empty reply") : `${cli.label}${args.targetModel ? "·" + args.targetModel : ""}`);
+        args.onProgress?.(q.id, errored ? "error" : "ok", errored ? (timedOut ? errMsg : (replyText.slice(0, 80) || "empty reply")) : `${cli.label}${args.targetModel ? "·" + args.targetModel : ""}`);
       }
     } catch (err) {
       records.push({
@@ -426,9 +504,13 @@ export async function runCanonicalSet(args: CanonicalRunArgs): Promise<Canonical
         cli: args.targetCli?.kind,
         model: args.targetModel,
         ok: false,
-        error: (err as Error).message,
+        error: timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s` : (err as Error).message,
       });
-      args.onProgress?.(q.id, "error", (err as Error).message);
+      args.onProgress?.(q.id, "error", timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s` : (err as Error).message);
+    } finally {
+      cleanupTimeout();
+      // CRASH-SAFE: persist the full record set now, before the next question.
+      flush();
     }
   }
   return records;
@@ -458,22 +540,32 @@ function runLabel(args: { targetCli?: AvailableCli; targetModel?: string }): str
   return parts.join("-").replace(/[/\:]+/g, "-");
 }
 
-export function writeRunDirectory(args: {
+// Resolve (and create) the run directory + write its meta/batch sidecars.
+// Separated from result-writing so a run dir can be created UP FRONT, before
+// the first answer, and streamed into incrementally. When `resumeDir` is
+// supplied and exists, it is reused verbatim (the resume target) instead of
+// minting a fresh directory - that's what lets a continue pick up in place.
+export function resolveRunDir(args: {
   vaultPath: string;
-  records: CanonicalRunRecord[];
   ts?: number;
   targetCli?: AvailableCli;
   targetModel?: string;
   batchId?: string;
   batchLabel?: string;
-}): string {
+  resumeDir?: string;
+}): { dir: string; label: string; ts: number } {
   const ts = args.ts ?? Date.now();
   ensureScaffold(args.vaultPath);
+  if (args.resumeDir && existsSync(args.resumeDir)) {
+    const label = args.resumeDir.split("/").pop() ?? args.resumeDir;
+    return { dir: args.resumeDir, label, ts };
+  }
   let label = `${dayKey(ts)}_${runLabel(args)}`;
   let dir = join(runsDir(args.vaultPath), label);
   // Same model rerun on the same day must be a NEW run, never a reuse of the
   // existing directory (whose stale score.json made `score --all` skip it, so
-  // a rerun looked instantly "finished" with the old numbers).
+  // a rerun looked instantly "finished" with the old numbers). A RESUME goes
+  // through resumeDir above, so this only fires for genuinely new runs.
   if (existsSync(dir)) {
     const d = new Date(ts);
     const hms = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join("-");
@@ -498,18 +590,24 @@ export function writeRunDirectory(args: {
   if (args.batchId) {
     vwriteFile(join(dir, "batch.json"), JSON.stringify({ id: args.batchId, label: args.batchLabel ?? null }, null, 2));
   }
+  return { dir, label, ts };
+}
+
+// Write results.json + results.md for a run directory. Called both
+// incrementally (after every answer, for crash-safety) and once at the end.
+// Idempotent: overwrites in place with the current full record set.
+export function writeRunResults(dir: string, label: string, ts: number, records: CanonicalRunRecord[]): void {
   // results.md — one section per question with the reply, timing, and
   // any error. Greppable, PR-able, the source of truth for `bench score`.
   const md: string[] = [];
   md.push(`# canonical run · ${label}`);
   md.push("");
   md.push(`- date: ${new Date(ts).toISOString()}`);
-  md.push(`- target: ${runLabel(args)}`);
-  md.push(`- questions: ${args.records.length}`);
-  const ok = args.records.filter((r) => r.ok).length;
-  md.push(`- successful: ${ok}/${args.records.length}`);
+  md.push(`- questions: ${records.length}`);
+  const ok = records.filter((r) => r.ok).length;
+  md.push(`- successful: ${ok}/${records.length}`);
   md.push("");
-  for (const r of args.records) {
+  for (const r of records) {
     md.push(`## ${r.id}`);
     md.push("");
     md.push(`- domain: ${r.domain}`);
@@ -534,10 +632,38 @@ export function writeRunDirectory(args: {
   vwriteFile(join(dir, "results.md"), md.join("\n"));
   // results.json — machine-readable mirror for `bench score` to load
   // without re-parsing markdown.
-  vwriteFile(
-    join(dir, "results.json"),
-    JSON.stringify(args.records, null, 2),
-  );
+  vwriteFile(join(dir, "results.json"), JSON.stringify(records, null, 2));
+}
+
+// Load a prior (possibly interrupted) run's records, so a resume can skip the
+// questions that already SUCCEEDED and re-run only the missing/errored ones.
+// Errored records are NOT treated as done - they retry. Returns null when
+// there's nothing to resume.
+export function loadPriorRun(dir: string): { records: CanonicalRunRecord[]; okIds: Set<string> } | null {
+  const f = join(dir, "results.json");
+  if (!existsSync(f)) return null;
+  try {
+    const records: CanonicalRunRecord[] = JSON.parse(vreadFile(f));
+    if (!Array.isArray(records)) return null;
+    const okIds = new Set(records.filter((r) => r.ok).map((r) => r.id));
+    return { records, okIds };
+  } catch {
+    return null;
+  }
+}
+
+export function writeRunDirectory(args: {
+  vaultPath: string;
+  records: CanonicalRunRecord[];
+  ts?: number;
+  targetCli?: AvailableCli;
+  targetModel?: string;
+  batchId?: string;
+  batchLabel?: string;
+  resumeDir?: string;
+}): string {
+  const { dir, label, ts } = resolveRunDir(args);
+  writeRunResults(dir, label, ts, args.records);
   return dir;
 }
 

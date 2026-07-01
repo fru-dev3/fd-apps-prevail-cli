@@ -1470,7 +1470,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     // Personal canonical run: fire each <vault>/benchmark/questions/*.md
     // at the target CLI (or council, when --council is passed) and
     // write results to <vault>/benchmark/runs/<date>_<label>/.
-    const { listQuestions, runCanonicalSet, writeRunDirectory } = await import(
+    const { listQuestions, runCanonicalSet, resolveRunDir, writeRunResults, loadPriorRun, runsDir: canonicalRunsDir } = await import(
       "./canonical-bench.ts"
     );
     const questions = listQuestions(vault);
@@ -1540,13 +1540,77 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       console.error(`cli ${targetCliKind} not detected. available: ${allClis.map((c) => c.kind).join(", ")}`);
       process.exit(1);
     }
-    console.log(`running ${filtered.length} canonical question${filtered.length === 1 ? "" : "s"}…`);
+    // RESUMABLE RUN. Look for an UNSCORED run dir for this exact target (same
+    // batch when batched, same cli+model) that has results.json but is
+    // incomplete - i.e. a prior run of this model was interrupted mid-batch.
+    // If found, resume INTO it: skip the questions it already answered
+    // successfully and only run the missing/errored ones. This is what makes a
+    // 1000-run batch restartable without re-burning tokens on done work.
+    // (A run that already has score.json is a finished, scored run and is left
+    // alone - a fresh dir is minted instead, preserving the old numbers.)
+    let resumeDir: string | undefined;
+    let priorRecords: import("./canonical-bench.ts").CanonicalRunRecord[] | undefined;
+    let skipIds: Set<string> | undefined;
+    // Only auto-resume a BATCHED invocation (the desktop always passes a batch
+    // id on Continue). A bare CLI run without --batch keeps the historical
+    // behavior of minting a fresh dated run, so it can never accidentally
+    // reopen an unrelated older unscored directory.
+    if (batchId) try {
+      const { existsSync: exists, readdirSync: readDir } = await import("node:fs");
+      const { vreadFile: vreadFileRC } = await import("./vault-session.ts");
+      const root = canonicalRunsDir(vault);
+      if (exists(root)) {
+        const wantCli = useCouncil ? null : (targetCli?.kind ?? null);
+        const wantModel = useCouncil ? null : (targetModel ?? null);
+        for (const name of readDir(root)) {
+          const d = join(root, name);
+          if (!exists(join(d, "results.json"))) continue;
+          if (exists(join(d, "score.json"))) continue; // already-scored: never reopen
+          // Match this exact target within THIS batch: same batch.json id, and
+          // same cli+model (council => both null) from meta.json.
+          try {
+            const bj = JSON.parse(vreadFileRC(join(d, "batch.json"))) as { id?: string };
+            if (bj.id !== batchId) continue;
+            const mj = JSON.parse(vreadFileRC(join(d, "meta.json"))) as { cli?: string | null; model?: string | null };
+            if ((mj.cli ?? null) !== wantCli || (mj.model ?? null) !== wantModel) continue;
+          } catch { continue; }
+          const prior = loadPriorRun(d);
+          if (!prior) continue;
+          // Only resume if there's actually work left (a question in `filtered`
+          // that wasn't answered ok yet). A fully-answered-but-unscored run
+          // needs no re-run - it just needs scoring - so leave it be.
+          const remaining = filtered.filter((q) => !prior.okIds.has(q.id));
+          if (remaining.length === 0) continue;
+          resumeDir = d;
+          priorRecords = prior.records;
+          skipIds = prior.okIds;
+          console.log(`resuming ${name}: ${prior.okIds.size} already answered, ${remaining.length} to run…`);
+          break;
+        }
+      }
+    } catch { /* resume is best-effort; fall through to a fresh run */ }
+
+    // Create (or reuse) the run dir up front so answers persist AS THEY LAND.
+    const { dir, label, ts } = resolveRunDir({
+      vaultPath: vault,
+      targetCli,
+      targetModel: targetModel ?? undefined,
+      batchId: batchId ?? undefined,
+      batchLabel: batchLabel ?? undefined,
+      resumeDir,
+    });
+    const already = skipIds ? filtered.filter((q) => skipIds!.has(q.id)).length : 0;
+    console.log(`running ${filtered.length - already} canonical question${filtered.length - already === 1 ? "" : "s"}…`);
     const records = await runCanonicalSet({
       vaultPath: vault,
       questions: filtered,
       clis: allClis,
       targetCli,
       targetModel: targetModel ?? undefined,
+      skipIds,
+      priorRecords,
+      // CRASH-SAFE: flush the full record set to disk after each answer.
+      onRecord: (recs) => writeRunResults(dir, label, ts, recs),
       onProgress: (id, status, info) => {
         // Newline-terminated markers so each reaches the desktop immediately (a
         // no-newline in-flight write can sit in Bun's pipe buffer until the slow
@@ -1558,18 +1622,12 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         else console.log(`  ${id}… ✗ ${info ?? "error"}`);
       },
     });
-    const dir = writeRunDirectory({
-      vaultPath: vault,
-      records,
-      targetCli,
-      targetModel: targetModel ?? undefined,
-      batchId: batchId ?? undefined,
-      batchLabel: batchLabel ?? undefined,
-    });
+    // Final write (also covers the no-onRecord path, and a zero-question run).
+    writeRunResults(dir, label, ts, records);
     const ok = records.filter((r) => r.ok).length;
     console.log("");
     console.log(`✓ ${ok}/${records.length} successful · written to ${dir}`);
-    console.log(`  next: prevail bench score (coming in #28)`);
+    console.log(`  next: prevail bench score`);
     return;
   }
 
