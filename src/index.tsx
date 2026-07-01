@@ -35,6 +35,8 @@ interface Args {
   recommendationsArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
+  skillDraft: boolean;
+  skillDraftArgs: string[];
   autonomy: boolean;
   autonomyArgs: string[];
   playbook: boolean;
@@ -129,6 +131,8 @@ function parseArgs(argv: string[]): Args {
   let recommendationsArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
+  let skillDraft = false;
+  let skillDraftArgs: string[] = [];
   let autonomy = false;
   let autonomyArgs: string[] = [];
   let playbook = false;
@@ -235,6 +239,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "suggest-apps") {
       suggestApps = true;
       suggestAppsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "skill-draft") {
+      skillDraft = true;
+      skillDraftArgs = argv.slice(i + 1);
       break;
     } else if (a === "autonomy") {
       autonomy = true;
@@ -430,6 +438,8 @@ function parseArgs(argv: string[]): Args {
     recommendationsArgs,
     suggestApps,
     suggestAppsArgs,
+    skillDraft,
+    skillDraftArgs,
     autonomy,
     autonomyArgs,
     playbook,
@@ -4855,6 +4865,188 @@ async function main() {
       }
     }
     if (json) process.stdout.write(`${JSON.stringify(readAppSuggestions(vault!))}\n`);
+    return;
+  }
+  if (args.skillDraft) {
+    // prevail skill-draft --domain <d> --name "<name>" --describe "<what it should do>"
+    //   --vault <path> [--cli <kind>] [--model <id>] [--ideas] [--json]
+    //
+    // Two modes:
+    //   default  — draft ONE complete, valid SKILL.md (frontmatter + heading +
+    //              body) that accomplishes the described task, grounded in the
+    //              domain's real context. Returns { ok, name, body }.
+    //   --ideas  — propose a few skill IDEAS (name + one-line) for the domain so
+    //              the user can turn one into a draft. Returns { ok, ideas: [...] }.
+    //
+    // Mirrors the connectors draft-ideal / bench suggest drafters: same context
+    // gathering, same Bunker Mode gate (local models only), same --json contract
+    // the desktop shells.
+    const a = args.skillDraftArgs;
+    const wantJson = a.includes("--json");
+    const wantIdeas = a.includes("--ideas");
+    const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
+    const failDraft = (msg: string): never => {
+      if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    };
+    const { readConfig: rc } = await import("./config.ts");
+    const { resolveDefaultVaultPath } = await import("./vault.ts");
+    const vflag = a.indexOf("--vault");
+    const vault = (vflag >= 0 ? a[vflag + 1] : undefined) ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const domain = (get("--domain") ?? "").trim();
+    const name = (get("--name") ?? "").trim();
+    const describe = (get("--describe") ?? "").trim();
+    if (!domain) failDraft("usage: prevail skill-draft --domain <d> --name \"<name>\" --describe \"<what it should do>\" --vault <path> [--cli <kind>] [--model <id>] [--ideas] [--json]");
+    if (!wantIdeas && (!name || !describe)) failDraft("skill-draft needs both --name and --describe (or use --ideas for suggestions)");
+
+    const domainDir = resolveDomainDir(vault!, domain);
+    if (!existsSync(domainDir)) failDraft(`domain directory not found for "${domain}"`);
+    const readCtx = (file: string, max: number): string => {
+      try {
+        const p = join(domainDir, file);
+        if (!existsSync(p)) return "";
+        const t = readFileSync(p, "utf8");
+        return t.length > max ? t.slice(0, max) + "\n…(truncated)" : t;
+      } catch { return ""; }
+    };
+    // Recent decisions + intents, so the draft builds on what the user already
+    // decided and asked for (mirrors surface.rs gather_context).
+    const readDecisions = (): string => {
+      try {
+        const raw = readFileSync(join(domainDir, "_decisions.jsonl"), "utf8");
+        const decs = raw.split("\n").reverse()
+          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter((v): v is Record<string, unknown> => !!v)
+          .map((v) => String((v.decision ?? v.verdict ?? "")).trim().slice(0, 160))
+          .filter(Boolean).slice(0, 6);
+        return decs.length ? decs.reverse().map((d) => `- ${d}`).join("\n") : "";
+      } catch { return ""; }
+    };
+    const readIntents = (): string => {
+      try {
+        const raw = readFileSync(join(domainDir, "_intents.jsonl"), "utf8");
+        const msgs = raw.split("\n").reverse()
+          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter((v): v is Record<string, unknown> => !!v && v.kind === "intent")
+          .map((v) => String(v.message ?? "").trim().slice(0, 140))
+          .filter(Boolean).slice(0, 8);
+        return msgs.length ? msgs.reverse().map((m) => `- ${m}`).join("\n") : "";
+      } catch { return ""; }
+    };
+    const idealCtx = readCtx("_ideal-state.md", 1500) || readCtx("ideal-state.md", 1500) || readCtx("soul.md", 800);
+    const sections = ([
+      ["Ideal state", idealCtx],
+      ["Long-term memory", readCtx("_memory.md", 2000)],
+      ["State", readCtx("_state.md", 1500) || readCtx("state.md", 1500)],
+      ["Goals", readCtx("goals.md", 1000)],
+      ["Decisions already made", readDecisions()],
+      ["Recent things the user asked", readIntents()],
+    ] as [string, string][]).filter(([, t]) => t);
+    const context = sections.map(([label, text]) => `## ${label}\n${text}`).join("\n\n");
+
+    const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+    let clis = await detectClis();
+    const cliKind = (get("--cli") ?? "").trim();
+    const model = (get("--model") ?? "").trim();
+    // Bunker Mode: drafting is an LLM call; only local providers may run.
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+      if (cliKind && !LOCAL_CLIS.has(cliKind)) failDraft(`Blocked by Bunker Mode: ${cliKind} is a cloud provider. Pick a local model (ollama, lmstudio, mlx).`);
+      clis = clis.filter((c) => LOCAL_CLIS.has(c.kind));
+      if (clis.length === 0) failDraft("Blocked by Bunker Mode: no local model provider is running. Start Ollama (or LM Studio / MLX) first.");
+    }
+    const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
+    if (!cli) failDraft("no AI CLI available. Install claude, codex, or another supported CLI first.");
+
+    if (wantIdeas) {
+      // Suggestion mode: a few skill IDEAS for the domain. The user turns one
+      // into a real draft via the default mode. This never writes anything.
+      const prompt = [
+        `You are helping this person build reusable AI skills for their "${domain}" life domain.`,
+        `A skill is a saved, reusable prompt they can run on demand (like "weekly review" or "meeting prep brief").`,
+        `Based ONLY on the context below, propose 3 to 5 useful skills this domain does not obviously have yet.`,
+        `Each must be specific to their real situation, high-leverage, and doable as a single on-demand prompt.`,
+        "",
+        `REQUIRED OUTPUT: a single JSON object, no preamble, no markdown fences, no explanation.`,
+        `Shape: {"ideas":[{"name":"Short Title Case Name","describe":"one sentence describing what the skill should do"},...]}`,
+        "",
+        "--- CONTEXT ---",
+        context || "(this domain has little context yet. Suggest sensible starter skills for it.)",
+      ].join("\n");
+      let raw = "";
+      try {
+        raw = await runChatTurn({ prompt, cwd: domainDir, cli: cli!, model, isFirst: true, bare: true });
+      } catch (e) {
+        failDraft(`LLM call failed: ${e}`);
+      }
+      // Tolerant JSON extraction: the model may wrap the object in prose/fences.
+      let ideas: Array<{ name: string; describe: string }> = [];
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          const parsed = JSON.parse(m[0]) as { ideas?: Array<{ name?: unknown; describe?: unknown }> };
+          ideas = (parsed.ideas ?? [])
+            .map((it) => ({ name: String(it.name ?? "").trim(), describe: String(it.describe ?? "").trim() }))
+            .filter((it) => it.name && it.describe)
+            .slice(0, 5);
+        } catch { /* fall through to empty */ }
+      }
+      if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, ideas })}\n`); return; }
+      if (ideas.length === 0) console.log("(no ideas returned)");
+      else for (const it of ideas) console.log(`  ${it.name}: ${it.describe}`);
+      return;
+    }
+
+    // Default mode: draft ONE complete, valid SKILL.md.
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+    const prompt = [
+      `You are writing a reusable AI SKILL for this person's "${domain}" life domain.`,
+      `A skill is a saved prompt they run on demand. You are drafting the skill file in the EXACT format below.`,
+      "",
+      `The skill they want, in their words: "${describe}"`,
+      `They want it named: "${name}".`,
+      "",
+      "OUTPUT FORMAT. Return the skill as a single markdown document with THIS exact structure and nothing else:",
+      "",
+      "---",
+      `id: ${slug}`,
+      "runner: llm",
+      "trigger: on-demand",
+      "description: <one sentence, under 120 chars, describing what running this skill does>",
+      "---",
+      "",
+      `# ${name}`,
+      "",
+      "<the prompt body: a clear, well-structured instruction that accomplishes the described task when this person runs it>",
+      "",
+      "BODY REQUIREMENTS:",
+      "- Write the body as direct instructions the AI will follow, grounded in this person's real situation from the context below.",
+      "- Use a short numbered list of concrete steps when it helps, and end with an explicit 'Output:' line stating what the run should produce.",
+      "- Keep the frontmatter EXACTLY as shown: only id, runner, trigger, description. Do not invent other frontmatter keys.",
+      "- Keep 'runner: llm' and 'trigger: on-demand' verbatim.",
+      "- No preamble, no code fences, no commentary. Return ONLY the document starting with the '---' frontmatter line.",
+      "- Do not use em dashes.",
+      "",
+      "--- CONTEXT (this person's real situation. Ground the skill in it.) ---",
+      context || "(this domain has little context yet. Write a sensible, generally useful skill for it.)",
+    ].join("\n");
+
+    let raw = "";
+    try {
+      raw = await runChatTurn({ prompt, cwd: domainDir, cli: cli!, model, isFirst: true, bare: true });
+    } catch (e) {
+      failDraft(`LLM call failed: ${e}`);
+    }
+    let body = (raw || "").trim().replace(/^```(?:markdown|md)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+    if (!body) failDraft("the model returned an empty draft");
+    // Guard: if the model dropped the frontmatter, wrap the body so what we
+    // return is always a valid SKILL.md (parseSkillFile needs the fence).
+    if (!/^---\s*\n/.test(body)) {
+      const heading = body.startsWith("#") ? "" : `# ${name}\n\n`;
+      body = `---\nid: ${slug}\nrunner: llm\ntrigger: on-demand\ndescription: ${describe.replace(/\n+/g, " ").slice(0, 118)}\n---\n\n${heading}${body}`;
+    }
+    if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, name, body })}\n`); return; }
+    console.log(body);
     return;
   }
   if (args.scout) {
