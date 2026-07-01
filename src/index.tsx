@@ -1678,6 +1678,85 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  if (sub === "preset-suggest") {
+    // AI-curate a LIBRARY of Arena presets over the model universe the desktop
+    // enumerated (validated/runnable, local-vs-cloud, tier hints). We NEVER
+    // invent models: the desktop passes the exact cli::model keys, and we ground
+    // every returned key against that list so a hallucination cannot reach the UI.
+    // Input: --models-json <json> OR the same JSON on stdin.
+    // Output (--json): { ok, presets: [{ name, rationale, models: ["cli::model"] }] }.
+    const { buildPresetPrompt, extractPresetJson, groundPresets } = await import("./bench-presets-ai.ts");
+    type AvailableModel = import("./bench-presets-ai.ts").AvailableModel;
+    const wantJson = args.includes("--json");
+    const failPS = (msg: string): never => {
+      if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    };
+    const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+    const cliKind = (flag("--cli") ?? "").trim();
+    const model = (flag("--model") ?? "").trim();
+
+    // Read the available-model list from --models-json or stdin.
+    let rawModels = flag("--models-json") ?? "";
+    if (!rawModels) {
+      const { readFileSync } = await import("node:fs");
+      try { rawModels = readFileSync(0, "utf8"); } catch { rawModels = ""; }
+    }
+    let available: AvailableModel[] = [];
+    try {
+      const parsed = JSON.parse(rawModels || "[]");
+      const arr = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.models) ? parsed.models : [];
+      available = (arr as unknown[])
+        .map((m) => {
+          if (!m || typeof m !== "object") return null;
+          const o = m as Record<string, unknown>;
+          const key = typeof o.key === "string" ? o.key.trim() : "";
+          if (!key) return null;
+          return {
+            key,
+            label: typeof o.label === "string" ? o.label : undefined,
+            provider: typeof o.provider === "string" ? o.provider : undefined,
+            validated: typeof o.validated === "boolean" ? o.validated : undefined,
+            local: typeof o.local === "boolean" ? o.local : undefined,
+            tier: typeof o.tier === "string" ? o.tier : undefined,
+          } as AvailableModel;
+        })
+        .filter((m): m is AvailableModel => m !== null);
+    } catch {
+      failPS("could not parse --models-json (expected a JSON array of { key, label, provider, ... })");
+    }
+    if (available.length === 0) failPS("no available models provided (pass --models-json or pipe the model list on stdin)");
+
+    const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+    let clis = await detectClis();
+    // Bunker Mode: this is an LLM call, so only local providers may run.
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+      if (cliKind && !LOCAL_CLIS.has(cliKind)) failPS(`Blocked by Bunker Mode: ${cliKind} is a cloud provider. Pick a local model (ollama, lmstudio, mlx).`);
+      clis = clis.filter((c) => LOCAL_CLIS.has(c.kind));
+      if (clis.length === 0) failPS("Blocked by Bunker Mode: no local model provider is running. Start Ollama (or LM Studio / MLX) first.");
+    }
+    const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
+    if (!cli) failPS("no AI CLI available. Install claude, codex, or another supported CLI first.");
+
+    const prompt = buildPresetPrompt(available);
+    let raw = "";
+    try {
+      raw = await runChatTurn({ prompt, cwd: vault, cli: cli!, model, isFirst: true, bare: true });
+    } catch (e) {
+      failPS(`LLM call failed: ${e}`);
+    }
+    const presets = groundPresets(extractPresetJson(raw), available);
+    if (presets.length === 0) failPS("the model returned no usable presets (every suggestion referenced unknown models or was empty)");
+    if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, presets })}\n`); return; }
+    for (const p of presets) {
+      console.log(`\n${p.name}`);
+      if (p.rationale) console.log(`  ${p.rationale}`);
+      console.log(`  ${p.models.join(", ")}`);
+    }
+    return;
+  }
+
   if (sub === "suggest") {
     // AI-draft canonical questions from each domain's own context.
     // Usage: prevail bench suggest --domain <name|all|a,b,c> [--count <n>] [--cli <kind>] [--model <id>]
@@ -1921,6 +2000,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   console.error("  prevail bench score [--run <name>] [--no-judge] [--judge-cli <kind>]");
   console.error("                                                grade a run (keyword + LLM judge)");
   console.error("  prevail bench leaderboard                     show ranked scoreboard across runs");
+  console.error("  prevail bench preset-suggest --models-json <json> [--cli <kind>] [--model <id>] [--json]");
+  console.error("                                                AI-curate a library of Arena presets over the given models");
   process.exit(1);
 }
 
