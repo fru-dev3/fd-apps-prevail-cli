@@ -1,7 +1,7 @@
 import { mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDomainDir, buildRoot } from "./path-safety.ts";
-import { vreadFile, vwriteFile } from "./vault-session.ts";
+import { vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
 
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 import { buildCouncilPanel, runCouncilOneShot } from "./council-runner.ts";
@@ -630,9 +630,11 @@ export function writeRunResults(dir: string, label: string, ts: number, records:
     md.push("");
   }
   vwriteFile(join(dir, "results.md"), md.join("\n"));
-  // results.json — machine-readable mirror for `bench score` to load
-  // without re-parsing markdown.
-  vwriteFile(join(dir, "results.json"), JSON.stringify(records, null, 2));
+  // results.json — machine-readable mirror for `bench score` to load without
+  // re-parsing markdown. Written ATOMICALLY (temp + rename): this is flushed
+  // after every question during a run, so a crash mid-write must never leave a
+  // truncated results.json that would lose the whole run on resume.
+  vwriteFileAtomic(join(dir, "results.json"), JSON.stringify(records, null, 2));
 }
 
 // Load a prior (possibly interrupted) run's records, so a resume can skip the

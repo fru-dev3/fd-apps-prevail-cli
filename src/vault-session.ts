@@ -12,7 +12,7 @@
 // vreadFile at a read site cannot change behavior for a plaintext vault. That's
 // what makes the migration safe to land incrementally.
 
-import { appendFileSync, closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { decryptText, encryptText } from "./vault-crypto.ts";
@@ -91,6 +91,25 @@ export function vwriteFile(path: string, content: string): void {
     return;
   }
   writeFileSync(path, encryptText(sessionDek, content));
+}
+
+/**
+ * Atomic vault write: write to a sibling temp file, then rename over the target.
+ * A crash mid-write can only leave the temp file, never a truncated target, so
+ * repeatedly-flushed files (e.g. a benchmark's incremental results.json) stay
+ * complete and readable across a resume. Encryption is content-based, so the
+ * encrypted bytes rename intact. Same-directory rename is atomic on one fs.
+ */
+export function vwriteFileAtomic(path: string, content: string): void {
+  const tmp = `${path}.${process.pid}.${Math.floor(performance.now())}.tmp`;
+  try {
+    vwriteFile(tmp, content);
+    renameSync(tmp, path);
+  } catch {
+    // Rename/temp write failed: fall back to a direct write so the flush is
+    // never dropped. Loses atomicity for this one write, but not the data.
+    vwriteFile(path, content);
+  }
 }
 
 /**
