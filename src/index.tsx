@@ -517,6 +517,7 @@ USAGE
                               (connectors list --json for the machine list)
                               connectors scopes <id> — show what an OAuth grant requests
                               connectors disconnect <id> — revoke + delete a stored token
+                              connectors draft-ideal <id> - AI-draft the app's ideal state
   prevail calendar [...]      calendar sync (read-only)
                               calendar pull-google --json — pull Google Calendar events
                               into <vault>/calendar-external.json for the desktop view
@@ -2365,6 +2366,86 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const r = getCommunityAppSoul(id, connectorsVault);
     if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); return; }
     console.log(r.soul || "(no soul set)");
+    return;
+  }
+  if (sub === "draft-ideal") {
+    // Draft an app's Ideal State from its real context (catalog description,
+    // any existing ideal-state note, the domains it feeds, its skills, and how
+    // it connects), optionally web-researching the app for best practices. The
+    // desktop puts the returned text in the editor for review before it is
+    // saved to the SAME soul.md the chat/agent reads, so drafting here and
+    // drafting from chat land on one file.
+    // Usage: prevail connectors draft-ideal <id> --vault <path> [--cli <kind>] [--model <id>] [--json]
+    const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+    const id = (args[1] ?? "").trim().toLowerCase();
+    const wantJson = args.includes("--json");
+    const failDraft = (msg: string): never => {
+      if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    };
+    if (!id || id.startsWith("--")) failDraft("usage: prevail connectors draft-ideal <id> --vault <path> [--cli <kind>] [--model <id>] [--json]");
+    const app = apps.find((a) => a.id === id);
+    if (!app) failDraft(`no connector with id "${id}" (try: prevail connectors list --json)`);
+
+    const cliKind = (flag("--cli") ?? "").trim();
+    const model = (flag("--model") ?? "").trim();
+    const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+    let clis = await detectClis();
+    // Bunker Mode: drafting is an LLM call; only local providers may run.
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+      if (cliKind && !LOCAL_CLIS.has(cliKind)) failDraft(`Blocked by Bunker Mode: ${cliKind} is a cloud provider. Pick a local model (ollama, lmstudio, mlx).`);
+      clis = clis.filter((c) => LOCAL_CLIS.has(c.kind));
+      if (clis.length === 0) failDraft("Blocked by Bunker Mode: no local model provider is running. Start Ollama (or LM Studio / MLX) first.");
+    }
+    const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
+    if (!cli) failDraft("no AI CLI available. Install claude, codex, or another supported CLI first.");
+
+    // Gather the app's real context so the draft is grounded, not generic.
+    const { getCommunityAppSoul } = await import("./vault.ts");
+    const existingIdeal = (getCommunityAppSoul(id, connectorsVault).soul || "").trim();
+    const name = app!.title || id;
+    const domainsLine = (app!.domains ?? []).filter(Boolean).join(", ");
+    const skillLines = (app!.skills ?? []).slice(0, 12).map((s) => `- ${s.title}`).join("\n");
+    const method = app!.integration ?? "manual";
+    const contextParts = [
+      `App: ${name} (id: ${id})`,
+      app!.description ? `Catalog description: ${app!.description}` : "",
+      domainsLine ? `Life domains it feeds: ${domainsLine}` : "",
+      `Connection method: ${method}`,
+      app!.connectionNotes ? `How it connects: ${app!.connectionNotes}` : "",
+      skillLines ? `Skills it gives the agent:\n${skillLines}` : "",
+      existingIdeal ? `Existing ideal-state note (improve on it, keep what is right):\n${existingIdeal}` : "",
+    ].filter(Boolean).join("\n\n");
+
+    const prompt = [
+      `You are helping define the IDEAL STATE for the "${name}" app inside this person's personal AI harness.`,
+      `The ideal state describes the ideal of what they want from this app if everything were possible.`,
+      `If you have web access, research ${name} first so the draft reflects real, best-practice capabilities of this app, not guesses.`,
+      "",
+      "Write concise markdown (no preamble, no surrounding quotes) that covers, in this order, each as its own short section:",
+      "- What this app is and does",
+      "- The value the user should get from it",
+      "- What data it can collect from the user",
+      "- What insights and metrics it can drive",
+      "- How it can help them day to day",
+      "",
+      "Ground it in the context below where possible. Keep it aspirational but specific. Return ONLY the ideal-state markdown.",
+      "",
+      "--- CONTEXT ---",
+      contextParts,
+    ].join("\n");
+
+    let raw = "";
+    try {
+      raw = await runChatTurn({ prompt, cwd: app!.path || connectorsVault, cli: cli!, model, isFirst: true, bare: true, webAccess: "allow" });
+    } catch (e) {
+      failDraft(`LLM call failed: ${e}`);
+    }
+    const draft = (raw || "").trim().replace(/^```(?:markdown)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+    if (!draft) failDraft("the model returned an empty draft");
+    if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, draft })}\n`); return; }
+    console.log(draft);
     return;
   }
   if (sub === "gateway-capabilities") {
