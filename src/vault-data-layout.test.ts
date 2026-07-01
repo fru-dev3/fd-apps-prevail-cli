@@ -22,6 +22,8 @@ import {
 } from "./vault-data-layout.ts";
 import { dataRoot, resolveDomainDir, appsContainer, newDomainDir } from "./path-safety.ts";
 import { scanVault } from "./vault.ts";
+import { appendScoreHistory, readScoreHistory } from "./score.ts";
+import type { ContextScore } from "./manifest.ts";
 
 let vault: string;
 
@@ -135,6 +137,23 @@ describe("v4 data-layout migrator", () => {
 
   test("archiveLegacyRoot refuses to run before migration", () => {
     expect(() => archiveLegacyRoot(vault, "x")).toThrow();
+  });
+
+  // Regression: the score-history log must land under data/domains/<d>/_log,
+  // never at a stray <vault>/<d>/_log. (General leaked a root general/_log/
+  // score.jsonl because appendScoreHistory joined the raw vault root.)
+  test("appendScoreHistory writes under data/domains, not the vault root", () => {
+    migrateToDataLayout(vault); // creates data/ so dataRoot() is <vault>/data
+    mkdirSync(join(vault, "data", "domains", "general"), { recursive: true });
+    appendScoreHistory(vault, "general", { score: 42 } as unknown as ContextScore);
+    // Canonical location has the entry...
+    const canonical = join(vault, "data", "domains", "general", "_log", "score.jsonl");
+    expect(existsSync(canonical)).toBe(true);
+    expect(readFileSync(canonical, "utf8")).toContain('"score":42');
+    // ...and nothing leaked to the vault root.
+    expect(existsSync(join(vault, "general"))).toBe(false);
+    // readScoreHistory reads it back from the canonical home.
+    expect(readScoreHistory(vault, "general").map((p) => p.score)).toContain(42);
   });
 });
 
