@@ -162,8 +162,10 @@ export function migrateToDataLayout(vaultPath: string): DataMigrateResult {
 // count, NEVER delete (originals stay put; a separate archive step prunes them
 // once the user is confident). Idempotent.
 //
-// Only SUPPORTING files move. CONTENT (_memory.md, _state.md, _skills) and config
-// (profile.md, ideal-state.md, omega.md, AGENTS-operating.md) stay at the root.
+// Both SUPPORTING runtime files AND config (profile.md, ideal-state.md, omega.md,
+// AGENTS-operating.md, calendar-external.json) move into build/, so the canonical
+// vault root ends up bare (only data/ + build/). Per-domain CONTENT (_memory.md,
+// _state.md, _skills) lives under data/domains/<d> and is NOT swept here.
 //
 // CRITICAL: this set must match what BOTH processes route to build/ (desktop
 // paths.rs runtime_file/build_root + distill.rs split; cli decisions.runtimeFile +
@@ -177,6 +179,17 @@ export const BUILD_SUPPORTING_ENTRIES: readonly string[] = [
   "_intents.jsonl",
   "_meta",
   "benchmark",
+  // Config/support that the canonical layout keeps under build/ (resolvers read
+  // build/ first, root as fallback — see cli-bridge findOmega/findIdealState/
+  // findOperatingManual, daemon-learn, alignment, calendar-sync). Sweeping these
+  // leaves the vault root bare (only data/ + build/).
+  "ideal-state.md",
+  "profile.md",
+  "omega.md",
+  "AGENTS-operating.md",
+  "calendar-external.json",
+  "notes.json",
+  "_log",
 ];
 
 export interface BuildMigrateResult {

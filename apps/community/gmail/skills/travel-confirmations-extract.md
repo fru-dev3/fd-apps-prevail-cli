@@ -15,7 +15,7 @@ outputs:
 Pull flight, hotel, rail, and car-rental confirmations from recent mail into
 a forward-looking itinerary so calendar and briefings know about upcoming
 trips. Default lookback 120 days of booking emails (trips are often booked
-well ahead); respect `${input.days}`. Read-only — never label or reply.
+well ahead); respect `${input.days}`. Read-only, never label or reply.
 
 Authenticate with the Gmail REST API using `Authorization: Bearer
 ${auth.token}` (OAuth access token, scope `gmail.readonly`).
@@ -31,7 +31,7 @@ Extract per booking: `type` (`flight`/`hotel`/`rail`/`car`), provider,
 confirmation/record-locator code, start datetime, end datetime, origin and
 destination (or city/property), and total cost if shown. For flights capture
 each segment (carrier, flight number, depart/arrive airports + times). Do
-not invent values — omit unknown fields.
+not invent values, omit unknown fields.
 
 Only include trips whose start date is today or later (future/in-progress).
 

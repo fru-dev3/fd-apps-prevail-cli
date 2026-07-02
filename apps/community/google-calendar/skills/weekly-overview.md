@@ -15,14 +15,14 @@ summary_path: summary
 # Weekly overview
 
 Pull the upcoming week of events from the primary Google Calendar so the
-chief domain can frame the week ahead — load, recurring commitments, and any
+chief domain can frame the week ahead, load, recurring commitments, and any
 clustering of meetings.
 
 Calls `events.list` with `singleEvents=true`, `orderBy=startTime`, and
 `timeMin=${now.rfc3339}`. `maxResults=50` covers a full forward week for most
 calendars (the result is already start-time ordered, so the early items are
 the soonest). The Calendar API token tokens are relative-from-now, so this is
-a rolling "next N events" window rather than a hard 7-day cutoff — downstream
+a rolling "next N events" window rather than a hard 7-day cutoff, downstream
 skills (see `free-time-finder`) trim it to the working week.
 
 The raw JSON is saved to `data/week-${date}.json`. Each `items[]` entry carries

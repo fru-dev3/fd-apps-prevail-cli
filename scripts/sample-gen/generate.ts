@@ -443,10 +443,17 @@ mkdirSync(OUT, { recursive: true });
 
 const SUBDIRS = ["data", "_threads", "_log", "_artifacts", "_skills", "_meta"];
 
+// Canonical vault layout: content lives under data/ (domains/ + apps/), all
+// support+config lives under build/. The root ends up holding only data/ + build/.
+mkdirSync(join(OUT, "data", "domains"), { recursive: true });
+mkdirSync(join(OUT, "data", "apps"), { recursive: true });
+mkdirSync(join(OUT, "build"), { recursive: true });
+writeFileSync(join(OUT, "data", ".prevail-data-layout"), `generated ${P.generatedAt}\n`);
+
 for (const key of P.domains) {
   const d = D[key];
   if (!d) { console.warn(`! no content for domain ${key}`); continue; }
-  const dir = join(OUT, key);
+  const dir = join(OUT, "data", "domains", key);
   mkdirSync(dir, { recursive: true });
   for (const s of SUBDIRS) mkdirSync(join(dir, s), { recursive: true });
 
@@ -457,10 +464,10 @@ for (const key of P.domains) {
   writeFileSync(join(dir, "_tasks.jsonl"), "");
 }
 
-// vault-level profile so the whole thing reads as one person
-mkdirSync(join(OUT, "_meta"), { recursive: true });
+// vault-level profile so the whole thing reads as one person — canonical home is
+// build/profile.md.
 writeFileSync(
-  join(OUT, "_meta", "profile.md"),
+  join(OUT, "build", "profile.md"),
   [
     "# Profile",
     "",

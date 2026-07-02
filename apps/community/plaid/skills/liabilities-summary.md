@@ -11,7 +11,7 @@ outputs:
 
 # Liabilities summary
 
-Summarize outstanding debt — credit cards, student loans, and mortgages —
+Summarize outstanding debt (credit cards, student loans, and mortgages)
 across every account linked to `PLAID_ACCESS_TOKEN`, with due dates and
 APRs so upcoming payments are visible. Read-only.
 
@@ -30,12 +30,12 @@ arrays: `credit[]`, `student[]`, and `mortgage[]`. Each is keyed back to an
 account via `account_id`.
 
 Extract per liability:
-- **credit** — `last_statement_balance`, `minimum_payment_amount`,
+- **credit**, `last_statement_balance`, `minimum_payment_amount`,
   `next_payment_due_date`, `last_payment_amount`, `is_overdue`, and the top
   entry of `aprs[]` (`apr_percentage`, `apr_type`).
-- **student** — `outstanding_interest_amount`, `next_payment_due_date`,
+- **student**, `outstanding_interest_amount`, `next_payment_due_date`,
   `minimum_payment_amount`, `interest_rate_percentage`, `loan_status.type`.
-- **mortgage** — `outstanding_principal_balance`, `next_monthly_payment`,
+- **mortgage**, `outstanding_principal_balance`, `next_monthly_payment`,
   `next_payment_due_date`, `interest_rate.percentage`, `loan_type_description`.
 
 Total debt = sum of current balances across all three categories.

@@ -5,7 +5,7 @@
   "description": "Pull recent threads, important mail, and attachments from Gmail into the email domain so briefings and chats are grounded in what's actually in your inbox.",
   "domains": ["email"],
   "integration": "oauth",
-  "connection": "Three connection strategies are supported, tried in priority order: (1) MCP — install an MCP Gmail server (e.g. npx @modelcontextprotocol/server-gmail) and set GMAIL_MCP_COMMAND; (2) OAuth — run `prevail connectors oauth gmail` once (PKCE, saves refresh token to ~/.prevail/connectors/gmail/auth/refresh.token); (3) CLI — install GAM (Google Apps Manager) and authenticate with `gam oauth create`.",
+  "connection": "Three connection strategies are supported, tried in priority order: (1) MCP, install an MCP Gmail server (e.g. npx @modelcontextprotocol/server-gmail) and set GMAIL_MCP_COMMAND; (2) OAuth, run `prevail connectors oauth gmail` once (PKCE, saves refresh token to ~/.prevail/connectors/gmail/auth/refresh.token); (3) CLI, install GAM (Google Apps Manager) and authenticate with `gam oauth create`.",
   "connections": [
     {
       "kind": "mcp",

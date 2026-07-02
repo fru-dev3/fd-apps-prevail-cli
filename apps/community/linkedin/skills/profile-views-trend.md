@@ -18,12 +18,12 @@ LinkedIn gives civilians no analytics API, so this runs as a browser-agent
 skill: an LLM drives a real Chrome window using the existing logged-in
 LinkedIn session (persistent profile), reads the page, and records a
 deterministic replay (`profile-views-trend-replay`) for future refreshes.
-Read-only — only navigate and read; never connect, message, post, or click
+Read-only, only navigate and read; never connect, message, post, or click
 anything that changes state.
 
 Navigate to `https://www.linkedin.com/me/profile-views/` (the
 "Who's viewed your profile" analytics page). If a login wall appears, pause
-for the human to sign in — LinkedIn enforces a ~30-day session, so visiting
+for the human to sign in, LinkedIn enforces a ~30-day session, so visiting
 linkedin.com in the browser once a month keeps this connected.
 
 Read from the page:
@@ -31,7 +31,7 @@ Read from the page:
 1. **Total profile views** over the default window (90 days) and the
    percentage change LinkedIn shows vs. the previous period.
 2. **Views in the last 7 days** if a weekly figure is shown.
-3. The **recent viewers** list — for each visible viewer, the display name
+3. The **recent viewers** list, for each visible viewer, the display name
    (or "LinkedIn Member" if anonymized) and their headline.
 
 Summarize as a dated markdown section appended to `profile-views.md`:
@@ -42,7 +42,7 @@ Summarize as a dated markdown section appended to `profile-views.md`:
 - Views (90d): <N> (<±%> vs prior period)
 - Views (7d): <N>
 - Recent viewers:
-  - <name> — <headline>
+  - <name>, <headline>
   - ...
 ```
 

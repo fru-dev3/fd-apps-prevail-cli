@@ -14,7 +14,7 @@ outputs:
 
 Build a short, scannable digest of important unread mail from the last few
 days so a briefing can lead with what actually needs attention. Default
-lookback 3 days; respect `${input.days}`. Read-only — never label, archive,
+lookback 3 days; respect `${input.days}`. Read-only, never label, archive,
 mark read, or reply.
 
 Authenticate with the Gmail REST API using `Authorization: Bearer
@@ -35,10 +35,10 @@ promotions). Group into **Action needed**, **FYI**, and **Low priority**.
 Output markdown only (no preamble):
 
 ```
-# Important unread — 2026-06-29 (last 3d)
+# Important unread, 2026-06-29 (last 3d)
 
 **Action needed**
-- **From** — Subject _(received)_ — one-line why it matters
+- **From**, Subject _(received)_, one-line why it matters
 **FYI**
 - ...
 **Low priority**

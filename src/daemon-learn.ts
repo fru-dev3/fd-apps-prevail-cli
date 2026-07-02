@@ -186,7 +186,10 @@ function titleCase(slug: string): string {
 }
 
 function readIdealPreamble(vaultPath: string): string {
-  const p = join(vaultPath, "ideal-state.md");
+  // Canonical layout keeps ideal-state.md under build/ (build/ wins); fall back to
+  // the legacy vault-root location for pre-build vaults.
+  const buildP = join(buildRoot(vaultPath), "ideal-state.md");
+  const p = existsSync(buildP) ? buildP : join(vaultPath, "ideal-state.md");
   if (!existsSync(p)) return "";
   let raw = "";
   try { raw = vreadFile(p).trim(); } catch { return ""; }
@@ -351,7 +354,7 @@ export async function refreshAppSuggestions(root: string, cfg: LearnConfig): Pro
 
   const existing = readAppSuggestions(root);
   const now = Date.now();
-  const apps = scanCommunityApps();
+  const apps = scanCommunityApps().filter((ap) => ap.enabled !== false);
   let refreshed = 0;
   for (const domain of uniq) {
     const prev = existing[domain];

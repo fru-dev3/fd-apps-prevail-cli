@@ -726,16 +726,18 @@ export interface ScoreHistoryPoint {
   score: number;
 }
 
-// Append {ts, score} to <vault>/<domain>/_log/score.jsonl (creating _log/ if
-// needed). Honors the immutable-zone contract via assertWritable.
+// Append {ts, score} to the domain's _log/score.jsonl (creating _log/ if needed).
+// Resolves the domain dir via resolveDomainDir so General and every domain write
+// under data/domains/<d> (v4), NOT a stray <vault>/<domain>/ at the root. Honors
+// the immutable-zone contract via assertWritable.
 export function appendScoreHistory(vaultPath: string, domain: string, score: ContextScore): void {
-  const root = resolve(vaultPath);
-  assertWritable(root, SCORE_LOG_REL);
-  const logDir = join(root, domain, "_log");
+  assertWritable(vaultPath, SCORE_LOG_REL);
+  const dir = resolveDomainDir(vaultPath, domain);
+  const logDir = join(dir, "_log");
   try {
     if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
     const point: ScoreHistoryPoint = { ts: Date.now(), score: score.score };
-    appendFileSync(join(root, domain, SCORE_LOG_REL), `${JSON.stringify(point)}\n`);
+    appendFileSync(join(dir, SCORE_LOG_REL), `${JSON.stringify(point)}\n`);
   } catch {
     /* history is best-effort — never fail a score on a log-write error */
   }
@@ -744,8 +746,7 @@ export function appendScoreHistory(vaultPath: string, domain: string, score: Con
 // Read the score history (oldest → newest) from _log/score.jsonl. Returns []
 // when the file is absent or unreadable.
 export function readScoreHistory(vaultPath: string, domain: string): ScoreHistoryPoint[] {
-  const root = resolve(vaultPath);
-  const file = join(root, domain, SCORE_LOG_REL);
+  const file = join(resolveDomainDir(vaultPath, domain), SCORE_LOG_REL);
   if (!exists(file)) return [];
   const out: ScoreHistoryPoint[] = [];
   for (const line of readText(file).split("\n")) {

@@ -673,6 +673,12 @@ async function replaySkillBrowser(
       60_000,
     );
     if (opened.event === "error") {
+      // If the browser engine is missing in this build, a re-learn would also
+      // fail, so surface the actionable message and do NOT queue a relearn.
+      const { isPlaywrightUnavailable, PLAYWRIGHT_UNAVAILABLE_MESSAGE } = await import("./playwright-resolve.ts");
+      if (isPlaywrightUnavailable(opened.message)) {
+        return { ok: false, message: PLAYWRIGHT_UNAVAILABLE_MESSAGE, outputsWritten: [], durationMs: Date.now() - started };
+      }
       return { ok: false, message: `replay open failed: ${opened.message}`, outputsWritten: [], durationMs: Date.now() - started, needsRelearn: { reason: opened.message } };
     }
 

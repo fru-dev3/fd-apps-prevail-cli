@@ -4,14 +4,14 @@ type: app
 description: |
   Pull recent transactions, balances, and recurring-transaction metadata from
   any institution linked to a Plaid Item. Used by wealth, tax, and business
-  domains. Read-only by default — write operations require explicit
+  domains. Read-only by default, write operations require explicit
   PLAID_WRITE_OK=1 in the environment.
 ---
 
 # Plaid
 
 **Auth:** API key (Plaid Sandbox or Production)
-**Environment:** `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_ACCESS_TOKEN` — store these in your shell rc or a `.envrc` file. The cockpit's chat will read them from the spawned subprocess env.
+**Environment:** `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_ACCESS_TOKEN`, store these in your shell rc or a `.envrc` file. The cockpit's chat will read them from the spawned subprocess env.
 **URL:** https://plaid.com
 **Domains using this app:** wealth, tax, business
 
@@ -36,7 +36,7 @@ description: |
 
 ## Inputs
 
-- None at chat time — env vars must be present at cockpit launch
+- None at chat time, env vars must be present at cockpit launch
 - For transaction pulls: optional date range (defaults to last 30 days)
 - For holdings: optional account filter
 
@@ -49,7 +49,7 @@ description: |
 ## Note
 
 This is a **reference plugin** shipped with prevail to demonstrate the LifeApp
-plugin contract. It is intentionally synthetic — the SKILL.md describes the
+plugin contract. It is intentionally synthetic, the SKILL.md describes the
 shape of a Plaid integration, but the cockpit ships no live HTTP code for it.
 A real implementation would call the Plaid API from a script under
 `<vault>/wealth/scripts/plaid-sync.ts` and update state.md from there.

@@ -3,10 +3,11 @@
 // child by the host below; speaks newline-delimited JSON over stdin/stdout.
 //
 // Why a subcommand and not a separate .mjs: the engine is one bun-compiled
-// binary with playwright-core bundled in (see the build `--external
-// chromium-bidi` flag). Re-spawning ourselves in driver mode needs no Node and
-// no extra runtime, while still isolating the browser in its own process with a
-// MINIMAL env (never the vault DEK / provider keys).
+// binary, and playwright-core is loaded at runtime from an on-disk sidecar next
+// to the executable (see playwright-resolve.ts; bun --compile cannot make
+// playwright-core resolvable inside /$bunfs). Re-spawning ourselves in driver
+// mode needs no Node and no extra runtime, while still isolating the browser in
+// its own process with a MINIMAL env (never the vault DEK / provider keys).
 //
 // Security invariants enforced here, in code:
 //   * The child receives only PATH/HOME/DISPLAY/PLAYWRIGHT_* — set by the host.
@@ -21,6 +22,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { redactSnapshot } from "./browser-actions.ts";
 import type { Locator, PageSnapshot, SnapshotElement } from "./browser-actions.ts";
+import { loadPlaywrightCore, PLAYWRIGHT_UNAVAILABLE_MESSAGE } from "./playwright-resolve.ts";
 
 // ---------------------------------------------------------------------------
 // Wire protocol (host ⇄ child)
@@ -106,6 +108,9 @@ function childEnv(extra: Record<string, string | undefined> = {}): Record<string
     DISPLAY: process.env.DISPLAY,
     PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
     PREVAIL_CHROMIUM_PATH: process.env.PREVAIL_CHROMIUM_PATH,
+    // Lets the spawned driver child resolve the same on-disk sidecar
+    // playwright-core the parent did (see playwright-resolve.ts).
+    PREVAIL_PLAYWRIGHT_CORE: process.env.PREVAIL_PLAYWRIGHT_CORE,
     ...extra,
   };
 }
@@ -116,7 +121,7 @@ function childEnv(extra: Record<string, string | undefined> = {}): Record<string
 // Chromium is available (or rejects if the download fails / offline). Emits a
 // coarse {phase:"chromium_download"} so the desktop can show a one-time wait.
 export async function ensureChromium(emit?: (e: Record<string, unknown>) => void): Promise<void> {
-  const pw = await import("playwright-core");
+  const pw = await loadPlaywrightCore();
   let exe = "";
   try {
     exe = (pw as { chromium: { executablePath(): string } }).chromium.executablePath();
@@ -374,9 +379,18 @@ export async function runBrowserDriverChild(): Promise<void> {
   const emit = (e: DriverEvent) => process.stdout.write(JSON.stringify(e) + "\n");
   let pw: any;
   try {
-    pw = await import("playwright-core");
+    // Resolves the on-disk sidecar playwright-core for the compiled binary; see
+    // playwright-resolve.ts. Falls back to the bundled specifier in dev.
+    pw = await loadPlaywrightCore();
   } catch (e) {
-    emit({ event: "error", message: "playwright-core unavailable: " + String((e as Error)?.message || e) });
+    // Keep the raw cause on stderr (inherited) for debugging, but surface a
+    // clear, actionable message to the user instead of the module-not-found dump.
+    try {
+      process.stderr.write("prevail: browser engine unavailable: " + String((e as Error)?.message || e) + "\n");
+    } catch {
+      /* ignore */
+    }
+    emit({ event: "error", message: PLAYWRIGHT_UNAVAILABLE_MESSAGE });
     return;
   }
 

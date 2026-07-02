@@ -27,6 +27,7 @@ import {
 } from "./browser-actions.ts";
 import type { TraceEntry } from "./browser-record.ts";
 import type { SkillSpec, SkillRunResult, SkillRunOpts } from "./connector-skills.ts";
+import { PLAYWRIGHT_UNAVAILABLE_MESSAGE, isPlaywrightUnavailable } from "./playwright-resolve.ts";
 
 // ---------------------------------------------------------------------------
 // Injectable seams
@@ -172,6 +173,11 @@ export async function runBrowserAgent(goal: AgentGoal, deps: { driver: DriverLik
     emit({ phase: "browser_open", url: opened.url });
     snap = await deps.driver.snapshot();
   } catch (e) {
+    // If the browser engine itself is missing (packaging miss in a release
+    // build), the raw module-not-found dump is meaningless to the user. Show the
+    // actionable message and degrade gracefully (fail() returns a normal result,
+    // so the learn flow does not crash).
+    if (isPlaywrightUnavailable(e)) return fail(PLAYWRIGHT_UNAVAILABLE_MESSAGE);
     return fail(`could not open browser: ${msg(e)}`);
   }
 

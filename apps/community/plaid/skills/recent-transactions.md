@@ -3,6 +3,11 @@ id: recent-transactions
 runner: llm
 panelist: claude
 trigger: refresh
+# Favorite of the recent-transactions pack. Plaid is an API aggregator with no
+# consumer login to automate, so browser automation does NOT make sense here:
+# this pack is api/llm + a CLI fallback (recent-transactions-cli), not browser.
+favorite: true
+capability: recent-transactions
 auth: [PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ACCESS_TOKEN]
 inputs:
   - { name: days, type: number, required: false, description: "lookback window (default 7)" }
@@ -35,4 +40,4 @@ Output one JSON object per line (JSONL). Each line is:
 {"date":"2026-06-01","amount":42.18,"name":"Whole Foods","category":["Food","Groceries"],"account_id":"abc123"}
 ```
 
-No preamble. No markdown — pure JSONL.
+No preamble. No markdown, pure JSONL.

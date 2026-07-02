@@ -7,6 +7,31 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.4] — 2026-06-30 · App ideal-state AI draft, darwin-x64 build fix
+
+### Added
+- **`connectors draft-ideal <id>`**: AI-drafts an app's ideal state from its catalog description, feeds-domains, skills, integration method, and existing soul, plus web research (what it is, value, data it collects, insights/metrics, how it helps). Honors Bunker Mode. Powers the desktop "Draft with AI" button.
+
+### Fixed
+- **Release build**: darwin-x64 (Intel Mac) dropped from the matrix - it can't be cross-compiled (`@opentui/core` native subpackages) and the scarce macos-13 runner blocked releases. Ships arm64 Mac + Linux x64/arm64 (the desktop app is arm64-Mac only anyway).
+
+## [1.9.3] — 2026-06-30 · App-loop "Run now", honest Google auth messaging
+
+### Fixed
+- **App loops run from "Run now"**: `runOneLoop` now resolves app ids (`data/apps/<id>`) in addition to domains, so an app loop's per-loop run works from the desktop, not just the scheduled daemon pass.
+- **Honest Google auth messaging**: `calendar-sync` and `gws-gateway` now explain that the account is signed in but the required scope (Calendar/Gmail) was not granted, and to re-authorize approving all permissions, instead of the misleading "not authenticated yet (run gws auth login)".
+
+## [1.9.2] — 2026-06-30 · Disabled apps fully inert, app/domain parity, Google multi-account
+
+### Added
+- **App/domain parity**: connecting an app now seeds the same standing-context file set a domain gets (soul.md, state.md, MEMORY.md, _intents.jsonl, _journal/, _threads/) under `data/apps/<id>/`, idempotent and edit-safe.
+- **App-scoped loops**: `discoverLoopTargets` runs an app's `data/apps/<id>/_loops.json` through the same path as domain loops; disabled apps are never returned.
+- **Google multi-account plumbing**: `calendar-sync`, `gws-gateway`, and `gws-mcp` take an optional account/profile param (default unchanged); `pullAllGoogleCalendars` fans out across connected accounts read-only; `calendar pull-google --account/--all`.
+
+### Fixed
+- **Disabled apps are fully inert**: `enabled === false` now blocks agent-MCP injection, skill loading and execution, loop discovery, the agent-facing `list_apps` tool, and learn suggestions; `scanVaultApps` reads the `enabled` flag (prior gap).
+- **Browser skills in packaged builds**: playwright-core resolves relative to the executable with a friendly unavailable message instead of a baked-in CI path.
+
 ## [1.7.1] — 2026-06-13 · Multi-connection strategies, briefing delivery channels, connector completeness
 
 ### Added

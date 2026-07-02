@@ -32,9 +32,13 @@ jobs:
           - target: darwin-arm64
             os: macos-14
             bun-target: bun-darwin-arm64
-          - target: darwin-x64
-            os: macos-13
-            bun-target: bun-darwin-x64
+          # darwin-x64 (Intel Mac) is intentionally NOT built. It required the
+          # scarce GitHub macos-13 runner (which queued >1h and blocked releases),
+          # and it can't be cross-compiled elsewhere because @opentui/core ships
+          # os/cpu-gated native subpackages (@opentui/core-darwin-x64 won't install
+          # on Linux or arm-mac). The desktop app is arm64-Mac only (no Intel dmg),
+          # so a standalone Intel-Mac CLI serves a platform the product doesn't
+          # support. arm64 Mac + Linux x64/arm64 cover every supported target.
           - target: linux-x64
             os: ubuntu-latest
             bun-target: bun-linux-x64
@@ -70,13 +74,20 @@ jobs:
           cp -R vault-demo dist/vault-demo
           cp -R skill-packs dist/skill-packs
           cp AGENTS-operating.md dist/AGENTS-operating.md
+          # Ship playwright-core as an ON-DISK SIDECAR next to the binary (#6).
+          # bun --compile cannot make playwright-core resolvable inside /$bunfs
+          # (its internals look for their package.json at the build-time
+          # node_modules path), so the engine loads this real copy at runtime via
+          # src/playwright-resolve.ts -> dirname(execPath)/node_modules/playwright-core.
+          mkdir -p dist/node_modules
+          cp -R node_modules/playwright-core dist/node_modules/playwright-core
           chmod +x dist/prevail
 
       - name: package
         working-directory: dist
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
-          tar -czf "prevail-${VERSION}-${{ matrix.target }}.tar.gz" prevail vault-demo AGENTS-operating.md
+          tar -czf "prevail-${VERSION}-${{ matrix.target }}.tar.gz" prevail vault-demo AGENTS-operating.md node_modules
           ls -la
 
       - name: upload build artifact

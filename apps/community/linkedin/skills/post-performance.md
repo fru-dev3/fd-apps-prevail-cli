@@ -16,7 +16,7 @@ outputs:
 
 Browser-agent skill: an LLM drives the logged-in Chrome session to read the
 analytics on your own recent LinkedIn posts, then records a replay
-(`post-performance-replay`) for future refreshes. Read-only — navigate and
+(`post-performance-replay`) for future refreshes. Read-only, navigate and
 read only; never like, comment, repost, edit, or delete.
 
 Start at your activity feed
@@ -27,7 +27,7 @@ For each of the latest ~10 posts you authored, read the engagement surface
 shown under the post (and the "View analytics" / impressions count where
 LinkedIn exposes it):
 
-- **Impressions** (views) — the headline reach number.
+- **Impressions** (views), the headline reach number.
 - **Reactions** (likes + other reactions, total).
 - **Comments**.
 - **Reposts**.
@@ -44,10 +44,10 @@ Summarize as a dated section appended to `post-performance.md`:
 ```
 
 Sort newest first. Below the table add one line:
-`Top by impressions: "<first line>" — <N> impressions.`
+`Top by impressions: "<first line>", <N> impressions.`
 
 `kind: markdown`, so each run appends a new dated snapshot. Carry the table in
 the agent's done-summary so the data is captured even before the replay is
 recorded.
 
-Output: a dated section in post-performance.md — a table of the latest ~10 posts with impressions, reactions, comments, and reposts.
+Output: a dated section in post-performance.md, a table of the latest ~10 posts with impressions, reactions, comments, and reposts.

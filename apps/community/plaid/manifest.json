@@ -5,7 +5,7 @@
   "description": "Aggregate bank, brokerage, and credit card transaction history via the Plaid API. Used by wealth, tax, and business domains to keep state.md in sync with the institutions Plaid is linked to.",
   "domains": ["wealth", "tax", "business"],
   "integration": "api",
-  "connection": "Three strategies in priority order: (1) API — set PLAID_CLIENT_ID + PLAID_SECRET + PLAID_ACCESS_TOKEN; (2) CLI — set PLAID_CLI_COMMAND to a wrapper binary that can call the Plaid API on your behalf.",
+  "connection": "Three strategies in priority order: (1) API, set PLAID_CLIENT_ID + PLAID_SECRET + PLAID_ACCESS_TOKEN; (2) CLI, set PLAID_CLI_COMMAND to a wrapper binary that can call the Plaid API on your behalf.",
   "connections": [
     {
       "kind": "api",

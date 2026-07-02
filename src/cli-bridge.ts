@@ -26,13 +26,14 @@ function findOperatingManual(vaultPath: string): string | null {
   if (operatingManualCache && operatingManualCache.vaultPath === vaultPath) {
     return operatingManualCache.content;
   }
-  // Canonical layout: PREVAIL.md at the vault root is the operating doc. Fall back
-  // to the legacy AGENTS-operating.md (root, then build/), then ~/.prevail, then the
-  // bundled copy beside the binary.
+  // Canonical layout keeps the operating doc under build/ (build/ wins), so look
+  // there first, then fall back to the legacy vault-root locations (PREVAIL.md /
+  // AGENTS-operating.md), then ~/.prevail, then the bundled copy beside the binary.
   const candidates: string[] = [
+    join(buildRoot(vaultPath), PREVAIL_DOC_FILE),
+    join(buildRoot(vaultPath), OPERATING_MANUAL_FILE),
     join(vaultPath, PREVAIL_DOC_FILE),
     join(vaultPath, OPERATING_MANUAL_FILE),
-    join(buildRoot(vaultPath), OPERATING_MANUAL_FILE),
     join(homedir(), ".prevail", PREVAIL_DOC_FILE),
     join(homedir(), ".prevail", OPERATING_MANUAL_FILE),
   ];
@@ -904,7 +905,7 @@ const WEB_DENY_NOTE = [
   "The user has globally disabled web access for this cockpit session.",
   "Do NOT use WebSearch, WebFetch, fetch(), curl, or any other tool that",
   "makes outbound HTTP requests. Work only from the vault and local files.",
-  "If a question genuinely requires the web, say so plainly and stop —",
+  "If a question genuinely requires the web, say so plainly and stop;",
   "do not silently proceed without web access.",
   "</web-access>",
 ].join("\n");
@@ -915,7 +916,57 @@ function augmentManualWithWebGate(manual: string | null, mode: "allow" | "deny")
   return `${manual}\n\n${WEB_DENY_NOTE}`;
 }
 
+// --- Fix #10: no em dashes in AI-generated output ---------------------------
+//
+// (a) A prompt directive injected into every turn (Claude via its system
+//     channel, other CLIs prepended to the prompt). Prompt directives are
+//     unreliable on their own, so (b) the sanitizer below is the hard guarantee.
+const NO_EM_DASH_DIRECTIVE = [
+  "# OUTPUT STYLE (HARD RULE)",
+  "Never use em dashes (Unicode U+2014) anywhere in your responses, and do not use en dashes (Unicode U+2013) as sentence punctuation.",
+  "Use commas, periods, colons, semicolons, or parentheses instead.",
+  "This applies to all prose you write.",
+].join("\n");
+
+function buildNoEmDashPreamble(): string {
+  return `${NO_EM_DASH_DIRECTIVE}\n\n---\n\n`;
+}
+
+// (b) The hard guarantee: strip em dashes from model output before it is
+// returned / streamed / persisted. We replace the em dash (U+2014) and any
+// SPACED en dash used as a sentence dash (U+2013 with a space on each side)
+// with a comma, the safest general substitute. Hyphens, en-dash NUMBER RANGES
+// ("3-5" with no surrounding spaces), and code are left intact. Fenced code
+// blocks and inline code spans are preserved verbatim so we never mangle source
+// that legitimately contains these characters.
+function stripEmDashesProse(s: string): string {
+  return s
+    // Em dash (U+2014), with any surrounding spaces collapsed -> ", ".
+    .replace(/\s*—\s*/g, ", ")
+    // En dash (U+2013) used as a sentence dash (spaces on BOTH sides) -> ", ".
+    // A bare numeric range like "3–5" has no surrounding spaces, untouched.
+    .replace(/\s+–\s+/g, ", ");
+}
+
+export function sanitizeEmDashes(text: string): string {
+  if (!text || (!text.includes("—") && !text.includes("–"))) return text;
+  // Split out fenced code blocks and inline code spans (kept verbatim). The
+  // capturing group lands code segments at ODD indices, prose at EVEN indices.
+  const segments = text.split(/(```[\s\S]*?```|`[^`\n]*`)/g);
+  for (let i = 0; i < segments.length; i += 2) {
+    segments[i] = stripEmDashesProse(segments[i]!);
+  }
+  return segments.join("");
+}
+
 export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, maxOutputChars, guard, webAccess }: ChatTurn): Promise<string> {
+  // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
+  // never shows them. The final returned reply is sanitized again below (the
+  // authoritative, code-block-aware pass). Per-delta stripping is best-effort
+  // for display; the final pass is the hard guarantee.
+  const upstreamOnChunk = onChunk;
+  onChunk = upstreamOnChunk ? (delta: string) => upstreamOnChunk(sanitizeEmDashes(delta)) : undefined;
+
   // cwd is <vault>/<domain>; the operating manual lives one level up at <vault>/AGENTS-operating.md
   const vaultPath = resolve(cwd, "..");
   const domainKeyForGuard = basename(cwd);
@@ -1027,7 +1078,11 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   // system-prompt flag get it prepended to the prompt so it still governs.
   const vaultLockPreamble = vaultLockOn() ? buildVaultLockPreamble() : null;
   const promptVaultLock = vaultLockPreamble && cli.kind !== "claude" ? vaultLockPreamble : "";
-  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + buildFrameworkPreamble(framework) + prompt;
+  // Fix #10 (a): the no-em-dash style directive. Claude gets it via the system
+  // channel (in claudeSystem below); CLIs without a system-prompt flag get it
+  // prepended to the prompt so it still governs the turn.
+  const promptNoEmDash = cli.kind !== "claude" ? buildNoEmDashPreamble() : "";
+  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
   // A prompt that begins with '-' makes the runtime CLI's option parser treat the
   // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
   // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
@@ -1046,7 +1101,10 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   // the per-day wall honest against a runaway loop.
   const reply = await dispatchTurn();
   if (budgetEstimate && guard) recordSpend(budgetEstimate, guard.budget);
-  return reply;
+  // Fix #10 (b): the hard guarantee. Strip em dashes from the complete reply
+  // before it is returned to ANY caller (persisted to the vault, rendered, fed
+  // into a council/skill). Code-block aware so code is never mangled.
+  return sanitizeEmDashes(reply);
 
   async function dispatchTurn(): Promise<string> {
   if (cli.kind === "claude") {
@@ -1057,7 +1115,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to
@@ -1070,18 +1128,38 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // not a request. WebSearch + WebFetch are the only built-ins that make
     // outbound requests. The WEB_DENY_NOTE in the system prompt is belt-and-braces.
     if (webMode === "deny") args.push("--disallowedTools", "WebSearch", "WebFetch");
-    // Agent-facing MCP servers (the Composio gateway): only on agentic act runs
-    // (where --dangerously-skip-permissions already auto-allows MCP tools).
-    // agentMcpConfigForClaude materializes ~/.prevail/agent-mcp.json from the
-    // COMPOSIO_API_KEY env var and returns its path; it returns null when no key
-    // is set, so this is a byte-for-byte no-op (no flag) without Composio.
-    if (act) {
-      try {
-        const { agentMcpConfigForClaude } = await import("./agent-mcp.ts");
-        const mcpCfg = agentMcpConfigForClaude();
-        if (mcpCfg) args.push("--mcp-config", mcpCfg);
-      } catch { /* never let MCP wiring break a turn */ }
-    }
+    // Agent-facing MCP servers. Two sources, different exposure rules:
+    //   - The Composio gateway (a hosted gateway behind the user's API key) is
+    //     injected ONLY on agentic act runs, where --dangerously-skip-permissions
+    //     already auto-allows MCP tools. This preserves the prior behavior.
+    //   - Connected stdio MCP servers (the user's own local MCP apps, integration
+    //     "mcp" with a mcpSetup.command) are injected on EVERY turn, chat included,
+    //     so the model can see their tools. We do NOT add --dangerously-skip-
+    //     permissions for chat, so on a non-act turn the tools are visible but
+    //     still subject to the normal permission model (safety unchanged).
+    // agentMcpConfigForClaude materializes ~/.prevail/agent-mcp.json and returns
+    // its path, or null when there is nothing to inject (no Composio key and no
+    // connected stdio servers), so this stays a byte-for-byte no-op otherwise.
+    try {
+      const { agentMcpConfigForClaude, agentMcpServerIds } = await import("./agent-mcp.ts");
+      const mcpCfg = agentMcpConfigForClaude(vaultPath, { includeComposio: act });
+      if (mcpCfg) {
+        args.push("--mcp-config", mcpCfg);
+        // In headless `-p` there is no TTY to approve tool use, so on a non-act
+        // (chat) turn the injected MCP tools would be auto-denied and the agent
+        // could never call them. Explicitly allow exactly the servers we
+        // injected (mcp__<serverId> permits all of that server's tools). This is
+        // additive - it does not disable the model's other behavior - and safe:
+        // the google_workspace tool gates its own writes (it only QUEUES them
+        // for approval), and connected stdio MCP servers are user-added. On act
+        // runs --dangerously-skip-permissions already allows everything, so we
+        // only need this on chat turns.
+        if (!act) {
+          const ids = agentMcpServerIds(vaultPath, { includeComposio: act });
+          if (ids.length) args.push("--allowedTools", ...ids.map((id) => `mcp__${id}`));
+        }
+      }
+    } catch { /* never let MCP wiring break a turn */ }
     args.push(...head);
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }

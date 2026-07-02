@@ -30,9 +30,9 @@ For each returned `accounts[]` entry, read `account_id`, `name`, `type`,
 `current` is null). Use `balances.iso_currency_code` for currency.
 
 Classify each account:
-- **Assets** — `type` of `depository`, `investment`, or `brokerage`. Use
+- **Assets**, `type` of `depository`, `investment`, or `brokerage`. Use
   the positive balance.
-- **Liabilities** — `type` of `credit` or `loan`. A balance here is money
+- **Liabilities**, `type` of `credit` or `loan`. A balance here is money
   owed, so it subtracts from net worth.
 
 Net worth = sum(asset balances) − sum(liability balances).

@@ -70,12 +70,23 @@ export function buildRecommendations(vaultRoot: string): Recommendation[] {
         missing.set(dl, c);
       }
     }
-    for (const [d, c] of missing) {
+    // Be judicious: domains are meant to be FEW and BROAD. Over-suggesting them
+    // fragments the vault into an unmanageable sprawl, so we surface only the
+    // strongest few (by how many distinct unresolved intents touch the area) and
+    // cap the total. Reusing an existing domain is almost always better than
+    // creating a new one - the copy nudges that, and the distiller upstream is
+    // told to prefer existing domains so facets of one project never become
+    // separate candidates here.
+    const MAX_DOMAIN_RECS = 3;
+    const ranked = [...missing.entries()]
+      .sort((a, b) => b[1].n - a[1].n)
+      .slice(0, MAX_DOMAIN_RECS);
+    for (const [d, c] of ranked) {
       recs.push({
         id: `domain:${d}`,
         category: "domain",
         title: `Create a "${titleCase(d)}" domain`,
-        detail: `Your activity keeps touching ${titleCase(d)}${c.ex ? ` (e.g. "${c.ex}")` : ""}, but you have no domain for it yet. Adding one lets Prevail track and work on it.`,
+        detail: `Your activity keeps touching ${titleCase(d)}${c.ex ? ` (e.g. "${c.ex}")` : ""}, but you have no domain for it yet. Add one only if it is a broad area worth tracking on its own - if it is really a facet of something you already track, it belongs in that existing domain.`,
         action: { kind: "create_domain", domain: d },
       });
     }

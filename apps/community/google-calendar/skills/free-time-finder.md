@@ -17,7 +17,7 @@ outputs:
 
 Find the open slots in the working week from the synced calendar.
 
-This skill reads the synced events — it does not call the network. Read the
+This skill reads the synced events, it does not call the network. Read the
 most recent `data/week-*.json` in this connector directory (written by the
 `weekly-overview` skill; pick the latest date in the name) and parse `items[]`.
 
@@ -44,6 +44,6 @@ End with a one-line total: `Total open: <H>h <M>m across <D> days.` If the
 week is fully booked, write `No open slots in the working week.`
 
 Write to `free-time.md`, replacing it each run. No preamble or commentary
-outside the slots. Read-only — this only reports availability; it never books.
+outside the slots. Read-only, this only reports availability; it never books.
 
-Output: free-time.md — the open slots per day across the working week, with a total.
+Output: free-time.md, the open slots per day across the working week, with a total.

@@ -12,8 +12,8 @@ outputs:
 
 # Weekly contribution summary
 
-Recap what I shipped on GitHub over the last week — PRs opened and merged,
-issues closed, and review activity — for a status update or self-review.
+Recap what I shipped on GitHub over the last week, PRs opened and merged,
+issues closed, and review activity, for a status update or self-review.
 Default lookback 7 days; respect `${input.days}`. Read-only.
 
 Authenticate with `GH_TOKEN` (header `Authorization: Bearer <GH_TOKEN>`,
@@ -33,16 +33,16 @@ From each result item read `repository_url` (derive `owner/repo`),
 Output markdown only (no preamble):
 
 ```
-# Contributions — week ending 2026-06-29
+# Contributions, week ending 2026-06-29
 
 **Merged (N)**
-- owner/repo #42 — title
+- owner/repo #42, title
 **Opened (N)**
 - ...
 **Issues closed (N)**
 - ...
 **Reviews (N)**
-- owner/repo #58 — title
+- owner/repo #58, title
 
 _N merged · M opened · K reviews across R repos_
 ```

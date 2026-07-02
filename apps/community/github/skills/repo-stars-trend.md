@@ -18,7 +18,7 @@ Use `GH_TOKEN` to authenticate. Hit
 `GET https://api.github.com/user/repos?per_page=100&affiliation=owner` and
 collect `name` + `stargazers_count` for each.
 
-Output ONLY the table — the runner will prepend the timestamp header.
+Output ONLY the table, the runner will prepend the timestamp header.
 
 ```
 | repo | ⭐ stars |

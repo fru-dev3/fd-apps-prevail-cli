@@ -9,6 +9,7 @@ import { resolveDomainDir, buildRoot } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, } from "./config.ts";
+import type { ChatEvent } from "./chat-json.ts";
 
 interface Args {
   vaultPath: string | null;
@@ -28,10 +29,14 @@ interface Args {
   briefingArgs: string[];
   connectors: boolean;
   connectorsArgs: string[];
+  calendar: boolean;
+  calendarArgs: string[];
   recommendations: boolean;
   recommendationsArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
+  skillDraft: boolean;
+  skillDraftArgs: string[];
   autonomy: boolean;
   autonomyArgs: string[];
   playbook: boolean;
@@ -46,8 +51,6 @@ interface Args {
   benchArgs: string[];
   usage: boolean;
   usageArgs: string[];
-  pack: boolean;
-  packArgs: string[];
   appmode: boolean;
   appmodeArgs: string[];
   models: boolean;
@@ -98,6 +101,10 @@ interface Args {
   privacyArgs: string[];
   search: boolean;
   searchArgs: string[];
+  gwsMcp: boolean;
+  gwsMcpDomain: string | null;
+  gws: boolean;
+  gwsArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -118,10 +125,14 @@ function parseArgs(argv: string[]): Args {
   let briefingArgs: string[] = [];
   let connectors = false;
   let connectorsArgs: string[] = [];
+  let calendar = false;
+  let calendarArgs: string[] = [];
   let recommendations = false;
   let recommendationsArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
+  let skillDraft = false;
+  let skillDraftArgs: string[] = [];
   let autonomy = false;
   let autonomyArgs: string[] = [];
   let playbook = false;
@@ -136,8 +147,6 @@ function parseArgs(argv: string[]): Args {
   let benchArgs: string[] = [];
   let usage = false;
   let usageArgs: string[] = [];
-  let pack = false;
-  let packArgs: string[] = [];
   let appmode = false;
   let appmodeArgs: string[] = [];
   let models = false;
@@ -188,6 +197,10 @@ function parseArgs(argv: string[]): Args {
   let privacyArgs: string[] = [];
   let search = false;
   let searchArgs: string[] = [];
+  let gwsMcp = false;
+  let gwsMcpDomain: string | null = null;
+  let gws = false;
+  let gwsArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -215,6 +228,9 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "connectors" || a === "connector") {
       connectors = true;
       connectorsArgs = argv.slice(i + 1);
+    } else if (a === "calendar") {
+      calendar = true;
+      calendarArgs = argv.slice(i + 1);
       break;
     } else if (a === "recommendations" || a === "recommend") {
       recommendations = true;
@@ -223,6 +239,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "suggest-apps") {
       suggestApps = true;
       suggestAppsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "skill-draft") {
+      skillDraft = true;
+      skillDraftArgs = argv.slice(i + 1);
       break;
     } else if (a === "autonomy") {
       autonomy = true;
@@ -266,10 +286,6 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "usage") {
       usage = true;
       usageArgs = argv.slice(i + 1);
-      break;
-    } else if (a === "pack" || a === "packs") {
-      pack = true;
-      packArgs = argv.slice(i + 1);
       break;
     } else if (a === "appmode") {
       appmode = true;
@@ -367,6 +383,23 @@ function parseArgs(argv: string[]): Args {
       search = true;
       searchArgs = argv.slice(i + 1);
       break;
+    } else if (a === "gws-mcp") {
+      // Top-level MCP entrypoint the agent launches: `prevail gws-mcp --vault
+      // <path> [--domain <d>]`. The launch flags follow the subcommand, so parse
+      // --vault / --domain inline (same shape as the `mcp` branch) before break.
+      gwsMcp = true;
+      for (let j = i + 1; j < argv.length; j++) {
+        const f = argv[j];
+        if (f === "--vault" || f === "-d") { if (argv[j + 1]) { vaultPath = resolve(process.cwd(), argv[j + 1]); j++; } }
+        else if (f.startsWith("--vault=")) { vaultPath = resolve(process.cwd(), f.slice("--vault=".length)); }
+        else if (f === "--domain") { if (argv[j + 1]) { gwsMcpDomain = argv[j + 1]; j++; } }
+        else if (f.startsWith("--domain=")) { gwsMcpDomain = f.slice("--domain=".length); }
+      }
+      break;
+    } else if (a === "gws") {
+      gws = true;
+      gwsArgs = argv.slice(i + 1);
+      break;
     } else if (a === "upgrade" || a === "update" || a === "self-update") {
       upgrade = true;
       upgradeArgs = argv.slice(i + 1);
@@ -399,10 +432,14 @@ function parseArgs(argv: string[]): Args {
     briefingArgs,
     connectors,
     connectorsArgs,
+    calendar,
+    calendarArgs,
     recommendations,
     recommendationsArgs,
     suggestApps,
     suggestAppsArgs,
+    skillDraft,
+    skillDraftArgs,
     autonomy,
     autonomyArgs,
     playbook,
@@ -417,8 +454,6 @@ function parseArgs(argv: string[]): Args {
     benchArgs,
     usage,
     usageArgs,
-    pack,
-    packArgs,
     appmode,
     appmodeArgs,
     models,
@@ -469,6 +504,10 @@ function parseArgs(argv: string[]): Args {
     privacyArgs,
     search,
     searchArgs,
+    gwsMcp,
+    gwsMcpDomain,
+    gws,
+    gwsArgs,
   };
 }
 
@@ -488,9 +527,21 @@ USAGE
                               (connectors list --json for the machine list)
                               connectors scopes <id> — show what an OAuth grant requests
                               connectors disconnect <id> — revoke + delete a stored token
+                              connectors draft-ideal <id> - AI-draft the app's ideal state
+  prevail calendar [...]      calendar sync (read-only)
+                              calendar pull-google --json — pull Google Calendar events
+                              into <vault>/calendar-external.json for the desktop view
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
                               auth: clients must send Authorization: prevail-<token> from ~/.prevail/mcp.json
                               parent-check: refuses non-TTY / unknown parents — bypass with --unsafe-detach
+  prevail gws-mcp --vault <v> [--domain <d>]
+                              run the gated Google Workspace MCP server (stdio) —
+                              exposes the authenticated gws CLI to the agent as one
+                              tool: reads run live, writes are queued for approval
+  prevail gws pending-list --json
+                              list Google Workspace writes awaiting your approval
+  prevail gws run --id <id> --json
+                              execute one approved Google Workspace write
   prevail bench [...]         run the public council benchmark suite
                               (bench list --json for the machine question list)
   prevail vault [...]         prune old logs, snapshot/restore the vault
@@ -1153,81 +1204,6 @@ async function usageCommand(args: string[], vaultOverride: string | null): Promi
   console.log("slice it: prevail usage --by day|domain|model|session [--domain <slug>] [--since 7d] [--json]");
 }
 
-// Role packages — list / import / export portable persona bundles
-// (prevail.pack/v1). See pack.ts.
-async function packCommand(args: string[], vaultOverride: string | null): Promise<void> {
-  const { parsePack, applyPack, exportPack, listBundledPacks, bundledPackText } =
-    await import("./pack.ts");
-  const { readFileSync, existsSync } = await import("node:fs");
-  const cfg = readConfig();
-  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
-  const sub = args[0];
-  const asJson = args.includes("--json");
-
-  if (!sub || sub === "list" || sub === "ls") {
-    const packs = listBundledPacks();
-    if (asJson) {
-      process.stdout.write(
-        JSON.stringify(packs.map((p) => ({
-          file: p.file,
-          name: p.pack.name,
-          version: p.pack.version,
-          description: p.pack.description ?? null,
-          domains: p.pack.domains.map((d) => d.slug),
-        }))) + "\n",
-      );
-      return;
-    }
-    if (packs.length === 0) { console.log("no bundled packs found."); return; }
-    console.log(`${packs.length} bundled pack${packs.length === 1 ? "" : "s"}:`);
-    for (const { pack } of packs) {
-      console.log(`  ${pack.name} (v${pack.version}) — ${pack.domains.map((d) => d.slug).join(", ")}`);
-    }
-    return;
-  }
-
-  if (sub === "import") {
-    // The argument may be a path to a .json pack OR a bundled pack name/file.
-    const ref = args[1];
-    if (!ref) { console.error("usage: prevail pack import <file.json|bundled-name> [--overwrite]"); process.exit(1); }
-    const overwrite = args.includes("--overwrite");
-    let text: string | null = null;
-    if (existsSync(ref)) {
-      text = readFileSync(ref, "utf8");
-    } else {
-      // Resolve against bundled packs by file name or pack name.
-      text = bundledPackText(ref);
-    }
-    if (text == null) {
-      const msg = `pack not found: ${ref}`;
-      if (asJson) process.stdout.write(JSON.stringify({ error: msg }) + "\n");
-      else console.error(msg);
-      process.exit(1);
-    }
-    try {
-      const result = applyPack(vault, parsePack(text), { overwrite });
-      if (asJson) process.stdout.write(JSON.stringify(result) + "\n");
-      else console.log(`imported into ${vault}: created [${result.created.join(", ")}]${result.skipped.length ? `, skipped existing [${result.skipped.join(", ")}]` : ""}`);
-    } catch (e) {
-      if (asJson) process.stdout.write(JSON.stringify({ error: String(e) }) + "\n");
-      else console.error(`pack import failed: ${e}`);
-      process.exit(1);
-    }
-    return;
-  }
-
-  if (sub === "export") {
-    const nameIdx = args.indexOf("--name");
-    const name = nameIdx >= 0 && args[nameIdx + 1] ? args[nameIdx + 1]! : "My Vault";
-    const out = exportPack(vault, name);
-    process.stdout.write(JSON.stringify(out, null, asJson ? 0 : 2) + "\n");
-    return;
-  }
-
-  console.error(`unknown pack subcommand: ${sub} (try: list | import | export)`);
-  process.exit(1);
-}
-
 async function benchCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const { loadQuestions, runBenchOne, writeBenchResult, writeBenchSummary, defaultResultsDir } =
     await import("./bench.ts");
@@ -1494,7 +1470,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     // Personal canonical run: fire each <vault>/benchmark/questions/*.md
     // at the target CLI (or council, when --council is passed) and
     // write results to <vault>/benchmark/runs/<date>_<label>/.
-    const { listQuestions, runCanonicalSet, writeRunDirectory } = await import(
+    const { listQuestions, runCanonicalSet, resolveRunDir, writeRunResults, loadPriorRun, runsDir: canonicalRunsDir } = await import(
       "./canonical-bench.ts"
     );
     const questions = listQuestions(vault);
@@ -1564,13 +1540,77 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       console.error(`cli ${targetCliKind} not detected. available: ${allClis.map((c) => c.kind).join(", ")}`);
       process.exit(1);
     }
-    console.log(`running ${filtered.length} canonical question${filtered.length === 1 ? "" : "s"}…`);
+    // RESUMABLE RUN. Look for an UNSCORED run dir for this exact target (same
+    // batch when batched, same cli+model) that has results.json but is
+    // incomplete - i.e. a prior run of this model was interrupted mid-batch.
+    // If found, resume INTO it: skip the questions it already answered
+    // successfully and only run the missing/errored ones. This is what makes a
+    // 1000-run batch restartable without re-burning tokens on done work.
+    // (A run that already has score.json is a finished, scored run and is left
+    // alone - a fresh dir is minted instead, preserving the old numbers.)
+    let resumeDir: string | undefined;
+    let priorRecords: import("./canonical-bench.ts").CanonicalRunRecord[] | undefined;
+    let skipIds: Set<string> | undefined;
+    // Only auto-resume a BATCHED invocation (the desktop always passes a batch
+    // id on Continue). A bare CLI run without --batch keeps the historical
+    // behavior of minting a fresh dated run, so it can never accidentally
+    // reopen an unrelated older unscored directory.
+    if (batchId) try {
+      const { existsSync: exists, readdirSync: readDir } = await import("node:fs");
+      const { vreadFile: vreadFileRC } = await import("./vault-session.ts");
+      const root = canonicalRunsDir(vault);
+      if (exists(root)) {
+        const wantCli = useCouncil ? null : (targetCli?.kind ?? null);
+        const wantModel = useCouncil ? null : (targetModel ?? null);
+        for (const name of readDir(root)) {
+          const d = join(root, name);
+          if (!exists(join(d, "results.json"))) continue;
+          if (exists(join(d, "score.json"))) continue; // already-scored: never reopen
+          // Match this exact target within THIS batch: same batch.json id, and
+          // same cli+model (council => both null) from meta.json.
+          try {
+            const bj = JSON.parse(vreadFileRC(join(d, "batch.json"))) as { id?: string };
+            if (bj.id !== batchId) continue;
+            const mj = JSON.parse(vreadFileRC(join(d, "meta.json"))) as { cli?: string | null; model?: string | null };
+            if ((mj.cli ?? null) !== wantCli || (mj.model ?? null) !== wantModel) continue;
+          } catch { continue; }
+          const prior = loadPriorRun(d);
+          if (!prior) continue;
+          // Only resume if there's actually work left (a question in `filtered`
+          // that wasn't answered ok yet). A fully-answered-but-unscored run
+          // needs no re-run - it just needs scoring - so leave it be.
+          const remaining = filtered.filter((q) => !prior.okIds.has(q.id));
+          if (remaining.length === 0) continue;
+          resumeDir = d;
+          priorRecords = prior.records;
+          skipIds = prior.okIds;
+          console.log(`resuming ${name}: ${prior.okIds.size} already answered, ${remaining.length} to run…`);
+          break;
+        }
+      }
+    } catch { /* resume is best-effort; fall through to a fresh run */ }
+
+    // Create (or reuse) the run dir up front so answers persist AS THEY LAND.
+    const { dir, label, ts } = resolveRunDir({
+      vaultPath: vault,
+      targetCli,
+      targetModel: targetModel ?? undefined,
+      batchId: batchId ?? undefined,
+      batchLabel: batchLabel ?? undefined,
+      resumeDir,
+    });
+    const already = skipIds ? filtered.filter((q) => skipIds!.has(q.id)).length : 0;
+    console.log(`running ${filtered.length - already} canonical question${filtered.length - already === 1 ? "" : "s"}…`);
     const records = await runCanonicalSet({
       vaultPath: vault,
       questions: filtered,
       clis: allClis,
       targetCli,
       targetModel: targetModel ?? undefined,
+      skipIds,
+      priorRecords,
+      // CRASH-SAFE: flush the full record set to disk after each answer.
+      onRecord: (recs) => writeRunResults(dir, label, ts, recs),
       onProgress: (id, status, info) => {
         // Newline-terminated markers so each reaches the desktop immediately (a
         // no-newline in-flight write can sit in Bun's pipe buffer until the slow
@@ -1582,18 +1622,12 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         else console.log(`  ${id}… ✗ ${info ?? "error"}`);
       },
     });
-    const dir = writeRunDirectory({
-      vaultPath: vault,
-      records,
-      targetCli,
-      targetModel: targetModel ?? undefined,
-      batchId: batchId ?? undefined,
-      batchLabel: batchLabel ?? undefined,
-    });
+    // Final write (also covers the no-onRecord path, and a zero-question run).
+    writeRunResults(dir, label, ts, records);
     const ok = records.filter((r) => r.ok).length;
     console.log("");
     console.log(`✓ ${ok}/${records.length} successful · written to ${dir}`);
-    console.log(`  next: prevail bench score (coming in #28)`);
+    console.log(`  next: prevail bench score`);
     return;
   }
 
@@ -1641,6 +1675,85 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     console.log(``);
     console.log(`✓ ${results.length} result${results.length === 1 ? "" : "s"} written to ${outputDir}`);
     console.log(`  summary: ${summary}`);
+    return;
+  }
+
+  if (sub === "preset-suggest") {
+    // AI-curate a LIBRARY of Arena presets over the model universe the desktop
+    // enumerated (validated/runnable, local-vs-cloud, tier hints). We NEVER
+    // invent models: the desktop passes the exact cli::model keys, and we ground
+    // every returned key against that list so a hallucination cannot reach the UI.
+    // Input: --models-json <json> OR the same JSON on stdin.
+    // Output (--json): { ok, presets: [{ name, rationale, models: ["cli::model"] }] }.
+    const { buildPresetPrompt, extractPresetJson, groundPresets } = await import("./bench-presets-ai.ts");
+    type AvailableModel = import("./bench-presets-ai.ts").AvailableModel;
+    const wantJson = args.includes("--json");
+    const failPS = (msg: string): never => {
+      if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    };
+    const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+    const cliKind = (flag("--cli") ?? "").trim();
+    const model = (flag("--model") ?? "").trim();
+
+    // Read the available-model list from --models-json or stdin.
+    let rawModels = flag("--models-json") ?? "";
+    if (!rawModels) {
+      const { readFileSync } = await import("node:fs");
+      try { rawModels = readFileSync(0, "utf8"); } catch { rawModels = ""; }
+    }
+    let available: AvailableModel[] = [];
+    try {
+      const parsed = JSON.parse(rawModels || "[]");
+      const arr = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.models) ? parsed.models : [];
+      available = (arr as unknown[])
+        .map((m) => {
+          if (!m || typeof m !== "object") return null;
+          const o = m as Record<string, unknown>;
+          const key = typeof o.key === "string" ? o.key.trim() : "";
+          if (!key) return null;
+          return {
+            key,
+            label: typeof o.label === "string" ? o.label : undefined,
+            provider: typeof o.provider === "string" ? o.provider : undefined,
+            validated: typeof o.validated === "boolean" ? o.validated : undefined,
+            local: typeof o.local === "boolean" ? o.local : undefined,
+            tier: typeof o.tier === "string" ? o.tier : undefined,
+          } as AvailableModel;
+        })
+        .filter((m): m is AvailableModel => m !== null);
+    } catch {
+      failPS("could not parse --models-json (expected a JSON array of { key, label, provider, ... })");
+    }
+    if (available.length === 0) failPS("no available models provided (pass --models-json or pipe the model list on stdin)");
+
+    const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+    let clis = await detectClis();
+    // Bunker Mode: this is an LLM call, so only local providers may run.
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+      if (cliKind && !LOCAL_CLIS.has(cliKind)) failPS(`Blocked by Bunker Mode: ${cliKind} is a cloud provider. Pick a local model (ollama, lmstudio, mlx).`);
+      clis = clis.filter((c) => LOCAL_CLIS.has(c.kind));
+      if (clis.length === 0) failPS("Blocked by Bunker Mode: no local model provider is running. Start Ollama (or LM Studio / MLX) first.");
+    }
+    const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
+    if (!cli) failPS("no AI CLI available. Install claude, codex, or another supported CLI first.");
+
+    const prompt = buildPresetPrompt(available);
+    let raw = "";
+    try {
+      raw = await runChatTurn({ prompt, cwd: vault, cli: cli!, model, isFirst: true, bare: true });
+    } catch (e) {
+      failPS(`LLM call failed: ${e}`);
+    }
+    const presets = groundPresets(extractPresetJson(raw), available);
+    if (presets.length === 0) failPS("the model returned no usable presets (every suggestion referenced unknown models or was empty)");
+    if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, presets })}\n`); return; }
+    for (const p of presets) {
+      console.log(`\n${p.name}`);
+      if (p.rationale) console.log(`  ${p.rationale}`);
+      console.log(`  ${p.models.join(", ")}`);
+    }
     return;
   }
 
@@ -1887,6 +2000,8 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
   console.error("  prevail bench score [--run <name>] [--no-judge] [--judge-cli <kind>]");
   console.error("                                                grade a run (keyword + LLM judge)");
   console.error("  prevail bench leaderboard                     show ranked scoreboard across runs");
+  console.error("  prevail bench preset-suggest --models-json <json> [--cli <kind>] [--model <id>] [--json]");
+  console.error("                                                AI-curate a library of Arena presets over the given models");
   process.exit(1);
 }
 
@@ -1988,6 +2103,204 @@ async function playbookCommand(args: string[]): Promise<void> {
   console.log(`${result.ok ? "✓" : "✗"} ${pb.name}: ${result.note}`);
   for (const s of result.steps) console.log(`  [${s.decision}] ${s.ok ? "✓" : "·"} ${s.label} — ${s.note}`);
   console.log(`run dir: ${result.runDir}`);
+}
+
+// Render one runner progress event (from runSkillPackWithFallback's onProgress)
+// as a short human line for the delta stream. Returns "" for events we don't
+// surface, so the caller can skip emitting an empty delta.
+function formatSkillProgress(event: Record<string, unknown>): string {
+  const ev = typeof event.event === "string" ? event.event : "";
+  if (ev === "method_fallback") {
+    return `falling back from ${String(event.from ?? "")} (${String(event.method ?? "")}): ${String(event.reason ?? "")}`;
+  }
+  if (ev === "step" || ev === "browser_step") {
+    const label = event.label ?? event.action ?? event.description ?? "";
+    return label ? `step: ${String(label)}` : "";
+  }
+  if (ev === "download") return `downloaded: ${String(event.path ?? event.file ?? "")}`;
+  // Generic fallthrough: surface any event that carries a message/note.
+  if (typeof event.message === "string") return event.message;
+  if (typeof event.note === "string") return event.note;
+  return "";
+}
+
+// `prevail connectors skill-run`: run one skill (favorite-first with fallback)
+// and stream ChatEvent NDJSON to stdout in the SAME shape as src/chat-json.ts.
+// Order: start -> (delta*) -> assistant -> usage -> done, or a single error.
+// On first run of a browser skill this drives the existing learn/login path via
+// the browser runner. A missing/locked vault yields a clear error event, never a
+// crash.
+async function connectorSkillRun(args: string[], vaultDefault: string): Promise<void> {
+  const flag = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const appId = (flag("--app") ?? "").trim().toLowerCase();
+  const skillId = (flag("--skill") ?? "").trim();
+  const vaultArg = flag("--vault");
+  const cliWanted = (flag("--cli") ?? "").trim();
+  const inputs: Record<string, unknown> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--input" && args[i + 1]) {
+      const kv = args[i + 1]!.split("=");
+      if (kv.length >= 2) inputs[kv[0]!] = kv.slice(1).join("=");
+      i++;
+    }
+  }
+
+  const thread = `skillrun-${Date.now().toString(36)}`;
+  const emit = (ev: ChatEvent) => process.stdout.write(`${JSON.stringify(ev)}\n`);
+  const fail = (error: string): never => {
+    emit({ type: "error", thread, ts: Date.now(), error });
+    process.exit(1);
+  };
+
+  if (!appId || !skillId) {
+    fail("usage: prevail connectors skill-run --app <appId> --skill <skillId> --vault <path> [--cli <provider>] --json");
+  }
+
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { appsContainer } = await import("./path-safety.ts");
+  const {
+    scanCommunityApps,
+    scaffoldCommunityApp,
+    seedAppStarterSkills,
+    migrateLegacyAppsIntoVault,
+    shippedSkillDirsForApp,
+  } = await import("./vault.ts");
+
+  const vault = (vaultArg || vaultDefault || "").trim();
+  if (!vault || !existsSync(vault)) {
+    fail(`vault is missing or locked: ${vault || "(none configured)"}. Pass --vault <path> to an unlocked vault.`);
+  }
+  try { migrateLegacyAppsIntoVault(vault); } catch { /* best effort */ }
+
+  // Resolve the app from TWO shipped registries, so a skill runs without a
+  // separate Connect step even when the vault has never seen the app:
+  //   1. scanCommunityApps — bundled apps/community (manifest + SKILL.md) and any
+  //      vault-scaffolded apps; these carry title/integration/domains.
+  //   2. the shipped skill-pack registry (skill-packs/apps/<id>/skills) — apps
+  //      that ship ONLY a starter pack, no community manifest (e.g. alltrails).
+  // Only when NEITHER knows the id is it a genuinely unknown connector.
+  let app = scanCommunityApps(vault).find((a) => a.id === appId);
+  const shippedDirs = shippedSkillDirsForApp(appId);
+  if (!app && shippedDirs.length === 0) {
+    fail(`no connector with id "${appId}" (try: prevail connectors list --json)`);
+  }
+
+  // Ensure a writable vault copy so outputs land in the vault (not a read-only
+  // bundled dir) and starter skills exist even pre-connect. Idempotent. For a
+  // skill-pack-only app, derive the scaffold metadata from the id (there is no
+  // community manifest to read).
+  const vaultAppPath = join(appsContainer(vault), appId);
+  if (!existsSync(vaultAppPath)) {
+    const title = app?.title ?? appId.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+    const r = scaffoldCommunityApp({
+      id: appId,
+      title,
+      integration: (app?.integration ?? "manual"),
+      domains: app?.domains ?? [],
+      vaultRoot: vault,
+    });
+    if (!r.ok && !existsSync(vaultAppPath)) {
+      fail(`could not prepare "${appId}" in the vault: ${r.error ?? "scaffold failed (vault may be locked or read-only)"}`);
+    }
+  }
+  try { seedAppStarterSkills(appId, vaultAppPath); } catch { /* best effort */ }
+
+  // Reload so the vault copy (with its writable data dir) is authoritative. A
+  // skill-pack-only app is now a real vault app, so this resolves it.
+  app = scanCommunityApps(vault).find((a) => a.id === appId) ?? app;
+  if (!app) {
+    fail(`could not prepare "${appId}" in the vault (scaffold produced no readable connector)`);
+  }
+
+  const {
+    loadSkillsForConnector,
+    packForSkill,
+    runSkillPackWithFallback,
+    logSkillRun,
+    effectiveMethod,
+  } = await import("./connector-skills.ts");
+
+  const skills = loadSkillsForConnector(app!);
+  const skill = skills.find((s) => s.id === skillId);
+  if (!skill) {
+    fail(`no skill "${skillId}" for connector "${appId}" (try: prevail connectors skills ${appId} --json)`);
+  }
+
+  // Honor --cli by steering the panelist the llm/browser-agent runners pick.
+  if (cliWanted) for (const s of skills) if (!s.panelist) s.panelist = cliWanted;
+
+  const method = effectiveMethod(skill!);
+  const engine = `${appId}/${skillId}:${method}`;
+  const startTs = Date.now();
+  emit({ type: "start", thread, ts: startTs, engine });
+
+  const onProgress = (event: Record<string, unknown>) => {
+    const line = formatSkillProgress(event);
+    if (line) emit({ type: "delta", thread, ts: Date.now(), text: `${line}\n` });
+  };
+
+  const pack = packForSkill(skill!, skills);
+  let result: Awaited<ReturnType<typeof runSkillPackWithFallback>>;
+  try {
+    result = await runSkillPackWithFallback(pack, inputs, {
+      autonomy: app!.autonomy ?? "read-only",
+      onProgress,
+    });
+  } catch (err) {
+    fail((err as Error)?.message ?? "skill run crashed");
+    return;
+  }
+  try { logSkillRun(skill!, result); } catch { /* best effort */ }
+
+  const doneTs = Date.now();
+  if (!result.ok) {
+    emit({ type: "error", thread, ts: doneTs, error: result.message || "skill run failed" });
+    process.exit(1);
+  }
+  const text = (result.summary && result.summary.trim()) || result.raw || result.message;
+  emit({ type: "assistant", thread, ts: doneTs, role: "assistant", text, engine });
+  emit({
+    type: "usage",
+    thread,
+    ts: doneTs,
+    usage: { input_tokens: 0, output_tokens: Math.ceil((result.raw?.length ?? text.length) / 4), cost_usd: 0 },
+  });
+  emit({ type: "done", thread, ts: Date.now() });
+  process.exit(0);
+}
+
+// `prevail calendar <sub>`: calendar sync commands. Stage A is a one-way,
+// READ-ONLY pull of Google Calendar events into <vaultRoot>/calendar-external.json
+// (the plaintext file the desktop Calendar view reads). It ALWAYS prints a single
+// line of parseable JSON and exits 0 — so the desktop never gets a crash, only a
+// result it can render.
+async function calendarCommand(args: string[], vaultDefault: string | null): Promise<void> {
+  const sub = args[0];
+  const vflag = args.indexOf("--vault");
+  const vaultArg = vflag >= 0 ? args[vflag + 1] : undefined;
+  const vault =
+    (vaultArg || vaultDefault || process.env.PREVAIL_VAULT_ROOT || readConfig()?.vaultPath || "").trim();
+
+  if (sub === "pull-google") {
+    // --all fans out across every connected Google account (events tagged by
+    // account); --account <label> targets one; default pulls the default profile.
+    const all = args.includes("--all");
+    const aflag = args.indexOf("--account");
+    const account = aflag >= 0 ? args[aflag + 1] : undefined;
+    const { pullGoogleCalendar, pullAllGoogleCalendars } = await import("./calendar-sync.ts");
+    const result = all
+      ? await pullAllGoogleCalendars(vault)
+      : await pullGoogleCalendar(vault, account ? { account } : undefined);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exit(0);
+  }
+
+  console.error("usage: prevail calendar pull-google --vault <path> [--account <label> | --all] [--json]");
+  process.exit(1);
 }
 
 async function connectorsCommand(args: string[]): Promise<void> {
@@ -2151,20 +2464,47 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error(`no connector with id "${id}"`);
       process.exit(1);
     }
-    const { loadSkillsForConnector } = await import("./connector-skills.ts");
-    const skills = loadSkillsForConnector(app);
+    const { listAvailableSkills } = await import("./connector-skills.ts");
+    const { shippedSkillDirsForApp } = await import("./vault.ts");
+    // AVAILABLE skills = shipped starter-pack skills (surfaced even pre-connect)
+    // merged with any already-seeded/learned skills on disk, deduped by id.
+    const skills = listAvailableSkills(app, shippedSkillDirsForApp(app.id));
     if (args.includes("--json")) {
-      process.stdout.write(`${JSON.stringify(skills.map((s) => ({ id: s.id, runner: s.runner, trigger: s.trigger ?? "on-demand" })))}\n`);
+      process.stdout.write(
+        `${JSON.stringify(
+          // Contract for the desktop lane: id, name, method, primary, source,
+          // trigger, summary. `runner` is kept additively for existing consumers.
+          skills.map((s) => ({
+            id: s.id,
+            name: s.name,
+            method: s.method,
+            primary: s.primary,
+            source: s.source,
+            trigger: s.trigger,
+            summary: s.summary,
+            runner: s.spec.runner,
+          })),
+        )}\n`,
+      );
       return;
     }
     if (skills.length === 0) {
-      console.log(`${app.title} has no skill files under ${app.path}/skills/`);
+      console.log(`${app.title} has no skills (no shipped pack and nothing learned yet).`);
       return;
     }
     console.log(`${app.title} · ${skills.length} skill${skills.length === 1 ? "" : "s"}:`);
     for (const s of skills) {
-      console.log(`  ${s.id.padEnd(28)}  runner=${s.runner.padEnd(8)} trigger=${s.trigger ?? "on-demand"}`);
+      const mark = s.primary ? "*" : " ";
+      console.log(`  ${mark} ${s.id.padEnd(28)}  method=${s.method.padEnd(8)} source=${s.source.padEnd(8)} trigger=${s.trigger}`);
     }
+    return;
+  }
+  if (sub === "skill-run") {
+    // prevail connectors skill-run --app <id> --skill <id> --vault <v> [--cli <p>] [--input k=v ...] --json
+    // Run a single skill (favorite-first with fallback, via runSkillPackWithFallback)
+    // and STREAM ChatEvent NDJSON to stdout. Lets the desktop "click a skill and
+    // run it" with no separate Connect step.
+    await connectorSkillRun(args, connectorsVault);
     return;
   }
   if (sub === "soul") {
@@ -2175,6 +2515,87 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const r = getCommunityAppSoul(id, connectorsVault);
     if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); return; }
     console.log(r.soul || "(no soul set)");
+    return;
+  }
+  if (sub === "draft-ideal") {
+    // Draft an app's Ideal State from its real context (catalog description,
+    // any existing ideal-state note, the domains it feeds, its skills, and how
+    // it connects), optionally web-researching the app for best practices. The
+    // desktop puts the returned text in the editor for review before it is
+    // saved to the SAME soul.md the chat/agent reads, so drafting here and
+    // drafting from chat land on one file.
+    // Usage: prevail connectors draft-ideal <id> --vault <path> [--cli <kind>] [--model <id>] [--json]
+    const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+    const id = (args[1] ?? "").trim().toLowerCase();
+    const wantJson = args.includes("--json");
+    const failDraft = (msg: string): never => {
+      if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    };
+    if (!id || id.startsWith("--")) failDraft("usage: prevail connectors draft-ideal <id> --vault <path> [--cli <kind>] [--model <id>] [--json]");
+    const app = apps.find((a) => a.id === id);
+    if (!app) failDraft(`no connector with id "${id}" (try: prevail connectors list --json)`);
+
+    const cliKind = (flag("--cli") ?? "").trim();
+    const model = (flag("--model") ?? "").trim();
+    const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+    let clis = await detectClis();
+    // Bunker Mode: drafting is an LLM call; only local providers may run.
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+      if (cliKind && !LOCAL_CLIS.has(cliKind)) failDraft(`Blocked by Bunker Mode: ${cliKind} is a cloud provider. Pick a local model (ollama, lmstudio, mlx).`);
+      clis = clis.filter((c) => LOCAL_CLIS.has(c.kind));
+      if (clis.length === 0) failDraft("Blocked by Bunker Mode: no local model provider is running. Start Ollama (or LM Studio / MLX) first.");
+    }
+    const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
+    if (!cli) failDraft("no AI CLI available. Install claude, codex, or another supported CLI first.");
+
+    // Gather the app's real context so the draft is grounded, not generic.
+    const { getCommunityAppSoul } = await import("./vault.ts");
+    const existingIdeal = (getCommunityAppSoul(id, connectorsVault).soul || "").trim();
+    const name = app!.title || id;
+    const domainsLine = (app!.domains ?? []).filter(Boolean).join(", ");
+    const skillLines = (app!.skills ?? []).slice(0, 12).map((s) => `- ${s.title}`).join("\n");
+    const method = app!.integration ?? "manual";
+    const contextParts = [
+      `App: ${name} (id: ${id})`,
+      app!.description ? `Catalog description: ${app!.description}` : "",
+      domainsLine ? `Life domains it feeds: ${domainsLine}` : "",
+      `Connection method: ${method}`,
+      app!.connectionNotes ? `How it connects: ${app!.connectionNotes}` : "",
+      skillLines ? `Skills it gives the agent:\n${skillLines}` : "",
+      existingIdeal ? `Existing ideal-state note (improve on it, keep what is right):\n${existingIdeal}` : "",
+    ].filter(Boolean).join("\n\n");
+
+    const prompt = [
+      `You are helping define the IDEAL STATE for the "${name}" app inside this person's personal AI harness.`,
+      `The ideal state describes the ideal of what they want from this app if everything were possible.`,
+      `If you have web access, research ${name} first so the draft reflects real, best-practice capabilities of this app, not guesses.`,
+      "",
+      "Write a COMPREHENSIVE markdown ideal state (thorough, NOT one or two sentences; a few sentences per section) that covers, in this order, each as its own titled section:",
+      "- What this app is and does",
+      "- The value the user should get from it",
+      "- What data it can collect from the user",
+      "- What insights and metrics it can drive",
+      "- How it can help them day to day",
+      "- What good looks like once it is fully working for them",
+      "",
+      "Ground it in the context below wherever possible. Keep it aspirational but specific. Do not use em dashes. No preamble, no surrounding quotes. Return ONLY the ideal-state markdown.",
+      "",
+      "--- CONTEXT ---",
+      contextParts,
+    ].join("\n");
+
+    let raw = "";
+    try {
+      raw = await runChatTurn({ prompt, cwd: app!.path || connectorsVault, cli: cli!, model, isFirst: true, bare: true, webAccess: "allow" });
+    } catch (e) {
+      failDraft(`LLM call failed: ${e}`);
+    }
+    const draft = (raw || "").trim().replace(/^```(?:markdown)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+    if (!draft) failDraft("the model returned an empty draft");
+    if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, draft })}\n`); return; }
+    console.log(draft);
     return;
   }
   if (sub === "gateway-capabilities") {
@@ -2591,6 +3012,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const { connectApp } = await import("./connect-app.ts");
     const result = await connectApp({ vaultPath: vaultArg, name, goal, provider, model, reevaluate, current });
     process.stdout.write(`${JSON.stringify(result)}\n`);
+    // Make the failure cause visible on stderr too (the JSON `ok`/`error` stays
+    // the machine contract; this is for logs and any non-JSON observer), so a
+    // locked vault / write failure surfaces instead of a silent exit.
+    if (!result.ok && result.error) console.error(`connect failed: ${result.error}`);
     process.exit(0);
   }
   if (sub === "composio") {
@@ -2675,12 +3100,19 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const title = flag("--title") ?? id;
     const integration = (flag("--integration") ?? "manual") as "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
     const domains = (flag("--domains") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    // MCP-client apps: --mcp-command is the full stdio spawn command (e.g.
+    // "npx -y @modelcontextprotocol/server-github"); --mcp-install is an
+    // optional one-time setup shell command. Persisted into the manifest's mcp
+    // block so the agent runtime can connect this app as an MCP server.
+    const mcpCommand = flag("--mcp-command");
+    const mcpInstall = flag("--mcp-install");
+    const mcpSetup = mcpCommand || mcpInstall ? { command: mcpCommand, install: mcpInstall } : undefined;
     if (!id) {
-      console.error("usage: prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b");
+      console.error("usage: prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b [--mcp-command <cmd>] [--mcp-install <cmd>]");
       process.exit(1);
     }
     const { scaffoldCommunityApp } = await import("./vault.ts");
-    const r = scaffoldCommunityApp({ id, title: title!, integration, domains, vaultRoot: connectorsVault });
+    const r = scaffoldCommunityApp({ id, title: title!, integration, domains, vaultRoot: connectorsVault, mcpSetup });
     if (args.includes("--json")) {
       process.stdout.write(`${JSON.stringify(r)}\n`);
       process.exit(r.ok ? 0 : 1);
@@ -2841,8 +3273,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
   console.error("  prevail connectors list");
   console.error("  prevail connectors test <id>");
   console.error("  prevail connectors oauth <id>");
-  console.error("  prevail connectors skills <id>                       — list runnable skills");
+  console.error("  prevail connectors skills <id>                       (list available skills, incl. starter packs)");
   console.error("  prevail connectors run <id> <skill> [--input k=v]   — execute a skill");
+  console.error("  prevail connectors skill-run --app <id> --skill <s> --vault <v> [--cli <p>] --json  (run + stream a skill)");
   console.error("  prevail connectors add --id <id> --title <t> --integration <type> --domains a,b");
   console.error("  prevail connectors set <id> domains <a,b,c>          — rewrite app→domain binding");
   console.error("  prevail connectors set <id> enabled <true|false>     — toggle autonomous sync");
@@ -4456,6 +4889,39 @@ async function searchCommand(args: string[]): Promise<number> {
   }
 }
 
+// `prevail [--vault <v>] gws <sub> --json` — the desktop's control surface for
+// the queued Google Workspace write actions:
+//   gws pending-list --json      → the PendingGws[] awaiting approval
+//   gws run --id <id> --json     → execute one approved write (the ONLY write path)
+// Reads/writes through gws-gateway; never starts the interactive TUI.
+async function gwsCommand(args: string[], vaultOverride: string | null): Promise<number> {
+  const sub = args[0];
+  const { json, flags } = parseKvArgs(args.slice(1), vaultOverride);
+  const cfg = readConfig();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  if (sub === "pending-list") {
+    const { readPendingGws } = await import("./gws-gateway.ts");
+    const items = readPendingGws(vault);
+    process.stdout.write(`${JSON.stringify(items)}\n`);
+    return 0;
+  }
+  if (sub === "run") {
+    const id = (flags.id ?? "").trim();
+    if (!id) {
+      if (json) emitJsonError("missing --id", "MISSING_ARG");
+      console.error("gws run requires --id <id>");
+      return 1;
+    }
+    const { runGwsApproved } = await import("./gws-gateway.ts");
+    const result = runGwsApproved(vault, id);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return result.ok ? 0 : 1;
+  }
+  if (json) emitJsonError(`unknown gws subcommand: ${sub ?? "(none)"}`, "BAD_SUBCOMMAND");
+  console.error(`unknown gws subcommand: ${sub ?? "(none)"} (try: pending-list | run --id <id>)`);
+  return 1;
+}
+
 async function main() {
   // Hidden subcommand: the fixed Playwright browser driver. It is spawned as a
   // CHILD of the engine (by BrowserDriverHost) with a minimal env and NO vault
@@ -4473,10 +4939,11 @@ async function main() {
   // driver's JSON channel. Replays playwright-core's own `install` command.
   if (process.argv.includes("__install-chromium")) {
     try {
-      // @ts-expect-error untyped playwright-core internal (the CLI program lives here)
-      const core = await import("playwright-core/lib/coreBundle");
-      // @ts-expect-error untyped playwright-core internal (commander program)
-      const utils = await import("playwright-core/lib/utilsBundle");
+      // Resolve the install CLI from the on-disk sidecar playwright-core so it
+      // works inside the compiled binary too (see playwright-resolve.ts).
+      const { loadPlaywrightSubmodule } = await import("./playwright-resolve.ts");
+      const core = await loadPlaywrightSubmodule("lib/coreBundle");
+      const utils = await loadPlaywrightSubmodule("lib/utilsBundle");
       const program = (utils as { program: { parseAsync: (a: string[]) => Promise<unknown> } }).program;
       (core as { libCli: { decorateProgram: (p: unknown) => void } }).libCli.decorateProgram(program);
       await program.parseAsync(["node", "cli", "install", "chromium"]);
@@ -4520,6 +4987,10 @@ async function main() {
   }
   if (args.connectors) {
     await connectorsCommand(args.connectorsArgs);
+    return;
+  }
+  if (args.calendar) {
+    await calendarCommand(args.calendarArgs, args.vaultPath);
     return;
   }
   if (args.autonomy) {
@@ -4583,6 +5054,188 @@ async function main() {
     if (json) process.stdout.write(`${JSON.stringify(readAppSuggestions(vault!))}\n`);
     return;
   }
+  if (args.skillDraft) {
+    // prevail skill-draft --domain <d> --name "<name>" --describe "<what it should do>"
+    //   --vault <path> [--cli <kind>] [--model <id>] [--ideas] [--json]
+    //
+    // Two modes:
+    //   default  — draft ONE complete, valid SKILL.md (frontmatter + heading +
+    //              body) that accomplishes the described task, grounded in the
+    //              domain's real context. Returns { ok, name, body }.
+    //   --ideas  — propose a few skill IDEAS (name + one-line) for the domain so
+    //              the user can turn one into a draft. Returns { ok, ideas: [...] }.
+    //
+    // Mirrors the connectors draft-ideal / bench suggest drafters: same context
+    // gathering, same Bunker Mode gate (local models only), same --json contract
+    // the desktop shells.
+    const a = args.skillDraftArgs;
+    const wantJson = a.includes("--json");
+    const wantIdeas = a.includes("--ideas");
+    const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
+    const failDraft = (msg: string): never => {
+      if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
+      console.error(msg); process.exit(1);
+    };
+    const { readConfig: rc } = await import("./config.ts");
+    const { resolveDefaultVaultPath } = await import("./vault.ts");
+    const vflag = a.indexOf("--vault");
+    const vault = (vflag >= 0 ? a[vflag + 1] : undefined) ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const domain = (get("--domain") ?? "").trim();
+    const name = (get("--name") ?? "").trim();
+    const describe = (get("--describe") ?? "").trim();
+    if (!domain) failDraft("usage: prevail skill-draft --domain <d> --name \"<name>\" --describe \"<what it should do>\" --vault <path> [--cli <kind>] [--model <id>] [--ideas] [--json]");
+    if (!wantIdeas && (!name || !describe)) failDraft("skill-draft needs both --name and --describe (or use --ideas for suggestions)");
+
+    const domainDir = resolveDomainDir(vault!, domain);
+    if (!existsSync(domainDir)) failDraft(`domain directory not found for "${domain}"`);
+    const readCtx = (file: string, max: number): string => {
+      try {
+        const p = join(domainDir, file);
+        if (!existsSync(p)) return "";
+        const t = readFileSync(p, "utf8");
+        return t.length > max ? t.slice(0, max) + "\n…(truncated)" : t;
+      } catch { return ""; }
+    };
+    // Recent decisions + intents, so the draft builds on what the user already
+    // decided and asked for (mirrors surface.rs gather_context).
+    const readDecisions = (): string => {
+      try {
+        const raw = readFileSync(join(domainDir, "_decisions.jsonl"), "utf8");
+        const decs = raw.split("\n").reverse()
+          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter((v): v is Record<string, unknown> => !!v)
+          .map((v) => String((v.decision ?? v.verdict ?? "")).trim().slice(0, 160))
+          .filter(Boolean).slice(0, 6);
+        return decs.length ? decs.reverse().map((d) => `- ${d}`).join("\n") : "";
+      } catch { return ""; }
+    };
+    const readIntents = (): string => {
+      try {
+        const raw = readFileSync(join(domainDir, "_intents.jsonl"), "utf8");
+        const msgs = raw.split("\n").reverse()
+          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter((v): v is Record<string, unknown> => !!v && v.kind === "intent")
+          .map((v) => String(v.message ?? "").trim().slice(0, 140))
+          .filter(Boolean).slice(0, 8);
+        return msgs.length ? msgs.reverse().map((m) => `- ${m}`).join("\n") : "";
+      } catch { return ""; }
+    };
+    const idealCtx = readCtx("_ideal-state.md", 1500) || readCtx("ideal-state.md", 1500) || readCtx("soul.md", 800);
+    const sections = ([
+      ["Ideal state", idealCtx],
+      ["Long-term memory", readCtx("_memory.md", 2000)],
+      ["State", readCtx("_state.md", 1500) || readCtx("state.md", 1500)],
+      ["Goals", readCtx("goals.md", 1000)],
+      ["Decisions already made", readDecisions()],
+      ["Recent things the user asked", readIntents()],
+    ] as [string, string][]).filter(([, t]) => t);
+    const context = sections.map(([label, text]) => `## ${label}\n${text}`).join("\n\n");
+
+    const { detectClis, runChatTurn } = await import("./cli-bridge.ts");
+    let clis = await detectClis();
+    const cliKind = (get("--cli") ?? "").trim();
+    const model = (get("--model") ?? "").trim();
+    // Bunker Mode: drafting is an LLM call; only local providers may run.
+    if (process.env.PREVAIL_BUNKER === "1") {
+      const LOCAL_CLIS = new Set(["ollama", "lmstudio", "mlx"]);
+      if (cliKind && !LOCAL_CLIS.has(cliKind)) failDraft(`Blocked by Bunker Mode: ${cliKind} is a cloud provider. Pick a local model (ollama, lmstudio, mlx).`);
+      clis = clis.filter((c) => LOCAL_CLIS.has(c.kind));
+      if (clis.length === 0) failDraft("Blocked by Bunker Mode: no local model provider is running. Start Ollama (or LM Studio / MLX) first.");
+    }
+    const cli = cliKind ? clis.find((c) => c.kind === cliKind) : clis.find((c) => c.kind === "claude") ?? clis[0];
+    if (!cli) failDraft("no AI CLI available. Install claude, codex, or another supported CLI first.");
+
+    if (wantIdeas) {
+      // Suggestion mode: a few skill IDEAS for the domain. The user turns one
+      // into a real draft via the default mode. This never writes anything.
+      const prompt = [
+        `You are helping this person build reusable AI skills for their "${domain}" life domain.`,
+        `A skill is a saved, reusable prompt they can run on demand (like "weekly review" or "meeting prep brief").`,
+        `Based ONLY on the context below, propose 3 to 5 useful skills this domain does not obviously have yet.`,
+        `Each must be specific to their real situation, high-leverage, and doable as a single on-demand prompt.`,
+        "",
+        `REQUIRED OUTPUT: a single JSON object, no preamble, no markdown fences, no explanation.`,
+        `Shape: {"ideas":[{"name":"Short Title Case Name","describe":"one sentence describing what the skill should do"},...]}`,
+        "",
+        "--- CONTEXT ---",
+        context || "(this domain has little context yet. Suggest sensible starter skills for it.)",
+      ].join("\n");
+      let raw = "";
+      try {
+        raw = await runChatTurn({ prompt, cwd: domainDir, cli: cli!, model, isFirst: true, bare: true });
+      } catch (e) {
+        failDraft(`LLM call failed: ${e}`);
+      }
+      // Tolerant JSON extraction: the model may wrap the object in prose/fences.
+      let ideas: Array<{ name: string; describe: string }> = [];
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          const parsed = JSON.parse(m[0]) as { ideas?: Array<{ name?: unknown; describe?: unknown }> };
+          ideas = (parsed.ideas ?? [])
+            .map((it) => ({ name: String(it.name ?? "").trim(), describe: String(it.describe ?? "").trim() }))
+            .filter((it) => it.name && it.describe)
+            .slice(0, 5);
+        } catch { /* fall through to empty */ }
+      }
+      if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, ideas })}\n`); return; }
+      if (ideas.length === 0) console.log("(no ideas returned)");
+      else for (const it of ideas) console.log(`  ${it.name}: ${it.describe}`);
+      return;
+    }
+
+    // Default mode: draft ONE complete, valid SKILL.md.
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+    const prompt = [
+      `You are writing a reusable AI SKILL for this person's "${domain}" life domain.`,
+      `A skill is a saved prompt they run on demand. You are drafting the skill file in the EXACT format below.`,
+      "",
+      `The skill they want, in their words: "${describe}"`,
+      `They want it named: "${name}".`,
+      "",
+      "OUTPUT FORMAT. Return the skill as a single markdown document with THIS exact structure and nothing else:",
+      "",
+      "---",
+      `id: ${slug}`,
+      "runner: llm",
+      "trigger: on-demand",
+      "description: <one sentence, under 120 chars, describing what running this skill does>",
+      "---",
+      "",
+      `# ${name}`,
+      "",
+      "<the prompt body: a clear, well-structured instruction that accomplishes the described task when this person runs it>",
+      "",
+      "BODY REQUIREMENTS:",
+      "- Write the body as direct instructions the AI will follow, grounded in this person's real situation from the context below.",
+      "- Use a short numbered list of concrete steps when it helps, and end with an explicit 'Output:' line stating what the run should produce.",
+      "- Keep the frontmatter EXACTLY as shown: only id, runner, trigger, description. Do not invent other frontmatter keys.",
+      "- Keep 'runner: llm' and 'trigger: on-demand' verbatim.",
+      "- No preamble, no code fences, no commentary. Return ONLY the document starting with the '---' frontmatter line.",
+      "- Do not use em dashes.",
+      "",
+      "--- CONTEXT (this person's real situation. Ground the skill in it.) ---",
+      context || "(this domain has little context yet. Write a sensible, generally useful skill for it.)",
+    ].join("\n");
+
+    let raw = "";
+    try {
+      raw = await runChatTurn({ prompt, cwd: domainDir, cli: cli!, model, isFirst: true, bare: true });
+    } catch (e) {
+      failDraft(`LLM call failed: ${e}`);
+    }
+    let body = (raw || "").trim().replace(/^```(?:markdown|md)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+    if (!body) failDraft("the model returned an empty draft");
+    // Guard: if the model dropped the frontmatter, wrap the body so what we
+    // return is always a valid SKILL.md (parseSkillFile needs the fence).
+    if (!/^---\s*\n/.test(body)) {
+      const heading = body.startsWith("#") ? "" : `# ${name}\n\n`;
+      body = `---\nid: ${slug}\nrunner: llm\ntrigger: on-demand\ndescription: ${describe.replace(/\n+/g, " ").slice(0, 118)}\n---\n\n${heading}${body}`;
+    }
+    if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, name, body })}\n`); return; }
+    console.log(body);
+    return;
+  }
   if (args.scout) {
     // prevail scout-models [--known a,b,c] [--cli <kind>] [--model <id>] [--json] [--read]
     // Searches the web for AI models worth adding to the Arena benchmark
@@ -4638,10 +5291,6 @@ async function main() {
   }
   if (args.usage) {
     await usageCommand(args.usageArgs, args.vaultPath);
-    return;
-  }
-  if (args.pack) {
-    await packCommand(args.packArgs, args.vaultPath);
     return;
   }
   if (args.appmode) {
@@ -4758,6 +5407,18 @@ async function main() {
   }
   if (args.search) {
     const code = await searchCommand(args.searchArgs);
+    process.exit(code);
+  }
+  if (args.gwsMcp) {
+    // The gated Google Workspace MCP server the agent launches over stdio.
+    const cfg = readConfig();
+    const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+    const { runGwsMcpServer } = await import("./gws-mcp.ts");
+    await runGwsMcpServer(vault, args.gwsMcpDomain ?? undefined);
+    return;
+  }
+  if (args.gws) {
+    const code = await gwsCommand(args.gwsArgs, args.vaultPath);
     process.exit(code);
   }
   if (args.daemon) {

@@ -19,8 +19,9 @@ import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from
 import { join, basename, dirname } from "node:path";
 import type { AppSkill, AppRoute } from "./vault.ts";
 import { scanCommunityApps, scanApps, scanVault } from "./vault.ts";
-import { loadSkillsForConnector, runSkill, logSkillRun } from "./connector-skills.ts";
-import type { SkillSpec, SkillRunResult } from "./connector-skills.ts";
+import { loadSkillsForConnector, logSkillRun, packForSkill, runSkillPackWithFallback, effectiveCapability } from "./connector-skills.ts";
+import type { SkillRunResult, SkillPack } from "./connector-skills.ts";
+import { logActivity } from "./activity.ts";
 import { probeConnector } from "./connector-probe.ts";
 import type { AuthCheckSpec } from "./connector-probe.ts";
 import { cadenceToCron } from "./heartbeat.ts";
@@ -381,29 +382,53 @@ async function runAppRefresh(app: AppSkill, state: SyncState, activeConnection?:
   const ctl = new AbortController();
   const killer = setTimeout(() => ctl.abort(), 10 * 60_000);
   try {
-    const chain: SkillSpec[] = [primary];
-    // Append skills chained via after: (one level; chains of chains resolve
-    // iteratively as long as each predecessor succeeded).
+    // #8: run capability PACKS, not single skills. The chosen primary leads its
+    // pack; if it is blocked or fails (a browser login wall, an unconfigured MCP
+    // server) the run transparently falls through to the SAME capability's other
+    // method. A single-method app forms a one-skill pack, so behavior is
+    // unchanged on the success path (and only adds a fallback attempt on failure).
+    const capOf = (id: string): string => {
+      const sp = skills.find((s) => s.id === id);
+      return sp ? effectiveCapability(sp) : id;
+    };
+    const primaryPack = packForSkill(primary, skills);
+    const packChain: SkillPack[] = [primaryPack];
+    // Resolve after: chains at the CAPABILITY level. With fallback only one method
+    // of a capability actually runs, so chaining keys off the capability that ran,
+    // not a specific method id. This keeps legacy comma-separated predecessor
+    // lists ("after: sync-inbox, sync-inbox-mcp, sync-inbox-cli") working, since
+    // those alternatives all share one capability.
+    const ranCaps = new Set<string>([primaryPack.capability]);
     let added = true;
     while (added) {
       added = false;
       for (const s of skills) {
-        if (!s.after || chain.some((c) => c.id === s.id)) continue;
-        // after may be comma-separated ("sync-inbox, sync-inbox-mcp, sync-inbox-cli")
-        const afterIds = s.after.split(",").map((a) => a.trim());
-        if (afterIds.some((aid) => chain.some((c) => c.id === aid))) {
-          chain.push(s);
+        if (!s.after) continue;
+        const cap = effectiveCapability(s);
+        if (ranCaps.has(cap)) continue;
+        const afterCaps = s.after.split(",").map((a) => capOf(a.trim()));
+        if (afterCaps.some((c) => ranCaps.has(c))) {
+          packChain.push(packForSkill(s, skills));
+          ranCaps.add(cap);
           added = true;
         }
       }
     }
     let cursor = { ...state.cursor };
-    for (const spec of chain) {
-      const r = await runSkill(spec, {}, { signal: ctl.signal, autonomy: app.autonomy ?? "read-only", cursor });
-      logSkillRun(spec, r);
+    for (const pack of packChain) {
+      const r = await runSkillPackWithFallback(pack, {}, { signal: ctl.signal, autonomy: app.autonomy ?? "read-only", cursor });
+      // Log every method attempted: the successful method carries the full
+      // result; earlier fallthroughs log their failure, so the per-app run
+      // history shows the whole fallback trail (not just the winner).
+      for (const att of r.attempts) {
+        const sp = pack.skills.find((s) => s.id === att.skillId);
+        if (!sp) continue;
+        logSkillRun(sp, att.ok ? r : { ok: false, message: att.message, outputsWritten: [], durationMs: 0 });
+      }
       results.push(r);
       if (!r.ok) {
-        return { outcome: { ok: false, error: `${spec.id}: ${r.message}`, skillsRun: results.length, needsRelearn: r.needsRelearn }, results };
+        const failId = r.attempts.length ? r.attempts[r.attempts.length - 1]!.skillId : pack.skills[0]!.id;
+        return { outcome: { ok: false, error: `${failId}: ${r.message}`, skillsRun: results.length, needsRelearn: r.needsRelearn }, results };
       }
       if (r.cursor) cursor = { ...cursor, ...r.cursor };
     }
@@ -679,6 +704,16 @@ export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: numb
         } else {
           mirrorConnectionStatus(app, "configured", state.last_ok_ts);
         }
+        // #16: record the sync on the System Activity log so the desktop's
+        // Automation tab shows app refreshes alongside loop runs and briefings.
+        logActivity(cfg.vaultPath, {
+          type: "sync",
+          domain: app.domains[0],
+          title: `Synced ${app.title}`,
+          detail: `${artifacts.length} artifact${artifacts.length === 1 ? "" : "s"}`,
+          status: "ok",
+          ref: app.id,
+        });
       } else {
         failed++;
         state.last_run_ok = false;
@@ -773,6 +808,17 @@ export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolea
     }].slice(-20);
     writeSyncState(app, state);
     mirrorConnectionStatus(app, state.first_fetch_ok ? "connected" : "configured", state.last_ok_ts);
+    // #16: record the manual "Sync now" on the System Activity log too, so the
+    // desktop's Automation tab reflects user-initiated refreshes, not only
+    // autonomous daemon ticks.
+    logActivity(cfg.vaultPath, {
+      type: "sync",
+      domain: app.domains[0],
+      title: `Synced ${app.title}`,
+      detail: `${artifacts.length} artifact${artifacts.length === 1 ? "" : "s"}`,
+      status: "ok",
+      ref: app.id,
+    });
     // ok reflects the FETCH GATE, not merely "the skill ran". A first sync that
     // completes cleanly but pulls no data is authorized-but-not-yet-verified,
     // report that honestly instead of as a hard failure.

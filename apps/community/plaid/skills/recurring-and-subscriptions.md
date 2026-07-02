@@ -11,7 +11,7 @@ outputs:
 
 # Recurring payments and subscriptions
 
-Surface recurring outflows — subscriptions, bills, memberships — detected by
+Surface recurring outflows (subscriptions, bills, memberships) detected by
 Plaid across every account linked to `PLAID_ACCESS_TOKEN`, so renewals and
 creeping charges are visible. Read-only.
 

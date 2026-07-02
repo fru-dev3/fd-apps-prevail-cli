@@ -15,7 +15,7 @@ outputs:
 Find purchase receipts, order confirmations, and bills/invoices in recent
 mail and extract structured line items so the wealth and tax domains have a
 clean expense feed. Default lookback 30 days; respect `${input.days}`.
-Read-only — never label, archive, or reply.
+Read-only, never label, archive, or reply.
 
 Authenticate with the Gmail REST API using `Authorization: Bearer
 ${auth.token}` (OAuth access token, scope `gmail.readonly`).
@@ -32,7 +32,7 @@ ${auth.token}` (OAuth access token, scope `gmail.readonly`).
 From each, extract: merchant/biller, total amount + currency, order/invoice
 number, purchase or due date, and a 1-3 word category guess (e.g.
 `software`, `utilities`, `groceries`, `travel`). Skip marketing mail with no
-real transaction. Do not invent values — omit fields you cannot find.
+real transaction. Do not invent values, omit fields you cannot find.
 
 Output one JSON object per line (JSONL, no preamble, no markdown):
 
