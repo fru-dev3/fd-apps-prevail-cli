@@ -198,8 +198,41 @@ export function rewrapKeyring(oldPass: string, newPass: string, keyring: Keyring
     salt: salt.toString("base64"),
     wrappedDek: seal(kek, dek),
     check: seal(kek, CHECK_CONSTANT),
+    // Preserve the recovery path across a passcode change. The recovery code
+    // wraps the SAME DEK, which is unchanged here, so the existing wrap stays
+    // valid — dropping it would silently disable recovery after any passcode
+    // change and leave the user with no lockout escape.
+    recovery: keyring.recovery,
     createdAt,
   };
+}
+
+/**
+ * Reset the passcode using the one-time RECOVERY CODE, for a user who forgot
+ * their passcode. Unwraps the DEK via the recovery code (throws on a wrong
+ * code), then re-wraps it under a brand-new passcode. The recovery wrap is
+ * preserved (same code keeps working) since it wraps the same, unchanged DEK.
+ * Returns the new keyring plus the DEK so the caller can unlock immediately.
+ */
+export function resetPasscodeWithRecovery(
+  recoveryCode: string,
+  newPass: string,
+  keyring: Keyring,
+  createdAt: string,
+): { keyring: Keyring; dek: Buffer } {
+  const dek = unwrapDekWithRecovery(recoveryCode, keyring);
+  const salt = randomBytes(16);
+  const kek = deriveKey(newPass, salt);
+  const next: Keyring = {
+    schema: KEYRING_SCHEMA,
+    kdf: "scrypt",
+    salt: salt.toString("base64"),
+    wrappedDek: seal(kek, dek),
+    check: seal(kek, CHECK_CONSTANT),
+    recovery: keyring.recovery,
+    createdAt,
+  };
+  return { keyring: next, dek };
 }
 
 // Convenience: encrypt/decrypt a UTF-8 file body with the DEK. The on-disk form
