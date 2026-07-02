@@ -3218,6 +3218,54 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  // Vault recovery (F4) — the forgot-passcode escape. Reads JSON
+  // { recoveryCode, newPasscode } from STDIN (two secrets, so not the raw-line
+  // form the crypto subcommands use). Unwraps the DEK with the recovery code,
+  // installs the new passcode (recovery wrap preserved), and hands the DEK back
+  // via the same 0600 keyFile channel as `unlock` so the session opens at once.
+  if (sub === "recover") {
+    const readStdin = (): string => {
+      try { return readFileSync(0, "utf8"); } catch { return ""; }
+    };
+    const crypto = await import("./vault-crypto.ts");
+    const ops = await import("./vault-encrypt-ops.ts");
+    const out = (o: Record<string, unknown>) => process.stdout.write(JSON.stringify(o) + "\n");
+    let recoveryCode = "";
+    let newPasscode = "";
+    try {
+      const j = JSON.parse(readStdin()) as { recoveryCode?: unknown; newPasscode?: unknown };
+      recoveryCode = typeof j.recoveryCode === "string" ? j.recoveryCode.trim() : "";
+      newPasscode = typeof j.newPasscode === "string" ? j.newPasscode : "";
+    } catch {
+      out({ ok: false, error: "recover expects JSON {recoveryCode,newPasscode} on stdin" });
+      return;
+    }
+    try {
+      const kr = ops.loadKeyring();
+      if (!kr) { out({ ok: false, error: "vault is not encrypted" }); return; }
+      if (newPasscode.length < 8) { out({ ok: false, error: "new passcode must be at least 8 characters" }); return; }
+      // Throws "wrong recovery code" / "no recovery code" — surfaced verbatim.
+      const { keyring: next, dek } = crypto.resetPasscodeWithRecovery(
+        recoveryCode,
+        newPasscode,
+        kr,
+        new Date().toISOString(),
+      );
+      ops.saveKeyring(next);
+      // Same DEK handoff as unlock: 0600 temp file, path only on stdout.
+      const dekB64 = dek.toString("base64");
+      const { writeFileSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { randomBytes } = await import("node:crypto");
+      const keyFile = join(tmpdir(), `prevail-dek-${randomBytes(9).toString("hex")}`);
+      writeFileSync(keyFile, dekB64, { mode: 0o600 });
+      out({ ok: true, keyFile });
+    } catch (e) {
+      out({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+    return;
+  }
+
   // JSON engine subcommands (archive / restore / list-archived) — defined by
   // docs/ENGINE-JSON-API.md. They read --vault/--json from their own sub-args
   // and emit the frozen error envelope on failure.
