@@ -3571,6 +3571,44 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  // `vault migrate-layout` (v4) — sort each domain's files into source/ (yours),
+  // memory/ (AI-derived) and .system/ (plumbing), with ideal.md + manifest.json
+  // at the root. Non-destructive: COPIES + verifies + drops a marker, leaving the
+  // originals so the app keeps working until the reader switch ships. `--apply`
+  // performs the copy; without it, a dry-run prints the plan. `--archive --force`
+  // is the SEPARATE step that moves the migrated originals into `_pre-v4-*`.
+  if (sub === "migrate-layout") {
+    const { migrateVaultToV4, archiveLegacyDomainV4, listDomainDirs } = await import("./vault-layout-v4.ts");
+    const asJson = args.includes("--json");
+    const apply = args.includes("--apply");
+    try {
+      if (args.includes("--archive")) {
+        if (!args.includes("--force")) {
+          console.error("vault migrate-layout --archive moves each migrated domain's originals into _pre-v4-<stamp>/.\nRe-run with --force once you've confirmed the app reads correctly from the new layout.");
+          process.exit(1);
+        }
+        const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+        const out = listDomainDirs(vault).map((d) => ({ domain: d, ...archiveLegacyDomainV4(vault, d, stamp) }));
+        if (asJson) process.stdout.write(JSON.stringify(out) + "\n");
+        else for (const r of out) console.log(`${r.domain}: archived ${r.archived.length} entr(ies) to ${r.archiveDir}`);
+        return;
+      }
+      const results = migrateVaultToV4(vault, apply);
+      if (asJson) { process.stdout.write(JSON.stringify(results) + "\n"); return; }
+      for (const r of results) {
+        if (r.alreadyMigrated) { console.log(`${r.domain}: already migrated`); continue; }
+        const verb = apply ? "migrated" : "would migrate";
+        console.log(`${r.domain}: ${verb} ${r.ops.length} entr(ies) -> source/ memory/ .system/  (left at root: ${r.skipped.join(", ") || "none"})`);
+      }
+      if (!apply) console.log("\nDry run. Re-run with --apply to copy (non-destructive), then --archive --force once verified.");
+    } catch (e) {
+      if (asJson) process.stdout.write(JSON.stringify({ error: String(e) }) + "\n");
+      else console.error(`vault migrate-layout failed: ${e}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // Vault encryption (F4 Phase 1). Passcode is read from STDIN, never argv.
   //   encrypt: create/load keyring, encrypt the vault in place, SELF-VERIFY by
   //            reading it back, and AUTO-ROLLBACK (decrypt) if verification fails
