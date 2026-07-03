@@ -28,6 +28,7 @@ import { cadenceToCron } from "./heartbeat.ts";
 import { nextRunWithin } from "./schedule.ts";
 import { tryAcquireLock } from "./file-lock.ts";
 import { vreadFile, vappendLine } from "./vault-session.ts";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 
 export interface SyncConfig {
   vaultPath: string;
@@ -273,7 +274,7 @@ function routeIntents(
       artifacts: (result.artifacts ?? []).slice(0, 20),
     });
     try {
-      vappendLine(join(dir, "_intents.jsonl"), rec + "\n");
+      vappendLine(v4ContentPath(dir, ".system/intents.jsonl", "_intents.jsonl"), rec + "\n");
       routed.push(domain);
     } catch { /* domain dir read-only? skip */ }
   }

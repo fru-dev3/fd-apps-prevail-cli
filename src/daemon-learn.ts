@@ -218,7 +218,7 @@ function appendDecisions(dir: string, decisions: unknown[]): void {
     out += rec + "\n";
   });
   if (out) {
-    try { vappendLine(join(dir, "_decisions.jsonl"), out); } catch { /* best effort */ }
+    try { vappendLine(v4ContentPath(dir, "memory/decisions.jsonl", "_decisions.jsonl"), out); } catch { /* best effort */ }
   }
 }
 
@@ -229,7 +229,7 @@ function appendDecisions(dir: string, decisions: unknown[]): void {
 // root, so they split. Mirrors the desktop distill.rs.
 async function distillDir(ledgerDir: string, contentDir: string, vaultPath: string, cfg: LearnConfig): Promise<number> {
   const dir = ledgerDir; // ledger/cursor/rotation/decisions side
-  const ledger = join(dir, "_intents.jsonl");
+  const ledger = v4ContentPath(dir, ".system/intents.jsonl", "_intents.jsonl");
   if (!existsSync(ledger)) return 0;
   let cursor = readCursor(dir);
   // Memory-safe read: only the bytes past the cursor, never the whole ledger.
@@ -302,7 +302,7 @@ async function distillDir(ledgerDir: string, contentDir: string, vaultPath: stri
 // tail, and decrements the cursor by exactly what was removed. Best-effort:
 // any failure leaves the ledger untouched.
 function maybeRotateLedger(dir: string, cursor: Cursor): void {
-  const ledger = join(dir, "_intents.jsonl");
+  const ledger = v4ContentPath(dir, ".system/intents.jsonl", "_intents.jsonl");
   let size = 0;
   try { size = statSync(ledger).size; } catch { return; }
   if (size < LEDGER_ROTATE_BYTES) return;

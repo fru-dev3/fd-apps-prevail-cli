@@ -17,6 +17,7 @@ import { appendTask, runOneLoop, executeAction, DEFAULT_LOOPS, type LoopsConfig 
 import { syncApp } from "./daemon-sync.ts";
 import { connectApp } from "./connect-app.ts";
 import { vappendLine } from "./vault-session.ts";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 import { VERSION } from "./version.ts";
 import { mcpConfigPath, readOrCreateMcpToken } from "./mcp-config.ts";
 
@@ -641,7 +642,7 @@ function logMcpIntent(domain: Domain, prompt: string, cli: string, model: string
       model: model || null,
       message: prompt,
     });
-    vappendLine(join(domain.path, "_intents.jsonl"), `${rec}\n`);
+    vappendLine(v4ContentPath(domain.path, ".system/intents.jsonl", "_intents.jsonl"), `${rec}\n`);
   } catch {
     /* intent logging is best-effort */
   }
