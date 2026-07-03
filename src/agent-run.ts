@@ -142,6 +142,12 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
     "- To remember a durable fact: call the remember tool (it writes to this domain's memory). Never use a host memory or sandbox store.",
     "- For Google, email, calendar, or drive: call the google_workspace tool. Reads run live. Writes (send, draft, delete) are QUEUED for the user's explicit approval and are NOT performed by you; report them as 'queued for your approval', never as done or sent.",
     "",
+    "IF A PREVAIL TOOL IS NOT AVAILABLE in your runtime (e.g. create_skill / create_loop / remember are missing), achieve the SAME result with your file tools by writing directly into THIS vault, so the outcome is identical whichever runtime you are:",
+    `- A skill -> ${domain.path}/skills/<slug>/SKILL.md, starting with frontmatter (---\\nname: <name>\\ndescription: <one line>\\n---) then the instructions.`,
+    `- A loop -> append a loop object to ${domain.path}/_loops.json (JSON: { schema: 1, desiredState: "", loops: [ { id, name, purpose, type: "open", cadence: "weekly", autonomy: "suggest", actions: ["..."], status: "active", enabled: true, lastRunTs: null, createdTs: <ms> } ] }); create the file if absent.`,
+    `- A memory -> append a bullet line to ${domain.path}/_memory.md.`,
+    "Use your host runtime's OWN connectors (e.g. Google, Drive) for live app data when you have them. Still never use a host-native skill folder or cron for Prevail's skills/loops; they live in this vault only.",
+    "",
     "HONESTY CONTRACT (critical):",
     "- You have NOT performed an action unless a Prevail tool returned success for it in this run. Never say you created a skill, created a loop, saved memory, drafted an email, or sent an email unless the matching tool call actually returned success.",
     "- If a capability is unavailable or a tool fails, say so plainly. Never invent a result, an id, or an outcome like 'it is in your drafts now'.",
@@ -211,9 +217,12 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
     }
     if (lines.length > 0) {
       footer = `\n\n---\nWhat I actually did (verified by Prevail):\n${lines.join("\n")}`;
-    } else if (act) {
+    } else if (act && cli.kind === "claude") {
       // act was on but no tool ran: state that plainly so a prose-only reply
-      // that *sounds* like it acted cannot masquerade as having done so.
+      // that *sounds* like it acted cannot masquerade as having done so. Only on
+      // claude, where the ledger + tool stream are authoritative; other runtimes
+      // (e.g. codex) act via their own file tools that the ledger can't see, so
+      // "no actions" would be a false claim there.
       footer = "\n\n---\nWhat I actually did (verified by Prevail): no actions were taken. Nothing was created, sent, queued, or changed.";
     }
   }

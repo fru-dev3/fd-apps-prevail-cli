@@ -1212,7 +1212,17 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
       modelArgs.push("-m", mBase);
       if (effort) modelArgs.push("-c", `model_reasoning_effort=${effort}`);
     }
-    const args = [...base, ...modelArgs, codexPrompt];
+    // Agent/act path: unlock Codex's tools so a user-approved run can actually
+    // act. Codex exec exposes its OWN connectors (mcp__codex_apps__*) plus file/
+    // shell tools, but gates them behind approvals+sandbox; the bypass flag is
+    // Codex's analogue of claude's --dangerously-skip-permissions. This is what
+    // makes Codex pass-through real: a Codex agent run uses the connectors you
+    // authorized in Codex, and can write to the vault directly (the model-
+    // agnostic file fallback for the create_skill/create_loop primitives, since
+    // Codex can't load Prevail's stdio MCP servers). Gated on `act`, so a normal
+    // advisory turn is unchanged.
+    const codexActArgs = act ? ["--dangerously-bypass-approvals-and-sandbox"] : [];
+    const args = [...base, ...modelArgs, ...codexActArgs, codexPrompt];
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractCodexReply(raw);
   }
