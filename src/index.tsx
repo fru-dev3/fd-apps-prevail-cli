@@ -8,7 +8,7 @@ import { resolve, join, basename, dirname } from "node:path";
 import { resolveDomainDir, buildRoot } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { bundledDemoVaultPath, readConfig, writeConfig, } from "./config.ts";
+import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 
 interface Args {
@@ -107,6 +107,8 @@ interface Args {
   actsMcpDomain: string | null;
   gws: boolean;
   gwsArgs: string[];
+  role: boolean;
+  roleArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
@@ -205,6 +207,8 @@ function parseArgs(argv: string[]): Args {
   let actsMcpDomain: string | null = null;
   let gws = false;
   let gwsArgs: string[] = [];
+  let role = false;
+  let roleArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -417,6 +421,10 @@ function parseArgs(argv: string[]): Args {
       gws = true;
       gwsArgs = argv.slice(i + 1);
       break;
+    } else if (a === "role") {
+      role = true;
+      roleArgs = argv.slice(i + 1);
+      break;
     } else if (a === "upgrade" || a === "update" || a === "self-update") {
       upgrade = true;
       upgradeArgs = argv.slice(i + 1);
@@ -527,6 +535,8 @@ function parseArgs(argv: string[]): Args {
     actsMcpDomain,
     gws,
     gwsArgs,
+    role,
+    roleArgs,
   };
 }
 
@@ -613,6 +623,8 @@ USAGE
                               Vault is kept unless --include-vault; never deletes
                               without --yes (otherwise prints the dry-run plan).
   prevail daemon --telegram   run the headless Telegram bot + briefing ticker
+  prevail role                print this machine's role (hub | client)
+  prevail role set hub|client set the role (hub owns automation; client captures only)
   prevail upgrade [...]       self-update from the latest GitHub release
                               flags: --check (no prompt) --force (no confirm) --pre (include prereleases)
   prevail --vault <path>      override vault path for one session
@@ -748,7 +760,10 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
   }
 
   if (sub === "tick") {
-    // mostly for debugging — runs all due schedules right now
+    // mostly for debugging — runs all due schedules right now. Schedule ticks are
+    // a processing entry point, so they run only on the hub.
+    const { guardHubOnly } = await import("./machine-role.ts");
+    if (guardHubOnly()) process.exit(1);
     const schedules = loadSchedules(vault);
     let fired = 0;
     for (const s of schedules) {
@@ -4007,6 +4022,36 @@ function printVaultHelp(): void {
   console.error("  prevail vault list-archived --json      list archived domain names");
 }
 
+// `prevail role`              print this machine's role (hub | client)
+// `prevail role set hub`      make this machine the hub (owns all automation)
+// `prevail role set client`   make this machine a client (capture only)
+function roleCommand(args: string[]): number {
+  const sub = args[0];
+  if (!sub || sub === "get" || sub === "show" || sub === "status") {
+    console.log(readMachineRole());
+    return 0;
+  }
+  if (sub === "set") {
+    const next = args[1];
+    if (next !== "hub" && next !== "client") {
+      console.error("usage: prevail role set hub|client");
+      return 1;
+    }
+    setMachineRole(next as MachineRole);
+    if (next === "client") {
+      console.log("Machine role set to client. Automation for this vault runs on the hub; this machine captures prompts only.");
+    } else {
+      console.log("Machine role set to hub. This machine owns all background automation for this vault.");
+    }
+    return 0;
+  }
+  console.error("usage:");
+  console.error("  prevail role                print this machine's role (hub | client)");
+  console.error("  prevail role set hub        this machine owns all background automation");
+  console.error("  prevail role set client     this machine captures prompts only");
+  return 1;
+}
+
 async function daemonCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const wantTelegram = args.includes("--telegram") || args.includes("-t");
   const wantLearn = args.includes("--learn");
@@ -4023,6 +4068,17 @@ async function daemonCommand(args: string[], vaultOverride: string | null): Prom
     if (wantUninstall) { await uninstallLaunchAgent(); return; }
     await installLaunchAgent(vault0);
     return;
+  }
+
+  // Machine-role gate. learn/loops/sync are PROCESSING daemons — they run only
+  // on the hub. On a client we refuse with a clear message and a non-zero exit.
+  // (capture runs on every machine and is handled by captureCommand, not here.)
+  if (wantLearn || wantLoops || wantSync) {
+    const { guardHubOnly, claimHubOwnership } = await import("./machine-role.ts");
+    if (guardHubOnly()) process.exit(1);
+    // Hub: stamp build/_meta/hub.json so a second machine claiming hub gets a
+    // loud (non-fatal) warning. Best-effort; never blocks the daemon.
+    if (existsSync(vault0)) claimHubOwnership(vault0);
   }
 
   // --learn: the headless self-learning loop (distill intents -> memory/state).
@@ -5500,6 +5556,10 @@ async function main() {
   }
   if (args.gws) {
     const code = await gwsCommand(args.gwsArgs, args.vaultPath);
+    process.exit(code);
+  }
+  if (args.role) {
+    const code = roleCommand(args.roleArgs);
     process.exit(code);
   }
   if (args.daemon) {

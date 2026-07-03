@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, writeFileSync, existsSync, utimesSync } from "node:fs";
+import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { tryAcquireLock } from "./file-lock.ts";
 
@@ -43,6 +43,52 @@ describe("tryAcquireLock", () => {
   test("malformed lock file (non-numeric PID) is treated as stale", () => {
     const path = join(mkdtempSync(join(tmpdir(), "lock-")), "d.lock");
     writeFileSync(path, "not-a-pid");
+    const handle = tryAcquireLock(path);
+    expect(handle).not.toBeNull();
+    handle!.release();
+  });
+
+  test("JSON sentinel round-trips: local live lock is not stolen", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "lock-")), "e.lock");
+    const first = tryAcquireLock(path);
+    expect(first).not.toBeNull();
+    // A second local acquire must fail — our own live PID holds it.
+    expect(tryAcquireLock(path)).toBeNull();
+    first!.release();
+  });
+
+  test("fresh foreign-host sentinel is NOT stolen even with a live-looking PID", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "lock-")), "f.lock");
+    // Plant a lock owned by a DIFFERENT machine. The PID is our own live pid, so
+    // a naive kill(pid,0) check would say "alive" anyway — but the point is we
+    // must never PID-probe a foreign host. It stays live within the stale window.
+    writeFileSync(
+      path,
+      JSON.stringify({ pid: process.pid, host: `${hostname()}-other`, ts: Date.now() }),
+    );
+    expect(tryAcquireLock(path)).toBeNull();
+  });
+
+  test("foreign-host sentinel with a dead-looking PID is still NOT stolen while fresh", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "lock-")), "g.lock");
+    // A PID that is reliably dead on THIS machine. Because the host is foreign we
+    // must not PID-probe it, so it must remain locked while fresh.
+    writeFileSync(
+      path,
+      JSON.stringify({ pid: 2147483640, host: "some-remote-mac", ts: Date.now() }),
+    );
+    expect(tryAcquireLock(path)).toBeNull();
+  });
+
+  test("foreign-host sentinel IS reclaimed once its mtime is stale", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "lock-")), "h.lock");
+    writeFileSync(
+      path,
+      JSON.stringify({ pid: process.pid, host: "some-remote-mac", ts: Date.now() }),
+    );
+    // Age the lock past the 5-minute stale floor.
+    const old = (Date.now() - 6 * 60 * 1000) / 1000;
+    utimesSync(path, old, old);
     const handle = tryAcquireLock(path);
     expect(handle).not.toBeNull();
     handle!.release();

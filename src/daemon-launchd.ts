@@ -8,6 +8,9 @@ import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+import { readMachineRole } from "./config.ts";
+import { CLIENT_ROLE_MESSAGE } from "./machine-role.ts";
+
 // The learn agent keeps its original label so existing status checks + the
 // in-app distiller's "defer when installed" guard keep working unchanged.
 const LABEL = "sh.prevail.learn";
@@ -67,6 +70,23 @@ function buildPlist(label: string, program: string, flag: string, vault: string,
 }
 
 export async function installLaunchAgent(vault: string, bin?: string): Promise<void> {
+  // Machine role gate: a client never runs the processing daemons for a shared
+  // vault. On a client we refuse learn/loops/sync and install ONLY the capture
+  // agent (transcripts exist only on the machine that created them). On a hub
+  // this whole branch is skipped and every agent installs as before.
+  if (readMachineRole() === "client") {
+    console.log(CLIENT_ROLE_MESSAGE);
+    const { installAgent } = await import("./capture-install.ts");
+    const r = installAgent(vault);
+    if (r.installed) {
+      console.log(`installed: sh.prevail.capture (client role: capture only) -> ${r.plist}`);
+    } else if (r.unsupported) {
+      console.log("capture agent not installed: launchd is macOS-only");
+    } else {
+      console.log(`capture agent not installed: ${r.error ?? "unknown error"}`);
+    }
+    return;
+  }
   const dir = join(homedir(), "Library", "LaunchAgents");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const program = bin || enginePath();

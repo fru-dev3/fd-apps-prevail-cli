@@ -30,6 +30,7 @@ import {
 } from "./schedule.ts";
 import { isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
 import { tryAcquireLock } from "./file-lock.ts";
+import { CLIENT_ROLE_MESSAGE, isClientMachine } from "./machine-role.ts";
 
 // =============================================================================
 // Track E5 — Scheduler / heartbeat hardening.
@@ -468,6 +469,9 @@ export interface TickResult {
   /** null when another tick held the lock (overlap prevented). */
   outcomes: TickRoutineOutcome[] | null;
   skippedLocked?: boolean;
+  /** True when this machine is a client: heartbeat/schedule automation runs
+   *  only on the hub, so the tick did no work. */
+  skippedRole?: boolean;
 }
 
 export interface TickOptions {
@@ -491,6 +495,14 @@ export function tick(vaultPath: string, opts: TickOptions = {}): TickResult {
   const budget = opts.budget ?? DEFAULT_TICK_BUDGET;
   const bucket = tickBucket(now.getTime(), tickMs);
   const estimate = opts.estimateCost ?? (() => ({ tokens: 0, costUsd: 0 }));
+
+  // Machine-role gate: heartbeat/schedule automation runs only on the hub. On a
+  // client the tick does no work (no lock taken, no ledger writes). Default role
+  // is hub, so a single-machine setup is unaffected.
+  if (isClientMachine()) {
+    console.error(CLIENT_ROLE_MESSAGE);
+    return { ok: true, tick: bucket, outcomes: null, skippedRole: true };
+  }
 
   // The lock + ledger both live in <vault>/_log; ensure it exists first so
   // tryAcquireLock's O_CREAT|O_EXCL open doesn't fail with ENOENT on a vault

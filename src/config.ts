@@ -133,6 +133,14 @@ export interface UserConfig {
   // a typical heavy turn. Set higher if you want full 4 × 8 = 32 lens
   // fanouts. Set to 1 to effectively disable council fanout.
   councilMaxCallsPerTurn?: number;
+  // Machine role for a vault shared across two Macs. "hub" (the always-on
+  // Mac mini) owns ALL background automation: learn/loops/connector-sync
+  // daemons and the heartbeat/schedule ticks. "client" (a MacBook) runs
+  // interactive use plus prompt capture only; it refuses to start any
+  // processing daemon for the shared vault. This is PER-MACHINE state and
+  // is NEVER stored in the vault. Missing = "hub" so a single-machine setup
+  // keeps its current behavior. Read/written via readMachineRole/setMachineRole.
+  machineRole?: "hub" | "client";
 }
 
 // Default hard cap on /council calls per turn. Lives at the top so the
@@ -343,6 +351,34 @@ export function setWebAccess(mode: "allow" | "deny"): void {
   const cfg = readConfig();
   if (!cfg) return;
   writeConfig({ ...cfg, webAccess: mode });
+}
+
+export type MachineRole = "hub" | "client";
+
+/** Effective machine role. Missing = "hub" so a fresh single-machine config
+ *  keeps running every daemon exactly as before. This is per-machine state:
+ *  it lives in ~/.prevail/config.json, never in the shared vault. */
+export function readMachineRole(): MachineRole {
+  return readConfig()?.machineRole === "client" ? "client" : "hub";
+}
+
+/** Persist the machine role. Writes a minimal config on first run (no config
+ *  yet) so `prevail role set client` works before the wizard has ever run. */
+export function setMachineRole(role: MachineRole): void {
+  const cfg = readConfig();
+  if (!cfg) {
+    writeConfig({
+      vaultPath: bundledDemoVaultPath(),
+      createdAt: new Date().toISOString(),
+      machineRole: role,
+    });
+    return;
+  }
+  const next = { ...cfg };
+  // "hub" is the default; store it explicitly anyway so the role is visible in
+  // the config file (avoids ambiguity between "never set" and "chose hub").
+  next.machineRole = role;
+  writeConfig(next);
 }
 
 // Read the effective framework for a given scope.

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 
 import { type BatchItem, ingestBatch } from "./capture.ts";
@@ -36,21 +36,35 @@ export interface CaptureCheckpoint {
   opencodeLastTs: number;
 }
 
-function checkpointPath(vault: string): string {
+/** Legacy, non-namespaced checkpoint path (pre multi-machine). Kept only so the
+ *  migration can seed the per-host file from it. */
+function legacyCheckpointPath(vault: string): string {
   return join(runtimePath(vault, "_meta"), "capture_sync_checkpoint.json");
 }
 
-function readCheckpoint(vault: string): CaptureCheckpoint {
-  const fallback: CaptureCheckpoint = {
-    version: 1,
-    files: {},
-    prevailLastTs: 0,
-    opencodeLastTs: 0,
-  };
-  const p = checkpointPath(vault);
-  if (!existsSync(p)) return fallback;
+/** hostname lowercased and sanitized to [a-z0-9-] so it is a safe filename
+ *  segment. Empty/odd hostnames collapse to "host". PREVAIL_HOST_SLUG is a test
+ *  seam (os.hostname() is fixed for the process): it lets a test simulate a
+ *  second machine sharing the vault. It is sanitized the same way. */
+export function hostSlug(): string {
+  const raw = process.env.PREVAIL_HOST_SLUG && process.env.PREVAIL_HOST_SLUG.length > 0
+    ? process.env.PREVAIL_HOST_SLUG
+    : hostname();
+  const slug = raw.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "host";
+}
+
+/** Per-machine checkpoint path. The checkpoint lives in the SHARED vault but is
+ *  keyed by absolute transcript paths — two Macs with the same username would
+ *  otherwise overwrite each other's high-water marks and silently MISS prompts.
+ *  Namespacing by hostname keeps each machine's marks separate. */
+export function checkpointPath(vault: string): string {
+  return join(runtimePath(vault, "_meta"), `capture_sync_checkpoint.${hostSlug()}.json`);
+}
+
+function parseCheckpoint(raw: string): CaptureCheckpoint | null {
   try {
-    const c = JSON.parse(readFileSync(p, "utf8")) as Partial<CaptureCheckpoint>;
+    const c = JSON.parse(raw) as Partial<CaptureCheckpoint>;
     return {
       version: 1,
       files: c.files && typeof c.files === "object" ? c.files : {},
@@ -58,11 +72,45 @@ function readCheckpoint(vault: string): CaptureCheckpoint {
       prevailLastTs: typeof c.prevailLastTs === "number" ? c.prevailLastTs : 0,
     };
   } catch {
-    return fallback;
+    return null;
   }
 }
 
-function writeCheckpoint(vault: string, cp: CaptureCheckpoint): void {
+export function readCheckpoint(vault: string): CaptureCheckpoint {
+  const fallback: CaptureCheckpoint = {
+    version: 1,
+    files: {},
+    prevailLastTs: 0,
+    opencodeLastTs: 0,
+  };
+  const p = checkpointPath(vault);
+  if (existsSync(p)) {
+    try {
+      return parseCheckpoint(readFileSync(p, "utf8")) ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  // Migration: first run on this host. If the legacy (non-namespaced) checkpoint
+  // exists, seed the per-host file from it, then use ONLY the per-host file going
+  // forward. The legacy file is left in place (another older machine may still
+  // read it, and we never destroy a checkpoint).
+  const legacy = legacyCheckpointPath(vault);
+  if (existsSync(legacy)) {
+    try {
+      const seeded = parseCheckpoint(readFileSync(legacy, "utf8"));
+      if (seeded) {
+        writeCheckpoint(vault, seeded);
+        return seeded;
+      }
+    } catch {
+      /* fall through to fresh fallback */
+    }
+  }
+  return fallback;
+}
+
+export function writeCheckpoint(vault: string, cp: CaptureCheckpoint): void {
   const p = checkpointPath(vault);
   try {
     const dir = dirname(p);
