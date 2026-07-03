@@ -839,6 +839,15 @@ export function buildChatPrompt(domain: Domain, view: ViewKey): string {
   return `You are helping with the "${domain.name}" life domain. The vault lives at ${domain.path}. Start by reading state.md.\n\n${angles[view]}`;
 }
 
+// A real tool invocation observed in the model's structured output. `phase`
+// "call" = the model invoked the tool; "result" = the tool returned (ok=false on
+// error). This is ground truth from the runtime, not the model's narration.
+export interface ToolEvent {
+  name: string;
+  phase: "call" | "result";
+  ok?: boolean;
+}
+
 export interface ChatTurn {
   prompt: string;
   cwd: string;
@@ -877,6 +886,11 @@ export interface ChatTurn {
   // Each call receives a string delta (NOT the cumulative buffer); the
   // caller does its own accumulation if needed.
   onChunk?: (delta: string) => void;
+  // Optional GROUND-TRUTH tool-call callback. When set (the agent/act path), the
+  // claude runner switches to structured stream-json and reports each REAL tool
+  // the model invokes — the honest "tools used" signal, so we never rely on the
+  // model's prose to know what actually ran. Untouched on normal chat turns.
+  onTool?: (ev: ToolEvent) => void;
   // Truncate the cumulative reply at this many characters. When the
   // stream crosses the cap, the child process is SIGKILL'd (same
   // pgroup trick used by abort) and the reply returned to the caller
@@ -959,7 +973,7 @@ export function sanitizeEmDashes(text: string): string {
   return segments.join("");
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, maxOutputChars, guard, webAccess }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1160,6 +1174,15 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
         }
       }
     } catch { /* never let MCP wiring break a turn */ }
+    // Ground-truth tool capture: on the agent/act path (onTool set) switch to
+    // structured stream-json so we can report the REAL tools the model invokes
+    // (including runtime-native connectors like AllTrails). Normal chat has no
+    // onTool and keeps the plain-text stream byte-for-byte unchanged.
+    if (onTool) {
+      args.push("--output-format", "stream-json", "--verbose");
+      args.push(...head);
+      return runClaudeStream(cli.bin, args, cwd, signal, onChunk, onTool, maxOutputChars);
+    }
     args.push(...head);
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
   }
@@ -1884,5 +1907,90 @@ function runCapture(
         resolve(`(error running ${bin}: ${err.message})`);
       }
     });
+  });
+}
+
+// Run claude in `--output-format stream-json --verbose` and parse the NDJSON
+// event stream: emit text deltas to onChunk (so the bubble still fills in) and
+// REAL tool invocations to onTool (ground truth — the model's own narration is
+// never trusted for "what ran"). Returns the final assistant text. Used only on
+// the agent/act path; normal chat keeps runCapture's plain-text stream.
+function runClaudeStream(
+  bin: string,
+  args: string[],
+  cwd: string,
+  signal: AbortSignal | undefined,
+  onChunk: ((delta: string) => void) | undefined,
+  onTool: (ev: ToolEvent) => void,
+  maxOutputChars?: number,
+): Promise<string> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve("(cancelled)"); return; }
+    let child;
+    try {
+      child = spawn(bin, args, { cwd, env: scrubbedEnv(), stdio: ["ignore", "pipe", "pipe"], detached: true });
+    } catch (err) {
+      resolve(`(error spawning ${bin}: ${(err as Error).message})`);
+      return;
+    }
+    let cancelled = false;
+    const onAbort = () => {
+      cancelled = true;
+      try {
+        if (typeof child!.pid === "number") process.kill(-child!.pid, "SIGKILL");
+        else child!.kill("SIGKILL");
+      } catch { try { child!.kill("SIGKILL"); } catch { /* noop */ } }
+    };
+    signal?.addEventListener("abort", onAbort);
+    const cap = typeof maxOutputChars === "number" ? maxOutputChars : DEFAULT_OUTPUT_CEILING;
+    let buf = "";
+    let finalText = "";
+    const acc: string[] = [];
+    let accLen = 0;
+    const toolNames = new Map<string, string>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handleEvent = (ev: any) => {
+      if (!ev || typeof ev !== "object") return;
+      if (ev.type === "assistant" && ev.message && Array.isArray(ev.message.content)) {
+        for (const b of ev.message.content) {
+          if (b && b.type === "text" && typeof b.text === "string" && b.text) {
+            acc.push(b.text); accLen += b.text.length;
+            if (onChunk && accLen <= cap) onChunk(b.text);
+          } else if (b && b.type === "tool_use" && b.name) {
+            if (b.id) toolNames.set(String(b.id), String(b.name));
+            try { onTool({ name: String(b.name), phase: "call" }); } catch { /* never break on callback */ }
+          }
+        }
+      } else if (ev.type === "user" && ev.message && Array.isArray(ev.message.content)) {
+        for (const b of ev.message.content) {
+          if (b && b.type === "tool_result") {
+            const nm = toolNames.get(String(b.tool_use_id)) ?? "tool";
+            try { onTool({ name: nm, phase: "result", ok: b.is_error !== true }); } catch { /* noop */ }
+          }
+        }
+      } else if (ev.type === "result" && typeof ev.result === "string") {
+        finalText = ev.result;
+      }
+    };
+    child.stdout.on("data", (b) => {
+      buf += b.toString();
+      let idx: number;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        try { handleEvent(JSON.parse(line)); } catch { /* partial / non-JSON line */ }
+      }
+    });
+    child.stderr.on("data", () => { /* diagnostics only */ });
+    const finish = () => {
+      signal?.removeEventListener("abort", onAbort);
+      const t = buf.trim();
+      if (t) { try { handleEvent(JSON.parse(t)); } catch { /* noop */ } }
+      if (cancelled) { resolve("(cancelled)"); return; }
+      resolve(finalText || acc.join("").trim() || "(no output)");
+    };
+    child.on("close", finish);
+    child.on("error", finish);
   });
 }

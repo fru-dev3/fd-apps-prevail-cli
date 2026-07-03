@@ -168,6 +168,14 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
         reply += delta;
         emit({ type: "delta", thread, ts: Date.now(), text: delta });
       },
+      // Ground-truth tool transparency: emit each REAL tool the model invokes
+      // (incl. runtime-native connectors like AllTrails), so the user sees what
+      // actually ran, not what the model claimed.
+      onTool: (ev) => {
+        const mark = ev.phase === "call" ? "→" : ev.ok === false ? "✗" : "✓";
+        const verb = ev.phase === "call" ? "calling" : ev.ok === false ? "failed" : "used";
+        emit({ type: "tool", thread, ts: Date.now(), role: "system", text: `${mark} ${verb} ${ev.name}` });
+      },
       maxOutputChars: 60_000,
     });
   } catch (err) {

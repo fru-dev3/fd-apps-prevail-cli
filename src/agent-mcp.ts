@@ -29,9 +29,25 @@ export const NANGO_KEY_ENV = "NANGO_SECRET_KEY";
 // The machine-local agent MCP config. Lives under ~/.prevail (always writable,
 // machine-scoped) NOT the vault, because it embeds the Composio API key and the
 // vault is backed up / synced across machines.
-export function agentMcpConfigPath(): string {
+// A short, stable, filesystem-safe hash of a string (djb2 in hex). Used to give
+// each vault its OWN agent-mcp config file.
+function shortHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
+
+// The machine-local agent MCP config path. PER-VAULT: the file name carries a
+// hash of the vault path, so two concurrent agent runs on DIFFERENT vaults (e.g.
+// the desktop and a CLI run, or two windows) can never clobber each other's
+// config and hand a spawned MCP server the WRONG vault (which previously caused
+// tools to write to the wrong place - even to `/`). Same-vault runs share the
+// file but write identical content, so that's safe. Absent vaultPath keeps the
+// legacy shared name (used only by the composio-status check).
+export function agentMcpConfigPath(vaultPath?: string): string {
   const base = process.env.PREVAIL_HOME || join(homedir(), ".prevail");
-  return join(base, "agent-mcp.json");
+  const suffix = vaultPath && vaultPath.trim() ? `-${shortHash(vaultPath.trim())}` : "";
+  return join(base, `agent-mcp${suffix}.json`);
 }
 
 export function composioApiKey(): string | null {
@@ -143,7 +159,7 @@ export function writeAgentMcpConfig(
 ): string | null {
   const mcpServers = buildAgentMcpServers(vaultPath, opts);
   if (Object.keys(mcpServers).length === 0) return null;
-  const p = agentMcpConfigPath();
+  const p = agentMcpConfigPath(vaultPath);
   try {
     writeSecretFile(p, JSON.stringify({ mcpServers }, null, 2));
     return p;
