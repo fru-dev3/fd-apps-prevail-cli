@@ -12,6 +12,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { buildRoot, runtimePath } from "./path-safety.ts";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile, vappendLine, vreadTail, vrotateLedgerPrefix } from "./vault-session.ts";
 
@@ -246,8 +247,10 @@ async function distillDir(ledgerDir: string, contentDir: string, vaultPath: stri
   // Threshold gate: don't burn a model call on a trivial slice.
   if (activity.length < cfg.threshold * cfg.memoryBudgetChars) return 0;
 
-  const memoryPath = join(contentDir, "_memory.md");
-  const statePath = join(contentDir, "_state.md");
+  // v4-aware (mirrors the desktop): a migrated domain reads+writes memory/*, a
+  // legacy domain the flat _memory.md/_state.md. No-op until the marker exists.
+  const memoryPath = v4ContentPath(contentDir, "memory/memory.md", "_memory.md");
+  const statePath = v4ContentPath(contentDir, "memory/state.md", "_state.md");
   const existingMemory = existsSync(memoryPath) ? safeRead(memoryPath) : "";
   const existingState = existsSync(statePath) ? safeRead(statePath) : "";
   const domainLabel = basename(contentDir);

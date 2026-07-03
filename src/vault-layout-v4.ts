@@ -20,7 +20,7 @@
 // originals is a separate, explicitly-confirmed step (archiveLegacyDomainV4).
 
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { countFiles } from "./vault-data-layout.ts";
 import { resolveDomainDir, DOMAINS_DIR, dataRoot } from "./path-safety.ts";
 
@@ -88,6 +88,23 @@ export interface V4MigrateResult {
 /** True once this domain has the v4 marker. */
 export function isV4Domain(domainDir: string): boolean {
   return existsSync(join(domainDir, V4_MARKER));
+}
+
+/**
+ * The path a logical content file lives at, honoring the domain's layout: the v4
+ * sub-path on a migrated domain (parent created on demand), else the legacy flat
+ * name. The single resolver readers AND writers share so a v4 domain round-trips
+ * consistently. A no-op on un-migrated domains (returns the legacy path), so it
+ * is safe to route existing writers/readers through it. Mirrors the desktop's
+ * paths::v4_content_path.
+ */
+export function v4ContentPath(domainDir: string, v4Rel: string, legacy: string): string {
+  if (isV4Domain(domainDir)) {
+    const p = join(domainDir, v4Rel);
+    mkdirSync(dirname(p), { recursive: true });
+    return p;
+  }
+  return join(domainDir, legacy);
 }
 
 /**
