@@ -3590,6 +3590,40 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
+  // `vault migrate-v4 [--force]` — force the clean per-domain layout on disk:
+  // each domain's hanging files move into source/ memory/ .system/ (the raw
+  // prompt ledger becomes .system/journal.jsonl), a .prevail-layout-v4 marker is
+  // dropped, and the originals are moved into a per-domain _pre-v4-<stamp>/
+  // backup (nothing deleted). Non-destructive by construction. Idempotent: an
+  // already-migrated domain is skipped. The desktop calls this on vault load.
+  if (sub === "migrate-v4") {
+    const { migrateDomainToV4, archiveLegacyDomainV4, listDomainDirs } = await import("./vault-layout-v4.ts");
+    const asJson = args.includes("--json");
+    // The `vault` arg-block breaks before the global --vault parse, so read the
+    // target vault from THIS command's own args (the desktop passes it).
+    const vi = args.indexOf("--vault");
+    const targetVault = vi >= 0 && args[vi + 1] ? resolve(process.cwd(), args[vi + 1]) : vault;
+    const stamp = "v4"; // stable backup dir name; a re-run just skips migrated domains
+    const results: { domain: string; ops: number; archived: number; already: boolean }[] = [];
+    try {
+      for (const d of listDomainDirs(targetVault)) {
+        const r = migrateDomainToV4(targetVault, d, true);
+        const a = r.alreadyMigrated ? { archived: [] } : archiveLegacyDomainV4(targetVault, d, stamp);
+        results.push({ domain: d, ops: r.ops.length, archived: a.archived.length, already: r.alreadyMigrated });
+      }
+      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results }) + "\n");
+      else {
+        for (const r of results) console.log(r.already ? `${r.domain}: already clean` : `${r.domain}: moved ${r.ops} entr(ies) into source/·memory/·.system/, archived ${r.archived} original(s)`);
+        console.log("done — vault is on the clean v4 layout. Originals are in each domain's _pre-v4-v4/ backup.");
+      }
+    } catch (e) {
+      if (asJson) process.stdout.write(JSON.stringify({ ok: false, error: String(e) }) + "\n");
+      else console.error(`vault migrate-v4 failed: ${e}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // Vault encryption (F4 Phase 1). Passcode is read from STDIN, never argv.
   //   encrypt: create/load keyring, encrypt the vault in place, SELF-VERIFY by
   //            reading it back, and AUTO-ROLLBACK (decrypt) if verification fails

@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 import { buildRoot, runtimePath } from "./path-safety.ts";
 import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile, vappendLine, vreadTail, vrotateLedgerPrefix } from "./vault-session.ts";
@@ -217,7 +218,7 @@ function appendDecisions(dir: string, decisions: unknown[]): void {
     out += rec + "\n";
   });
   if (out) {
-    try { vappendLine(join(dir, "_decisions.jsonl"), out); } catch { /* best effort */ }
+    try { vappendLine(v4ContentPath(dir, "memory/decisions.jsonl", "_decisions.jsonl"), out); } catch { /* best effort */ }
   }
 }
 
@@ -228,7 +229,7 @@ function appendDecisions(dir: string, decisions: unknown[]): void {
 // root, so they split. Mirrors the desktop distill.rs.
 async function distillDir(ledgerDir: string, contentDir: string, vaultPath: string, cfg: LearnConfig): Promise<number> {
   const dir = ledgerDir; // ledger/cursor/rotation/decisions side
-  const ledger = join(dir, "_intents.jsonl");
+  const ledger = v4ContentPath(dir, ".system/journal.jsonl", "_intents.jsonl");
   if (!existsSync(ledger)) return 0;
   let cursor = readCursor(dir);
   // Memory-safe read: only the bytes past the cursor, never the whole ledger.
@@ -246,8 +247,8 @@ async function distillDir(ledgerDir: string, contentDir: string, vaultPath: stri
   // Threshold gate: don't burn a model call on a trivial slice.
   if (activity.length < cfg.threshold * cfg.memoryBudgetChars) return 0;
 
-  const memoryPath = join(contentDir, "_memory.md");
-  const statePath = join(contentDir, "_state.md");
+  const memoryPath = v4ContentPath(contentDir, "memory/memory.md", "_memory.md");
+  const statePath = v4ContentPath(contentDir, "memory/state.md", "_state.md");
   const existingMemory = existsSync(memoryPath) ? safeRead(memoryPath) : "";
   const existingState = existsSync(statePath) ? safeRead(statePath) : "";
   const domainLabel = basename(contentDir);
@@ -299,7 +300,7 @@ async function distillDir(ledgerDir: string, contentDir: string, vaultPath: stri
 // tail, and decrements the cursor by exactly what was removed. Best-effort:
 // any failure leaves the ledger untouched.
 function maybeRotateLedger(dir: string, cursor: Cursor): void {
-  const ledger = join(dir, "_intents.jsonl");
+  const ledger = v4ContentPath(dir, ".system/journal.jsonl", "_intents.jsonl");
   let size = 0;
   try { size = statSync(ledger).size; } catch { return; }
   if (size < LEDGER_ROTATE_BYTES) return;
@@ -389,13 +390,13 @@ async function learnPass(cfg: LearnConfig): Promise<{ domains: number; lines: nu
   // stay at root, so ledgerDir and contentDir split for General only.
   const targets: { ledgerDir: string; contentDir: string }[] = [];
   const generalLedger = buildRoot(root);
-  if (existsSync(join(generalLedger, "_intents.jsonl"))) targets.push({ ledgerDir: generalLedger, contentDir: root });
+  if ((existsSync(join(generalLedger, ".system/journal.jsonl")) || existsSync(join(generalLedger, "_intents.jsonl")))) targets.push({ ledgerDir: generalLedger, contentDir: root });
   for (const name of readdirSync(root)) {
     // Skip hidden/underscore, plus the v4 containers (build/ holds the General
     // ledger handled above; data/ holds domains, not a domain itself).
     if (name.startsWith(".") || name.startsWith("_") || name === "build" || name === "data") continue;
     const p = join(root, name);
-    try { if (statSync(p).isDirectory() && existsSync(join(p, "_intents.jsonl"))) targets.push({ ledgerDir: p, contentDir: p }); } catch { /* skip */ }
+    try { if (statSync(p).isDirectory() && (existsSync(join(p, ".system/journal.jsonl")) || existsSync(join(p, "_intents.jsonl")))) targets.push({ ledgerDir: p, contentDir: p }); } catch { /* skip */ }
   }
   for (const t of targets) {
     try {

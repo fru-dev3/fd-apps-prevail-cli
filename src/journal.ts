@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 
 import { vappendLine } from "./vault-session.ts";
 import { join } from "node:path";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 
@@ -129,7 +130,8 @@ function ensureJournalDir(domainPath: string): string | null {
   // naming convention and to keep curated AI output out of any vault
   // tooling that lists "user-facing" subfolders. The user explicitly
   // asked for _journal — for parity with the _log convention.
-  const dir = join(domainPath, "_journal");
+  // v4: memory/journal/ on a migrated domain, else _journal/.
+  const dir = v4ContentPath(domainPath, "memory/journal", "_journal");
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     return dir;

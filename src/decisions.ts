@@ -14,7 +14,8 @@
 import { existsSync, mkdirSync } from "node:fs";
 
 import { vappendLine, vreadFile, vwriteFile } from "./vault-session.ts";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 import { resolveDomainDir, dataRoot, DOMAINS_DIR } from "./path-safety.ts";
 
 // A path segment is unsafe if it could traverse out of the vault. (General is no
@@ -52,7 +53,9 @@ export function runtimeFile(vaultPath: string, domain: string | null | undefined
 }
 
 export function decisionsFile(vaultPath: string, domain: string | null | undefined): string {
-  return runtimeFile(vaultPath, domain, "_decisions.jsonl");
+  // v4-aware: memory/decisions.jsonl on a migrated domain, else _decisions.jsonl.
+  const legacy = runtimeFile(vaultPath, domain, "_decisions.jsonl");
+  return v4ContentPath(dirname(legacy), "memory/decisions.jsonl", "_decisions.jsonl");
 }
 
 export interface DecisionFeedback {

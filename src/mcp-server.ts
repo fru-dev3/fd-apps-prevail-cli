@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 import { timingSafeEqual } from "node:crypto";
 import { buildRoot } from "./path-safety.ts";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
@@ -641,7 +642,7 @@ function logMcpIntent(domain: Domain, prompt: string, cli: string, model: string
       model: model || null,
       message: prompt,
     });
-    vappendLine(join(domain.path, "_intents.jsonl"), `${rec}\n`);
+    vappendLine(v4ContentPath(domain.path, ".system/journal.jsonl", "_intents.jsonl"), `${rec}\n`);
   } catch {
     /* intent logging is best-effort */
   }
@@ -762,7 +763,7 @@ function tListDomains(vaultPath: string): string {
 
 function tReadState(args: Record<string, unknown>, vaultPath: string): string {
   const domain = resolveDomain(vaultPath, args.domain);
-  const f = join(domain.path, "state.md");
+  const f = v4ContentPath(domain.path, "memory/state.md", "state.md");
   if (!existsSync(f)) return `(no state.md for ${domain.name})`;
   return readFileSync(f, "utf8");
 }
@@ -782,7 +783,8 @@ function tReadLog(args: Record<string, unknown>, vaultPath: string): string {
 function tReadIntents(args: Record<string, unknown>, vaultPath: string): string {
   const domain = resolveDomain(vaultPath, args.domain);
   const limit = typeof args.limit === "number" && args.limit > 0 ? args.limit : 30;
-  const f = runtimeFile(vaultPath, domain.name, "_intents.jsonl");
+  const legacyF = runtimeFile(vaultPath, domain.name, "_intents.jsonl");
+  const f = v4ContentPath(dirname(legacyF), ".system/journal.jsonl", "_intents.jsonl");
   if (!existsSync(f)) return `(no intents recorded for ${domain.name})`;
   const rows: string[] = [];
   for (const line of readFileSync(f, "utf8").split("\n")) {
@@ -837,7 +839,7 @@ function tReadMemory(args: Record<string, unknown>, vaultPath: string): string {
   const name = typeof args.domain === "string" && args.domain.trim() ? args.domain : null;
   if (name) {
     const domain = resolveDomain(vaultPath, name);
-    const f = join(domainDir(vaultPath, domain.name), "MEMORY.md");
+    const f = v4ContentPath(domainDir(vaultPath, domain.name), "memory/memory.md", "MEMORY.md");
     if (!existsSync(f)) return `(no learned MEMORY.md for ${domain.name} yet)`;
     return readFileSync(f, "utf8");
   }

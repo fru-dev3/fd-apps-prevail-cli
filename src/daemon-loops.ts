@@ -11,6 +11,7 @@
 // (runChatTurn), same encryption-aware vault I/O (vread/vwrite). Idempotent and
 // best-effort: a failing loop records its error and never blocks the others.
 import { existsSync, mkdirSync } from "node:fs";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 import { join, basename, resolve } from "node:path";
 import { runtimePath } from "./path-safety.ts";
 import { withLock } from "./file-lock.ts";
@@ -354,8 +355,8 @@ export async function runOneLoop(
 
   const domainLabel = basename(domainDir);
   onPhase("read", "Reading state and memory");
-  const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
-  const memory = safeRead(join(domainDir, "_memory.md"));
+  const state = safeRead(v4ContentPath(domainDir, "memory/state.md", "_state.md")) || safeRead(join(domainDir, "state.md"));
+  const memory = safeRead(v4ContentPath(domainDir, "memory/memory.md", "_memory.md"));
   const domainIntents = readDomainIntents(root, domainLabel);
   const clis = await detectClis();
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
@@ -598,10 +599,10 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
 
   // The general domain dir maps to the label "general"; everything else by dir name.
   const domainLabel = resolve(domainDir) === resolve(generalDir(cfg.vaultPath)) || resolve(domainDir) === resolve(cfg.vaultPath) ? "general" : basename(domainDir);
-  const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
+  const state = safeRead(v4ContentPath(domainDir, "memory/state.md", "_state.md")) || safeRead(join(domainDir, "state.md"));
   // Domains keep durable memory in _memory.md; apps (domain parity) use MEMORY.md.
   // Read whichever exists so an app loop gets the same standing context.
-  const memory = safeRead(join(domainDir, "_memory.md")) || safeRead(join(domainDir, "MEMORY.md"));
+  const memory = safeRead(v4ContentPath(domainDir, "memory/memory.md", "_memory.md")) || safeRead(join(domainDir, "MEMORY.md"));
   // Curated high-level intents touching this domain — the compounding signal.
   const domainIntents = readDomainIntents(resolve(cfg.vaultPath), domainLabel);
 
@@ -689,7 +690,7 @@ export async function executeAction(cfg: LoopsConfig, domainName: string, action
   const clis = await detectClis();
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
   if (!cli) throw new Error("no CLI available to execute the action");
-  const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
+  const state = safeRead(v4ContentPath(domainDir, "memory/state.md", "_state.md")) || safeRead(join(domainDir, "state.md"));
   const prompt = [
     `You are carrying out an action the user has EXPLICITLY APPROVED in the "${domainName}" domain of their personal life-OS.`,
     `Do it now using the tools and connectors available to you: MCP servers, file operations, and any configured app connectors (email, calendar, etc.).`,
@@ -760,7 +761,7 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
   if (!cli) throw new Error("no CLI available to run AI tasks");
   const domainName = basename(domainDir);
-  const state = safeRead(join(domainDir, "_state.md")) || safeRead(join(domainDir, "state.md"));
+  const state = safeRead(v4ContentPath(domainDir, "memory/state.md", "_state.md")) || safeRead(join(domainDir, "state.md"));
   // Autonomy gate (B7/O5/A-05): only ACT when the user opted in AND the action
   // isn't consequential. A financial/irreversible/external-send/credential task
   // is NEVER auto-executed — it's always proposed for explicit approval, even
