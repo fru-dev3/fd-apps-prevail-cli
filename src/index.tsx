@@ -2589,7 +2589,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const prompt = [
       `You are helping define the IDEAL STATE for the "${name}" app inside this person's personal AI harness.`,
       `The ideal state describes the ideal of what they want from this app if everything were possible.`,
-      `If you have web access, research ${name} first so the draft reflects real, best-practice capabilities of this app, not guesses.`,
+      `Draft it now from what you already know about ${name} and the context below. Do NOT ask for web access, tools, or any permission, and do NOT refuse or stall — you have everything you need to write a strong draft from your own knowledge. Never output a request for access; always output the ideal-state markdown itself.`,
       "",
       "Write a COMPREHENSIVE markdown ideal state (thorough, NOT one or two sentences; a few sentences per section) that covers, in this order, each as its own titled section:",
       "- What this app is and does",
