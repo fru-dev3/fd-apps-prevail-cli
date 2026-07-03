@@ -3190,6 +3190,25 @@ async function connectorsCommand(args: string[]): Promise<void> {
       else { console.error(r.error); process.exit(1); }
       return;
     }
+    // prevail connectors set <id> privacy <local|standard>  (per-app local-only pin)
+    if (id && field === "privacy") {
+      const local = value === "local" || value === "localOnly" || value === "true" || value === "1" || value === "on";
+      const { setCommunityAppPrivacy } = await import("./vault.ts");
+      const r = setCommunityAppPrivacy(id, local, connectorsVault);
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(`privacy for "${id}": ${local ? "local only" : "standard"}`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
+    // prevail connectors set <id> model <model-id>  ("" clears -> global default)
+    if (id && field === "model") {
+      const { setCommunityAppModel } = await import("./vault.ts");
+      const r = setCommunityAppModel(id, value ?? "", connectorsVault);
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(r.model ? `model for "${id}" set to ${r.model}` : `model for "${id}" cleared`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
     // prevail connectors set <id> soul "<why this app is in your harness>"  ("" clears it)
     if (id && field === "soul") {
       const { setCommunityAppSoul } = await import("./vault.ts");

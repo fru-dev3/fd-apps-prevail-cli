@@ -852,6 +852,8 @@ interface CoercedManifest {
   oauth?: unknown;
   refresh?: AppRefresh;
   autonomy?: AppAutonomy;
+  localOnly?: boolean;
+  model?: string;
   enabled?: boolean;
   account?: { label: string; address?: string };
   routes?: AppRoute[];
@@ -996,6 +998,9 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     oauth: typeof o.oauth === "object" && o.oauth !== null ? o.oauth : undefined,
     refresh: coerceRefresh(o.refresh),
     autonomy: coerceAutonomy(o.autonomy),
+    // Per-app privacy (local-only pin) + default model, so the UI reflects them.
+    localOnly: (typeof o.privacy === "object" && o.privacy && (o.privacy as Record<string, unknown>).localOnly === true) || undefined,
+    model: typeof o.model === "string" && o.model.trim() ? o.model.trim() : undefined,
     // Only an explicit `false` disables; any other value (absent, junk) leaves
     // it enabled by default.
     enabled: o.enabled === false ? false : undefined,
@@ -1760,6 +1765,54 @@ export function setCommunityAppIntegration(
     raw.integration = v;
     writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
     return { ok: true, path: app.manifestPath, integration: v };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
+  }
+}
+
+// Per-app PRIVACY: local-only pins the app's data processing to a local model
+// (Ollama), same construct domains use (manifest.privacy.localOnly). Writes
+// manifest.privacy.localOnly.
+export function setCommunityAppPrivacy(
+  id: string,
+  localOnly: boolean,
+  vaultPath?: string,
+): { ok: boolean; path?: string; localOnly?: boolean; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    const priv = (typeof raw.privacy === "object" && raw.privacy) ? raw.privacy as Record<string, unknown> : {};
+    priv.localOnly = localOnly;
+    raw.privacy = priv;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, localOnly };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
+  }
+}
+
+// Per-app default MODEL for the app's skill / sync / agent runs (manifest.model).
+// "" clears it (falls back to the global default).
+export function setCommunityAppModel(
+  id: string,
+  model: string,
+  vaultPath?: string,
+): { ok: boolean; path?: string; model?: string; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    const m = (model ?? "").trim();
+    if (m) raw.model = m; else delete raw.model;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, model: m };
   } catch (e) {
     return { ok: false, error: `update failed: ${e}` };
   }
