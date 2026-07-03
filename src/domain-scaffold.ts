@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
 import { vwriteFile } from "./vault-session.ts";
 import { join } from "node:path";
 import { appsContainer, newDomainDir, resolveDomainDir } from "./path-safety.ts";
 import { seedSkillPack } from "./vault.ts";
+import { V4_MARKER, v4ContentPath } from "./vault-layout-v4.ts";
 
 export interface ScaffoldResult {
   ok: boolean;
@@ -19,17 +20,21 @@ export function scaffoldDomain(vaultPath: string, rawName: string): ScaffoldResu
 
   try {
     mkdirSync(dir, { recursive: true });
-    for (const sub of ["00_current", "01_prior", "02_briefs"]) {
-      mkdirSync(join(dir, sub), { recursive: true });
-    }
-    vwriteFile(join(dir, "state.md"), defaultState(name));
-    vwriteFile(join(dir, "open-loops.md"), defaultOpenLoops(name));
-    vwriteFile(join(dir, "config.md"), defaultConfig(name));
-    vwriteFile(join(dir, "QUICKSTART.md"), defaultQuickstart(name));
-    vwriteFile(join(dir, "PROMPTS.md"), defaultPrompts(name));
-    // Seed the bundled default skills for this domain (when a pack exists) so a
-    // new domain arrives with high-quality skills, not an empty _skills/.
-    try { seedSkillPack(`domains/${name}/_skills`, join(dir, "_skills")); } catch { /* best effort */ }
+    // Create the domain directly in the clean v4 layout. Write the marker FIRST
+    // so v4ContentPath routes every file into source/ (your material), memory/
+    // (AI-derived), and .system/ (plumbing), creating parents on demand. This is
+    // the SAME resolver the readers use, so a new domain round-trips correctly
+    // and never ships the old flat layout (loose state.md, 00_current/, etc.).
+    writeFileSync(join(dir, V4_MARKER), "v4\n");
+    mkdirSync(join(dir, "memory", "briefs"), { recursive: true });
+    vwriteFile(v4ContentPath(dir, "memory/state.md", "state.md"), defaultState(name));
+    vwriteFile(v4ContentPath(dir, "memory/open-loops.md", "open-loops.md"), defaultOpenLoops(name));
+    vwriteFile(v4ContentPath(dir, "source/config.md", "config.md"), defaultConfig(name));
+    vwriteFile(v4ContentPath(dir, "source/quickstart.md", "QUICKSTART.md"), defaultQuickstart(name));
+    vwriteFile(v4ContentPath(dir, "source/starters.md", "PROMPTS.md"), defaultPrompts(name));
+    // Seed the bundled default skills for this domain (when a pack exists) into
+    // the v4 memory/skills home so a new domain arrives with quality skills.
+    try { seedSkillPack(`domains/${name}/_skills`, v4ContentPath(dir, "memory/skills", "_skills")); } catch { /* best effort */ }
     return { ok: true, message: `created ${name}`, path: dir };
   } catch (err) {
     return { ok: false, message: (err as Error).message };
@@ -122,11 +127,11 @@ function today(): string {
 function defaultAppState(name: string): string {
   return `# ${title(name)}
 
-> Synthetic / placeholder — fill this in as you connect the app.
+> Synthetic placeholder. Fill this in as you connect the app.
 
 **Used by domains:** (list here)
-**Last refresh:** —
-**Auth:** —
+**Last refresh:** (not yet)
+**Auth:** (not set)
 
 ## Coverage
 
@@ -146,7 +151,7 @@ What data this app exposes; which institutions, accounts, or scopes it connects 
 function defaultState(name: string): string {
   return `# ${title(name)} State
 
-> Synthetic / placeholder — fill this in as you learn what to track.
+> Synthetic placeholder. Fill this in as you learn what to track.
 
 **Last updated:** ${today()}
 
@@ -177,7 +182,7 @@ function defaultOpenLoops(name: string): string {
 function defaultConfig(name: string): string {
   return `# ${title(name)} Config
 
-> Settings, accounts, identifiers — the durable facts an agent needs to act on ${name}.
+> Settings, accounts, and identifiers: the durable facts an agent needs to act on ${name}.
 
 | Key | Value |
 |---|---|
@@ -191,8 +196,8 @@ function defaultQuickstart(name: string): string {
 A 60-second tour of the ${name} domain.
 
 1. What lives here
-2. How to read \`state.md\`
-3. Where the briefs land (\`02_briefs/\`)
+2. How to read \`memory/state.md\`
+3. Where the briefs land (\`memory/briefs/\`)
 4. The skills available
 `;
 }
