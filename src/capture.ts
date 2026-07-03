@@ -240,6 +240,15 @@ export function ingest(input: IngestInput): IngestResult {
   const slug = safeToolSlug(input.tool);
   const now = input.now ?? new Date();
 
+  // Skip capture for Prevail's OWN internal model calls (distill/taskgen/
+  // skillgen/surface). Those spawn a CLI with PREVAIL_INTERNAL=1, which the
+  // CLI's own prompt-capture hook subprocess inherits - so without this guard
+  // they self-record as "what the user asked", flooding the journal with the
+  // injected ideal-state preamble.
+  if (process.env.PREVAIL_INTERNAL === "1") {
+    return { ok: true, written: false, path: "", tool: slug ?? "", reason: "internal Prevail call — not captured" };
+  }
+
   // Resolve the path defensively even on the error paths so the result always
   // points somewhere meaningful for diagnostics.
   const path = slug
