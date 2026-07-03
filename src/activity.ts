@@ -8,9 +8,16 @@
 // of the vault. Best-effort: logging never throws into a producer's hot path —
 // observability must not break the thing being observed.
 import { join } from "node:path";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { runtimePath } from "./path-safety.ts";
-import { vappendLine, vreadFile } from "./vault-session.ts";
+import { vappendLine, vreadFile, vrotateLedgerPrefix } from "./vault-session.ts";
+
+// Retention: the activity ledger is append-only and, unlike _intents.jsonl, was
+// never rotated — so it grew unbounded and got slower to read as a vault aged.
+// Once it passes ACTIVITY_MAX_BYTES, roll the oldest records into
+// activity.archive.jsonl (retrievable, never deleted), keeping a recent tail.
+const ACTIVITY_MAX_BYTES = 1_000_000;   // ~1 MB before we rotate
+const ACTIVITY_KEEP_TAIL_BYTES = 400_000; // keep the most recent ~400 KB live
 
 export type ActivityType =
   | "loop_run"     // a loop evaluated on its cadence or via Run-now
@@ -51,7 +58,15 @@ export function logActivity(vaultRoot: string, ev: Omit<ActivityEvent, "ts"> & {
       ...(ev.status ? { status: ev.status } : {}),
       ...(ev.ref ? { ref: ev.ref } : {}),
     };
-    vappendLine(activityFile(vaultRoot), JSON.stringify(full) + "\n");
+    const file = activityFile(vaultRoot);
+    vappendLine(file, JSON.stringify(full) + "\n");
+    // Cheap size check on each append (activity events are low-frequency); rotate
+    // the head into the archive once the live file grows past the cap.
+    try {
+      if (statSync(file).size > ACTIVITY_MAX_BYTES) {
+        vrotateLedgerPrefix(file, join(dir, "activity.archive.jsonl"), ACTIVITY_MAX_BYTES, ACTIVITY_KEEP_TAIL_BYTES);
+      }
+    } catch { /* rotation is best-effort */ }
   } catch {
     /* best effort — observability must not break the producer */
   }
