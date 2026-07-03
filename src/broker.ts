@@ -55,8 +55,14 @@ export function gateAction(
   if (decision === "auto" && cls === "financial") {
     const cap = getMonthlyFinancialCap(opts.vault);
     if (cap != null) {
-      const amount = parseAmountUsd(action) ?? 0;
+      const amount = parseAmountUsd(action);
       const spent = monthSpendUsd(opts.vault);
+      // When the amount can't be read from the action text, we can't prove it
+      // fits under the cap - so require approval instead of silently treating it
+      // as $0 (which would let an unbounded spend bypass the cap entirely).
+      if (amount == null) {
+        return { cls, decision: "ask", reason: `monthly financial cap is set ($${cap}) but this action's amount is unknown — approve to run` };
+      }
       if (spent + amount > cap) {
         return { cls, decision: "ask", reason: `monthly financial cap $${cap} would be exceeded (spent $${spent.toFixed(2)} this month)` };
       }
