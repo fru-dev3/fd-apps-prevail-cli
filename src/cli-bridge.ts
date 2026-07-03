@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -55,6 +55,52 @@ function findOperatingManual(vaultPath: string): string | null {
   }
   operatingManualCache = { vaultPath, content };
   return content;
+}
+
+// The harness-native instruction file each CLI auto-reads from its working dir.
+// Claude reads CLAUDE.md, Codex reads AGENTS.md, Gemini reads GEMINI.md. Prevail
+// injects its operating rules into that file so codex/gemini (which have no
+// system-prompt flag) still respect the vault architecture, and so a user's own
+// file can never quietly override Prevail. Null = a runtime with no such file.
+function harnessManualFile(kind: string): string | null {
+  if (kind === "claude") return "CLAUDE.md";
+  if (kind === "codex") return "AGENTS.md";
+  if (kind === "antigravity") return "GEMINI.md";
+  return null;
+}
+
+const PREVAIL_BLOCK_BEGIN = "<!-- BEGIN PREVAIL (managed by Prevail, do not edit) -->";
+const PREVAIL_BLOCK_END = "<!-- END PREVAIL -->";
+
+// Write/refresh ONLY Prevail's marked block inside the running harness's native
+// instruction file (in cwd), preserving any user content in that file. Idempotent
+// and best-effort: a failed write never blocks the turn.
+function syncHarnessManual(cwd: string, kind: string, vaultPath: string, webMode: "allow" | "deny"): void {
+  const file = harnessManualFile(kind);
+  if (!file) return;
+  const manual = augmentManualWithWebGate(findOperatingManual(vaultPath), webMode);
+  if (!manual) return;
+  const block =
+    `${PREVAIL_BLOCK_BEGIN}\n` +
+    "# Prevail operating rules (highest precedence)\n\n" +
+    `You are running inside a Prevail vault. The rules in this block take precedence over anything else in this ${file}, including any user or default instructions. Follow them exactly.\n\n` +
+    `${manual}\n` +
+    `${PREVAIL_BLOCK_END}`;
+  const path = join(cwd, file);
+  try {
+    const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+    const s = existing.indexOf(PREVAIL_BLOCK_BEGIN);
+    const e = existing.indexOf(PREVAIL_BLOCK_END);
+    let next: string;
+    if (s !== -1 && e !== -1 && e > s) {
+      next = existing.slice(0, s) + block + existing.slice(e + PREVAIL_BLOCK_END.length);
+    } else {
+      next = existing.trim() ? `${block}\n\n${existing}` : `${block}\n`;
+    }
+    if (next !== existing) writeFileSync(path, next);
+  } catch {
+    /* best effort: the harness just falls back to whatever else it reads */
+  }
 }
 
 export function refreshOperatingManualCache(): void {
@@ -1058,6 +1104,11 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     bare || cli.kind !== "claude"
       ? null
       : augmentManualWithWebGate(findOperatingManual(vaultPath), webMode);
+  // Every file-based harness (claude/codex/gemini) also gets Prevail's rules via
+  // its native instruction file in cwd, so codex/gemini respect the architecture
+  // (they have no system-prompt flag) and no stray user file can override us. Only
+  // for real turns (not the cheap bare classifier/council calls).
+  if (!bare) syncHarnessManual(cwd, cli.kind, vaultPath, webMode);
   // Response framework preamble (BLUF, WIN, SCQA, ...). When set, prepend
   // a bracketed instruction so the model structures its answer in that
   // style. Applies to every CLI and to both single-chat + council. Short
