@@ -5,15 +5,20 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  archiveDomain,
+  backupDomain,
   backupVault,
+  listArchived,
   parseDuration,
   pruneLog,
+  restoreDomain,
   restoreVault,
   verifyVault,
 } from "./vault-ops.ts";
@@ -438,5 +443,61 @@ describe("verifyVault", () => {
     expect(first.status).toBe("ok");
     expect(second.status).toBe("missing");
     expect(second.ok).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Domain archive (regression: v4 data/domains layout)
+//
+// A v4 vault keeps domains under data/domains/<d>, not <vault>/<d>. backupDomain
+// used to look at the flat root, so archiveDomain (which backs up before moving)
+// always failed with "domain not found" and nothing got archived.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("domain archive (v4 layout)", () => {
+  // Vaults are created under homedir(), not tmpdir(): on macOS tmpdir() lives
+  // under /var/folders, and validateVaultPath (which manifest ops run) forbids
+  // /var. Real vaults live under the user's home, so this mirrors reality.
+  function makeV4Vault(domain: string): string {
+    const root = mkdtempSync(join(homedir(), ".prevail-archive-test-"));
+    const dir = join(root, "data", "domains", domain);
+    mkdirSync(join(dir, "_log"), { recursive: true });
+    writeFileSync(join(dir, "_state.md"), `# ${domain}\n`);
+    writeFileSync(join(dir, "_log", "2026-06-01.md"), "log entry\n");
+    return root;
+  }
+
+  test("backupDomain finds a domain under data/domains and tars a top-level <domain>/ entry", async () => {
+    const vault = makeV4Vault("travel");
+    const out = join(vault, "out.tar.gz");
+    const res = await backupDomain({ vaultPath: vault, domain: "travel", outputPath: out });
+    expect(existsSync(out)).toBe(true);
+    expect(res.bytes).toBeGreaterThan(0);
+    expect(res.fileCount).toBeGreaterThan(0);
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  test("archiveDomain moves a v4 domain into _archive and restoreDomain brings it back", async () => {
+    const vault = makeV4Vault("travel");
+    const live = join(vault, "data", "domains", "travel");
+    const archived = join(vault, "_archive", "travel");
+
+    expect(listArchived(vault)).toEqual([]);
+    const res = await archiveDomain(vault, "travel");
+    try {
+      expect(existsSync(live)).toBe(false);
+      expect(existsSync(archived)).toBe(true);
+      expect(listArchived(vault)).toEqual(["travel"]);
+
+      restoreDomain(vault, "travel");
+      expect(existsSync(live)).toBe(true);
+      expect(existsSync(archived)).toBe(false);
+      expect(listArchived(vault)).toEqual([]);
+    } finally {
+      // archiveDomain writes its safety backup to homedir(); clean it up so the
+      // test stays hermetic.
+      rmSync(res.backup.archivePath, { force: true });
+      rmSync(vault, { recursive: true, force: true });
+    }
   });
 });

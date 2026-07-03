@@ -777,7 +777,11 @@ export interface BackupDomainArgs {
 export async function backupDomain(args: BackupDomainArgs): Promise<BackupResult> {
   assertSafeDomainName(args.domain);
   const vault = resolve(args.vaultPath);
-  const domainPath = join(vault, args.domain);
+  // Resolve the domain to its real on-disk home (data/domains/<d> in the strict
+  // v4 layout, or the legacy root in an old vault). The old code assumed
+  // <vault>/<domain>, which does not exist in a v4 vault, so archiving (which
+  // backs up before moving) always failed with "domain not found".
+  const domainPath = resolveDomainDir(vault, args.domain);
   if (!existsSync(domainPath)) {
     throw new Error(`backupDomain: domain not found: ${domainPath}`);
   }
@@ -789,9 +793,10 @@ export async function backupDomain(args: BackupDomainArgs): Promise<BackupResult
   for (const ex of BACKUP_EXCLUDES) {
     argv.push("--exclude", ex);
   }
-  // -C <vault> <domain> → archive contains a single top-level "<domain>/"
-  // entry, so it restores cleanly relative to any vault root.
-  argv.push("-C", vault, args.domain);
+  // -C <parent-of-domain> <domain> → archive contains a single top-level
+  // "<domain>/" entry (independent of where the domain lives in the vault), so
+  // it restores cleanly relative to any vault root.
+  argv.push("-C", dirname(domainPath), basename(domainPath));
 
   const proc = Bun.spawn(["tar", ...argv], { stdout: "pipe", stderr: "pipe" });
   const code = await proc.exited;
