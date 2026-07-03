@@ -103,6 +103,8 @@ interface Args {
   searchArgs: string[];
   gwsMcp: boolean;
   gwsMcpDomain: string | null;
+  actsMcp: boolean;
+  actsMcpDomain: string | null;
   gws: boolean;
   gwsArgs: string[];
 }
@@ -199,6 +201,8 @@ function parseArgs(argv: string[]): Args {
   let searchArgs: string[] = [];
   let gwsMcp = false;
   let gwsMcpDomain: string | null = null;
+  let actsMcp = false;
+  let actsMcpDomain: string | null = null;
   let gws = false;
   let gwsArgs: string[] = [];
   for (let i = 2; i < argv.length; i++) {
@@ -396,6 +400,19 @@ function parseArgs(argv: string[]): Args {
         else if (f.startsWith("--domain=")) { gwsMcpDomain = f.slice("--domain=".length); }
       }
       break;
+    } else if (a === "acts-mcp") {
+      // Prevail's own action-primitive MCP server the agent launches:
+      // `prevail acts-mcp --vault <path> [--domain <d>]`. Same launch-flag shape
+      // as gws-mcp (parse --vault / --domain inline before break).
+      actsMcp = true;
+      for (let j = i + 1; j < argv.length; j++) {
+        const f = argv[j];
+        if (f === "--vault" || f === "-d") { if (argv[j + 1]) { vaultPath = resolve(process.cwd(), argv[j + 1]); j++; } }
+        else if (f.startsWith("--vault=")) { vaultPath = resolve(process.cwd(), f.slice("--vault=".length)); }
+        else if (f === "--domain") { if (argv[j + 1]) { actsMcpDomain = argv[j + 1]; j++; } }
+        else if (f.startsWith("--domain=")) { actsMcpDomain = f.slice("--domain=".length); }
+      }
+      break;
     } else if (a === "gws") {
       gws = true;
       gwsArgs = argv.slice(i + 1);
@@ -506,6 +523,8 @@ function parseArgs(argv: string[]): Args {
     searchArgs,
     gwsMcp,
     gwsMcpDomain,
+    actsMcp,
+    actsMcpDomain,
     gws,
     gwsArgs,
   };
@@ -5415,6 +5434,15 @@ async function main() {
     const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
     const { runGwsMcpServer } = await import("./gws-mcp.ts");
     await runGwsMcpServer(vault, args.gwsMcpDomain ?? undefined);
+    return;
+  }
+  if (args.actsMcp) {
+    // Prevail's own vault-scoped action primitives (create_skill / create_loop /
+    // remember) the agent launches over stdio.
+    const cfg = readConfig();
+    const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+    const { runActsMcpServer } = await import("./acts-mcp.ts");
+    await runActsMcpServer(vault, args.actsMcpDomain ?? undefined);
     return;
   }
   if (args.gws) {

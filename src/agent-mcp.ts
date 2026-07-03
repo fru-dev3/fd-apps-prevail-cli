@@ -120,6 +120,19 @@ function buildAgentMcpServers(
     } catch {
       // gws detection must never break agent wiring.
     }
+    // Prevail's OWN action primitives (create_skill / create_loop / remember).
+    // Always wired in when we know the vault, so an agentic run saves skills,
+    // loops, and memory into THIS vault — never the host model's native skill
+    // folder / cron / sandbox. This is the model-agnostic execution surface.
+    try {
+      const domain = opts?.domain?.trim();
+      mcpServers["prevail_acts"] = {
+        command: process.execPath,
+        args: ["acts-mcp", "--vault", vaultPath, ...(domain ? ["--domain", domain] : [])],
+      };
+    } catch {
+      // never let acts wiring break a turn.
+    }
   }
   return mcpServers;
 }
