@@ -52,8 +52,13 @@ function gatherSignals(vault: string, domain: string): string {
       return t.length > cap ? t.slice(0, cap) + "\n[...]" : t;
     } catch { return ""; }
   };
-  const state = readCapped("state.md", 2500);
-  if (state) parts.push(`STATE (${domain}/state.md):\n${state}`);
+  // v4 vaults keep the derived snapshot at _state.md; only legacy vaults use a
+  // hand-written state.md. Read whichever exists (preferring _state.md) so the
+  // suggestions are grounded in the domain, not generic. Before, this read only
+  // state.md, so in a modern vault it got no state and fell back to guessing.
+  const stateFile = existsSync(join(dir, "_state.md")) ? "_state.md" : "state.md";
+  const state = readCapped(stateFile, 2500);
+  if (state) parts.push(`STATE (${domain}/${stateFile}):\n${state}`);
   const decisions = readDecisions(vault, domain, 8);
   if (decisions.length) {
     const lines = decisions.map((d) => {
