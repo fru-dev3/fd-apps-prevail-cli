@@ -188,6 +188,21 @@ function manifestPath(vaultPath: string, domain: string): string {
 
 const IMMUTABLE_ZONE_PREFIXES = ["_drop", "01_prior"] as const;
 
+// A domain whose manifest sets sandbox.mode = "locked" is READ-ONLY: agents may
+// read it but must not write files or take shell/computer-use side-effects
+// there. Best-effort (a missing/unreadable manifest reads as not-locked, the
+// permissive default). Enforced at the agent-run chokepoint (agent-run.ts),
+// which is where write-capable computer-use is switched on.
+export function isDomainLocked(vaultPath: string, domain: string | undefined | null): boolean {
+  if (!domain) return false;
+  try {
+    const m = readManifest(vaultPath, domain);
+    return m?.sandbox?.mode === "locked";
+  } catch {
+    return false;
+  }
+}
+
 export function assertWritable(vaultPath: string, relPath: string): void {
   if (typeof relPath !== "string" || relPath.length === 0) {
     throw new Error("assertWritable: relPath is empty");

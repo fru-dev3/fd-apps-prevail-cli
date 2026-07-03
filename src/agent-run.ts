@@ -23,6 +23,7 @@ import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
 import { makeSessionId } from "./session.ts";
 import { gateAction } from "./broker.ts";
+import { isDomainLocked } from "./manifest.ts";
 import type { ChatEvent } from "./chat-json.ts";
 
 export interface AgentRunOptions {
@@ -84,8 +85,12 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
   const gate = gateAction(goal, { vault: vaultPath, autonomousActs: autonomy === "auto" });
   if (gate.decision === "block") return fail(`blocked by autonomy policy: ${gate.reason ?? gate.cls}`);
   // act drives the harness's full-agency switch; only true when the broker
-  // cleared the action AND the user opted into auto.
-  const act = gate.decision === "auto";
+  // cleared the action AND the user opted into auto. A domain set to read-only
+  // (sandbox.mode = "locked") forces act=false so the agent can read but never
+  // write files or take shell side-effects there - the real enforcement of the
+  // domain's "Read + Write vs read-only" setting.
+  const locked = isDomainLocked(vaultPath, opts.domain);
+  const act = gate.decision === "auto" && !locked;
 
   const model = (opts.model ?? "").trim();
   const engine = `${cli.kind}:${model || "default"}`;
