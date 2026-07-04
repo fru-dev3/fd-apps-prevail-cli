@@ -103,6 +103,7 @@ interface Args {
   searchArgs: string[];
   gwsMcp: boolean;
   gwsMcpDomain: string | null;
+  gwsMcpAccount: string | null;
   actsMcp: boolean;
   actsMcpDomain: string | null;
   gws: boolean;
@@ -203,6 +204,7 @@ function parseArgs(argv: string[]): Args {
   let searchArgs: string[] = [];
   let gwsMcp = false;
   let gwsMcpDomain: string | null = null;
+  let gwsMcpAccount: string | null = null;
   let actsMcp = false;
   let actsMcpDomain: string | null = null;
   let gws = false;
@@ -393,8 +395,10 @@ function parseArgs(argv: string[]): Args {
       break;
     } else if (a === "gws-mcp") {
       // Top-level MCP entrypoint the agent launches: `prevail gws-mcp --vault
-      // <path> [--domain <d>]`. The launch flags follow the subcommand, so parse
-      // --vault / --domain inline (same shape as the `mcp` branch) before break.
+      // <path> [--domain <d>] [--account <label>]`. The launch flags follow the
+      // subcommand, so parse --vault / --domain / --account inline (same shape as
+      // the `mcp` branch) before break. --account is the user's chip selection,
+      // used by gws-mcp as the authoritative default target account.
       gwsMcp = true;
       for (let j = i + 1; j < argv.length; j++) {
         const f = argv[j];
@@ -402,6 +406,8 @@ function parseArgs(argv: string[]): Args {
         else if (f.startsWith("--vault=")) { vaultPath = resolve(process.cwd(), f.slice("--vault=".length)); }
         else if (f === "--domain") { if (argv[j + 1]) { gwsMcpDomain = argv[j + 1]; j++; } }
         else if (f.startsWith("--domain=")) { gwsMcpDomain = f.slice("--domain=".length); }
+        else if (f === "--account") { if (argv[j + 1]) { gwsMcpAccount = argv[j + 1]; j++; } }
+        else if (f.startsWith("--account=")) { gwsMcpAccount = f.slice("--account=".length); }
       }
       break;
     } else if (a === "acts-mcp") {
@@ -531,6 +537,7 @@ function parseArgs(argv: string[]): Args {
     searchArgs,
     gwsMcp,
     gwsMcpDomain,
+    gwsMcpAccount,
     actsMcp,
     actsMcpDomain,
     gws,
@@ -563,7 +570,7 @@ USAGE
   prevail mcp                 run as an MCP server (stdio) — exposes council + vault to other agents
                               auth: clients must send Authorization: prevail-<token> from ~/.prevail/mcp.json
                               parent-check: refuses non-TTY / unknown parents — bypass with --unsafe-detach
-  prevail gws-mcp --vault <v> [--domain <d>]
+  prevail gws-mcp --vault <v> [--domain <d>] [--account <label>]
                               run the gated Google Workspace MCP server (stdio) —
                               exposes the authenticated gws CLI to the agent as one
                               tool: reads run live, writes are queued for approval
@@ -5596,7 +5603,7 @@ async function main() {
     const cfg = readConfig();
     const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
     const { runGwsMcpServer } = await import("./gws-mcp.ts");
-    await runGwsMcpServer(vault, args.gwsMcpDomain ?? undefined);
+    await runGwsMcpServer(vault, args.gwsMcpDomain ?? undefined, args.gwsMcpAccount ?? undefined);
     return;
   }
   if (args.actsMcp) {

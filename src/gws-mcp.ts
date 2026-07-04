@@ -76,7 +76,7 @@ function tools(): McpTool[] {
           },
           account: {
             type: "string",
-            description: "Optional Google account to target when more than one is connected: a profile label (e.g. \"work\") or the literal \"default\". Omit to use the default account. Reads run against it; queued writes run against the same account after approval.",
+            description: "Optional Google account to target when more than one is connected: a profile label (e.g. \"work\") or the literal \"default\". Omit to use the account the user selected for this session (or the default account if none was selected); only set this to deliberately override for a specific cross-account action. Reads run against it; queued writes run against the same account after approval.",
           },
         },
         required: ["args"],
@@ -91,10 +91,11 @@ function wrapText(s: string): McpContent[] {
 
 // The single tool handler: classify, then either run the read live or queue the
 // write for approval. Never runs a write inline.
-function callGoogleWorkspace(
+export function callGoogleWorkspace(
   rawArgs: Record<string, unknown>,
   vaultPath: string,
   defaultDomain: string,
+  defaultAccount: string | undefined,
 ): McpContent[] {
   const argsIn = rawArgs.args;
   if (!Array.isArray(argsIn) || argsIn.some((a) => typeof a !== "string") || argsIn.length === 0) {
@@ -104,9 +105,15 @@ function callGoogleWorkspace(
   const domain = (typeof rawArgs.domain === "string" && rawArgs.domain.trim())
     ? rawArgs.domain.trim()
     : defaultDomain;
+  // Account precedence: an explicit tool-arg account (the model's per-action
+  // override, e.g. a deliberate cross-account send) wins; otherwise the launched
+  // --account (the user's chip selection, threaded from the composer) is the
+  // authoritative default; otherwise undefined => gws-gateway's "default"
+  // profile. This is what makes the chip selection binding even when the model
+  // passes no `account`.
   const account = (typeof rawArgs.account === "string" && rawArgs.account.trim())
     ? rawArgs.account.trim()
-    : undefined;
+    : defaultAccount;
 
   const { kind, summary } = classifyGwsCommand(args);
   if (kind === "read") {
@@ -127,6 +134,7 @@ function dispatch(
   req: JsonRpcReq,
   vaultPath: string,
   defaultDomain: string,
+  defaultAccount: string | undefined,
 ): unknown {
   switch (req.method) {
     case "initialize": {
@@ -146,7 +154,7 @@ function dispatch(
       const p = (req.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
       const name = p.name ?? "";
       if (name !== "google_workspace") throw new Error(`unknown tool: ${name}`);
-      return { content: callGoogleWorkspace(p.arguments ?? {}, vaultPath, defaultDomain) };
+      return { content: callGoogleWorkspace(p.arguments ?? {}, vaultPath, defaultDomain, defaultAccount) };
     }
     case "ping":
       return {};
@@ -170,13 +178,17 @@ async function* readStdinLines(): AsyncGenerator<string> {
   if (buffer.trim()) yield buffer.trim();
 }
 
-export async function runGwsMcpServer(vaultPath: string, domain?: string): Promise<void> {
+export async function runGwsMcpServer(vaultPath: string, domain?: string, account?: string): Promise<void> {
   if (!existsSync(vaultPath)) {
     log(`vault not found: ${vaultPath}`);
     process.exit(1);
   }
   const defaultDomain = (domain && domain.trim()) ? domain.trim() : "general";
-  log(`starting · vault=${vaultPath} · domain=${defaultDomain} · stdio`);
+  // The launched --account (the user's chip selection). The literal "default" is
+  // treated as "no override" so the connector uses its own default profile.
+  const rawAccount = (account && account.trim()) ? account.trim() : undefined;
+  const defaultAccount = rawAccount && rawAccount !== "default" ? rawAccount : undefined;
+  log(`starting · vault=${vaultPath} · domain=${defaultDomain} · account=${defaultAccount ?? "(default)"} · stdio`);
 
   for await (const line of readStdinLines()) {
     let req: JsonRpcReq;
@@ -188,7 +200,7 @@ export async function runGwsMcpServer(vaultPath: string, domain?: string): Promi
     }
     const id = req.id ?? null;
     try {
-      const result = dispatch(req, vaultPath, defaultDomain);
+      const result = dispatch(req, vaultPath, defaultDomain, defaultAccount);
       if (req.id !== undefined && req.id !== null) {
         send({ jsonrpc: "2.0", id, result });
       }

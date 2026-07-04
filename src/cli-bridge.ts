@@ -920,6 +920,13 @@ export interface ChatTurn {
   // WebSearch/WebFetch tools and refuses providers whose web tools can't be
   // switched off (see runChatTurn). Omitted => fall back to the global setting.
   webAccess?: "allow" | "deny";
+  // The user's Google-account chip selection (composer Modes). When set it is
+  // threaded to the google_workspace connector launch as its AUTHORITATIVE
+  // default target account (gws-mcp --account <label>), so the picked account is
+  // honored even if the model omits an `account:` tool-arg. A comma-joined list
+  // is allowed; the connector uses the first entry as its default. Omitted =>
+  // today's behavior (the connector's own "default" account).
+  googleAccount?: string;
   // Optional cancellation. Aborting the signal SIGTERMs the child process so
   // Escape in the cockpit can drop an in-flight prompt without waiting for
   // the model to finish. runCapture resolves with "(cancelled)" on abort.
@@ -1019,7 +1026,7 @@ export function sanitizeEmDashes(text: string): string {
   return segments.join("");
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1207,7 +1214,8 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // connected stdio servers), so this stays a byte-for-byte no-op otherwise.
     try {
       const { agentMcpConfigForClaude, agentMcpServerIds } = await import("./agent-mcp.ts");
-      const mcpCfg = agentMcpConfigForClaude(vaultPath, { includeComposio: act });
+      const gwsAccount = googleAccount?.trim() || undefined;
+      const mcpCfg = agentMcpConfigForClaude(vaultPath, { includeComposio: act, googleAccount: gwsAccount });
       if (mcpCfg) {
         args.push("--mcp-config", mcpCfg);
         // In headless `-p` there is no TTY to approve tool use, so on a non-act
@@ -1220,7 +1228,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
         // runs --dangerously-skip-permissions already allows everything, so we
         // only need this on chat turns.
         if (!act) {
-          const ids = agentMcpServerIds(vaultPath, { includeComposio: act });
+          const ids = agentMcpServerIds(vaultPath, { includeComposio: act, googleAccount: gwsAccount });
           if (ids.length) args.push("--allowedTools", ...ids.map((id) => `mcp__${id}`));
         }
       }

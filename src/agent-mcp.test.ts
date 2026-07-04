@@ -1,8 +1,8 @@
 import { describe, expect, test, beforeEach, afterAll } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { agentMcpServerIds } from "./agent-mcp.ts";
+import { agentMcpServerIds, writeAgentMcpConfig } from "./agent-mcp.ts";
 
 // #31 disabled apps are fully inert: a disabled connector's MCP server must NOT
 // be injected into the agent's tool set. agentMcpServerIds is the single source
@@ -45,5 +45,54 @@ describe("agent MCP injection excludes disabled apps (#31)", () => {
     const ids = agentMcpServerIds(undefined, { includeComposio: false });
     expect(ids).toContain("mcp-on");
     expect(ids).not.toContain("mcp-off");
+  });
+});
+
+// Fix 1: the composer's Google-account chip selection is threaded to the
+// gws-mcp launch as an authoritative default target account. When
+// opts.googleAccount is set, the google_workspace server is launched with
+// `--account <label>`; when it is absent the flag is omitted (backward-compat).
+describe("gws-mcp launch honors the picked Google account (Fix 1)", () => {
+  const GWS_ROOT = join(TMP_BASE, `prevail-gwsacct-${process.pid}`);
+  const GWS_HOME = join(GWS_ROOT, "home");
+  const VAULT = join(GWS_ROOT, "vault");
+  const FAKE_GWS = join(GWS_ROOT, "gws");
+
+  beforeEach(() => {
+    rmSync(GWS_ROOT, { recursive: true, force: true });
+    mkdirSync(GWS_HOME, { recursive: true });
+    mkdirSync(VAULT, { recursive: true });
+    // A real file so resolveGwsBinary() returns truthy and the gws server wires in.
+    writeFileSync(FAKE_GWS, "#!/bin/sh\n");
+    process.env.PREVAIL_HOME = GWS_HOME;
+    process.env.PREVAIL_GWS_BIN = FAKE_GWS;
+  });
+  afterAll(() => {
+    rmSync(GWS_ROOT, { recursive: true, force: true });
+    delete process.env.PREVAIL_HOME;
+    delete process.env.PREVAIL_GWS_BIN;
+  });
+
+  function gwsArgs(googleAccount?: string): string[] {
+    const p = writeAgentMcpConfig(VAULT, { includeComposio: false, googleAccount });
+    expect(p).not.toBeNull();
+    const cfg = JSON.parse(readFileSync(p!, "utf8")) as {
+      mcpServers: Record<string, { args?: string[] }>;
+    };
+    const gws = cfg.mcpServers["google_workspace"];
+    expect(gws).toBeDefined();
+    return gws!.args ?? [];
+  }
+
+  test("a picked account adds --account <label> to the gws-mcp launch", () => {
+    const args = gwsArgs("fru.dev");
+    const idx = args.indexOf("--account");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("fru.dev");
+  });
+
+  test("no picked account => no --account flag (backward compatible)", () => {
+    const args = gwsArgs(undefined);
+    expect(args).not.toContain("--account");
   });
 });

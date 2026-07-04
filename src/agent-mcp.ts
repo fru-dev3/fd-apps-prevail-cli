@@ -112,7 +112,7 @@ function buildConnectedMcpServers(vaultPath?: string): Record<string, unknown> {
 // server ids the caller allow-lists, so the two can never drift apart.
 function buildAgentMcpServers(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean; domain?: string },
+  opts?: { includeComposio?: boolean; domain?: string; googleAccount?: string },
 ): Record<string, unknown> {
   const includeComposio = opts?.includeComposio !== false;
   const key = composioApiKey();
@@ -128,9 +128,20 @@ function buildAgentMcpServers(
     try {
       if (resolveGwsBinary()) {
         const domain = opts?.domain?.trim();
+        // The user's Google-account chip selection (composer Modes). Threaded
+        // here as the AUTHORITATIVE default target account for gws reads and
+        // queued writes, so the connector honors the picked account even when
+        // the model omits an `account:` tool-arg. Absent = today's behavior.
+        const account = opts?.googleAccount?.trim();
         mcpServers["google_workspace"] = {
           command: process.execPath,
-          args: ["gws-mcp", "--vault", vaultPath, ...(domain ? ["--domain", domain] : [])],
+          args: [
+            "gws-mcp",
+            "--vault",
+            vaultPath,
+            ...(domain ? ["--domain", domain] : []),
+            ...(account ? ["--account", account] : []),
+          ],
         };
       }
     } catch {
@@ -155,7 +166,7 @@ function buildAgentMcpServers(
 
 export function writeAgentMcpConfig(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean; domain?: string },
+  opts?: { includeComposio?: boolean; domain?: string; googleAccount?: string },
 ): string | null {
   const mcpServers = buildAgentMcpServers(vaultPath, opts);
   if (Object.keys(mcpServers).length === 0) return null;
@@ -174,7 +185,7 @@ export function writeAgentMcpConfig(
 // adds no flag and the turn is unchanged.
 export function agentMcpConfigForClaude(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean; domain?: string },
+  opts?: { includeComposio?: boolean; domain?: string; googleAccount?: string },
 ): string | null {
   return writeAgentMcpConfig(vaultPath, opts);
 }
@@ -187,7 +198,7 @@ export function agentMcpConfigForClaude(
 // written.
 export function agentMcpServerIds(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean; domain?: string },
+  opts?: { includeComposio?: boolean; domain?: string; googleAccount?: string },
 ): string[] {
   return Object.keys(buildAgentMcpServers(vaultPath, opts));
 }

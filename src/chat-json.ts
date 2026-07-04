@@ -102,6 +102,10 @@ export interface ChatJsonOptions {
   // Economy / Balanced / Quality bias for the Auto router. Only consulted when
   // model === "auto"; absent => PREVAIL_ROUTE_BIAS env => "balanced".
   routeBias?: string;
+  // The user's Google-account chip selection (composer Modes). Threaded to the
+  // google_workspace connector as its authoritative default target account.
+  // Comma-joined list allowed; absent => the connector's own default account.
+  googleAccount?: string;
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
   write?: (line: string) => void;
@@ -310,6 +314,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       model,
       isFirst: !opts.sessionId, // resume → not first (claude uses --continue)
       webAccess: opts.webAccess,
+      googleAccount: opts.googleAccount,
       onChunk: (delta: string) => {
         if (!delta) return;
         reply += delta;
@@ -381,6 +386,7 @@ export async function chatJsonCommand(
   let localOnly = false;
   let webAccess: "allow" | "deny" | undefined;
   let routeBias: string | undefined;
+  let googleAccount: string | undefined;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -401,6 +407,8 @@ export async function chatJsonCommand(
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
     else if (a === "--route-bias") { routeBias = next; i++; }
     else if (a.startsWith("--route-bias=")) routeBias = a.slice("--route-bias=".length);
+    else if (a === "--google-account") { googleAccount = next; i++; }
+    else if (a.startsWith("--google-account=")) googleAccount = a.slice("--google-account=".length);
     else if (a === "--vault") { vaultPath = resolve(process.cwd(), next ?? ""); i++; }
     else if (a.startsWith("--vault=")) vaultPath = resolve(process.cwd(), a.slice("--vault=".length));
     // --json is implied by this command path; tolerate it being present.
@@ -433,6 +441,7 @@ export async function chatJsonCommand(
     localOnly,
     webAccess,
     routeBias,
+    googleAccount,
   });
 }
 

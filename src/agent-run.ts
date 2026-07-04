@@ -41,6 +41,10 @@ export interface AgentRunOptions {
   // "auto": full agency — still subject to the broker gate below.
   autonomy?: "safe" | "auto";
   signal?: AbortSignal;
+  // The user's Google-account chip selection (composer Modes). Threaded to the
+  // google_workspace connector as its authoritative default target account.
+  // Comma-joined list allowed; absent => the connector's own default account.
+  googleAccount?: string;
   // Override the NDJSON sink (defaults to stdout). Used by tests.
   write?: (line: string) => void;
 }
@@ -200,6 +204,7 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
       // Agent tasks generally need read access to the web; the broker gate is
       // the guard for consequential actions, not web reads.
       webAccess: "allow",
+      googleAccount: opts.googleAccount,
       signal: opts.signal,
       onChunk: (delta: string) => {
         if (!delta) return;
@@ -306,6 +311,7 @@ export async function agentRunCommand(args: string[], vaultOverride: string | nu
   let model = "";
   let taskId: string | undefined;
   let autonomy: "safe" | "auto" = "safe";
+  let googleAccount: string | undefined;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     const next = args[i + 1];
@@ -321,8 +327,10 @@ export async function agentRunCommand(args: string[], vaultOverride: string | nu
     else if (a.startsWith("--task=")) taskId = a.slice("--task=".length);
     else if (a === "--autonomy") { autonomy = next === "auto" ? "auto" : "safe"; i++; }
     else if (a.startsWith("--autonomy=")) autonomy = a.slice("--autonomy=".length) === "auto" ? "auto" : "safe";
+    else if (a === "--google-account") { googleAccount = next; i++; }
+    else if (a.startsWith("--google-account=")) googleAccount = a.slice("--google-account=".length);
     // --json is implicit; ignore it and any unknown flags.
   }
   const vaultPath = vaultOverride ?? process.cwd();
-  return runAgentJson({ vaultPath, domain, goal, cli, model, taskId, autonomy });
+  return runAgentJson({ vaultPath, domain, goal, cli, model, taskId, autonomy, googleAccount });
 }
