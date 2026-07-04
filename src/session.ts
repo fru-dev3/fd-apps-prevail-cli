@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { resolveDomainDir } from "./path-safety.ts";
+import { isV4Domain } from "./vault-layout-v4.ts";
 import {
   appendFileSync,
   chmodSync,
@@ -381,17 +382,44 @@ export function makeTurnId(): string {
 
 // Path to a domain's JSONL thread file inside the vault. Lives under the
 // agent-writable _threads/ zone (VAULT-SPEC §3).
+// The single canonical directory threads are WRITTEN to for a domain. On a
+// v4-migrated domain that is memory/threads/ (the v4 home for `_threads`); on a
+// legacy domain it stays the flat _threads/. MUST mirror the desktop's
+// safe_domain_subdir remap so engine-written and desktop-written threads land in
+// ONE place per domain rather than splitting across two dirs (the disappearance
+// bug: written here, listed there).
+function threadsDir(vaultPath: string, domain: string): string {
+  const base = resolveDomainDir(vaultPath, domain);
+  return isV4Domain(base) ? join(base, "memory", "threads") : join(base, "_threads");
+}
+
+// Every directory a domain's thread files may live in, canonical first, then the
+// legacy _threads/ (where the pre-v4 migrator COPIES leave originals and older
+// engine builds still wrote). Readers merge across all of these so a thread is
+// never orphaned by the v4 split. Mirrors the desktop paths::thread_search_dirs.
+function threadSearchDirs(vaultPath: string, domain: string): string[] {
+  const base = resolveDomainDir(vaultPath, domain);
+  const canonical = isV4Domain(base) ? join(base, "memory", "threads") : join(base, "_threads");
+  const dirs = [canonical];
+  const legacy = join(base, "_threads");
+  if (!dirs.includes(legacy)) dirs.push(legacy);
+  return dirs;
+}
+
 export function threadJsonlPath(vaultPath: string, domain: string, sessionId: string): string {
   // H5: sessionId flows in from --session-id / resume APIs and lands in a path.
   // Reject anything that isn't a plain id so it can't traverse out of _threads/.
   if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) {
     throw new Error(`invalid session id: ${sessionId.slice(0, 40)}`);
   }
-  return join(resolveDomainDir(vaultPath, domain), "_threads", `${sessionId}.jsonl`);
-}
-
-function threadsDir(vaultPath: string, domain: string): string {
-  return join(resolveDomainDir(vaultPath, domain), "_threads");
+  // Continue an EXISTING session file wherever it already lives (so appends
+  // don't split one thread across the v4 and legacy dirs); otherwise the
+  // canonical dir. Same-file-continuity mirrors the desktop known-slug logic.
+  for (const dir of threadSearchDirs(vaultPath, domain)) {
+    const p = join(dir, `${sessionId}.jsonl`);
+    if (existsSync(p)) return p;
+  }
+  return join(threadsDir(vaultPath, domain), `${sessionId}.jsonl`);
 }
 
 // Append a turn to <domain>/_threads/<sessionId>.jsonl, creating the
@@ -559,38 +587,44 @@ export function importDesktopThreads(
   domain: string,
 ): ThreadImportResult {
   const result: ThreadImportResult = { imported: [], skipped: [] };
-  const dir = threadsDir(vaultPath, domain);
-  if (!existsSync(dir)) return result;
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return result;
-  }
-  for (const name of entries) {
-    if (!name.endsWith(".md")) continue;
-    const slug = name.slice(0, -".md".length);
-    if (!slug) continue;
-    const jsonlPath = threadJsonlPath(vaultPath, domain, slug);
-    if (existsSync(jsonlPath)) {
-      result.skipped.push(slug);
-      continue;
-    }
-    let md = "";
+  const seen = new Set<string>();
+  // Scan EVERY dir a .md thread may live in (v4 memory/threads AND legacy
+  // _threads), so a v4 domain's desktop threads aren't missed by looking in
+  // only one place.
+  for (const dir of threadSearchDirs(vaultPath, domain)) {
+    if (!existsSync(dir)) continue;
+    let entries: string[] = [];
     try {
-      md = readFileSync(join(dir, name), "utf8");
+      entries = readdirSync(dir);
     } catch {
       continue;
     }
-    const turns = parseDesktopThreadMarkdown(md);
-    if (turns.length === 0) {
-      result.skipped.push(slug);
-      continue;
+    for (const name of entries) {
+      if (!name.endsWith(".md")) continue;
+      const slug = name.slice(0, -".md".length);
+      if (!slug || seen.has(slug)) continue;
+      seen.add(slug);
+      const jsonlPath = threadJsonlPath(vaultPath, domain, slug);
+      if (existsSync(jsonlPath)) {
+        result.skipped.push(slug);
+        continue;
+      }
+      let md = "";
+      try {
+        md = readFileSync(join(dir, name), "utf8");
+      } catch {
+        continue;
+      }
+      const turns = parseDesktopThreadMarkdown(md);
+      if (turns.length === 0) {
+        result.skipped.push(slug);
+        continue;
+      }
+      for (const turn of turns) {
+        writeThreadTurn(vaultPath, domain, slug, turn);
+      }
+      result.imported.push(slug);
     }
-    for (const turn of turns) {
-      writeThreadTurn(vaultPath, domain, slug, turn);
-    }
-    result.imported.push(slug);
   }
   return result;
 }
