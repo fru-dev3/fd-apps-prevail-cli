@@ -1635,8 +1635,14 @@ export function scaffoldCommunityApp(opts: {
   // so `gateway-add` can be re-run safely. Non-gateway scaffolds keep the old
   // "already exists" guard.
   if (existsSync(root)) {
-    if (!opts.gateway) return { ok: false, error: `app "${id}" already exists at ${root}` };
-    try {
+    // A folder that exists only to hold the app's conversation scope
+    // (data/apps/<id>/_scope, created when you chat with the app) is not a real
+    // app yet: it has no manifest.json. Refuse a re-add only when a real app is
+    // already scaffolded here; a bare scope shell falls through to the scaffold
+    // below so adding the connector is never blocked by an earlier chat.
+    if (!opts.gateway) {
+      if (existsSync(join(root, "manifest.json"))) return { ok: false, error: `app "${id}" already exists at ${root}` };
+    } else try {
       const manifestPath = join(root, "manifest.json");
       const raw = existsSync(manifestPath) ? JSON.parse(vreadFile(manifestPath)) as Record<string, unknown> : {};
       raw.gateway = { provider: opts.gateway.provider, toolkit: opts.gateway.toolkit };
