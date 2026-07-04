@@ -590,6 +590,8 @@ export interface AppSkill {
   // Human-meaningful account identity for multi-instance connectors
   // (gmail-personal vs gmail-estate): shown in every UI row.
   account?: { label: string; address?: string };
+  // Runtime pin for the app's chats (pass-through lanes).
+  runtime?: string;
   // Routing: which artifacts/records land in which domain. When absent,
   // one summary intent record goes to every domain in domains[].
   routes?: AppRoute[];
@@ -854,6 +856,11 @@ interface CoercedManifest {
   autonomy?: AppAutonomy;
   localOnly?: boolean;
   model?: string;
+  // Which AI runtime serves this app's chats (claude | codex | gemini |
+  // antigravity | ollama). Set when the user picks a harness pass-through lane
+  // whose connectors only exist inside that runtime's sessions (e.g. ChatGPT
+  // apps ride Codex). Absent = the user's global runtime pick.
+  runtime?: string;
   enabled?: boolean;
   account?: { label: string; address?: string };
   routes?: AppRoute[];
@@ -1001,6 +1008,7 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     // Per-app privacy (local-only pin) + default model, so the UI reflects them.
     localOnly: (typeof o.privacy === "object" && o.privacy && (o.privacy as Record<string, unknown>).localOnly === true) || undefined,
     model: typeof o.model === "string" && o.model.trim() ? o.model.trim() : undefined,
+    runtime: typeof o.runtime === "string" && o.runtime.trim() ? o.runtime.trim().toLowerCase() : undefined,
     // Only an explicit `false` disables; any other value (absent, junk) leaves
     // it enabled by default.
     enabled: o.enabled === false ? false : undefined,
@@ -1094,6 +1102,7 @@ export function scanCommunityApps(vaultPath?: string): AppSkill[] {
         // a bundled app actually sticks.
         enabled: overrides[m.id]?.enabled === false ? false : m.enabled,
         account: m.account,
+        runtime: m.runtime,
         routes: m.routes,
         connections: m.connections,
         authEnvVars: m.authEnvVars,
@@ -1850,6 +1859,35 @@ export function boundGoogleAccountLabel(vaultPath?: string): string | undefined 
     return app?.account?.label;
   } catch {
     return undefined;
+  }
+}
+
+// Pin (or clear) the AI runtime that serves this app's chats. The routing half
+// of the harness pass-through lanes: picking "via Codex" only means anything if
+// the app's conversations actually run on codex (whose account-side connectors,
+// like ChatGPT apps, exist only inside its sessions). "" / "off" / "none" clears.
+export function setCommunityAppRuntime(
+  id: string,
+  runtime: string,
+  vaultPath?: string,
+): { ok: boolean; path?: string; runtime?: string | null; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  const r = (runtime ?? "").trim().toLowerCase();
+  const clearing = r === "" || r === "off" || r === "none";
+  if (!clearing && !["claude", "codex", "gemini", "antigravity", "ollama"].includes(r)) {
+    return { ok: false, error: `unknown runtime "${runtime}"` };
+  }
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    if (clearing) delete raw.runtime; else raw.runtime = r;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, runtime: clearing ? null : r };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
   }
 }
 
