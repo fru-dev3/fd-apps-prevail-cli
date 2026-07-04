@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { hostname } from "node:os";
 
 import { runtimePath, validateVaultPath } from "./path-safety.ts";
 
@@ -42,6 +43,9 @@ export interface CaptureRecord {
    *  backstop (may include harness-injected/programmatic prompts). Lets the
    *  distiller weight clean human prompts over backstop noise. */
   source: CaptureSource;
+  /** The machine this prompt was typed on (os.hostname() of the capturing
+   *  process). Multi-machine vaults use it to attribute activity per host. */
+  host?: string;
 }
 
 export interface IngestInput {
@@ -284,6 +288,7 @@ export function ingest(input: IngestInput): IngestResult {
     cwd,
     prompt,
     source: input.source ?? "push",
+    host: hostname(),
   };
 
   try {
@@ -381,6 +386,7 @@ export function ingestBatch(vault: string, tool: string, items: BatchItem[]): Ba
       cwd: (item.cwd ?? "").trim() || "",
       prompt,
       source: "sync",
+      host: hostname(),
     };
     lines.push(JSON.stringify(record));
   }

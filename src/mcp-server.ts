@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { v4ContentPath, v4DirPath } from "./vault-layout-v4.ts";
@@ -641,6 +642,10 @@ function logMcpIntent(domain: Domain, prompt: string, cli: string, model: string
       cli,
       model: model || null,
       message: prompt,
+      // Which machine served this MCP call (the daemon host - for a remote MCP
+      // client this is where the vault lives, which is the useful attribution).
+      host: hostname(),
+      app: "prevail-mcp",
     });
     vappendLine(v4ContentPath(domain.path, ".system/journal.jsonl", "_intents.jsonl"), `${rec}\n`);
   } catch {
