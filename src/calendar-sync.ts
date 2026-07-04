@@ -198,26 +198,37 @@ export function listGwsProfiles(): GwsProfile[] {
 }
 
 // Pure decision: given the connected profiles on this machine, which account
-// should a caller that passed NO explicit account target? This is the fix for
-// the "domain chat can't authenticate" bug: gws's own default is whatever lives
-// at ~/.config/gws, which may hold NO valid credentials (e.g. the user only
-// authorized a labeled account like "work" from the Prevail Google panel).
-// Falling back to that empty default is why a domain chat failed with "scope not
-// granted" while the app chat worked. Rules:
-//   - no connected profiles at all -> undefined (nothing to target; the caller
-//     still fails, but with an honest, account-named error);
-//   - the default profile is connected -> undefined (keep using ~/.config/gws;
-//     least surprising, matches the historic app-chat behavior);
-//   - otherwise -> the first connected labeled account (stable order by dir), so
-//     an attached Google app always runs against an AUTHENTICATED account.
+// should a caller that passed NO explicit account target? Machine-agnostic on
+// purpose - profiles are whatever gws config dirs exist on THIS machine, never
+// specific labels/addresses. Rules ("never guess between identities"):
+//   - no connected profiles -> undefined (nothing to target; the caller still
+//     fails, but with an honest, account-named error);
+//   - exactly ONE connected profile -> that profile, whatever its label
+//     (including the bare "default" dir). Unambiguous, so zero friction;
+//   - TWO OR MORE connected profiles -> undefined: acting as the wrong identity
+//     is worse than asking, so no auto-pick. Callers that can ask (the chat
+//     connector) refuse with the connected labels (see resolveGwsAccounts);
+//     background callers fall back to gws's own default dir as before.
 // NOTE: "connected" here means "has auth material on disk" (see isGwsProfileDir),
-// not a live per-scope probe, so this can still pick an account whose specific
+// not a live per-scope probe, so a pick can still hit an account whose specific
 // scope was not granted; that surfaces as an honest, account-named auth error
 // downstream (see gws-gateway).
 export function pickDefaultGwsAccount(profiles: GwsProfile[]): string | undefined {
-  if (profiles.length === 0) return undefined;
-  if (profiles.some((p) => p.label === "default")) return undefined;
-  return profiles[0]!.label;
+  if (profiles.length === 1) return profiles[0]!.label;
+  return undefined;
+}
+
+// The full no-explicit-account resolution, for callers that can ask the user:
+// none / a single unambiguous account / ambiguous with the connected labels.
+export type GwsAccountResolution =
+  | { kind: "none" }
+  | { kind: "single"; label: string }
+  | { kind: "ambiguous"; labels: string[] };
+
+export function resolveGwsAccounts(profiles: GwsProfile[] = listGwsProfiles()): GwsAccountResolution {
+  if (profiles.length === 0) return { kind: "none" };
+  if (profiles.length === 1) return { kind: "single", label: profiles[0]!.label };
+  return { kind: "ambiguous", labels: profiles.map((p) => p.label) };
 }
 
 // The connected/authorized Google account to target when a caller passes none.

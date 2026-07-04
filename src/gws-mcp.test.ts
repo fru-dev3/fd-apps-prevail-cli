@@ -39,8 +39,30 @@ describe("gws-mcp account precedence (Fix 1)", () => {
     expect(lastQueuedAccount()).toBe("alex.rivera");
   });
 
-  test("no launched account and no tool-arg => default account (undefined)", () => {
-    callGoogleWorkspace({ args: SEND_ARGS }, VAULT, "general", undefined);
+  test("no pick + zero or one connected account => proceeds (unambiguous)", () => {
+    // Machine state pinned via the injectable resolver - never the live machine.
+    callGoogleWorkspace({ args: SEND_ARGS }, VAULT, "general", undefined, () => ({ kind: "none" }));
     expect(lastQueuedAccount()).toBeUndefined();
+    callGoogleWorkspace({ args: SEND_ARGS }, VAULT, "general", undefined, () => ({ kind: "single", label: "work" }));
+    expect(readPendingGws(VAULT).length).toBe(2);
+  });
+
+  test("no pick + MULTIPLE connected accounts => refused with the labels, nothing queued", () => {
+    const out = callGoogleWorkspace(
+      { args: SEND_ARGS }, VAULT, "general", undefined,
+      () => ({ kind: "ambiguous", labels: ["home", "work"] }),
+    );
+    const text = out.map((c) => c.text ?? "").join(" ");
+    expect(text).toContain("multiple Google accounts");
+    expect(text).toContain("home, work");
+    expect(readPendingGws(VAULT).length).toBe(0);
+  });
+
+  test("an explicit pick bypasses the multi-account refusal", () => {
+    callGoogleWorkspace(
+      { args: SEND_ARGS }, VAULT, "general", "work",
+      () => ({ kind: "ambiguous", labels: ["home", "work"] }),
+    );
+    expect(lastQueuedAccount()).toBe("work");
   });
 });

@@ -13,6 +13,7 @@
 import { existsSync } from "node:fs";
 import { VERSION } from "./version.ts";
 import { classifyGwsCommand, runGwsRead, addPendingGws } from "./gws-gateway.ts";
+import { resolveGwsAccounts } from "./calendar-sync.ts";
 
 interface JsonRpcReq {
   jsonrpc: "2.0";
@@ -76,7 +77,7 @@ function tools(): McpTool[] {
           },
           account: {
             type: "string",
-            description: "Optional Google account to target when more than one is connected: a profile label (e.g. \"work\") or the literal \"default\". Omit to use the account the user selected for this session (or, if none was selected, a CONNECTED account is chosen automatically). Only set this to deliberately override for a specific cross-account action. Reads run against it; queued writes run against the same account after approval.",
+            description: "Optional Google account to target: a profile label (e.g. \"work\") or the literal \"default\". Omit to use the account the user selected for this session; if none was selected and exactly one account is connected, that one is used. If none was selected and MULTIPLE accounts are connected, the call is refused with the connected labels - ask the user which account to use and retry with it here. Reads run against it; queued writes run against the same account after approval.",
           },
         },
         required: ["args"],
@@ -96,6 +97,9 @@ export function callGoogleWorkspace(
   vaultPath: string,
   defaultDomain: string,
   defaultAccount: string | undefined,
+  // Injectable so tests can pin the machine's connected-profile state; production
+  // callers use the live resolution.
+  resolveAccounts: typeof resolveGwsAccounts = resolveGwsAccounts,
 ): McpContent[] {
   const argsIn = rawArgs.args;
   if (!Array.isArray(argsIn) || argsIn.some((a) => typeof a !== "string") || argsIn.length === 0) {
@@ -109,14 +113,30 @@ export function callGoogleWorkspace(
   // override, e.g. a deliberate cross-account send) wins; otherwise the launched
   // --account (the user's chip selection, threaded from the composer) is the
   // authoritative default; otherwise undefined. When it stays undefined, the
-  // account is resolved AT SPAWN by gwsSpawnEnv/resolveDefaultGwsAccount to a
-  // CONNECTED account (not gws's arbitrary on-disk default), so an attached
-  // Google app authenticates in a domain chat exactly as in the app's own chat.
-  // This is what makes the chip selection binding even when the model passes no
-  // `account`.
+  // resolution is strict: exactly one connected account is used automatically
+  // (gwsSpawnEnv/resolveDefaultGwsAccount); with several connected the call is
+  // refused below rather than guessed, so Prevail never acts as the wrong
+  // identity. This is what makes the chip selection binding even when the model
+  // passes no `account`.
   const account = (typeof rawArgs.account === "string" && rawArgs.account.trim())
     ? rawArgs.account.trim()
     : defaultAccount;
+  // Never guess between identities: when NO account was picked (no tool-arg, no
+  // composer chip) and this machine has MORE THAN ONE connected Google account,
+  // refuse with the connected labels instead of silently acting as one of them.
+  // Machine-agnostic - the labels come from whatever gws profiles exist here.
+  // With zero or one account connected the resolution is unambiguous and nothing
+  // changes. Applies to reads AND writes (a read against the wrong inbox leaks
+  // the wrong person's data; a write is worse).
+  if (!account) {
+    const res = resolveAccounts();
+    if (res.kind === "ambiguous") {
+      return wrapText(
+        `Error: multiple Google accounts are connected on this machine (${res.labels.join(", ")}) and none was picked, so nothing was run. ` +
+        `Ask the user which account to use, then retry with account:"<label>" - or the user can pick account(s) under Modes in the composer.`,
+      );
+    }
+  }
 
   const { kind, summary } = classifyGwsCommand(args);
   if (kind === "read") {
@@ -187,10 +207,14 @@ export async function runGwsMcpServer(vaultPath: string, domain?: string, accoun
     process.exit(1);
   }
   const defaultDomain = (domain && domain.trim()) ? domain.trim() : "general";
-  // The launched --account (the user's chip selection). The literal "default" is
-  // treated as "no override" so the connector uses its own default profile.
+  // The launched --account (the user's chip selection). ANY pick - including the
+  // literal "default" - is an explicit choice and is honored verbatim (it
+  // bypasses the multi-account "never guess" refusal in callGoogleWorkspace;
+  // gwsSpawnEnv maps "default" to the default profile dir). A comma-joined
+  // multi-pick targets its first entry by default; the model can override
+  // per-action with the `account` tool-arg for cross-account fan-out.
   const rawAccount = (account && account.trim()) ? account.trim() : undefined;
-  const defaultAccount = rawAccount && rawAccount !== "default" ? rawAccount : undefined;
+  const defaultAccount = rawAccount ? (rawAccount.split(",")[0]!.trim() || undefined) : undefined;
   log(`starting · vault=${vaultPath} · domain=${defaultDomain} · account=${defaultAccount ?? "(default)"} · stdio`);
 
   for await (const line of readStdinLines()) {

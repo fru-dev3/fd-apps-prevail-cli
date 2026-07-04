@@ -2,36 +2,41 @@ import { describe, expect, test } from "bun:test";
 import {
   pickDefaultGwsAccount,
   resolveDefaultGwsAccount,
+  resolveGwsAccounts,
   resolveGwsConfigDir,
   gwsSpawnEnv,
   type GwsProfile,
 } from "./calendar-sync.ts";
 
 // The generic principle under test: when a caller passes NO explicit account,
-// gws must target a CONNECTED/authorized account rather than gws's arbitrary
-// on-disk default. An explicitly-picked account always wins. This is what makes
-// an attached Google app authenticate in a DOMAIN chat exactly as in the app's
-// own chat.
+// resolution is strict and machine-agnostic - exactly one connected profile is
+// used automatically (whatever its label; never a hard-coded address), and with
+// several connected we NEVER guess between identities. An explicitly-picked
+// account always wins.
 
 const prof = (label: string): GwsProfile => ({ label, configDir: `/x/.config/${label === "default" ? "gws" : `gws-${label}`}` });
 
-describe("pickDefaultGwsAccount — connected account, not gws's arbitrary default", () => {
+describe("pickDefaultGwsAccount — one connected account auto-targets; several never guess", () => {
   test("no connected profiles -> undefined (honest failure, nothing to target)", () => {
     expect(pickDefaultGwsAccount([])).toBeUndefined();
   });
 
-  test("default profile connected -> undefined (use ~/.config/gws, unchanged)", () => {
-    expect(pickDefaultGwsAccount([prof("default"), prof("work")])).toBeUndefined();
-  });
-
-  test("only a labeled account connected -> that account (the domain-chat fix)", () => {
-    // The user authorized only "work" from the Google panel; the default dir is
-    // empty. We must target "work", not let gws fall back to the empty default.
+  test("exactly one connected -> that account, whatever its label", () => {
     expect(pickDefaultGwsAccount([prof("work")])).toBe("work");
+    expect(pickDefaultGwsAccount([prof("default")])).toBe("default");
   });
 
-  test("multiple labeled accounts, none default -> the first (stable order)", () => {
-    expect(pickDefaultGwsAccount([prof("home"), prof("work")])).toBe("home");
+  test("two or more connected -> undefined (never guess between identities)", () => {
+    expect(pickDefaultGwsAccount([prof("default"), prof("work")])).toBeUndefined();
+    expect(pickDefaultGwsAccount([prof("home"), prof("work")])).toBeUndefined();
+  });
+});
+
+describe("resolveGwsAccounts — the ask-the-user resolution", () => {
+  test("none / single / ambiguous, with the connected labels surfaced", () => {
+    expect(resolveGwsAccounts([])).toEqual({ kind: "none" });
+    expect(resolveGwsAccounts([prof("work")])).toEqual({ kind: "single", label: "work" });
+    expect(resolveGwsAccounts([prof("home"), prof("work")])).toEqual({ kind: "ambiguous", labels: ["home", "work"] });
   });
 });
 
