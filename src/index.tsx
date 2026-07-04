@@ -68,6 +68,8 @@ interface Args {
   manifestArgs: string[];
   chat: boolean;
   chatArgs: string[];
+  skillUsage: boolean;
+  skillUsageArgs: string[];
   agentRun: boolean;
   agentRunArgs: string[];
   score: boolean;
@@ -171,6 +173,8 @@ function parseArgs(argv: string[]): Args {
   let manifestArgs: string[] = [];
   let chat = false;
   let chatArgs: string[] = [];
+  let skillUsage = false;
+  let skillUsageArgs: string[] = [];
   let agentRun = false;
   let agentRunArgs: string[] = [];
   let score = false;
@@ -325,6 +329,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "manifest") {
       manifest = true;
       manifestArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "skill-usage") {
+      skillUsage = true;
+      skillUsageArgs = argv.slice(i + 1);
       break;
     } else if (a === "chat") {
       chat = true;
@@ -509,6 +517,8 @@ function parseArgs(argv: string[]): Args {
     manifest,
     manifestArgs,
     chat,
+    skillUsage,
+    skillUsageArgs,
     chatArgs,
     agentRun,
     agentRunArgs,
@@ -5593,6 +5603,40 @@ async function main() {
     const { agentRunCommand } = await import("./agent-run.ts");
     const code = await agentRunCommand(args.agentRunArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.skillUsage) {
+    // Skill usage intelligence: record / report / archive / unarchive.
+    //   prevail skill-usage used <domain> <skillId> [--source chat|council|sync|loop|agent]
+    //   prevail skill-usage report [--json]
+    //   prevail skill-usage archive|unarchive <domain> <skillId> [--json]
+    const suArgs = args.skillUsageArgs;
+    const jsonOut = suArgs.includes("--json");
+    const su = await import("./skill-usage.ts");
+    const v = args.vaultPath ?? readConfig()?.vaultPath ?? bundledDemoVaultPath();
+    const action = suArgs[0];
+    if (action === "used" && suArgs[1] && suArgs[2]) {
+      const srcIdx = suArgs.indexOf("--source");
+      const source = (srcIdx !== -1 ? suArgs[srcIdx + 1] : "other") as import("./skill-usage.ts").SkillUseSource;
+      await su.recordSkillUse(v, suArgs[1], suArgs[2], source);
+      if (jsonOut) process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+      return;
+    }
+    if (action === "report") {
+      const rep = su.skillUsageReport(v);
+      if (jsonOut) { process.stdout.write(`${JSON.stringify(rep)}\n`); return; }
+      console.log(`${rep.total} skills · ${rep.unused} never used · ${rep.dormant} dormant (no use in ${su.DORMANT_AFTER_DAYS}d)`);
+      for (const r of rep.rows) console.log(`  ${r.verdict.padEnd(7)} ${String(r.uses).padStart(4)}x  ${r.domain}/${r.id}`);
+      return;
+    }
+    if ((action === "archive" || action === "unarchive") && suArgs[1] && suArgs[2]) {
+      const r = action === "archive" ? su.archiveSkill(v, suArgs[1], suArgs[2]) : su.unarchiveSkill(v, suArgs[1], suArgs[2]);
+      if (jsonOut) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(`${action}d ${suArgs[1]}/${suArgs[2]}`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
+    console.error("usage: prevail skill-usage <used|report|archive|unarchive> ...");
+    process.exit(1);
   }
   if (args.chat) {
     const { chatJsonCommand } = await import("./chat-json.ts");
