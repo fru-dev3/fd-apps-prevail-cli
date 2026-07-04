@@ -36,6 +36,9 @@ import {
   shouldRunClassifier,
   classifyPrompt,
   metaFor,
+  cascadeEnabled,
+  pickCheaperCandidate,
+  cascadeShouldEscalate,
   type RouteCandidate,
 } from "./model-routing.ts";
 import { generalDir } from "./decisions.ts";
@@ -102,6 +105,11 @@ export interface ChatJsonOptions {
   // Economy / Balanced / Quality bias for the Auto router. Only consulted when
   // model === "auto"; absent => PREVAIL_ROUTE_BIAS env => "balanced".
   routeBias?: string;
+  // Layer 4 cascade escalation (opt-in, default OFF). Only consulted when
+  // model === "auto"; absent => PREVAIL_ROUTE_CASCADE env => off. When on AND the
+  // router lands in the ambiguous middle band, the turn runs the cheaper pick
+  // first and escalates to the normal pick only if a confidence check fails.
+  routeCascade?: boolean;
   // The user's Google-account chip selection (composer Modes). Threaded to the
   // google_workspace connector as its authoritative default target account.
   // Comma-joined list allowed; absent => the connector's own default account.
@@ -227,6 +235,16 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // Bunker/local-only), pick a concrete model, and emit a `route` event.
   let model = (opts.model ?? "").trim();
   let routeInfo: NonNullable<ChatEvent["route"]> | null = null;
+  // Layer 4 cascade plan, set only when cascade is on AND the router lands in the
+  // ambiguous middle band AND a cheaper candidate exists. Null => the single-turn
+  // path runs unchanged (cascade off / obvious band / no cheaper model).
+  let cascadePlan: {
+    cheapModel: string;
+    targetModel: string;
+    difficulty: number;
+    confidence: number;
+    bias: string;
+  } | null = null;
   if (model === "auto") {
     const localOnly = opts.localOnly ?? false;
     const bias = normalizeBias(opts.routeBias ?? process.env.PREVAIL_ROUTE_BIAS);
@@ -263,6 +281,30 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       difficulty: decision.difficulty,
       bias: decision.bias,
     };
+
+    // Layer 4 cascade: opt-in, and ONLY in the ambiguous middle band. Obvious-easy
+    // and obvious-hard prompts never cascade (h.ambiguous is false for them), so
+    // they keep today's single-turn behavior even with cascade on. When a cheaper
+    // candidate than the router's pick exists, run it first and escalate only if
+    // the confidence check fails; otherwise there is nothing cheaper to try and we
+    // just run the normal pick once.
+    if (cascadeEnabled(opts.routeCascade, process.env.PREVAIL_ROUTE_CASCADE) && h.ambiguous) {
+      const cheap = pickCheaperCandidate(candidates, decision.tier);
+      if (cheap && cheap.model && cheap.model !== decision.model) {
+        cascadePlan = {
+          cheapModel: cheap.model,
+          targetModel: decision.model,
+          difficulty: decision.difficulty,
+          confidence: decision.confidence,
+          bias: decision.bias,
+        };
+        // The turn STARTS on the cheaper model, so the initial route chip reflects
+        // that honestly. If we escalate, a second `route` event announces it.
+        model = cheap.model;
+        routeInfo.model = cheap.model;
+        routeInfo.reason = `cascade: trying ${cheap.model} first (${decision.reason})`;
+      }
+    }
   }
   const engine = engineLabel(cli, model);
   const startTs = Date.now();
@@ -306,26 +348,86 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   });
 
   let reply = "";
+  // The model that actually produced the final reply. Equals `model` on every
+  // non-cascade turn (so the assistant/usage/persistence are byte-identical); on
+  // a cascade escalation it becomes the escalated target.
+  let ranModel = model;
   try {
-    reply = await runChatTurn({
-      prompt: message,
-      cwd: domain.path,
-      cli,
-      model,
-      isFirst: !opts.sessionId, // resume → not first (claude uses --continue)
-      webAccess: opts.webAccess,
-      googleAccount: opts.googleAccount,
-      onChunk: (delta: string) => {
-        if (!delta) return;
-        reply += delta;
-        emit({ type: "delta", thread, ts: Date.now(), text: delta });
-      },
-    });
+    if (cascadePlan) {
+      // 1) Cheap pass, BUFFERED (no deltas) so it can be discarded silently if we
+      //    escalate - the consumer never sees a throwaway partial answer.
+      const cheapReply = await runChatTurn({
+        prompt: message,
+        cwd: domain.path,
+        cli,
+        model: cascadePlan.cheapModel,
+        isFirst: !opts.sessionId,
+        webAccess: opts.webAccess,
+        googleAccount: opts.googleAccount,
+      });
+      if (cascadeShouldEscalate({ difficulty: cascadePlan.difficulty, confidence: cascadePlan.confidence, reply: cheapReply })) {
+        // 2) Escalate: announce it transparently with a second `route` event, then
+        //    re-run on the router's normal pick WITH streaming (the normal UX).
+        ranModel = cascadePlan.targetModel;
+        emit({
+          type: "route",
+          thread,
+          ts: Date.now(),
+          domain: opts.domain,
+          engine: engineLabel(cli, ranModel),
+          route: {
+            cli: cli.kind,
+            model: ranModel,
+            reason: `escalated from ${cascadePlan.cheapModel}: the cheaper model was not confident enough`,
+            confidence: cascadePlan.confidence,
+            difficulty: cascadePlan.difficulty,
+            bias: cascadePlan.bias,
+          },
+        });
+        reply = await runChatTurn({
+          prompt: message,
+          cwd: domain.path,
+          cli,
+          model: ranModel,
+          isFirst: !opts.sessionId,
+          webAccess: opts.webAccess,
+          googleAccount: opts.googleAccount,
+          onChunk: (delta: string) => {
+            if (!delta) return;
+            reply += delta;
+            emit({ type: "delta", thread, ts: Date.now(), text: delta });
+          },
+        });
+      } else {
+        // The cheap answer stands. Emit it as one delta so a stream-only consumer
+        // still renders the text, then fall through to the shared finalize path.
+        reply = cheapReply;
+        if (reply) emit({ type: "delta", thread, ts: Date.now(), text: reply });
+      }
+    } else {
+      reply = await runChatTurn({
+        prompt: message,
+        cwd: domain.path,
+        cli,
+        model,
+        isFirst: !opts.sessionId, // resume → not first (claude uses --continue)
+        webAccess: opts.webAccess,
+        googleAccount: opts.googleAccount,
+        onChunk: (delta: string) => {
+          if (!delta) return;
+          reply += delta;
+          emit({ type: "delta", thread, ts: Date.now(), text: delta });
+        },
+      });
+    }
   } catch (err) {
     return fail((err as Error)?.message ?? "chat turn failed");
   }
 
   const doneTs = Date.now();
+  // On a cascade escalation the reply came from the escalated model, so label the
+  // finalized events with it; otherwise this is byte-identical to `engine`.
+  const finalEngine = ranModel === model ? engine : engineLabel(cli, ranModel);
   // assistant (finalized full reply)
   emit({
     type: "assistant",
@@ -333,7 +435,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     ts: doneTs,
     role: "assistant",
     text: reply,
-    engine,
+    engine: finalEngine,
   });
 
   // usage (heuristic — see estimateUsage)
@@ -350,7 +452,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     parentId: userTurn.id,
     role: "assistant",
     cli: cli.kind,
-    model,
+    model: ranModel,
     content: reply,
     ts: doneTs,
   };
@@ -362,7 +464,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     content: reply,
     ts: doneTs,
     cli: cli.kind,
-    model,
+    model: ranModel,
   });
 
   // done
@@ -386,6 +488,7 @@ export async function chatJsonCommand(
   let localOnly = false;
   let webAccess: "allow" | "deny" | undefined;
   let routeBias: string | undefined;
+  let routeCascade: boolean | undefined;
   let googleAccount: string | undefined;
   let vaultPath = vaultOverride ?? "";
 
@@ -407,6 +510,9 @@ export async function chatJsonCommand(
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
     else if (a === "--route-bias") { routeBias = next; i++; }
     else if (a.startsWith("--route-bias=")) routeBias = a.slice("--route-bias=".length);
+    else if (a === "--route-cascade") routeCascade = true;
+    else if (a === "--no-route-cascade") routeCascade = false;
+    else if (a.startsWith("--route-cascade=")) { const v = a.slice("--route-cascade=".length).toLowerCase(); routeCascade = v === "1" || v === "true" || v === "on" || v === "yes"; }
     else if (a === "--google-account") { googleAccount = next; i++; }
     else if (a.startsWith("--google-account=")) googleAccount = a.slice("--google-account=".length);
     else if (a === "--vault") { vaultPath = resolve(process.cwd(), next ?? ""); i++; }
@@ -441,6 +547,7 @@ export async function chatJsonCommand(
     localOnly,
     webAccess,
     routeBias,
+    routeCascade,
     googleAccount,
   });
 }

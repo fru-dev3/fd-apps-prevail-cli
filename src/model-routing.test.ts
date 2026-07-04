@@ -9,6 +9,9 @@ import {
   normalizeBias,
   shouldRunClassifier,
   parseClassifyResponse,
+  cascadeEnabled,
+  pickCheaperCandidate,
+  cascadeShouldEscalate,
   type RouteCandidate,
   type RouteBias,
 } from "./model-routing.ts";
@@ -219,5 +222,94 @@ describe("chooseModel — determinism", () => {
       const b = chooseModel({ message: "steady prompt", candidates: mk(), bias, classified: { difficulty: 3 } });
       expect(a.model).toBe(b.model);
     }
+  });
+});
+
+// ── Layer 4 cascade (opt-in) ────────────────────────────────────────────────
+
+describe("cascadeEnabled", () => {
+  test("explicit flag wins over env", () => {
+    expect(cascadeEnabled(true, undefined)).toBe(true);
+    expect(cascadeEnabled(false, "1")).toBe(false); // flag false overrides truthy env
+    expect(cascadeEnabled(true, "0")).toBe(true);
+  });
+  test("defaults OFF; only affirmative env turns it on", () => {
+    expect(cascadeEnabled(undefined, undefined)).toBe(false);
+    expect(cascadeEnabled(undefined, "")).toBe(false);
+    expect(cascadeEnabled(undefined, "0")).toBe(false);
+    expect(cascadeEnabled(undefined, "false")).toBe(false);
+    for (const v of ["1", "true", "on", "yes", "TRUE", "On"]) {
+      expect(cascadeEnabled(undefined, v)).toBe(true);
+    }
+  });
+});
+
+describe("pickCheaperCandidate", () => {
+  const cands = (): RouteCandidate[] => [
+    makeCandidate("claude", "opus"),   // tier 4
+    makeCandidate("claude", "sonnet"), // tier 3
+    makeCandidate("claude", "haiku"),  // tier 2
+  ];
+  test("drops exactly one rung (next tier down), not to the floor", () => {
+    // target tier 4 => cheaper should be sonnet (tier 3), not haiku (tier 2).
+    expect(pickCheaperCandidate(cands(), 4)?.model).toBe("sonnet");
+    // target tier 3 => haiku (tier 2).
+    expect(pickCheaperCandidate(cands(), 3)?.model).toBe("haiku");
+  });
+  test("null when nothing is cheaper", () => {
+    expect(pickCheaperCandidate(cands(), 2)).toBeNull(); // nothing below tier 2 here
+    expect(pickCheaperCandidate([makeCandidate("claude", "opus")], 4)).toBeNull();
+  });
+  test("deterministic across call order", () => {
+    const a = pickCheaperCandidate(cands(), 4)?.model;
+    const b = pickCheaperCandidate([...cands()].reverse(), 4)?.model;
+    expect(a).toBe(b);
+  });
+});
+
+describe("cascadeShouldEscalate", () => {
+  const good = "The capital of France is Paris. It has been the capital since the 10th century.";
+  test("stays on the cheap model for a confident, moderate answer", () => {
+    expect(cascadeShouldEscalate({ difficulty: 3, confidence: 0.7, reply: good })).toBe(false);
+  });
+  test("escalates on an empty or truncated cheap answer", () => {
+    expect(cascadeShouldEscalate({ difficulty: 3, confidence: 0.7, reply: "" })).toBe(true);
+    expect(cascadeShouldEscalate({ difficulty: 3, confidence: 0.7, reply: " " })).toBe(true);
+  });
+  test("escalates when the cheap model self-reports uncertainty", () => {
+    expect(cascadeShouldEscalate({ difficulty: 3, confidence: 0.7, reply: "I'm not sure, this is tricky." })).toBe(true);
+    expect(cascadeShouldEscalate({ difficulty: 3, confidence: 0.7, reply: "I don't have enough context to answer." })).toBe(true);
+    expect(cascadeShouldEscalate({ difficulty: 3, confidence: 0.7, reply: "I can't help with that." })).toBe(true);
+  });
+  test("escalates on a hard-middle difficulty or an unsure route", () => {
+    expect(cascadeShouldEscalate({ difficulty: 4, confidence: 0.7, reply: good })).toBe(true);
+    expect(cascadeShouldEscalate({ difficulty: 3, confidence: 0.4, reply: good })).toBe(true);
+  });
+});
+
+// End-to-end intent: the router picks a target for the ambiguous middle, cascade
+// starts one rung cheaper, and escalation lands back on that target.
+describe("cascade integration (router + cheap pick + escalate)", () => {
+  const cands = (): RouteCandidate[] => [
+    makeCandidate("claude", "opus"),
+    makeCandidate("claude", "sonnet"),
+    makeCandidate("claude", "haiku"),
+  ];
+  test("ambiguous moderate prompt: cheap start is a rung below the target", () => {
+    // A bare, unclassified moderate prompt with no easy/hard keyword lands in the
+    // ambiguous middle (difficulty 3, not obvious-easy/hard).
+    const prompt = "Tell me about the history of the coffee bean and how it spread across different continents over time.";
+    const h = deriveHeuristics(prompt);
+    expect(h.ambiguous).toBe(true);
+    expect(h.difficultyPrior).toBe(3);
+    const decision = chooseModel({ message: prompt, candidates: cands(), bias: "balanced" });
+    const cheap = pickCheaperCandidate(cands(), decision.tier);
+    // There is a cheaper rung, and it is strictly weaker than the target.
+    expect(cheap).not.toBeNull();
+    expect(metaFor(cheap!.model).tier).toBeLessThan(decision.tier);
+  });
+  test("obvious bands are not ambiguous, so cascade never engages there", () => {
+    expect(deriveHeuristics("hi").ambiguous).toBe(false);            // obvious-easy
+    expect(deriveHeuristics("Please debug and refactor this algorithm: ```for(;;){}```").ambiguous).toBe(false); // obvious-hard
   });
 });

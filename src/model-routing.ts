@@ -370,6 +370,57 @@ export function routeWithFallback(input: RouteInput, fallback: { cli: CliKind; m
   }
 }
 
+// ---------------------------------------------------------------------------
+// Layer 4 - cascade escalation (OPT-IN, default OFF).
+//
+// For the ambiguous MIDDLE band only, cascade answers with a CHEAPER model first
+// and escalates to the router's normal pick only when a confidence check fails.
+// Off, or outside the middle band, is byte-identical to the single-turn path.
+// Both functions are PURE so the cascade is exhaustively unit-testable.
+// ---------------------------------------------------------------------------
+
+// Truthy env parse for PREVAIL_ROUTE_CASCADE. Anything obviously affirmative
+// turns it on; absent / "0" / "false" leaves it OFF (the default).
+export function cascadeEnabled(flag: boolean | undefined, env: string | undefined): boolean {
+  if (typeof flag === "boolean") return flag;
+  const s = (env ?? "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "on" || s === "yes";
+}
+
+// The cheaper model to try first: the HIGHEST-tier candidate strictly below the
+// target tier (i.e. the next tier down), so we drop exactly one rung, not to the
+// floor. Deterministic (stable order). Null when nothing is cheaper - in which
+// case there is no cascade to run and the caller uses the normal single turn.
+export function pickCheaperCandidate(candidates: RouteCandidate[], targetTier: number): RouteCandidate | null {
+  let best: RouteCandidate | null = null;
+  let bestTier = 0;
+  for (const c of stableSort(candidates)) {
+    if (!c || typeof c.model !== "string") continue;
+    const t = metaFor(c.model).tier;
+    if (t < targetTier && t > bestTier) { best = c; bestTier = t; }
+  }
+  return best;
+}
+
+// The cheap model self-reporting that it can't answer / isn't sure. Kept narrow
+// so a confident answer that merely mentions uncertainty in passing does not
+// trip it (anchored to first-person "I ..." admissions).
+const CHEAP_UNCERTAIN_RE =
+  /\b(i(?:'m| am) not sure|i am unsure|i can(?:'|no)?t (?:help|answer|assist|do that)|i do(?:n'|no)t (?:know|have enough)|unable to (?:help|answer|determine)|not able to (?:help|answer)|beyond my|cannot determine|insufficient information)\b/i;
+
+// Decide whether to escalate after the cheap pass. Honest, cheap signals only
+// (no extra model call): an empty/truncated answer, a first-person uncertainty
+// admission, a difficulty that landed hard (>=4) on a deliberately weak pick, or
+// a router that was itself unsure of the pick. Any one is enough.
+export function cascadeShouldEscalate(args: { difficulty: number; confidence: number; reply: string }): boolean {
+  const reply = (args.reply ?? "").trim();
+  if (reply.length < 2) return true;                 // no real answer came back
+  if (CHEAP_UNCERTAIN_RE.test(reply)) return true;    // the model punted
+  if (Number.isFinite(args.difficulty) && args.difficulty >= 4) return true; // hard middle
+  if (Number.isFinite(args.confidence) && args.confidence < 0.5) return true; // unsure route
+  return false;
+}
+
 interface ReasonArgs {
   difficulty: number;
   bias: RouteBias;
