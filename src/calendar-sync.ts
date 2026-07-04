@@ -238,9 +238,38 @@ export function resolveDefaultGwsAccount(): string | undefined {
   return pickDefaultGwsAccount(listGwsProfiles());
 }
 
+// The signed-in email of a gws profile, via `gws auth status` (the only place
+// the identity lives - token material is opaque on disk). Cached per process:
+// used only to resolve email-looking account selectors, never on hot paths.
+const profileEmailCache = new Map<string, string | null>();
+function gwsProfileEmail(configDir: string): string | null {
+  const hit = profileEmailCache.get(configDir);
+  if (hit !== undefined) return hit;
+  let email: string | null = null;
+  try {
+    const gws = resolveGwsBinary();
+    if (gws) {
+      const run = spawnSync(gws, ["auth", "status"], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: augmentedPath(), GOOGLE_WORKSPACE_CLI_CONFIG_DIR: configDir },
+        timeout: 8000,
+        maxBuffer: 4 * 1024 * 1024,
+      });
+      const user = (JSON.parse(run.stdout || "{}") as { user?: unknown }).user;
+      if (typeof user === "string" && user.includes("@")) email = user.trim().toLowerCase();
+    }
+  } catch { /* unknown identity - cache the miss */ }
+  profileEmailCache.set(configDir, email);
+  return email;
+}
+
 // Resolve an account selector to a gws config dir, or undefined for the default
 // profile (caller then leaves GOOGLE_WORKSPACE_CLI_CONFIG_DIR unset → ~/.config/gws).
-// Accepts a label ("work"), the literal "default", or an absolute config-dir path.
+// Accepts a label ("work"), the literal "default", an absolute config-dir path,
+// or an EMAIL / email local-part ("2354595+fru-dev3@users.noreply.github.com" / "alex.rivera") - the UI
+// shows emails, so users and models naturally pass them; a selector containing
+// "@" or "." can never be a label (labels are slugs), so the email probe only
+// runs when nothing else can match.
 export function resolveGwsConfigDir(account?: string): string | undefined {
   const a = (account || "").trim();
   if (!a || a.toLowerCase() === "default") return undefined;
@@ -249,6 +278,22 @@ export function resolveGwsConfigDir(account?: string): string | undefined {
   // Otherwise treat it as a label, matching a known profile first.
   for (const p of listGwsProfiles()) {
     if (p.label === a) return p.configDir;
+  }
+  // No label matched: the selector may be an email or an email local part (the
+  // UI shows emails, so users and models naturally pass them). Match each
+  // profile's live signed-in identity; the per-profile probe is cached, so this
+  // costs one `gws auth status` per profile per process, only on the miss path.
+  {
+    const want = a.toLowerCase();
+    for (const p of listGwsProfiles()) {
+      const email = gwsProfileEmail(p.configDir);
+      if (!email) continue;
+      if (email === want || email.split("@")[0] === want) {
+        // The default profile's dir is returned explicitly - equivalent to
+        // leaving the env unset, and lets the caller log a concrete target.
+        return p.configDir;
+      }
+    }
   }
   // Fall back to the conventional dir for the label (may be created by login).
   const safe = a.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");

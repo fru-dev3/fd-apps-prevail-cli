@@ -173,6 +173,11 @@ export function gwsSelfEmailHook(account?: string): ((subject: string, body: str
 // argv or a disabled Google API into a fake "scope not granted" story that
 // nobody could act on. Exported for tests.
 export function classifyGwsFailure(stdoutText: string, stderrText: string, args: string[], account?: string): string {
+  // gws prints "Using keyring backend: keyring" on EVERY run - strip that benign
+  // banner so the keychain-failure rule below can't misfire on it.
+  const strip = (s: string) => s.replace(/using keyring backend:[^\n]*/gi, "");
+  stdoutText = strip(stdoutText);
+  stderrText = strip(stderrText);
   const all = `${stdoutText}\n${stderrText}`;
   // 1. gws rejected the command itself - an argv problem, not auth. Return the
   //    CLI's own usage message so the model can immediately self-correct.
@@ -188,7 +193,16 @@ export function classifyGwsFailure(stdoutText: string, stderrText: string, args:
     const svc = args[0] ? cap(args[0]) : "This service";
     return `${svc} is blocked at Google, not by sign-in: the ${svc} API is DISABLED on the Google Cloud project behind your OAuth client. One-time fix: open ${url ?? "the Google Cloud console API library for your project"}, click Enable, wait about a minute, then retry. Every connected account on this machine shares that client, so enabling it fixes all of them.`;
   }
-  // 3. A genuine permission/scope refusal for this account.
+  // 3. The macOS Keychain refused gws in THIS execution context. The same
+  //    command works in the user's Terminal, so name the context problem
+  //    precisely instead of blaming the account.
+  if (/keyring|keychain|errSec|SecKeychain|no such credential|failed to (read|get|load).*(token|credential)/i.test(all)) {
+    return (
+      `gws could not read its saved token from the macOS Keychain when launched from the app (it works in Terminal, where the Keychain grants access). ` +
+      `This is a machine trust setting, not a Google problem: open Keychain Access, find the gws item, and allow access - or re-run 'gws auth login' once from Terminal and approve "Always Allow" when the Keychain prompts.`
+    );
+  }
+  // 4. A genuine permission/scope refusal for this account.
   if (/insufficient.*scope|invalid_scope|ACCESS_TOKEN_SCOPE_INSUFFICIENT|PERMISSION_DENIED/i.test(all)) {
     return notAuthedMessage(args, account);
   }
