@@ -930,6 +930,12 @@ export interface ChatTurn {
   // WebSearch/WebFetch tools and refuses providers whose web tools can't be
   // switched off (see runChatTurn). Omitted => fall back to the global setting.
   webAccess?: "allow" | "deny";
+  // Allow this turn to ALSO see the user's own Claude Code MCP servers (their
+  // claude.ai connectors like PayPal/Notion). Default false: engine turns run a
+  // strict, engine-managed tool surface so account routing can't be bypassed.
+  // App chats opt in - "connected via Claude Code" passthrough is exactly the
+  // contract those apps advertise.
+  inheritUserMcp?: boolean;
   // The user's Google-account chip selection (composer Modes). When set it is
   // threaded to the google_workspace connector launch as its AUTHORITATIVE
   // default target account (gws-mcp --account <label>), so the picked account is
@@ -1036,7 +1042,7 @@ export function sanitizeEmDashes(text: string): string {
   return segments.join("");
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1242,7 +1248,10 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
         // routing (the picked/bound identity) and failing with wrong-account
         // errors like "entity not found". Restrict MCP to exactly what we
         // injected; builtins (WebSearch/WebFetch/files) are unaffected.
-        args.push("--strict-mcp-config");
+        // EXCEPTION: app chats opt in to ALSO inherit the user's own Claude
+        // Code MCP servers - the "connected via Claude Code" passthrough those
+        // apps advertise (PayPal etc.). Scoped: domain chats stay strict.
+        if (!inheritUserMcp) args.push("--strict-mcp-config");
         // In headless `-p` there is no TTY to approve tool use, so on a non-act
         // (chat) turn the injected MCP tools would be auto-denied and the agent
         // could never call them. Explicitly allow exactly the servers we

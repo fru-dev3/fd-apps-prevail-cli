@@ -137,6 +137,9 @@ export interface ChatJsonOptions {
   // google_workspace connector as its authoritative default target account.
   // Comma-joined list allowed; absent => the connector's own default account.
   googleAccount?: string;
+  // App-chat passthrough: let the turn also see the user's own Claude Code MCP
+  // servers (their claude.ai connectors). Strict surface otherwise.
+  inheritUserMcp?: boolean;
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
   write?: (line: string) => void;
@@ -443,6 +446,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         isFirst: !opts.sessionId,
         webAccess: opts.webAccess,
         googleAccount: opts.googleAccount,
+        inheritUserMcp: opts.inheritUserMcp,
       });
       if (cascadeShouldEscalate({ difficulty: cascadePlan.difficulty, confidence: cascadePlan.confidence, reply: cheapReply })) {
         // 2) Escalate: announce it transparently with a second `route` event, then
@@ -493,6 +497,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         isFirst: !opts.sessionId, // resume → not first (claude uses --continue)
         webAccess: opts.webAccess,
         googleAccount: opts.googleAccount,
+        inheritUserMcp: opts.inheritUserMcp,
         onTool,
         onChunk: (delta: string) => {
           if (!delta) return;
@@ -571,6 +576,7 @@ export async function chatJsonCommand(
   let routeBias: string | undefined;
   let routeCascade: boolean | undefined;
   let googleAccount: string | undefined;
+  let inheritUserMcp = false;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -594,6 +600,7 @@ export async function chatJsonCommand(
     else if (a === "--route-cascade") routeCascade = true;
     else if (a === "--no-route-cascade") routeCascade = false;
     else if (a.startsWith("--route-cascade=")) { const v = a.slice("--route-cascade=".length).toLowerCase(); routeCascade = v === "1" || v === "true" || v === "on" || v === "yes"; }
+    else if (a === "--inherit-user-mcp") inheritUserMcp = true;
     else if (a === "--google-account") { googleAccount = next; i++; }
     else if (a.startsWith("--google-account=")) googleAccount = a.slice("--google-account=".length);
     else if (a === "--vault") { vaultPath = resolve(process.cwd(), next ?? ""); i++; }
@@ -630,6 +637,7 @@ export async function chatJsonCommand(
     routeBias,
     routeCascade,
     googleAccount,
+    inheritUserMcp,
   });
 }
 
