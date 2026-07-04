@@ -1231,6 +1231,15 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
       if (mcpCfg) {
         toolsInjected = true;
         args.push("--mcp-config", mcpCfg);
+        // Engine-managed turn = engine-managed tool surface. Without this,
+        // claude also loads the USER'S global MCP config (claude.ai Gmail /
+        // Calendar / Drive connectors, authenticated as whatever claude.ai
+        // holds), and the model can reach for those instead of the injected
+        // google_workspace server - silently bypassing Prevail's account
+        // routing (the picked/bound identity) and failing with wrong-account
+        // errors like "entity not found". Restrict MCP to exactly what we
+        // injected; builtins (WebSearch/WebFetch/files) are unaffected.
+        args.push("--strict-mcp-config");
         // In headless `-p` there is no TTY to approve tool use, so on a non-act
         // (chat) turn the injected MCP tools would be auto-denied and the agent
         // could never call them. Explicitly allow exactly the servers we
