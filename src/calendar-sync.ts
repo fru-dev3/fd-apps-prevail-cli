@@ -107,7 +107,7 @@ function shortReason(e: unknown): string {
 // A PATH that includes the common package-manager bin dirs, so a `gws` installed
 // by Homebrew / a user-local install is found even when the desktop spawns us
 // with a sparse env.
-function augmentedPath(): string {
+export function augmentedPath(): string {
   const extra = ["/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local", "bin"), join(homedir(), ".cargo", "bin")];
   const current = (process.env.PATH || "").split(":").filter(Boolean);
   const seen = new Set(current);

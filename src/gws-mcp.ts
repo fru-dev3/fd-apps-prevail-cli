@@ -15,6 +15,7 @@ import { VERSION } from "./version.ts";
 import { classifyGwsCommand, runGwsRead, addPendingGws } from "./gws-gateway.ts";
 import { resolveGwsAccounts } from "./calendar-sync.ts";
 import { boundGoogleAccountLabel } from "./vault.ts";
+import { runGwsDoctor } from "./gws-doctor.ts";
 
 // Default app-binding lookup (separated so tests can inject a stub).
 function defaultBoundLookup(vault: string): string | undefined {
@@ -69,6 +70,12 @@ const TOOL_DESCRIPTION =
 
 function tools(): McpTool[] {
   return [
+    {
+      name: "google_workspace_doctor",
+      description:
+        "Self-diagnose the Google connection end to end: for EVERY connected account, reports identity, token health, granted scopes per service, and whether each Google API is enabled on the OAuth project - with the exact remedial action for anything broken. Call this FIRST whenever a google_workspace call fails (or before starting multi-account Google work), instead of retrying blind variations. Read-only, takes no arguments.",
+      inputSchema: { type: "object", properties: {} },
+    },
     {
       name: "google_workspace",
       description: TOOL_DESCRIPTION,
@@ -161,7 +168,8 @@ export function callGoogleWorkspace(
   if (kind === "read") {
     const r = runGwsRead(args, account);
     if (r.ok) return wrapText(r.output ?? "(no output)");
-    return wrapText(`Error: ${r.error ?? "gws read failed"}`);
+    // Point the agent at self-diagnosis instead of blind retry variations.
+    return wrapText(`Error: ${r.error ?? "gws read failed"} (To diagnose all accounts/services at once, call the google_workspace_doctor tool.)`);
   }
   // Write: queue it (with its target account). NEVER execute here.
   const rec = addPendingGws(vaultPath, { domain, summary, args, account });
@@ -195,6 +203,9 @@ function dispatch(
     case "tools/call": {
       const p = (req.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
       const name = p.name ?? "";
+      if (name === "google_workspace_doctor") {
+        return { content: wrapText(runGwsDoctor()) };
+      }
       if (name !== "google_workspace") throw new Error(`unknown tool: ${name}`);
       const content = callGoogleWorkspace(p.arguments ?? {}, vaultPath, defaultDomain, defaultAccount);
       // Honest failure signaling: an "Error: ..." text result IS a failed call.
