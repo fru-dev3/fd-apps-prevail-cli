@@ -16,7 +16,7 @@ import {
 
 const prof = (label: string): GwsProfile => ({ label, configDir: `/x/.config/${label === "default" ? "gws" : `gws-${label}`}` });
 
-describe("pickDefaultGwsAccount — one connected account auto-targets; several never guess", () => {
+describe("pickDefaultGwsAccount: one connected account auto-targets; several never guess", () => {
   test("no connected profiles -> undefined (honest failure, nothing to target)", () => {
     expect(pickDefaultGwsAccount([])).toBeUndefined();
   });
@@ -32,7 +32,7 @@ describe("pickDefaultGwsAccount — one connected account auto-targets; several 
   });
 });
 
-describe("resolveGwsAccounts — the ask-the-user resolution", () => {
+describe("resolveGwsAccounts: the ask-the-user resolution", () => {
   test("none / single / ambiguous, with the connected labels surfaced", () => {
     expect(resolveGwsAccounts([])).toEqual({ kind: "none" });
     expect(resolveGwsAccounts([prof("work")])).toEqual({ kind: "single", label: "work" });
