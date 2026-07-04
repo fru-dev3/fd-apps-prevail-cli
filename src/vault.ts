@@ -1170,6 +1170,20 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const appPath = join(appsRoot, entry.name);
+    // A per-app conversation scope (data/apps/<id>/_scope) can materialize the
+    // app folder even when no real app is installed there yet. Such a shell
+    // holds ONLY underscore/dot entries (_scope, _threads, .system). A REAL app
+    // always has at least one plain content file (manifest.json / state.md /
+    // soul.md / skills). Skip a scope-only shell so a per-app chat never gets
+    // listed as a phantom app (which would also double-list against a bundled
+    // community app of the same id).
+    let hasAppContent = false;
+    try {
+      for (const child of readdirSync(appPath, { withFileTypes: true })) {
+        if (!child.name.startsWith("_") && !child.name.startsWith(".")) { hasAppContent = true; break; }
+      }
+    } catch {}
+    if (!hasAppContent) continue;
     const statePath = join(appPath, "state.md");
     const loopsPath = join(appPath, "open-loops.md");
     const hasState = existsSync(statePath);

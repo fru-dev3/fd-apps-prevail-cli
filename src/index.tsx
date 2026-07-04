@@ -5,8 +5,8 @@
 // daemon, chat-json…) paid ~400ms loading the whole terminal UI it never renders.
 // They're now dynamically imported inside runWizard()/launchCockpit() only.
 import { resolve, join, basename, dirname } from "node:path";
-import { resolveDomainDir, buildRoot } from "./path-safety.ts";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { resolveDomainDir, buildRoot, dataRoot, DOMAINS_DIR, appScopeId } from "./path-safety.ts";
+import { existsSync, readdirSync, readFileSync, renameSync, mkdirSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
@@ -3645,9 +3645,63 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         const a = r.alreadyMigrated ? { archived: [] } : archiveLegacyDomainV4(targetVault, d, stamp);
         results.push({ domain: d, ops: r.ops.length, archived: a.archived.length, already: r.alreadyMigrated });
       }
-      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results }) + "\n");
+      // Best-effort cleanup of stray app-scope shadow folders. A confirmed bug
+      // resolved per-app conversation scopes (`_app-<id>`) like domains, leaving
+      // shadow folders under data/domains/_app-<id>. They belong with the app at
+      // data/apps/<id>/_scope. Relocate them non-destructively so the Rebuild
+      // button repairs existing vaults. Never clobber: when the target already
+      // has an entry, only non-colliding children are moved and the rest stay.
+      // Recursively move src into dest without ever clobbering: a file that
+      // already exists at the target is left where it is; a directory that
+      // exists at both is descended into so nested history (e.g. _threads/*.jsonl)
+      // still migrates instead of being stranded. Returns files moved; prunes
+      // now-empty source dirs so a fully-migrated shadow folder disappears.
+      const mergeNonClobber = (src: string, dest: string): number => {
+        let moved = 0;
+        let children: import("node:fs").Dirent[] = [];
+        try { children = readdirSync(src, { withFileTypes: true }); } catch { return 0; }
+        for (const child of children) {
+          const cSrc = join(src, child.name);
+          const cDest = join(dest, child.name);
+          if (!existsSync(cDest)) {
+            try { mkdirSync(dest, { recursive: true }); renameSync(cSrc, cDest); moved++; } catch {}
+          } else if (child.isDirectory()) {
+            moved += mergeNonClobber(cSrc, cDest); // descend a colliding directory
+          } // a colliding file is left untouched (never clobber)
+        }
+        try { if (readdirSync(src).length === 0) rmdirSync(src); } catch {}
+        return moved;
+      };
+      const relocated: { app: string; entries: number; whole: boolean }[] = [];
+      try {
+        const domainsDir = join(dataRoot(targetVault), DOMAINS_DIR);
+        if (existsSync(domainsDir)) {
+          for (const de of readdirSync(domainsDir, { withFileTypes: true })) {
+            if (!de.isDirectory()) continue;
+            const id = appScopeId(de.name);
+            if (!id) continue;
+            const src = join(domainsDir, de.name);
+            const dest = resolveDomainDir(targetVault, de.name); // data/apps/<id>/_scope
+            if (!existsSync(dest)) {
+              try {
+                mkdirSync(dirname(dest), { recursive: true });
+                renameSync(src, dest);
+                relocated.push({ app: id, entries: -1, whole: true });
+              } catch { /* leave the stray folder in place on failure */ }
+            } else {
+              relocated.push({ app: id, entries: mergeNonClobber(src, dest), whole: false });
+            }
+          }
+        }
+      } catch { /* cleanup is best-effort; never fail the migration over it */ }
+      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated }) + "\n");
       else {
         for (const r of results) console.log(r.already ? `${r.domain}: already clean` : `${r.domain}: moved ${r.ops} entr(ies) into source/·memory/·.system/, archived ${r.archived} original(s)`);
+        for (const r of relocated) {
+          console.log(r.whole
+            ? `_app-${r.app}: relocated shadow domain folder to data/apps/${r.app}/_scope`
+            : `_app-${r.app}: merged ${r.entries} entr(ies) into data/apps/${r.app}/_scope (kept any colliding originals)`);
+        }
         console.log("done — vault is on the clean v4 layout. Originals are in each domain's _pre-v4-v4/ backup.");
       }
     } catch (e) {
