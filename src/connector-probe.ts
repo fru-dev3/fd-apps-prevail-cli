@@ -1,5 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { browserProfilePath } from "./path-safety.ts";
 import { spawn } from "node:child_process";
 import type { AppSkill, ConnectorStatus } from "./vault.ts";
 import { scrubbedEnv } from "./cli-bridge.ts";
@@ -156,7 +157,13 @@ export async function probeConnector(app: AppSkill, spec: AuthCheckSpec | null):
 function probeBrowserSession(app: AppSkill, spec: AuthCheckSpec, ts: number): ProbeResult {
   const { join } = require("node:path") as typeof import("node:path");
   const stateFile = join(app.path, spec.state_file ?? "auth/state.json");
-  const profileDir = join(app.path, spec.profile_dir ?? "auth/profile");
+  // The live Chrome profile now lives MACHINE-LOCAL (~/.prevail/browser-profiles),
+  // outside the synced vault. Check that location; also check the legacy in-vault
+  // path so a not-yet-migrated profile still reads as a fresh session. Use the
+  // pure resolver so a read-only probe never creates the dir (which would look
+  // falsely fresh).
+  const localProfileDir = browserProfilePath(app.id);
+  const legacyProfileDir = join(app.path, spec.profile_dir ?? "auth/profile");
   const maxAgeDays = spec.max_age_days ?? 25;
   const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
 
@@ -168,7 +175,7 @@ function probeBrowserSession(app: AppSkill, spec: AuthCheckSpec, ts: number): Pr
     }
   };
   const stateMtime = freshness(stateFile);
-  const profileMtime = freshness(profileDir);
+  const profileMtime = Math.max(freshness(localProfileDir) ?? 0, freshness(legacyProfileDir) ?? 0) || null;
   const newest = Math.max(stateMtime ?? 0, profileMtime ?? 0);
   if (newest === 0) {
     return {

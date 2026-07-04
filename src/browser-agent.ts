@@ -18,6 +18,7 @@
 // unit-testable with mocks (no real browser, no real model).
 
 import { join, relative } from "node:path";
+import { browserProfileDir } from "./path-safety.ts";
 import {
   validateAgentAction,
   extractFirstJsonObject,
@@ -368,7 +369,8 @@ export async function runSkillBrowserAgent(
   const domainAllow = Array.isArray(ex.domain_allow) ? (ex.domain_allow as unknown[]).filter((x): x is string => typeof x === "string") : startHost(startUrl);
   const session = ex.session === "state" ? "state" : "profile";
   const downloadsDir = join(skill.connectorDir, "data", "imports");
-  const profileDir = join(skill.connectorDir, "auth", "profile");
+  // Machine-local profile (outside the vault), migrating any legacy in-vault one.
+  const profileDir = browserProfileDir(skill.connectorId, join(skill.connectorDir, "auth", "profile"));
   const statePath = join(skill.connectorDir, "auth", "state.json");
 
   const { BrowserDriverHost, makeHostDriver } = await import("./browser-driver.ts");

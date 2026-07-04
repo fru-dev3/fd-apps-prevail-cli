@@ -16,6 +16,7 @@
 
 import { mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync, chmodSync } from "node:fs";
 import { dirname, relative, join } from "node:path";
+import { browserProfileDir } from "./path-safety.ts";
 import { spawn } from "node:child_process";
 import type { SkillSpec, SkillRunResult, SkillRunOpts } from "./connector-skills.ts";
 import { substitute, safeOutputPath, buildSkillEnv } from "./connector-skills.ts";
@@ -632,7 +633,8 @@ async function replaySkillBrowser(
   const session = ex.session === "state" ? "state" : "profile";
   const headed = ex.headless === false || ex.headed === true; // default headless
   const downloadsDir = join(skill.connectorDir, "data", "imports");
-  const profileDir = join(skill.connectorDir, "auth", "profile");
+  // Machine-local profile (outside the vault), migrating any legacy in-vault one.
+  const profileDir = browserProfileDir(skill.connectorId, join(skill.connectorDir, "auth", "profile"));
   const statePath = join(skill.connectorDir, "auth", "state.json");
   const domainAllow = Array.isArray(ex.domain_allow)
     ? (ex.domain_allow as unknown[]).filter((x): x is string => typeof x === "string")

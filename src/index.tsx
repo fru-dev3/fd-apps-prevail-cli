@@ -5,7 +5,7 @@
 // daemon, chat-json…) paid ~400ms loading the whole terminal UI it never renders.
 // They're now dynamically imported inside runWizard()/launchCockpit() only.
 import { resolve, join, basename, dirname } from "node:path";
-import { resolveDomainDir, buildRoot, dataRoot, DOMAINS_DIR, appScopeId } from "./path-safety.ts";
+import { resolveDomainDir, buildRoot, dataRoot, DOMAINS_DIR, appScopeId, browserProfileDir } from "./path-safety.ts";
 import { existsSync, readdirSync, readFileSync, renameSync, mkdirSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
@@ -3002,7 +3002,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
       } catch { /* no manifest */ }
     }
     if (!host) host = `${id.toLowerCase().replace(/-(com|org|net|io|co|app|ai|dev)$/, ".$1").replace(/[^a-z0-9.]/g, "")}`;
-    const profileDir = join(app.path, "auth", "profile");
+    // Machine-local profile (outside the vault), migrating any legacy in-vault one.
+    const profileDir = browserProfileDir(app.id, join(app.path, "auth", "profile"));
     const { importChromeLogins } = await import("./browser-import.ts");
     const r = await importChromeLogins(profileDir, [host]);
     return done(r.ok, { message: r.message, imported: r.imported, error: r.ok ? undefined : r.message });

@@ -20,6 +20,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { browserProfileDir } from "./path-safety.ts";
 import { redactSnapshot } from "./browser-actions.ts";
 import type { Locator, PageSnapshot, SnapshotElement } from "./browser-actions.ts";
 import { loadPlaywrightCore, PLAYWRIGHT_UNAVAILABLE_MESSAGE } from "./playwright-resolve.ts";
@@ -431,7 +432,10 @@ export async function runBrowserDriverChild(): Promise<void> {
     const baseOpts: any = { headless: !req.headed, acceptDownloads: true, viewport: req.viewport || { width: 1280, height: 860 } };
     if (execPath) baseOpts.executablePath = execPath;
     else baseOpts.channel = "chrome";
-    const profileDir = req.profileDir || join(downloadsDir, "..", "auth", "profile");
+    // Callers always pass a machine-local profileDir. The fallback stays
+    // machine-local too (never the vault) so a stray launch can't write a Chrome
+    // profile into a synced vault.
+    const profileDir = req.profileDir || browserProfileDir("default");
     mkdirSync(profileDir, { recursive: true });
     try {
       context = await pw.chromium.launchPersistentContext(profileDir, baseOpts);
