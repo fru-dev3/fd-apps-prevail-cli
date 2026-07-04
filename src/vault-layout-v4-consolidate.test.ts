@@ -189,22 +189,31 @@ test("v4Destination: every ideal alias adopts to ideal-state.md; canonical stays
   expect(v4Destination("manifest.json")).toBeNull();
 });
 
-test("writeVaultAgentContract: creates, is idempotent, and preserves user content", () => {
+test("vault map: canonical VAULT.md + harness shims, idempotent, user content survives", () => {
   const v = _mkdtemp2(_join2(_tmp2(), "prevail-contract-"));
   try {
     const r1 = writeVaultAgentContract(v);
     expect(r1.ok).toBe(true);
     expect(r1.updated).toBe(true);
-    const body = _read2(_join2(v, "CLAUDE.md"), "utf8");
-    expect(body).toContain("ideal-state.md");
-    expect(body).toContain("NEVER touch");
+    // The canonical, harness-neutral map holds the full contract.
+    const map = _read2(_join2(v, "VAULT.md"), "utf8");
+    expect(map).toContain("ideal-state.md");
+    expect(map).toContain("NEVER touch");
+    expect(map).toContain("_loops.json schema");
+    expect(map).toContain("Integrating from OUTSIDE the app");
+    // Every harness shim exists and points at VAULT.md, never duplicating it.
+    for (const shim of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      const body = _read2(_join2(v, shim), "utf8");
+      expect(body).toContain("VAULT.md");
+      expect(body.length).toBeLessThan(600);
+    }
     // Idempotent second write.
     expect(writeVaultAgentContract(v).updated).toBe(false);
-    // User content outside the block survives a refresh.
-    _write2(_join2(v, "CLAUDE.md"), `My own notes up top.\n\n${vaultAgentContract()}`);
+    // User content outside the managed block survives a refresh.
+    _write2(_join2(v, "VAULT.md"), `My own notes up top.\n\n${vaultAgentContract()}`);
     const r3 = writeVaultAgentContract(v);
     expect(r3.ok).toBe(true);
-    const after = _read2(_join2(v, "CLAUDE.md"), "utf8");
+    const after = _read2(_join2(v, "VAULT.md"), "utf8");
     expect(after).toContain("My own notes up top.");
     expect(after).toContain("ideal-state.md");
   } finally {

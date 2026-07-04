@@ -336,93 +336,172 @@ export function consolidateDomainV4Leftovers(vaultPath: string, domain: string):
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The in-vault agent contract: a CLAUDE.md at the VAULT ROOT that teaches any
-// agent working directly on the filesystem (Claude Code on any machine) the
-// layout law, the canonical filenames, and the do-not-touch list - so external
-// edits land where the app reads instead of in invisible variants. The block
-// between the markers is auto-managed (rewritten on every groom); anything the
-// user adds outside the markers is preserved. This file is the ONE sanctioned
-// root-level file besides build/ and data/.
+// The vault map: ONE canonical, harness-neutral document (<vault>/VAULT.md)
+// that teaches ANY AI - Claude, Codex, Gemini, Antigravity, local models, plain
+// scripts - how the entire vault is structured: where every concept lives, the
+// exact formats, what may be edited, what must never be touched, and how to
+// integrate from outside the app. Because each harness auto-loads only its own
+// convention file, thin SHIMS (CLAUDE.md / AGENTS.md / GEMINI.md) point at
+// VAULT.md so the canonical map is vendor-free but still auto-discovered.
+// All managed blocks are marker-fenced; user content outside them survives.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CONTRACT_BEGIN = "<!-- BEGIN PREVAIL VAULT CONTRACT (auto-managed - edits inside this block are overwritten) -->";
-const CONTRACT_END = "<!-- END PREVAIL VAULT CONTRACT -->";
+const MAP_BEGIN = "<!-- BEGIN PREVAIL VAULT MAP (auto-managed - edits inside this block are overwritten on groom) -->";
+const MAP_END = "<!-- END PREVAIL VAULT MAP -->";
 
-export function vaultAgentContract(): string {
+export function vaultMap(): string {
   return [
-    CONTRACT_BEGIN,
-    "# Prevail vault - contract for agents editing these files directly",
+    MAP_BEGIN,
+    "# VAULT.md - the map of this Prevail vault",
     "",
-    "This vault IS the product; the Prevail app is a UI over it. Edits that follow",
-    "this contract appear in the app (navigate away/back to refresh a panel).",
+    "This vault IS the product; the Prevail app is one client over these files.",
+    "Any AI or script may work on the vault directly. Follow this map exactly:",
+    "correctly named files appear in the app; misnamed known files are adopted",
+    "to their canonical names by a groom pass on app launch; unknown files are",
+    "left where you put them.",
     "",
     "## Layout law",
-    "- Vault root contains ONLY `build/`, `data/`, and this CLAUDE.md.",
-    "- Domains: `data/domains/<slug>/` (lowercase slug). Apps: `data/apps/<id>/`.",
-    "- Never invent new root-level files or directories.",
+    "```",
+    "<vault>/",
+    "  VAULT.md            this map (canonical; CLAUDE/AGENTS/GEMINI.md are shims)",
+    "  build/              vault-global config + derived data",
+    "    ideal-state.md    the user's GLOBAL constitution (layered under domains)",
+    "    user.md           who the user is (injected into chats)",
+    "    _meta/            ledgers, caches, capture streams - NEVER hand-edit",
+    "  data/",
+    "    domains/<slug>/   one life domain per dir (lowercase slug)",
+    "    apps/<id>/        one connected app per dir",
+    "```",
+    "No other root-level files or directories. Ever.",
     "",
-    "## Per-domain files you may create or edit (`data/domains/<slug>/`)",
-    "- `ideal-state.md` - THE domain ideal (purpose, current reality, target,",
-    "  metrics, habits, what to avoid). Exactly this name; `ideal.md`/`soul.md`",
-    "  are legacy aliases that get auto-renamed to it.",
-    "- `manifest.json` - identity/settings. Safe: identity.label/emoji/summary,",
-    "  goals (string array), config.autoState (bool), routing.keywords.",
-    "- `memory/state.md` - current-state snapshot. NOTE: when",
-    "  manifest.config.autoState is true a daemon may consolidate/rewrite it;",
-    "  durable truths belong in ideal-state.md / source/goals.md / memory/memory.md.",
-    "- `memory/memory.md` - durable long-term memory (injected into chats).",
-    "- `source/` - the user's own material (goals.md, config.md, any files).",
-    "- `_tasks.md` - one task per line: `- [ ] Task text @2026-07-15 ~priority:high`",
-    "  (`~priority:` high|critical; `~owner:ai` hands it to the AI; `- [x]` done;",
-    "  leave `~id:`/`+added` to the app).",
-    "- `_loops.json` - `{ \"desiredState\": \"...\", \"loops\": [{ \"id\", \"name\",",
-    "  \"purpose\", \"kind\": \"steward|briefing\", \"type\": \"open|closed\",",
-    "  \"cadence\": \"daily|weekly|monthly\", \"autonomy\": \"suggest|tasks|ask|auto\",",
-    "  \"signals\": [], \"condition\": \"\", \"evaluation\": \"\", \"enabled\": true,",
-    "  \"status\": \"active\" }] }` (briefing loops also take `\"channel\": \"gmail\"`).",
-    "- `skills/<skill-id>/SKILL.md` - one dir per skill, `description:` near the",
-    "  top. Archive by moving the dir into `skills/_archive/`.",
+    "## A domain - data/domains/<slug>/",
+    "```",
+    "  manifest.json       identity + settings (JSON, see below)",
+    "  ideal-state.md      THE domain ideal - target, metrics, habits, anti-patterns",
+    "  _tasks.md           task board (line format below)",
+    "  _loops.json         standing loops (schema below)",
+    "  _loops_runtime.json machine-managed - NEVER edit",
+    "  _surface.json       machine-managed - NEVER edit",
+    "  source/             the user's own material (goals.md, config.md, any files)",
+    "  memory/             AI-maintained knowledge",
+    "    state.md          current-state snapshot (see autoState caveat)",
+    "    memory.md         durable long-term memory (injected into chats)",
+    "    threads/          chat transcripts - NEVER edit",
+    "  .system/            journals, logs, cursors - NEVER edit",
+    "  skills/<skill-id>/SKILL.md   one skill per dir; skills/_archive/ = archived",
+    "```",
+    "Create a NEW domain by making the dir with a manifest.json or ideal-state.md;",
+    "the app discovers it on the next scan.",
     "",
-    "## Vault-global (`build/`)",
-    "- `build/ideal-state.md` - the global constitution (layered under domains).",
-    "- `build/user.md` - who the user is.",
+    "### manifest.json (safe fields)",
+    '`identity.label/emoji/summary` · `goals` (string array) · `config.autoState`',
+    "(bool; when true a daemon may consolidate memory/state.md - put durable truths",
+    "in ideal-state.md, source/, or memory/memory.md) · `routing.keywords` ·",
+    '`heartbeat: { "enabled": bool, "routines": [{ "id", "schedule": "daily 08:30" | cron, "enabled" }] }`.',
+    "Keep valid JSON; malformed fields are silently dropped.",
+    "",
+    "### _tasks.md line format",
+    "`- [ ] Task text @2026-07-15 ~priority:high`",
+    "`~priority:` high|critical · `~owner:ai` hands it to the AI · `- [x]` done ·",
+    "leave `~id:` and `+added` to the app.",
+    "",
+    "### _loops.json schema",
+    "```json",
+    '{ "desiredState": "one-line target",',
+    '  "loops": [{ "id": "rent-watch", "name": "Rent Watch",',
+    '    "purpose": "what this loop continuously achieves",',
+    '    "kind": "steward",            // steward | briefing | scout',
+    '    "type": "open",               // open | closed (closed ends when condition met)',
+    '    "cadence": "weekly",          // daily | weekly | monthly',
+    '    "autonomy": "auto",           // suggest | tasks | ask | auto (auto ACTS)',
+    '    "channel": "gmail",           // briefing loops only: log | gmail | telegram',
+    '    "signals": [], "condition": "", "evaluation": "",',
+    '    "enabled": true, "status": "active" }] }',
+    "```",
+    "",
+    "### skills/<skill-id>/SKILL.md",
+    "Markdown with a `description:` line near the top; optional `cadence:` for",
+    "scheduled skills. Archive = move the dir into skills/_archive/ (never delete).",
+    "",
+    "## An app - data/apps/<id>/",
+    "`manifest.json` (integration, domains it feeds, account binding, schedule) ·",
+    "`SKILL.md` (how to operate it) · `skills/` (its runnable skills) · `_scope/`",
+    "(its own conversation space - NEVER edit).",
+    "",
+    "## Integrating from OUTSIDE the app",
+    "- CLI: `prevail chat --domain <slug>` (grounded chat), `prevail skill-usage",
+    "  report|archive`, `prevail connectors list|set`, `prevail capture ingest`",
+    "  (record a prompt into the journal), `prevail vault migrate-v4` (groom).",
+    "- MCP: `prevail mcp` serves vault tools (chat, tasks, loops, memory, intents)",
+    "  to any MCP-capable client.",
+    "- Journal entries and capture records carry provenance (surface, host, app,",
+    "  versions, tz). Do not fabricate ledger lines; use the CLI/MCP surfaces.",
     "",
     "## NEVER touch",
-    "- `memory/threads/` (chat transcripts), `.system/` (journals, logs, cursors),",
-    "- `_loops_runtime.json`, `_surface.json`, anything under `build/_meta/`.",
-    "These are app/daemon-managed; hand edits corrupt ledgers or get overwritten.",
+    "`build/_meta/` · any `.system/` · `memory/threads/` · `_loops_runtime.json` ·",
+    "`_surface.json`. These are app/daemon-managed ledgers; hand edits corrupt",
+    "them or are overwritten.",
     "",
-    "## New domains by hand",
-    "Create `data/domains/<slug>/` with a `manifest.json` (or just an",
-    "`ideal-state.md` to start) - the app discovers it on next scan. Misnamed",
-    "known files are adopted to canonical names by the groom pass on app launch.",
-    CONTRACT_END,
+    "## Refresh semantics",
+    "The app re-reads files when a panel is opened (navigate away and back).",
+    "Filename aliases for the domain ideal (ideal.md, soul.md, ideal_state.md)",
+    "self-heal to ideal-state.md on app launch.",
+    MAP_END,
     "",
   ].join("\n");
 }
 
-// Write/refresh the contract at <vault>/CLAUDE.md. Preserves anything the user
-// keeps outside the marker block; inside the block is always regenerated.
+// Kept for callers/tests that predate the rename.
+export function vaultAgentContract(): string {
+  return vaultMap();
+}
+
+const SHIM_BEGIN = "<!-- BEGIN PREVAIL SHIM (auto-managed) -->";
+const SHIM_END = "<!-- END PREVAIL SHIM -->";
+
+function shimBody(): string {
+  return [
+    SHIM_BEGIN,
+    "This vault's structure, formats, editing rules, and integration points are",
+    "documented in ONE canonical, harness-neutral file: **read `VAULT.md` in this",
+    "directory before creating or editing anything here.**",
+    SHIM_END,
+    "",
+  ].join("\n");
+}
+
+// Replace a marker-fenced block inside existing content (or append/create).
+function upsertBlock(existing: string, begin: string, end: string, block: string): string {
+  const bi = existing.indexOf(begin);
+  const ei = existing.indexOf(end);
+  if (bi !== -1 && ei !== -1 && ei > bi) {
+    return existing.slice(0, bi) + block.trimEnd() + existing.slice(ei + end.length);
+  }
+  if (existing.trim()) return `${existing.trimEnd()}\n\n${block}`;
+  return block;
+}
+
+// Write/refresh the canonical VAULT.md and the per-harness shims that point to
+// it. Idempotent; user content outside the managed blocks survives.
 export function writeVaultAgentContract(vaultPath: string): { ok: boolean; path: string; updated: boolean } {
-  const p = join(vaultPath, "CLAUDE.md");
-  const block = vaultAgentContract();
-  try {
+  let updated = false;
+  const write = (file: string, begin: string, end: string, block: string) => {
+    const p = join(vaultPath, file);
     let existing = "";
     try { existing = readFileSync(p, "utf8"); } catch { /* new file */ }
-    let next: string;
-    const bi = existing.indexOf(CONTRACT_BEGIN);
-    const ei = existing.indexOf(CONTRACT_END);
-    if (bi !== -1 && ei !== -1 && ei > bi) {
-      next = existing.slice(0, bi) + block.trimEnd() + existing.slice(ei + CONTRACT_END.length);
-    } else if (existing.trim()) {
-      next = `${existing.trimEnd()}\n\n${block}`;
-    } else {
-      next = block;
+    const next = upsertBlock(existing, begin, end, block);
+    if (next !== existing) {
+      writeFileSync(p, next);
+      updated = true;
     }
-    if (next === existing) return { ok: true, path: p, updated: false };
-    writeFileSync(p, next);
-    return { ok: true, path: p, updated: true };
+  };
+  try {
+    write("VAULT.md", MAP_BEGIN, MAP_END, vaultMap());
+    for (const shim of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
+      write(shim, SHIM_BEGIN, SHIM_END, shimBody());
+    }
+    return { ok: true, path: join(vaultPath, "VAULT.md"), updated };
   } catch {
-    return { ok: false, path: p, updated: false };
+    return { ok: false, path: join(vaultPath, "VAULT.md"), updated: false };
   }
 }
