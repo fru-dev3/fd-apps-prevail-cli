@@ -1650,7 +1650,40 @@ export function scaffoldCommunityApp(opts: {
     // already scaffolded here; a bare scope shell falls through to the scaffold
     // below so adding the connector is never blocked by an earlier chat.
     if (!opts.gateway) {
-      if (existsSync(join(root, "manifest.json"))) return { ok: false, error: `app "${id}" already exists at ${root}` };
+      const manifestPath = join(root, "manifest.json");
+      if (existsSync(manifestPath)) {
+        // ADOPT, never refuse: the vault is the product, and users (and their
+        // own import pipelines) legitimately create data/apps/<id>/ with skills
+        // and a manifest before ever touching the UI. Connecting from the UI
+        // fills ONLY the missing canonical manifest fields and leaves every
+        // user file (skills/, data, notes) untouched - forcing a rename/delete
+        // of a pre-existing folder was backwards.
+        try {
+          const raw = JSON.parse(vreadFile(manifestPath)) as Record<string, unknown>;
+          if (!raw || typeof raw !== "object") throw new Error("manifest is not a JSON object");
+          raw.id = id; // the dir name is canonical - heals mismatched/missing ids
+          if (typeof raw.name !== "string" || !raw.name.trim()) raw.name = opts.title;
+          if (typeof raw.description !== "string") raw.description = `${opts.title} connector (adopted from an existing folder).`;
+          const existingDomains = Array.isArray(raw.domains) ? (raw.domains as unknown[]).filter((d): d is string => typeof d === "string") : [];
+          raw.domains = [...new Set([...existingDomains, ...(opts.domains ?? []).filter(Boolean)])];
+          if (typeof raw.integration !== "string" || !raw.integration.trim()) raw.integration = integ;
+          if (typeof raw.connection !== "string") raw.connection = opts.connection ?? `Connect ${opts.title}, then this app syncs into ${(raw.domains as string[]).join(", ") || "its domains"}.`;
+          if (opts.authCheck && Object.keys(opts.authCheck).length > 0 && !raw.auth_check) raw.auth_check = opts.authCheck;
+          if (opts.refreshEvery && !raw.refresh) raw.refresh = { every: opts.refreshEvery };
+          if (opts.mcpSetup && (opts.mcpSetup.command || opts.mcpSetup.install) && !raw.mcp) {
+            const mcp: Record<string, string> = {};
+            if (opts.mcpSetup.command) mcp.command = opts.mcpSetup.command;
+            if (opts.mcpSetup.install) mcp.install = opts.mcpSetup.install;
+            raw.mcp = mcp;
+          }
+          writeFileSync(manifestPath, JSON.stringify(raw, null, 2));
+          if (!existsSync(join(root, "SKILL.md"))) writeFileSync(join(root, "SKILL.md"), `# ${opts.title}\n\n${raw.connection}\n`);
+          seedAppParityFiles(root, opts.title);
+          return { ok: true, path: root };
+        } catch (e) {
+          return { ok: false, error: `app "${id}" has an existing manifest.json that could not be adopted (${String(e).slice(0, 120)}). Fix or remove that file and retry.` };
+        }
+      }
     } else try {
       const manifestPath = join(root, "manifest.json");
       const raw = existsSync(manifestPath) ? JSON.parse(vreadFile(manifestPath)) as Record<string, unknown> : {};
@@ -1711,7 +1744,9 @@ export function scaffoldCommunityApp(opts: {
       writeFileSync(join(root, "SKILL.md"), gatewaySkillBody(opts.title, opts.gateway));
       writeFileSync(join(root, "connection.md"), gatewayConnectionBody(opts.title, opts.gateway));
     } else {
-      writeFileSync(join(root, "SKILL.md"), `# ${opts.title}\n\n${manifest.connection}\n`);
+      // Never clobber a user-authored SKILL.md (a manifest-less imported folder
+      // may already carry one; adoption means keeping it).
+      if (!existsSync(join(root, "SKILL.md"))) writeFileSync(join(root, "SKILL.md"), `# ${opts.title}\n\n${manifest.connection}\n`);
       writeFileSync(join(root, "connection.md"), `# Connecting ${opts.title}\n\nIntegration: ${integ}\nDomains: ${domains.join(", ") || "(none yet)"}\n\nAdd an auth_check + refresh block to manifest.json and a skill under skills/ to enable syncing.\n`);
     }
     writeFileSync(join(root, "connection-status.json"), JSON.stringify({ status: "not-configured" }, null, 2));

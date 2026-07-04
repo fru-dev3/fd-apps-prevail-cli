@@ -62,3 +62,53 @@ describe("app account identity binding", () => {
     expect(app!.account?.label).toBe("work");
   });
 });
+
+// Adoption contract: connecting an app whose folder ALREADY exists on disk
+// (hand-created or from an external import pipeline) adopts it - missing
+// canonical manifest fields are filled, user skills and values are untouched,
+// and a fresh scaffold over a manifest-less folder keeps its SKILL.md.
+import { scaffoldCommunityApp } from "./vault.ts";
+import { readFileSync as _rd } from "node:fs";
+
+describe("app folder adoption (pre-existing dirs)", () => {
+  beforeEach(seedApp);
+
+  test("existing manifest is adopted: missing fields filled, user values kept, skills untouched", () => {
+    const dir = join(APPS, "posthog");
+    mkdirSync(join(dir, "skills", "usage-report"), { recursive: true });
+    writeFileSync(join(dir, "skills", "usage-report", "SKILL.md"), "# usage-report\nmy imported skill\n");
+    writeFileSync(join(dir, "SKILL.md"), "# My PostHog notes\n");
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify({ name: "PostHog (mine)", domains: ["dev"] }));
+    const r = scaffoldCommunityApp({ id: "posthog", title: "PostHog", integration: "api", domains: ["business"] });
+    expect(r.ok).toBe(true);
+    const m = JSON.parse(_rd(join(dir, "manifest.json"), "utf8"));
+    expect(m.id).toBe("posthog");                       // canonical id healed in
+    expect(m.name).toBe("PostHog (mine)");              // user's value preserved
+    expect(m.domains.sort()).toEqual(["business", "dev"]); // domains unioned
+    expect(m.integration).toBe("api");                  // missing field filled
+    // User files untouched.
+    expect(_rd(join(dir, "SKILL.md"), "utf8")).toContain("My PostHog notes");
+    expect(_rd(join(dir, "skills", "usage-report", "SKILL.md"), "utf8")).toContain("my imported skill");
+    // And the app now shows up in the scan.
+    expect(scanCommunityApps().some((a) => a.id === "posthog")).toBe(true);
+  });
+
+  test("manifest-less imported folder: fresh scaffold keeps its SKILL.md", () => {
+    const dir = join(APPS, "stessa");
+    mkdirSync(join(dir, "skills"), { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "# Imported stessa instructions\n");
+    const r = scaffoldCommunityApp({ id: "stessa", title: "Stessa", integration: "api", domains: ["real-estate"] });
+    expect(r.ok).toBe(true);
+    expect(_rd(join(dir, "SKILL.md"), "utf8")).toContain("Imported stessa instructions");
+    expect(JSON.parse(_rd(join(dir, "manifest.json"), "utf8")).id).toBe("stessa");
+  });
+
+  test("an unparseable existing manifest fails with an honest, actionable error", () => {
+    const dir = join(APPS, "broken");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "manifest.json"), "{not json");
+    const r = scaffoldCommunityApp({ id: "broken", title: "Broken", integration: "api", domains: [] });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("could not be adopted");
+  });
+});
