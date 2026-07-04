@@ -177,7 +177,7 @@ test("consolidation is a no-op on a non-v4 domain", () => {
 
 // Canonical ideal + the in-vault agent contract (vault-as-the-product law).
 import { v4Destination, vaultAgentContract, writeVaultAgentContract } from "./vault-layout-v4.ts";
-import { mkdtempSync as _mkdtemp2, readFileSync as _read2, writeFileSync as _write2, rmSync as _rm2 } from "node:fs";
+import { mkdtempSync as _mkdtemp2, readFileSync as _read2, writeFileSync as _write2, rmSync as _rm2, lstatSync as _lstat2 } from "node:fs";
 import { join as _join2 } from "node:path";
 import { tmpdir as _tmp2 } from "node:os";
 
@@ -189,7 +189,7 @@ test("v4Destination: every ideal alias adopts to ideal-state.md; canonical stays
   expect(v4Destination("manifest.json")).toBeNull();
 });
 
-test("vault map: canonical VAULT.md + harness shims, idempotent, user content survives", () => {
+test("vault map: canonical VAULT.md; harness files are SYMLINKS to it", () => {
   const v = _mkdtemp2(_join2(_tmp2(), "prevail-contract-"));
   try {
     const r1 = writeVaultAgentContract(v);
@@ -197,25 +197,32 @@ test("vault map: canonical VAULT.md + harness shims, idempotent, user content su
     expect(r1.updated).toBe(true);
     // The canonical, harness-neutral map holds the full contract.
     const map = _read2(_join2(v, "VAULT.md"), "utf8");
-    expect(map).toContain("ideal-state.md");
-    expect(map).toContain("NEVER touch");
-    expect(map).toContain("_loops.json schema");
-    expect(map).toContain("Integrating from OUTSIDE the app");
-    // Every harness shim exists and points at VAULT.md, never duplicating it.
+    for (const must of ["ideal-state.md", "NEVER touch", "_loops.json", "Daemons - exactly what writes what", "Integrating from OUTSIDE the app", "skill_usage.json", "~owner:ai"]) {
+      expect(map).toContain(must);
+    }
+    // Harness convention files are real symlinks to VAULT.md (one file, zero
+    // drift) - reading them yields the full map.
     for (const shim of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
-      const body = _read2(_join2(v, shim), "utf8");
-      expect(body).toContain("VAULT.md");
-      expect(body.length).toBeLessThan(600);
+      expect(_lstat2(_join2(v, shim)).isSymbolicLink()).toBe(true);
+      expect(_read2(_join2(v, shim), "utf8")).toContain("Layout law");
     }
     // Idempotent second write.
     expect(writeVaultAgentContract(v).updated).toBe(false);
-    // User content outside the managed block survives a refresh.
+    // User content outside the managed block survives a map refresh.
     _write2(_join2(v, "VAULT.md"), `My own notes up top.\n\n${vaultAgentContract()}`);
-    const r3 = writeVaultAgentContract(v);
-    expect(r3.ok).toBe(true);
+    expect(writeVaultAgentContract(v).ok).toBe(true);
     const after = _read2(_join2(v, "VAULT.md"), "utf8");
     expect(after).toContain("My own notes up top.");
     expect(after).toContain("ideal-state.md");
+    // A harness file holding REAL user content is never replaced by a link -
+    // it keeps the content and gains the pointer block.
+    _rm2(_join2(v, "CLAUDE.md"));
+    _write2(_join2(v, "CLAUDE.md"), "My repo instructions.\n");
+    expect(writeVaultAgentContract(v).updated).toBe(true);
+    const claude = _read2(_join2(v, "CLAUDE.md"), "utf8");
+    expect(_lstat2(_join2(v, "CLAUDE.md")).isSymbolicLink()).toBe(false);
+    expect(claude).toContain("My repo instructions.");
+    expect(claude).toContain("VAULT.md");
   } finally {
     _rm2(v, { recursive: true, force: true });
   }

@@ -19,7 +19,7 @@
 // switch ships (staged rollout, exactly like migrateToDataLayout). Archiving the
 // originals is a separate, explicitly-confirmed step (archiveLegacyDomainV4).
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { countFiles } from "./vault-data-layout.ts";
 import { resolveDomainDir, DOMAINS_DIR, dataRoot } from "./path-safety.ts";
@@ -339,11 +339,12 @@ export function consolidateDomainV4Leftovers(vaultPath: string, domain: string):
 // The vault map: ONE canonical, harness-neutral document (<vault>/VAULT.md)
 // that teaches ANY AI - Claude, Codex, Gemini, Antigravity, local models, plain
 // scripts - how the entire vault is structured: where every concept lives, the
-// exact formats, what may be edited, what must never be touched, and how to
-// integrate from outside the app. Because each harness auto-loads only its own
-// convention file, thin SHIMS (CLAUDE.md / AGENTS.md / GEMINI.md) point at
-// VAULT.md so the canonical map is vendor-free but still auto-discovered.
-// All managed blocks are marker-fenced; user content outside them survives.
+// exact formats, which daemons write what, what may be edited, what must never
+// be touched, and how to integrate from outside the app. Harness convention
+// files (CLAUDE.md / AGENTS.md / GEMINI.md) are SYMLINKS to VAULT.md where the
+// filesystem allows (one file, zero drift); on filesystems without symlinks
+// (exFAT, some SMB mounts) they fall back to a tiny pointer shim. All managed
+// text is marker-fenced; user content outside the markers survives.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAP_BEGIN = "<!-- BEGIN PREVAIL VAULT MAP (auto-managed - edits inside this block are overwritten on groom) -->";
@@ -352,22 +353,26 @@ const MAP_END = "<!-- END PREVAIL VAULT MAP -->";
 export function vaultMap(): string {
   return [
     MAP_BEGIN,
-    "# VAULT.md - the map of this Prevail vault",
+    "# VAULT.md - the complete map of this Prevail vault",
     "",
     "This vault IS the product; the Prevail app is one client over these files.",
     "Any AI or script may work on the vault directly. Follow this map exactly:",
-    "correctly named files appear in the app; misnamed known files are adopted",
-    "to their canonical names by a groom pass on app launch; unknown files are",
-    "left where you put them.",
+    "correctly named files appear in the app (panels re-read on open); misnamed",
+    "KNOWN files self-heal to canonical names on app launch; unknown files stay",
+    "where you put them.",
+    "",
+    "BEFORE EDITING: read 200 bytes of any memory/state.md - if it is not plain",
+    "markdown, this vault is ENCRYPTED at rest; do NOT hand-edit anything, use",
+    "the app or CLI instead.",
     "",
     "## Layout law",
     "```",
     "<vault>/",
-    "  VAULT.md            this map (canonical; CLAUDE/AGENTS/GEMINI.md are shims)",
+    "  VAULT.md            this map (canonical; CLAUDE/AGENTS/GEMINI.md link here)",
     "  build/              vault-global config + derived data",
     "    ideal-state.md    the user's GLOBAL constitution (layered under domains)",
     "    user.md           who the user is (injected into chats)",
-    "    _meta/            ledgers, caches, capture streams - NEVER hand-edit",
+    "    _meta/            machine-managed ledgers - NEVER hand-edit (details below)",
     "  data/",
     "    domains/<slug>/   one life domain per dir (lowercase slug)",
     "    apps/<id>/        one connected app per dir",
@@ -376,76 +381,144 @@ export function vaultMap(): string {
     "",
     "## A domain - data/domains/<slug>/",
     "```",
-    "  manifest.json       identity + settings (JSON, see below)",
-    "  ideal-state.md      THE domain ideal - target, metrics, habits, anti-patterns",
-    "  _tasks.md           task board (line format below)",
+    "  manifest.json       identity + settings (JSON, fields below)",
+    "  ideal-state.md      THE domain ideal: purpose, current reality, target,",
+    "                      metrics, habits/routines, what to avoid",
+    "  _tasks.md           task board (line grammar below)",
     "  _loops.json         standing loops (schema below)",
-    "  _loops_runtime.json machine-managed - NEVER edit",
-    "  _surface.json       machine-managed - NEVER edit",
-    "  source/             the user's own material (goals.md, config.md, any files)",
+    "  _loops_runtime.json loop run history/pending - machine-managed, NEVER edit",
+    "  _surface.json       suggested questions cache - machine-managed, NEVER edit",
+    "  source/             the user's own material: goals.md, config.md, any files",
     "  memory/             AI-maintained knowledge",
-    "    state.md          current-state snapshot (see autoState caveat)",
-    "    memory.md         durable long-term memory (injected into chats)",
-    "    threads/          chat transcripts - NEVER edit",
-    "  .system/            journals, logs, cursors - NEVER edit",
-    "  skills/<skill-id>/SKILL.md   one skill per dir; skills/_archive/ = archived",
+    "    state.md          current-state snapshot (autoState caveat below)",
+    "    memory.md         durable long-term memory (injected into every chat)",
+    "    threads/          chat transcripts (<slug>.md + <slug>.jsonl) - NEVER edit",
+    "  .system/            journal.jsonl (provenance ledger), log/ - NEVER edit",
+    "  skills/<skill-id>/SKILL.md    one skill per dir",
+    "  skills/_archive/<skill-id>/   archived skills (invisible to the app)",
     "```",
-    "Create a NEW domain by making the dir with a manifest.json or ideal-state.md;",
-    "the app discovers it on the next scan.",
+    "Create a NEW domain: make the dir + a manifest.json or ideal-state.md; the",
+    "app discovers it on the next scan. Renaming a domain = renaming its dir",
+    "(update references in _loops.json and app manifests that name it).",
     "",
-    "### manifest.json (safe fields)",
-    '`identity.label/emoji/summary` · `goals` (string array) · `config.autoState`',
-    "(bool; when true a daemon may consolidate memory/state.md - put durable truths",
-    "in ideal-state.md, source/, or memory/memory.md) · `routing.keywords` ·",
-    '`heartbeat: { "enabled": bool, "routines": [{ "id", "schedule": "daily 08:30" | cron, "enabled" }] }`.',
-    "Keep valid JSON; malformed fields are silently dropped.",
+    "### manifest.json fields (safe to edit)",
+    "- identity: { name, label, emoji, summary }",
+    "- goals: [\"string\", ...]",
+    "- config: { cli, model, autoState }  - autoState true lets the state daemon",
+    "  consolidate memory/state.md; put durable truths in ideal-state.md /",
+    "  source/ / memory/memory.md, or set autoState false to hand-manage state.",
+    "- routing: { keywords: [], channels: [], default: bool } - inbound routing",
+    "- heartbeat: { enabled: bool, routines: [{ id, schedule, enabled? }] }",
+    "  schedule = 5-field cron OR 'hourly' | 'daily [HH:MM]' | 'weekly [day] [HH:MM]'.",
+    "  A routine id matching skills/<id>/ may take its cadence from that SKILL.md.",
+    "- privacy: { localOnly: bool } - true pins this domain to local models only",
+    "Malformed fields are silently dropped by the reader; keep valid JSON.",
     "",
-    "### _tasks.md line format",
-    "`- [ ] Task text @2026-07-15 ~priority:high`",
-    "`~priority:` high|critical · `~owner:ai` hands it to the AI · `- [x]` done ·",
-    "leave `~id:` and `+added` to the app.",
+    "### _tasks.md - one task per line",
+    "`- [ ] Task text @2026-07-15 ~priority:high ~owner:ai ~status:doing`",
+    "- `- [ ]` open, `- [x]` done · `@YYYY-MM-DD` due date",
+    "- `~priority:` high | critical (absent = normal)",
+    "- `~owner:ai` hands the task to the AI steward: the loops daemon picks up",
+    "  open AI-owned tasks (a few per pass), DOES them with real tools when",
+    "  autonomy allows, then sets `~status:review` (done, awaiting user accept)",
+    "  or `~status:blocked` (needs the user) - both surface in the Decision Inbox.",
+    "- `~status:` todo | doing | blocked | review | icebox",
+    "- Leave `~id:` and `+added` tokens to the app.",
     "",
-    "### _loops.json schema",
+    "### _loops.json - standing, self-driving routines",
     "```json",
-    '{ "desiredState": "one-line target",',
-    '  "loops": [{ "id": "rent-watch", "name": "Rent Watch",',
-    '    "purpose": "what this loop continuously achieves",',
-    '    "kind": "steward",            // steward | briefing | scout',
-    '    "type": "open",               // open | closed (closed ends when condition met)',
-    '    "cadence": "weekly",          // daily | weekly | monthly',
-    '    "autonomy": "auto",           // suggest | tasks | ask | auto (auto ACTS)',
-    '    "channel": "gmail",           // briefing loops only: log | gmail | telegram',
-    '    "signals": [], "condition": "", "evaluation": "",',
-    '    "enabled": true, "status": "active" }] }',
+    "{ \"desiredState\": \"one-line target for the domain\",",
+    "  \"loops\": [{ \"id\": \"rent-watch\", \"name\": \"Rent Watch\",",
+    "    \"purpose\": \"what this loop continuously achieves\",",
+    "    \"kind\": \"steward\",           // steward | briefing | scout",
+    "    \"type\": \"open\",              // open | closed (closed ends when condition met)",
+    "    \"cadence\": \"weekly\",         // daily | weekly | monthly",
+    "    \"autonomy\": \"auto\",          // suggest | tasks | ask | auto",
+    "    \"channel\": \"gmail\",          // briefing loops only: log | gmail | telegram",
+    "    \"signals\": [], \"condition\": \"\", \"evaluation\": \"\",",
+    "    \"enabled\": true, \"status\": \"active\" }] }",
     "```",
+    "Autonomy semantics: suggest = propose only · tasks = may file tasks · ask =",
+    "propose, consequential actions wait for approval · auto = ACTS with real",
+    "tools (files, web, connectors); money / contacting others / irreversible",
+    "actions ALWAYS queue for user approval regardless. Loops read ideal-state.md",
+    "as their target; with no ideal an auto loop drafts one itself.",
     "",
-    "### skills/<skill-id>/SKILL.md",
-    "Markdown with a `description:` line near the top; optional `cadence:` for",
-    "scheduled skills. Archive = move the dir into skills/_archive/ (never delete).",
+    "### skills/ - how skills behave",
+    "- Discovery: any skills/<skill-id>/SKILL.md dir is a skill; `description:`",
+    "  near the top is its summary; optional `cadence:` feeds heartbeat routines.",
+    "- In chat: attached via /<skill-name>; an app's primary skill auto-attaches",
+    "  in that app's chat. Skill bodies are injected into the prompt.",
+    "- Usage is metered into build/_meta/skill_usage.json (machine-managed);",
+    "  `prevail skill-usage report` ranks by real use and flags unused/dormant.",
+    "- Archive = MOVE the dir to skills/_archive/<id>/ (never delete);",
+    "  `prevail skill-usage archive|unarchive <domain> <id>` does it safely.",
     "",
     "## An app - data/apps/<id>/",
-    "`manifest.json` (integration, domains it feeds, account binding, schedule) ·",
-    "`SKILL.md` (how to operate it) · `skills/` (its runnable skills) · `_scope/`",
-    "(its own conversation space - NEVER edit).",
+    "```",
+    "  manifest.json   integration: api|oauth|browser|mcp|manual · domains: []",
+    "                  account: { label }   which identity of a multi-account",
+    "                                       connector this app instance is",
+    "                  refresh: { every }   sync cadence · enabled: bool",
+    "                  autonomy: read-only|act · model: per-app default",
+    "  SKILL.md        how to operate this app",
+    "  skills/         its runnable skills (learn/replay/sync)",
+    "  _scope/         the app's own chat space - NEVER edit",
+    "```",
+    "Google specifics: accounts are MACHINE-LOCAL gws profiles (~/.config/gws*);",
+    "the manifest account.label binds this app to one of them. With several",
+    "accounts and no binding/pick, the connector refuses rather than guess.",
+    "",
+    "## Daemons - exactly what writes what",
+    "- Loops daemon: runs due loops; writes _loops_runtime.json, files tasks in",
+    "  _tasks.md, delivers briefings (journal / Gmail-to-self), logs to",
+    "  build/_meta activity + action audit.",
+    "- State consolidator (per-domain, only when manifest.config.autoState=true):",
+    "  rewrites memory/state.md from recent activity.",
+    "- Intents distiller: reads journals + capture streams; writes",
+    "  build/_meta/intents_distilled.json.",
+    "- Skill/task generators: may add skills/<id>/ and _tasks.md lines from",
+    "  captured activity.",
+    "- Capture: harness hooks + transcript sync append",
+    "  build/_meta/prompts/<tool>.jsonl (schema below).",
+    "- Surface: writes _surface.json suggested questions per domain.",
+    "- Groom (app launch): adopts misnamed known files (ideal.md/soul.md/",
+    "  ideal_state.md -> ideal-state.md), maintains this map + harness links.",
+    "- Multi-machine: the vault syncs BETWEEN machines; ~/.config, credentials,",
+    "  keychains are per-machine. Processing daemons run on the HUB role machine;",
+    "  capture runs everywhere. Do not assume another machine's credentials.",
+    "",
+    "## Ledgers and their schemas (read-only for agents)",
+    "- Domain journal .system/journal.jsonl - one JSON object per prompt:",
+    "  { kind:'intent', ts(ms), session, thread, domain, surface, cli, model,",
+    "    model_id, message, prompt, prefs, host, app, app_version, os,",
+    "    engine_version, tz, meta_v }",
+    "- Capture stream build/_meta/prompts/<tool>.jsonl:",
+    "  { ts(ISO), epoch_ms, tool, session, cwd, prompt, source:'push'|'sync', host }",
+    "Append through `prevail capture ingest` or the app - never by hand.",
     "",
     "## Integrating from OUTSIDE the app",
-    "- CLI: `prevail chat --domain <slug>` (grounded chat), `prevail skill-usage",
-    "  report|archive`, `prevail connectors list|set`, `prevail capture ingest`",
-    "  (record a prompt into the journal), `prevail vault migrate-v4` (groom).",
-    "- MCP: `prevail mcp` serves vault tools (chat, tasks, loops, memory, intents)",
-    "  to any MCP-capable client.",
-    "- Journal entries and capture records carry provenance (surface, host, app,",
-    "  versions, tz). Do not fabricate ledger lines; use the CLI/MCP surfaces.",
+    "- CLI (`prevail`): chat --domain <slug> (grounded chat) · agent-run (act",
+    "  mode) · loops --once / --run-loop (run loops now) · briefing run ·",
+    "  connectors list|set <id> domains|account|model|refresh|enabled ·",
+    "  skill-usage used|report|archive|unarchive · capture ingest|sync ·",
+    "  vault migrate-v4 (groom) · role get|set hub|client · telegram setup",
+    "- MCP: `prevail mcp` serves vault tools (chat, council, tasks, loops,",
+    "  memory, intents, apps) to any MCP-capable client.",
+    "- Writes that contact people / spend money / are irreversible queue in the",
+    "  app's Needs-you inbox for one-tap approval; design integrations to expect",
+    "  that gate rather than fight it.",
     "",
     "## NEVER touch",
-    "`build/_meta/` · any `.system/` · `memory/threads/` · `_loops_runtime.json` ·",
-    "`_surface.json`. These are app/daemon-managed ledgers; hand edits corrupt",
-    "them or are overwritten.",
+    "build/_meta/ (ledgers, caches, pending approvals) · any .system/ ·",
+    "memory/threads/ · _loops_runtime.json · _surface.json · app _scope/ dirs.",
+    "Machine-managed; hand edits corrupt ledgers or are overwritten.",
     "",
-    "## Refresh semantics",
-    "The app re-reads files when a panel is opened (navigate away and back).",
-    "Filename aliases for the domain ideal (ideal.md, soul.md, ideal_state.md)",
-    "self-heal to ideal-state.md on app launch.",
+    "## Refresh + self-healing semantics",
+    "- App panels re-read files when opened: navigate away and back after edits.",
+    "- Ideal aliases (ideal.md, soul.md, ideal_state.md, idealstate.md) adopt to",
+    "  ideal-state.md on app launch; legacy flat names (_state.md, _memory.md,",
+    "  soul.md) migrate into the layout above.",
     MAP_END,
     "",
   ].join("\n");
@@ -481,26 +554,62 @@ function upsertBlock(existing: string, begin: string, end: string, block: string
   return block;
 }
 
-// Write/refresh the canonical VAULT.md and the per-harness shims that point to
-// it. Idempotent; user content outside the managed blocks survives.
+// Ensure one harness convention file points at VAULT.md. Preferred form: a real
+// SYMLINK (one file on disk, zero drift - the harness auto-loads the full map).
+// Fallbacks, in order: keep a correct existing symlink; preserve user content
+// by upserting the pointer block; plain pointer file when the filesystem
+// refuses symlinks (exFAT, some SMB/Windows setups).
+function ensureHarnessLink(vaultPath: string, file: string): boolean {
+  const p = join(vaultPath, file);
+  try {
+    let st: import("node:fs").Stats | null = null;
+    try { st = lstatSync(p); } catch { /* absent */ }
+    if (st?.isSymbolicLink()) {
+      try {
+        if (readlinkSync(p) === "VAULT.md") return false; // already correct
+        rmSync(p);
+      } catch { /* fall through to recreate */ }
+    } else if (st) {
+      const existing = readFileSync(p, "utf8");
+      const stripped = existing
+        .replace(new RegExp(`${SHIM_BEGIN}[\\s\\S]*?${SHIM_END}`), "")
+        .replace(/<!-- BEGIN PREVAIL[\s\S]*?END PREVAIL[^>]*-->/g, "")
+        .trim();
+      if (stripped) {
+        // Real user content lives here - never replace with a link; keep the
+        // file and make sure the pointer block is present and current.
+        const next = upsertBlock(existing, SHIM_BEGIN, SHIM_END, shimBody());
+        if (next !== existing) { writeFileSync(p, next); return true; }
+        return false;
+      }
+      rmSync(p); // only our own managed text - safe to upgrade to a symlink
+    }
+    try {
+      symlinkSync("VAULT.md", p);
+      return true;
+    } catch {
+      writeFileSync(p, shimBody()); // filesystem refused symlinks - pointer file
+      return true;
+    }
+  } catch {
+    return false;
+  }
+}
+
+// Write/refresh the canonical VAULT.md and the per-harness links to it.
+// Idempotent; user content outside managed blocks survives.
 export function writeVaultAgentContract(vaultPath: string): { ok: boolean; path: string; updated: boolean } {
   let updated = false;
-  const write = (file: string, begin: string, end: string, block: string) => {
-    const p = join(vaultPath, file);
+  try {
+    const p = join(vaultPath, "VAULT.md");
     let existing = "";
     try { existing = readFileSync(p, "utf8"); } catch { /* new file */ }
-    const next = upsertBlock(existing, begin, end, block);
-    if (next !== existing) {
-      writeFileSync(p, next);
-      updated = true;
-    }
-  };
-  try {
-    write("VAULT.md", MAP_BEGIN, MAP_END, vaultMap());
+    const next = upsertBlock(existing, MAP_BEGIN, MAP_END, vaultMap());
+    if (next !== existing) { writeFileSync(p, next); updated = true; }
     for (const shim of ["CLAUDE.md", "AGENTS.md", "GEMINI.md"]) {
-      write(shim, SHIM_BEGIN, SHIM_END, shimBody());
+      if (ensureHarnessLink(vaultPath, shim)) updated = true;
     }
-    return { ok: true, path: join(vaultPath, "VAULT.md"), updated };
+    return { ok: true, path: p, updated };
   } catch {
     return { ok: false, path: join(vaultPath, "VAULT.md"), updated: false };
   }
