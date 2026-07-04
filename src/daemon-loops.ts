@@ -260,7 +260,7 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
       : [
           `MISSING IDEAL STATE - THIS IS A BLOCKER YOU FIX, NOT A REASON TO STOP: the desired state is not set, so the gap cannot be measured. Your FIRST action this run is to unblock yourself by DRAFTING it: 3-6 concrete sentences of what thriving looks like for the ${domainLabel} domain (the key numbers, coverage, cadences, and outcomes), grounded in the domain's purpose, current state, memory, and the user's intents.`,
           autonomous
-            ? `Write your draft to the file ideal.md at the ROOT of this domain directory (create it), then report it as a completed action with "did": true. Continue the rest of the run measuring against your draft.`
+            ? `Write your draft to the file ideal-state.md at the ROOT of this domain directory (create it; this is the same file the app's Ideal State panel edits), then report it as a completed action with "did": true. Continue the rest of the run measuring against your draft.`
             : `File it as a task (set "task": true) whose text begins "Approve this draft ideal state:" followed by your full draft, so the user only has to accept or edit it. Then continue the run measuring against your draft.`,
           "",
         ].join("\n"),
@@ -405,10 +405,14 @@ export async function runOneLoop(
   onPhase("read", "Reading state and memory");
   const state = safeRead(v4ContentPath(domainDir, "memory/state.md", "_state.md")) || safeRead(join(domainDir, "state.md"));
   const memory = safeRead(v4ContentPath(domainDir, "memory/memory.md", "_memory.md"));
-  // The domain's ideal state (Context panel; ideal.md at the domain root, legacy
-  // soul.md). This is what "loops measure the gap to" - it MUST reach the
-  // steward even when the loop doc's own desiredState was never filled in.
-  const ideal = safeRead(join(domainDir, "ideal.md")) || safeRead(join(domainDir, "soul.md"));
+  // The domain's ideal state - what "loops measure the gap to". CANONICAL file
+  // is ideal-state.md at the domain root (the one the desktop's Ideal State
+  // panel reads/writes and the chat preamble injects); ideal.md and soul.md are
+  // legacy fallbacks. It MUST reach the steward even when the loop doc's own
+  // desiredState was never filled in.
+  const ideal = safeRead(join(domainDir, "ideal-state.md"))
+    || safeRead(join(domainDir, "ideal.md"))
+    || safeRead(join(domainDir, "soul.md"));
   const domainIntents = readDomainIntents(root, domainLabel);
   const clis = await detectClis();
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
