@@ -1896,7 +1896,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       try {
         const tdir = join(domainDir, "_threads");
         if (exists(tdir)) {
-          const mds = readDir(tdir).filter((f) => f.endsWith(".md")).sort();
+          const mds = readDir(tdir).filter((f) => !f.startsWith(".") && f.endsWith(".md")).sort();
           const latest = mds[mds.length - 1];
           if (latest) {
             const t = readFile(join(tdir, latest), "utf8");

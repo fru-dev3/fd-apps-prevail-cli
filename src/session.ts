@@ -600,9 +600,20 @@ export function importDesktopThreads(
       continue;
     }
     for (const name of entries) {
+      // Skip macOS AppleDouble sidecars (._<file>) and any hidden dotfile. A
+      // network/exFAT vault litters these next to real threads; "._<slug>.md"
+      // ends in ".md" but its slug ("._<slug>") fails threadJsonlPath's id
+      // validation. Since this importer runs before EVERY engine chat turn and
+      // is NOT wrapped in a try/catch by its caller, a throw here aborted the
+      // whole conversation - this is the "invalid session id" follow-up bug.
+      if (name.startsWith(".")) continue;
       if (!name.endsWith(".md")) continue;
       const slug = name.slice(0, -".md".length);
       if (!slug || seen.has(slug)) continue;
+      // Belt-and-braces: never hand a non-conforming slug to threadJsonlPath
+      // (which throws on it). Skip it instead so one odd filename can never
+      // take down a chat turn, even if the dotfile guard above misses it.
+      if (!/^[A-Za-z0-9_-]+$/.test(slug)) continue;
       seen.add(slug);
       const jsonlPath = threadJsonlPath(vaultPath, domain, slug);
       if (existsSync(jsonlPath)) {

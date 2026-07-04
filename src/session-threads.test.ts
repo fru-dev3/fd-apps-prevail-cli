@@ -73,3 +73,26 @@ test("v4 domain: desktop .md thread in legacy _threads/ is still imported (not o
   expect(turns.map((t) => t.role)).toEqual(["user", "assistant"]);
   expect(turns[0].content).toBe("old question");
 });
+
+// Regression: a macOS AppleDouble "._<slug>.md" sidecar (created on a network/
+// exFAT vault) must NOT crash the import. Its slug "._<slug>" fails
+// threadJsonlPath's id validation; because importDesktopThreads runs before
+// every engine chat turn and its caller does NOT wrap it in try/catch, a throw
+// here aborted the whole conversation ("invalid session id" follow-up bug). The
+// sidecar must be skipped and the real thread imported.
+test("v4 domain: AppleDouble ._<slug>.md sidecar is skipped, real thread still imported", () => {
+  const dir = v4Domain();
+  const tdir = join(dir, "memory", "threads");
+  mkdirSync(tdir, { recursive: true });
+  const slug = "2026-07-04_13-28-27_811c9dc5";
+  writeFileSync(join(tdir, `${slug}.md`), "## You\n\nhello\n\n## Assistant\n\nhi\n");
+  // The sidecar macOS drops next to it - ends in .md but has a "._" slug.
+  writeFileSync(join(tdir, `._${slug}.md`), "\x00\x05\x16\x07AppleDouble");
+  // Must NOT throw (the bug threw "invalid session id: ._2026-...").
+  const res = importDesktopThreads(vault, "health");
+  expect(res.imported).toContain(slug);
+  // No "._" slug ever leaks into imported OR skipped.
+  expect([...res.imported, ...res.skipped].some((s) => s.startsWith("."))).toBe(false);
+  const turns = readThreadTurns(vault, "health", slug);
+  expect(turns[0].content).toBe("hello");
+});
