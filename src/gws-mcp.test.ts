@@ -65,4 +65,25 @@ describe("gws-mcp account precedence (Fix 1)", () => {
     );
     expect(lastQueuedAccount()).toBe("work");
   });
+
+  test("the Google app's account binding resolves ambiguity for headless callers", () => {
+    // No pick + multiple accounts, but the user bound the Google app to "work":
+    // that standing choice is honored (this is how loop act runs resolve).
+    callGoogleWorkspace(
+      { args: SEND_ARGS }, VAULT, "general", undefined,
+      () => ({ kind: "ambiguous", labels: ["home", "work"] }),
+      () => "work",
+    );
+    expect(lastQueuedAccount()).toBe("work");
+  });
+
+  test("a binding for an account that is NOT connected does not bypass the refusal", () => {
+    const out = callGoogleWorkspace(
+      { args: SEND_ARGS }, VAULT, "general", undefined,
+      () => ({ kind: "ambiguous", labels: ["home", "work"] }),
+      () => "stale-label",
+    );
+    expect(out.map((c) => c.text ?? "").join(" ")).toContain("multiple Google accounts");
+    expect(readPendingGws(VAULT).length).toBe(0);
+  });
 });

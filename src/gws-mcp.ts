@@ -14,6 +14,12 @@ import { existsSync } from "node:fs";
 import { VERSION } from "./version.ts";
 import { classifyGwsCommand, runGwsRead, addPendingGws } from "./gws-gateway.ts";
 import { resolveGwsAccounts } from "./calendar-sync.ts";
+import { boundGoogleAccountLabel } from "./vault.ts";
+
+// Default app-binding lookup (separated so tests can inject a stub).
+function defaultBoundLookup(vault: string): string | undefined {
+  return boundGoogleAccountLabel(vault);
+}
 
 interface JsonRpcReq {
   jsonrpc: "2.0";
@@ -97,9 +103,10 @@ export function callGoogleWorkspace(
   vaultPath: string,
   defaultDomain: string,
   defaultAccount: string | undefined,
-  // Injectable so tests can pin the machine's connected-profile state; production
-  // callers use the live resolution.
+  // Injectable so tests can pin the machine's connected-profile state and the
+  // app-binding lookup; production callers use the live resolution.
   resolveAccounts: typeof resolveGwsAccounts = resolveGwsAccounts,
+  lookupBoundAccount: (vault: string) => string | undefined = defaultBoundLookup,
 ): McpContent[] {
   const argsIn = rawArgs.args;
   if (!Array.isArray(argsIn) || argsIn.some((a) => typeof a !== "string") || argsIn.length === 0) {
@@ -118,7 +125,7 @@ export function callGoogleWorkspace(
   // refused below rather than guessed, so Prevail never acts as the wrong
   // identity. This is what makes the chip selection binding even when the model
   // passes no `account`.
-  const account = (typeof rawArgs.account === "string" && rawArgs.account.trim())
+  let account = (typeof rawArgs.account === "string" && rawArgs.account.trim())
     ? rawArgs.account.trim()
     : defaultAccount;
   // Never guess between identities: when NO account was picked (no tool-arg, no
@@ -127,14 +134,23 @@ export function callGoogleWorkspace(
   // Machine-agnostic - the labels come from whatever gws profiles exist here.
   // With zero or one account connected the resolution is unambiguous and nothing
   // changes. Applies to reads AND writes (a read against the wrong inbox leaks
-  // the wrong person's data; a write is worse).
+  // the wrong person's data; a write is worse). One standing choice does count:
+  // the Google APP's account binding (manifest.account) - the user explicitly
+  // bound the app to that identity, so headless callers (loop act runs) resolve
+  // through it instead of dead-ending where nobody can answer a question.
   if (!account) {
     const res = resolveAccounts();
     if (res.kind === "ambiguous") {
-      return wrapText(
-        `Error: multiple Google accounts are connected on this machine (${res.labels.join(", ")}) and none was picked, so nothing was run. ` +
-        `Ask the user which account to use, then retry with account:"<label>" - or the user can pick account(s) under Modes in the composer.`,
-      );
+      const bound = lookupBoundAccount(vaultPath);
+      if (bound && res.labels.includes(bound)) {
+        account = bound;
+      } else {
+        return wrapText(
+          `Error: multiple Google accounts are connected on this machine (${res.labels.join(", ")}) and none was picked, so nothing was run. ` +
+          `Ask the user which account to use, then retry with account:"<label>" - or the user can pick account(s) under Modes in the composer, ` +
+          `or bind the Google app to an account under its settings (Account identity) to make the choice standing.`,
+        );
+      }
     }
   }
 

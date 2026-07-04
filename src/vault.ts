@@ -1838,6 +1838,21 @@ export function setCommunityAppModel(
   }
 }
 
+// The Google app's account binding, when one is set: the label of the identity
+// the user bound their Google app instance to. This is the standing, explicit
+// account choice that headless callers (loop act runs, the briefing email hook)
+// use to resolve WHICH Google account to target when no per-call pick exists -
+// the user made the choice once on the app, so it is not guessing. Returns
+// undefined when no Google-ish app carries a binding.
+export function boundGoogleAccountLabel(vaultPath?: string): string | undefined {
+  try {
+    const app = scanCommunityApps(vaultPath).find((a) => /google|gmail/i.test(a.id) && a.account?.label);
+    return app?.account?.label;
+  } catch {
+    return undefined;
+  }
+}
+
 // Bind (or clear) an app's ACCOUNT IDENTITY - which account of a multi-identity
 // connector this app instance is (gmail-personal vs gmail-estate). This is the
 // generic "an app = a connector + an identity" contract: attaching the app to
