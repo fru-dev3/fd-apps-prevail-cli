@@ -3251,6 +3251,18 @@ async function connectorsCommand(args: string[]): Promise<void> {
       else { console.error(r.error); process.exit(1); }
       return;
     }
+    // prevail connectors set <id> account <label> [address]  ("off"/"none"/"" clears)
+    //   binds the app instance to ONE identity of a multi-account connector
+    //   (e.g. which Google account this app is). Attaching the app to a chat
+    //   carries this identity into the turn.
+    if (id && field === "account") {
+      const { setCommunityAppAccount } = await import("./vault.ts");
+      const r = setCommunityAppAccount(id, value ?? "", args[4], connectorsVault);
+      if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(r.ok ? 0 : 1); }
+      if (r.ok) console.log(r.account ? `account for "${id}" bound to ${r.account.label}${r.account.address ? ` (${r.account.address})` : ""}` : `account binding cleared for "${id}"`);
+      else { console.error(r.error); process.exit(1); }
+      return;
+    }
     // prevail connectors set <id> model <model-id>  ("" clears -> global default)
     if (id && field === "model") {
       const { setCommunityAppModel } = await import("./vault.ts");

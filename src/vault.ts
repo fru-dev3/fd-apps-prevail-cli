@@ -1838,6 +1838,39 @@ export function setCommunityAppModel(
   }
 }
 
+// Bind (or clear) an app's ACCOUNT IDENTITY - which account of a multi-identity
+// connector this app instance is (gmail-personal vs gmail-estate). This is the
+// generic "an app = a connector + an identity" contract: attaching the app to
+// any chat carries this identity into the turn (e.g. the gws account the
+// google_workspace connector targets). Machine-agnostic - the label is whatever
+// the user connected, never a hard-coded address. `label` empty / "off" /
+// "none" clears the binding. Values are round-tripped through coerceAccount -
+// the SAME validator the scanner uses - so anything written here is honored.
+export function setCommunityAppAccount(
+  id: string,
+  label: string,
+  address?: string,
+  vaultPath?: string,
+): { ok: boolean; path?: string; account?: { label: string; address?: string } | null; error?: string } {
+  const cleanId = (id ?? "").trim().toLowerCase();
+  if (!cleanId) return { ok: false, error: "missing app id" };
+  const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
+  if (!app || !app.manifestPath) return { ok: false, error: `no app with id "${id}"` };
+  const l = (label ?? "").trim();
+  const clearing = l === "" || l.toLowerCase() === "off" || l.toLowerCase() === "none";
+  const account = clearing ? undefined : coerceAccount({ label: l, address });
+  if (!clearing && !account) return { ok: false, error: "invalid account label" };
+  try {
+    const raw = JSON.parse(vreadFile(app.manifestPath)) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return { ok: false, error: "manifest is not an object" };
+    if (account) raw.account = account; else delete raw.account;
+    writeFileSync(app.manifestPath, `${JSON.stringify(raw, null, 2)}\n`);
+    return { ok: true, path: app.manifestPath, account: account ?? null };
+  } catch (e) {
+    return { ok: false, error: `update failed: ${e}` };
+  }
+}
+
 // APP-4: set (or clear) an app's autonomous-sync schedule. `every` is the
 // cadence the engine understands (hourly | <2-23>h | daily | weekly |
 // <1-90>d | <1-12>w), with an optional HH:MM `at` and weekday `on`.
