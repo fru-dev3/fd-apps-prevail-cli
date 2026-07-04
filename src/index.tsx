@@ -2373,6 +2373,23 @@ async function connectorsCommand(args: string[]): Promise<void> {
   const connectorsVault = vaultArg || process.env.PREVAIL_VAULT_ROOT || readConfig()?.vaultPath || resolveDefaultVaultPath();
   try { migrateLegacyAppsIntoVault(connectorsVault); } catch { /* best effort */ }
   const apps = scanCommunityApps(connectorsVault);
+  // Forgiving connector resolution: exact id, then case-insensitive, then a
+  // slugified id/title match, so a slightly-off id (case, punctuation, or the
+  // manifest title vs the folder id) self-heals instead of throwing. And when
+  // nothing matches, the error lists what IS available so the mismatch is obvious.
+  const connSlug = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const pickConnector = (wantId: string): (typeof apps)[number] | undefined => {
+    const want = (wantId || "").trim();
+    if (!want) return undefined;
+    return (
+      apps.find((a) => a.id === want) ??
+      apps.find((a) => a.id.toLowerCase() === want.toLowerCase()) ??
+      apps.find((a) => connSlug(a.id) === connSlug(want)) ??
+      apps.find((a) => connSlug(a.title || "") === connSlug(want))
+    );
+  };
+  const connectorNotFound = (wantId: string) =>
+    `no connector with id "${wantId}". Available: ${apps.map((a) => a.id).join(", ") || "none"}. Try: prevail connectors list --json`;
   const sub = args[0];
   if (!sub || sub === "list" || sub === "ls") {
     if (args.includes("--json")) {
@@ -2442,9 +2459,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error("usage: prevail connectors test <id>");
       process.exit(1);
     }
-    const app = apps.find((a) => a.id === id);
+    const app = pickConnector(id);
     if (!app) {
-      console.error(`no connector with id "${id}"`);
+      console.error(connectorNotFound(id));
       process.exit(1);
     }
     const r = await probeConnector(app, (app.authCheck as Parameters<typeof probeConnector>[1]) ?? null);
@@ -2464,7 +2481,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // mirror of `connect` - it lets the user recreate a connector cleanly.
     const id = args[1];
     if (!id) { console.error("usage: prevail connectors remove <id>"); process.exit(1); }
-    const app = apps.find((a) => a.id === id);
+    const app = pickConnector(id);
     const { appsContainer } = await import("./path-safety.ts");
     const { rmSync } = await import("node:fs");
     const { homedir } = await import("node:os");
@@ -2473,7 +2490,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
       if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
       console.error(msg); process.exit(1);
     };
-    if (!app) return fail(`no connector with id "${id}"`);
+    if (!app) return fail(connectorNotFound(id));
     // Guard: a user app lives in the vault's data/apps (the single source of
     // truth), the legacy ~/.prevail/apps, or the dev override - any of those is
     // the user's own and is removable. The ONLY thing we refuse is a connector
@@ -2510,9 +2527,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error("usage: prevail connectors skills <connector-id>");
       process.exit(1);
     }
-    const app = apps.find((a) => a.id === id);
+    const app = pickConnector(id);
     if (!app) {
-      console.error(`no connector with id "${id}"`);
+      console.error(connectorNotFound(id));
       process.exit(1);
     }
     const { listAvailableSkills } = await import("./connector-skills.ts");
@@ -2584,8 +2601,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error(msg); process.exit(1);
     };
     if (!id || id.startsWith("--")) failDraft("usage: prevail connectors draft-ideal <id> --vault <path> [--cli <kind>] [--model <id>] [--json]");
-    const app = apps.find((a) => a.id === id);
-    if (!app) failDraft(`no connector with id "${id}" (try: prevail connectors list --json)`);
+    const app = pickConnector(id);
+    if (!app) failDraft(connectorNotFound(id));
 
     const cliKind = (flag("--cli") ?? "").trim();
     const model = (flag("--model") ?? "").trim();
@@ -2654,9 +2671,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // gateway). On-demand (the desktop's "Discover" button), not the sync.
     const id = args[1];
     if (!id) { console.error("usage: prevail connectors gateway-capabilities <id>"); process.exit(1); }
-    const app = apps.find((a) => a.id === id);
+    const app = pickConnector(id);
     const failJson = (msg: string) => { if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); } console.error(msg); process.exit(1); };
-    if (!app) return failJson(`no connector with id "${id}"`);
+    if (!app) return failJson(connectorNotFound(id));
     if (!app.gateway) return failJson(`"${id}" is not a gateway app`);
     const { discoverGatewayCapabilities } = await import("./daemon-sync.ts");
     const r = await discoverGatewayCapabilities(app);
@@ -2673,10 +2690,10 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // and the skills/<id>/SKILL.md layouts). JSON only - this feeds the UI.
     const id = args[1];
     if (!id) { console.error("usage: prevail connectors skill-files <connector-id>"); process.exit(1); }
-    const app = apps.find((a) => a.id === id);
+    const app = pickConnector(id);
     if (!app) {
       if (args.includes("--json")) { process.stdout.write("[]\n"); return; }
-      console.error(`no connector with id "${id}"`); process.exit(1);
+      console.error(connectorNotFound(id)); process.exit(1);
     }
     const { existsSync, readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
@@ -2715,9 +2732,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error("usage: prevail connectors run <connector-id> <skill-id> [--input key=value ...]");
       process.exit(1);
     }
-    const app = apps.find((a) => a.id === id);
+    const app = pickConnector(id);
     if (!app) {
-      console.error(`no connector with id "${id}"`);
+      console.error(connectorNotFound(id));
       process.exit(1);
     }
     const { loadSkillsForConnector, runSkill, logSkillRun } = await import("./connector-skills.ts");
@@ -2756,9 +2773,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error("saves the refresh token to ~/.prevail/connectors/<id>/auth/.");
       process.exit(1);
     }
-    const app = apps.find((a) => a.id === id);
+    const app = pickConnector(id);
     if (!app) {
-      console.error(`no connector with id "${id}"`);
+      console.error(connectorNotFound(id));
       process.exit(1);
     }
     if (!app.oauth) {
@@ -2797,9 +2814,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
   if (sub === "scopes") {
     const id = args[1];
     const { isConnected } = await import("./oauth-flow.ts");
-    const app = id ? apps.find((a) => a.id === id) : undefined;
+    const app = id ? pickConnector(id) : undefined;
     if (!id || !app) {
-      const msg = !id ? "usage: prevail connectors scopes <id>" : `no connector with id "${id}"`;
+      const msg = !id ? "usage: prevail connectors scopes <id>" : connectorNotFound(id);
       if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
       console.error(msg); process.exit(1);
     }
@@ -2823,7 +2840,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
   if (sub === "disconnect" || sub === "logout" || sub === "revoke") {
     const id = args[1];
     const { disconnectConnector } = await import("./oauth-flow.ts");
-    const app = id ? apps.find((a) => a.id === id) : undefined;
+    const app = id ? pickConnector(id) : undefined;
     if (!id) {
       const msg = "usage: prevail connectors disconnect <id>";
       if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
@@ -2849,8 +2866,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error(msg); process.exit(1);
     };
     if (!id) return fail("usage: prevail connectors browser-login <id> [--url <login-url>]");
-    const app = apps.find((a) => a.id === id);
-    if (!app) return fail(`no connector with id "${id}"`);
+    const app = pickConnector(id);
+    if (!app) return fail(connectorNotFound(id));
     // Resolve the login URL with fallbacks so login ALWAYS has somewhere to open:
     //   1) explicit --url, 2) the manifest's login_url/homepage,
     //   3) a homepage DERIVED from the connector id (e.g. airbnb -> airbnb.com,
@@ -2899,8 +2916,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
       process.exit(0);
     };
     if (!id) return done(false, { error: "usage: prevail connectors browser-learn <id> [--goal ...] [--url ...]" });
-    const app = apps.find((a) => a.id === id);
-    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    const app = pickConnector(id);
+    if (!app) return done(false, { error: connectorNotFound(id) });
     const goal = flag("--goal") ?? "";
     const recordAs = flag("--record-as");
     let url = flag("--url") ?? "";
@@ -2958,8 +2975,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
       process.exit(0);
     };
     if (!id) return done(false, { error: "usage: prevail connectors browser-replay <id> [<skill-id>]" });
-    const app = apps.find((a) => a.id === id);
-    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    const app = pickConnector(id);
+    if (!app) return done(false, { error: connectorNotFound(id) });
     const { loadSkillsForConnector, runSkill, logSkillRun } = await import("./connector-skills.ts");
     const skills = loadSkillsForConnector(app).filter((s) => s.runner === "browser" && Array.isArray(s.extra?.steps));
     const skill = wantSkill ? skills.find((s) => s.id === wantSkill) : skills[0];
@@ -2990,8 +3007,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
       process.exit(0);
     };
     if (!id) return done(false, { error: "usage: prevail connectors import-login <id> [--host <domain>]" });
-    const app = apps.find((a) => a.id === id);
-    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    const app = pickConnector(id);
+    if (!app) return done(false, { error: connectorNotFound(id) });
     // Host(s): explicit --host wins; else manifest start_url/login_url/homepage; else derive from id.
     let host = flag("--host") ?? "";
     if (!host) {
@@ -3022,8 +3039,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
       process.exit(0);
     };
     if (!id) return done(false, { error: "usage: prevail connectors seed-recipe <id> [--recipe <recipeId>] [--skill <skillId>]" });
-    const app = apps.find((a) => a.id === id);
-    if (!app) return done(false, { error: `no connector with id "${id}"` });
+    const app = pickConnector(id);
+    if (!app) return done(false, { error: connectorNotFound(id) });
     const { matchRecipe, seedSkillFromRecipe } = await import("./recipes.ts");
     const recipe = matchRecipe(flag("--recipe") ?? id);
     if (!recipe) return done(false, { error: `no bundled recipe matches "${flag("--recipe") ?? id}" (list: prevail connectors recipes)` });
@@ -3283,8 +3300,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // connector's sync-state.json (last ~20 runs, manual + autonomous).
     const id = args[1];
     if (!id) { console.error("usage: prevail connectors runs <id>"); process.exit(1); }
-    const app = apps.find((a) => a.id === id);
-    if (!app) { console.error(`no connector with id "${id}"`); process.exit(1); }
+    const app = pickConnector(id);
+    if (!app) { console.error(connectorNotFound(id)); process.exit(1); }
     const { readSyncState } = await import("./daemon-sync.ts");
     const st = readSyncState(app);
     if (args.includes("--json")) {
