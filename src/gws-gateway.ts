@@ -9,7 +9,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { resolveGwsBinary, gwsSpawnEnv } from "./calendar-sync.ts";
+import { resolveGwsBinary, gwsSpawnEnv, resolveDefaultGwsAccount } from "./calendar-sync.ts";
 import { auditAction } from "./action-audit.ts";
 import { runtimePath } from "./path-safety.ts";
 
@@ -36,7 +36,43 @@ export interface GwsResult {
 const MAX_OUTPUT = 16 * 1024;
 
 const NOT_INSTALLED = "Google Workspace CLI (gws) is not installed";
-const NOT_AUTHED = "This Google action needs a scope that was not granted. You may be signed in, but the required permission (e.g. Gmail or Calendar) is missing. Re-authorize from the Google panel and approve ALL requested permissions; if it still fails, your OAuth client is not enabled for that API.";
+
+// The account label a call effectively ran as, so an auth error can name it.
+// Mirrors gwsSpawnEnv's precedence: an explicit account (chip / model arg) wins;
+// otherwise the connected default account; otherwise the literal "default".
+function effectiveAccountLabel(account?: string): string {
+  const a = (account || "").trim();
+  if (a && a.toLowerCase() !== "default") return a;
+  return resolveDefaultGwsAccount() ?? "default";
+}
+
+// An honest, actionable auth/scope failure that names WHICH Google account and
+// WHICH service/permission failed and points the user at the Prevail Google panel
+// (NOT claude.ai-specific "/mcp" or "claude mcp" advice). `args` gives the service
+// (its first token, e.g. "gmail" / "calendar"); `account` is the target account.
+export function notAuthedMessage(args: string[], account?: string): string {
+  const svc = args[0] ? cap(args[0]) : "Google";
+  const acct = effectiveAccountLabel(account);
+  return (
+    `${svc} could not authenticate as your "${acct}" Google account. ` +
+    `You may be signed in, but a permission (scope) this action needs was not granted for that account. ` +
+    `Open the Prevail Google panel, re-authorize the "${acct}" account, and approve ALL requested permissions. ` +
+    `If it still fails, that account's Google OAuth client is not enabled for this API.`
+  );
+}
+
+// The first meaningful stderr line from gws (dropping its keyring/diagnostic
+// noise), so a genuinely different failure (bad params, quota) is not hidden
+// behind the generic auth guidance. Empty when there's nothing useful to add.
+function meaningfulStderr(stderr: string): string {
+  for (const raw of (stderr || "").split("\n")) {
+    const l = raw.trim();
+    if (!l) continue;
+    if (/keyring backend/i.test(l) || /^using /i.test(l)) continue;
+    return l.slice(0, 160);
+  }
+  return "";
+}
 
 // READ method tokens — operations that only observe state.
 const READ_TOKENS = new Set([
@@ -116,10 +152,11 @@ export function runGwsRead(args: string[], account?: string): GwsResult {
     env: gwsSpawnEnv(account),
     maxBuffer: 16 * 1024 * 1024,
   });
-  if (run.error) return { ok: false, error: NOT_AUTHED };
+  if (run.error) return { ok: false, error: notAuthedMessage(args, account) };
   if (run.status !== 0) {
-    const stderr = (run.stderr || "").trim();
-    return { ok: false, error: stderr || NOT_AUTHED };
+    const detail = meaningfulStderr(run.stderr || "");
+    const base = notAuthedMessage(args, account);
+    return { ok: false, error: detail ? `${base} (details: ${detail})` : base };
   }
   return { ok: true, output: truncate(run.stdout || "") };
 }
@@ -198,10 +235,11 @@ export function runGwsApproved(vaultRoot: string, id: string): GwsResult {
   });
   let result: GwsResult;
   if (run.error) {
-    result = { ok: false, error: NOT_AUTHED };
+    result = { ok: false, error: notAuthedMessage(item.args, item.account) };
   } else if (run.status !== 0) {
-    const stderr = (run.stderr || "").trim();
-    result = { ok: false, error: stderr || NOT_AUTHED };
+    const detail = meaningfulStderr(run.stderr || "");
+    const base = notAuthedMessage(item.args, item.account);
+    result = { ok: false, error: detail ? `${base} (details: ${detail})` : base };
   } else {
     result = { ok: true, output: truncate(run.stdout || "") };
   }

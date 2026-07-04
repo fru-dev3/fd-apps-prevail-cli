@@ -197,6 +197,36 @@ export function listGwsProfiles(): GwsProfile[] {
   return out;
 }
 
+// Pure decision: given the connected profiles on this machine, which account
+// should a caller that passed NO explicit account target? This is the fix for
+// the "domain chat can't authenticate" bug: gws's own default is whatever lives
+// at ~/.config/gws, which may hold NO valid credentials (e.g. the user only
+// authorized a labeled account like "work" from the Prevail Google panel).
+// Falling back to that empty default is why a domain chat failed with "scope not
+// granted" while the app chat worked. Rules:
+//   - no connected profiles at all -> undefined (nothing to target; the caller
+//     still fails, but with an honest, account-named error);
+//   - the default profile is connected -> undefined (keep using ~/.config/gws;
+//     least surprising, matches the historic app-chat behavior);
+//   - otherwise -> the first connected labeled account (stable order by dir), so
+//     an attached Google app always runs against an AUTHENTICATED account.
+// NOTE: "connected" here means "has auth material on disk" (see isGwsProfileDir),
+// not a live per-scope probe, so this can still pick an account whose specific
+// scope was not granted; that surfaces as an honest, account-named auth error
+// downstream (see gws-gateway).
+export function pickDefaultGwsAccount(profiles: GwsProfile[]): string | undefined {
+  if (profiles.length === 0) return undefined;
+  if (profiles.some((p) => p.label === "default")) return undefined;
+  return profiles[0]!.label;
+}
+
+// The connected/authorized Google account to target when a caller passes none.
+// Reads the live profile list and applies pickDefaultGwsAccount. Returns a label
+// (or undefined to mean the default profile / ~/.config/gws).
+export function resolveDefaultGwsAccount(): string | undefined {
+  return pickDefaultGwsAccount(listGwsProfiles());
+}
+
 // Resolve an account selector to a gws config dir, or undefined for the default
 // profile (caller then leaves GOOGLE_WORKSPACE_CLI_CONFIG_DIR unset → ~/.config/gws).
 // Accepts a label ("work"), the literal "default", or an absolute config-dir path.
@@ -220,7 +250,13 @@ export function resolveGwsConfigDir(account?: string): string | undefined {
 // approval path, and the calendar pull all target accounts the same way.
 export function gwsSpawnEnv(account?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath() };
-  const dir = resolveGwsConfigDir(account);
+  // An explicit account (a picked chip, a model `account:` arg, or a per-account
+  // fan-out label) always wins. When NONE is given, target a CONNECTED account
+  // rather than gws's arbitrary on-disk default, so a domain chat with the Google
+  // app attached authenticates as the same account the app chat would use.
+  const explicit = (account || "").trim();
+  const effective = explicit ? account : resolveDefaultGwsAccount();
+  const dir = resolveGwsConfigDir(effective);
   if (dir) env.GOOGLE_WORKSPACE_CLI_CONFIG_DIR = dir;
   return env;
 }

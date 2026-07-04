@@ -6,6 +6,7 @@ import {
   readPendingGws,
   addPendingGws,
   removePendingGws,
+  notAuthedMessage,
 } from "./gws-gateway.ts";
 
 describe("classifyGwsCommand — reads run live, writes/unknown are gated", () => {
@@ -32,6 +33,27 @@ describe("classifyGwsCommand — reads run live, writes/unknown are gated", () =
   test("produces a human summary", () => {
     expect(classifyGwsCommand(["gmail", "+triage"]).summary).toBe("Gmail: triage");
     expect(classifyGwsCommand(["calendar", "events", "delete"]).summary).toBe("Calendar: events delete");
+  });
+});
+
+describe("notAuthedMessage — names the account, the service, and the panel", () => {
+  test("an explicit account and service are both named", () => {
+    const msg = notAuthedMessage(["gmail", "messages", "send"], "work");
+    expect(msg).toContain('"work"');   // WHICH account
+    expect(msg).toContain("Gmail");     // WHICH service/scope area
+    expect(msg).toContain("Prevail Google panel"); // WHERE to fix it
+    expect(msg.toLowerCase()).toContain("approve all");
+  });
+
+  test("names Calendar for a calendar action", () => {
+    expect(notAuthedMessage(["calendar", "events", "list"], "personal")).toContain("Calendar");
+    expect(notAuthedMessage(["calendar", "events", "list"], "personal")).toContain('"personal"');
+  });
+
+  test("never surfaces claude.ai-specific /mcp or `claude mcp` advice", () => {
+    const msg = notAuthedMessage(["drive", "files", "list"], "work");
+    expect(msg).not.toContain("/mcp");
+    expect(msg.toLowerCase()).not.toContain("claude mcp");
   });
 });
 

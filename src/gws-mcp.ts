@@ -76,7 +76,7 @@ function tools(): McpTool[] {
           },
           account: {
             type: "string",
-            description: "Optional Google account to target when more than one is connected: a profile label (e.g. \"work\") or the literal \"default\". Omit to use the account the user selected for this session (or the default account if none was selected); only set this to deliberately override for a specific cross-account action. Reads run against it; queued writes run against the same account after approval.",
+            description: "Optional Google account to target when more than one is connected: a profile label (e.g. \"work\") or the literal \"default\". Omit to use the account the user selected for this session (or, if none was selected, a CONNECTED account is chosen automatically). Only set this to deliberately override for a specific cross-account action. Reads run against it; queued writes run against the same account after approval.",
           },
         },
         required: ["args"],
@@ -108,9 +108,12 @@ export function callGoogleWorkspace(
   // Account precedence: an explicit tool-arg account (the model's per-action
   // override, e.g. a deliberate cross-account send) wins; otherwise the launched
   // --account (the user's chip selection, threaded from the composer) is the
-  // authoritative default; otherwise undefined => gws-gateway's "default"
-  // profile. This is what makes the chip selection binding even when the model
-  // passes no `account`.
+  // authoritative default; otherwise undefined. When it stays undefined, the
+  // account is resolved AT SPAWN by gwsSpawnEnv/resolveDefaultGwsAccount to a
+  // CONNECTED account (not gws's arbitrary on-disk default), so an attached
+  // Google app authenticates in a domain chat exactly as in the app's own chat.
+  // This is what makes the chip selection binding even when the model passes no
+  // `account`.
   const account = (typeof rawArgs.account === "string" && rawArgs.account.trim())
     ? rawArgs.account.trim()
     : defaultAccount;
