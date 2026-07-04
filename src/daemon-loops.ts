@@ -17,7 +17,7 @@ import { runtimePath } from "./path-safety.ts";
 import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis, type ToolEvent } from "./cli-bridge.ts";
-import { stepLabel } from "./tool-labels.ts";
+import { stepLabel, stepDetail } from "./tool-labels.ts";
 import { spawnSync } from "node:child_process";
 
 // Whether the 1Password CLI ("op") is available - cached per process. When it
@@ -504,7 +504,8 @@ export async function runOneLoop(
               }
               return;
             }
-            onPhase("think", stepLabel(ev.name, ev.input));
+            const detail = stepDetail(ev.name, ev.input);
+            onPhase("think", detail ? `${stepLabel(ev.name, ev.input)} · ${detail}`.slice(0, 200) : stepLabel(ev.name, ev.input));
           } catch { /* display only */ }
         }
       : undefined;

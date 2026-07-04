@@ -84,6 +84,36 @@ const BUILTIN_LABEL: Record<string, string> = {
   TodoWrite: "Updating the plan",
 };
 
+// One-line DETAIL for a step: the concrete target of the call (the query, the
+// file, the command, the connector argv) so a multi-step run is debuggable at a
+// glance. Display-only, truncated, never throws. Secrets are not expected in
+// tool inputs (credentials flow through env/keychain), but keep it short anyway.
+export function stepDetail(name: string, input?: unknown): string {
+  const trunc = (s: string, n = 140) => (s.length > n ? s.slice(0, n) + "…" : s);
+  try {
+    const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+    const bare = name.replace(/^mcp__/, "");
+    if (bare.includes("google_workspace")) {
+      const args = gwsArgs(input);
+      const acct = typeof o.account === "string" && o.account.trim() ? ` · account: ${o.account.trim()}` : "";
+      return args ? trunc(`gws ${args.join(" ")}${acct}`) : "";
+    }
+    if (name === "WebSearch" && typeof o.query === "string") return trunc(o.query);
+    if (name === "WebFetch" && typeof o.url === "string") return trunc(String(o.url));
+    if ((name === "Read" || name === "Write" || name === "Edit") && typeof o.file_path === "string") return trunc(String(o.file_path));
+    if (name === "Bash" && typeof o.command === "string") return trunc(String(o.command));
+    if ((name === "Grep" || name === "Glob") && typeof (o.pattern ?? o.query) === "string") return trunc(String(o.pattern ?? o.query));
+    if (name === "Task" && typeof o.description === "string") return trunc(String(o.description));
+    if (name === "TodoWrite") return "";
+    // Generic MCP/other tools: compact one-line JSON of the input.
+    const keys = Object.keys(o);
+    if (keys.length === 0) return "";
+    return trunc(JSON.stringify(o));
+  } catch {
+    return "";
+  }
+}
+
 // The public entry point. `name` is the tool_use name (may be prefixed
 // "mcp__<server>__<tool>"); `input` is its raw input object (used only for gws).
 export function stepLabel(name: string, input?: unknown): string {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { stepLabel } from "./tool-labels.ts";
+import { stepLabel, stepDetail } from "./tool-labels.ts";
 
 test("gws labels: read vs write per service", () => {
   expect(stepLabel("google_workspace", { args: ["gmail", "messages", "list"] })).toBe("Reading Gmail");
@@ -26,4 +26,17 @@ test("never throws on junk input", () => {
   expect(() => stepLabel("google_workspace", null)).not.toThrow();
   expect(() => stepLabel("google_workspace", { args: [1, 2] })).not.toThrow();
   expect(stepLabel("google_workspace", {})).toBe("Using Google Workspace");
+});
+
+test("stepDetail: concrete targets per tool, truncated, never throws", () => {
+  expect(stepDetail("google_workspace", { args: ["gmail", "labels", "list"], account: "work" })).toBe("gws gmail labels list \u00b7 account: work");
+  expect(stepDetail("WebSearch", { query: "rent trends minneapolis" })).toBe("rent trends minneapolis");
+  expect(stepDetail("Read", { file_path: "/vault/real-estate/lease.pdf" })).toBe("/vault/real-estate/lease.pdf");
+  expect(stepDetail("Bash", { command: "npm run build" })).toBe("npm run build");
+  expect(stepDetail("TodoWrite", { todos: [] })).toBe("");
+  expect(stepDetail("mcp__notion__search_pages", { q: "brief" })).toBe('{"q":"brief"}');
+  const long = "x".repeat(300);
+  expect(stepDetail("Bash", { command: long }).length).toBeLessThanOrEqual(141);
+  expect(() => stepDetail("Bash", null)).not.toThrow();
+  expect(stepDetail("Bash", null)).toBe("");
 });

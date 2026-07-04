@@ -28,7 +28,7 @@ import {
   type CliKind,
   type ToolEvent,
 } from "./cli-bridge.ts";
-import { stepLabel } from "./tool-labels.ts";
+import { stepLabel, stepDetail } from "./tool-labels.ts";
 import { isLocalCliKind } from "./model-pricing.ts";
 import {
   normalizeBias,
@@ -96,6 +96,9 @@ export interface ChatEvent {
     id: string;
     label: string;
     status: "running" | "done" | "failed";
+    // The concrete target of the call (query / file / command / connector argv)
+    // while running, and the error snippet when failed - the debugging line.
+    detail?: string;
   };
   // The model's declared plan for a multi-step job (from its TodoWrite list),
   // rendered as a header above the live checklist. Re-sent whenever the model
@@ -405,16 +408,21 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       const id = ev.id || `step-${++stepSeq}`;
       if (ev.phase === "call") {
         const label = stepLabel(ev.name, ev.input);
+        const detail = stepDetail(ev.name, ev.input);
         stepLabels.set(id, label);
-        emit({ type: "tool", thread, ts: Date.now(), text: label, step: { id, label, status: "running" } });
+        emit({ type: "tool", thread, ts: Date.now(), text: label, step: { id, label, status: "running", ...(detail ? { detail } : {}) } });
       } else {
         const label = stepLabels.get(id) ?? stepLabel(ev.name);
+        const failed = ev.ok === false;
+        // On failure the detail line becomes WHY it failed (the tool's own error
+        // snippet); successful results keep the call-time detail already shown.
+        const detail = failed && ev.resultText ? ev.resultText : undefined;
         emit({
           type: "tool",
           thread,
           ts: Date.now(),
           text: label,
-          step: { id, label, status: ev.ok === false ? "failed" : "done" },
+          step: { id, label, status: failed ? "failed" : "done", ...(detail ? { detail } : {}) },
         });
       }
     } catch { /* display only - never let step reporting break a turn */ }

@@ -899,6 +899,9 @@ export interface ToolEvent {
   // the google_workspace gws argv -> "Reading Gmail" / "Creating a Google Doc").
   // Absent on "result". Never trusted for control flow, only for display.
   input?: unknown;
+  // On a FAILED "result" (ok === false): a short snippet of the tool's error
+  // output, so the step checklist can show WHY a step failed. Display only.
+  resultText?: string;
 }
 
 export interface ChatTurn {
@@ -2062,7 +2065,18 @@ function runClaudeStream(
         for (const b of ev.message.content) {
           if (b && b.type === "tool_result") {
             const nm = toolNames.get(String(b.tool_use_id)) ?? "tool";
-            try { onTool({ name: nm, phase: "result", ok: b.is_error !== true, id: b.tool_use_id ? String(b.tool_use_id) : undefined }); } catch { /* noop */ }
+            // On failure, pull a short error snippet from the result content so
+            // the step checklist can show WHY (debuggability for multi-step runs).
+            let resultText: string | undefined;
+            if (b.is_error === true) {
+              try {
+                const parts = Array.isArray(b.content) ? b.content : [];
+                const txt = parts.map((p: { type?: string; text?: string }) => (p && p.type === "text" && typeof p.text === "string" ? p.text : "")).join(" ").trim()
+                  || (typeof b.content === "string" ? b.content : "");
+                if (txt) resultText = txt.slice(0, 200);
+              } catch { /* display only */ }
+            }
+            try { onTool({ name: nm, phase: "result", ok: b.is_error !== true, id: b.tool_use_id ? String(b.tool_use_id) : undefined, resultText }); } catch { /* noop */ }
           }
         }
       } else if (ev.type === "result" && typeof ev.result === "string") {
