@@ -16,7 +16,8 @@ import { join, basename, resolve } from "node:path";
 import { runtimePath } from "./path-safety.ts";
 import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
-import { runChatTurn, detectClis } from "./cli-bridge.ts";
+import { runChatTurn, detectClis, type ToolEvent } from "./cli-bridge.ts";
+import { stepLabel } from "./tool-labels.ts";
 import { scanVault, scanApps } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
@@ -448,10 +449,31 @@ export async function runOneLoop(
     // Non-auto loops keep the propose-only bare turn, byte-identical to before.
     const autonomous = loop.autonomy === "auto" || cfg.autonomousActs === true;
     onPhase("think", autonomous ? `Working the loop with ${runModel || cli.label}` : `Measuring the gap with ${runModel || cli.label}`);
+    // Live visibility for act runs: stream the model's own plan (its TodoWrite
+    // list) and every REAL tool step (Searching the web, Checking your calendar,
+    // Writing a file) into the run's phase label, so the user watches the loop
+    // walk its plan instead of staring at an opaque "working" state.
+    const onTool = autonomous
+      ? (ev: ToolEvent) => {
+          if (ev.phase !== "call") return;
+          try {
+            if (ev.name === "TodoWrite") {
+              const todos = (ev.input as { todos?: Array<{ content?: unknown }> } | undefined)?.todos;
+              if (Array.isArray(todos)) {
+                const plan = todos.map((t) => (typeof t?.content === "string" ? t.content.trim() : "")).filter(Boolean);
+                if (plan.length) onPhase("think", `Plan: ${plan.join(" · ")}`.slice(0, 240));
+              }
+              return;
+            }
+            onPhase("think", stepLabel(ev.name, ev.input));
+          } catch { /* display only */ }
+        }
+      : undefined;
     const out = await runChatTurn({
       prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous),
       cwd: domainDir, cli, model: runModel, isFirst: true, bare: !autonomous,
       act: autonomous,
+      onTool,
       // Acting takes real time (tool calls, retries); give an act run more room.
       signal: AbortSignal.timeout(autonomous ? LOOP_TURN_TIMEOUT_MS * 3 : LOOP_TURN_TIMEOUT_MS),
     });
