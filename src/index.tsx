@@ -6,6 +6,7 @@
 // They're now dynamically imported inside runWizard()/launchCockpit() only.
 import { resolve, join, basename, dirname } from "node:path";
 import { resolveDomainDir, buildRoot, dataRoot, DOMAINS_DIR, appScopeId, browserProfileDir } from "./path-safety.ts";
+import { v4DirPath } from "./vault-layout-v4.ts";
 import { existsSync, readdirSync, readFileSync, renameSync, mkdirSync, rmdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
@@ -1909,7 +1910,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       // synthetic prompts.
       let logCtx = "";
       try {
-        const ldir = join(domainDir, "_log");
+        const ldir = v4DirPath(domainDir, ".system/log", "_log");
         if (exists(ldir)) {
           const logs = readDir(ldir).filter((f) => f.endsWith(".md")).sort();
           const recent = logs.slice(-3); // most recent few days
@@ -3666,7 +3667,7 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   // backup (nothing deleted). Non-destructive by construction. Idempotent: an
   // already-migrated domain is skipped. The desktop calls this on vault load.
   if (sub === "migrate-v4") {
-    const { migrateDomainToV4, archiveLegacyDomainV4, listDomainDirs } = await import("./vault-layout-v4.ts");
+    const { migrateDomainToV4, archiveLegacyDomainV4, listDomainDirs, consolidateDomainV4Leftovers } = await import("./vault-layout-v4.ts");
     const asJson = args.includes("--json");
     // The `vault` arg-block breaks before the global --vault parse, so read the
     // target vault from THIS command's own args (the desktop passes it).
@@ -3729,13 +3730,29 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
           }
         }
       } catch { /* cleanup is best-effort; never fail the migration over it */ }
-      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated }) + "\n");
+      // Second pass: consolidate any legacy leftovers a non-v4-aware writer
+      // re-created at an ALREADY-migrated domain's root (MEMORY.md, _threads/,
+      // _log/, _skillgen.json, _taskgen.json, ...) into their v4 homes. This is
+      // what makes a re-run of "Rebuild structure" clean up the reported dupes.
+      // Non-destructive + idempotent: a clean domain is a no-op.
+      const consolidated: { domain: string; moved: string[]; deduped: string[]; conflicts: string[]; merged: string[] }[] = [];
+      try {
+        for (const d of listDomainDirs(targetVault)) {
+          const c = consolidateDomainV4Leftovers(targetVault, d);
+          if (c.moved.length + c.deduped.length + c.conflicts.length + c.merged.length > 0) consolidated.push(c);
+        }
+      } catch { /* consolidation is best-effort; never fail the migration over it */ }
+      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated, consolidatedLeftovers: consolidated }) + "\n");
       else {
         for (const r of results) console.log(r.already ? `${r.domain}: already clean` : `${r.domain}: moved ${r.ops} entr(ies) into source/·memory/·.system/, archived ${r.archived} original(s)`);
         for (const r of relocated) {
           console.log(r.whole
             ? `_app-${r.app}: relocated shadow domain folder to data/apps/${r.app}/_scope`
             : `_app-${r.app}: merged ${r.entries} entr(ies) into data/apps/${r.app}/_scope (kept any colliding originals)`);
+        }
+        for (const c of consolidated) {
+          const n = c.moved.length + c.deduped.length + c.conflicts.length + c.merged.length;
+          console.log(`${c.domain}: consolidated ${n} leftover(s) into memory/·.system/ (moved ${c.moved.length}, deduped ${c.deduped.length}, merged ${c.merged.length}, kept-both ${c.conflicts.length})`);
         }
         console.log("done — vault is on the clean v4 layout. Originals are in each domain's _pre-v4-v4/ backup.");
       }

@@ -55,7 +55,9 @@ interface Cursor {
 }
 
 function cursorPath(dir: string): string {
-  return join(dir, "_distill.json");
+  // v4-aware: the distiller cursor is app plumbing -> .system/ on a migrated
+  // domain, else the legacy flat _distill.json.
+  return v4ContentPath(dir, ".system/distill.cursor.json", "_distill.json");
 }
 function readCursor(dir: string): Cursor {
   try {
@@ -306,7 +308,7 @@ function maybeRotateLedger(dir: string, cursor: Cursor): void {
   if (size < LEDGER_ROTATE_BYTES) return;
   try {
     const removed = vrotateLedgerPrefix(
-      ledger, join(dir, "_intents.archive.jsonl"), cursor.byte_offset, LEDGER_KEEP_TAIL_BYTES,
+      ledger, v4ContentPath(dir, ".system/journal.archive.jsonl", "_intents.archive.jsonl"), cursor.byte_offset, LEDGER_KEEP_TAIL_BYTES,
     );
     if (removed > 0) {
       writeCursor(dir, { ...cursor, byte_offset: Math.max(0, cursor.byte_offset - removed) });

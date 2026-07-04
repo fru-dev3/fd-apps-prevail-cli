@@ -19,7 +19,7 @@
 // switch ships (staged rollout, exactly like migrateToDataLayout). Archiving the
 // originals is a separate, explicitly-confirmed step (archiveLegacyDomainV4).
 
-import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { countFiles } from "./vault-data-layout.ts";
 import { resolveDomainDir, DOMAINS_DIR, dataRoot } from "./path-safety.ts";
@@ -67,6 +67,8 @@ export function v4Destination(name: string): string | null {
   if (stem === "_skillgen") return `.system/skillgen.cursor.${ext || "json"}`;
   if (stem === "_taskgen") return `.system/taskgen.cursor.${ext || "json"}`;
   if (stem === "_surface") return `.system/surface.cache.${ext || "json"}`;
+  // Raw per-turn transcript logs (the daily _log/*.md + score/heartbeat jsonl).
+  if (lower === "_log") return ".system/log";
 
   // Unknown — leave where it is (a user file we don't recognize).
   return null;
@@ -106,6 +108,25 @@ export function v4ContentPath(domainDir: string, v4Rel: string, legacy: string):
     const p = join(domainDir, v4Rel);
     mkdirSync(dirname(p), { recursive: true });
     return p;
+  }
+  return join(domainDir, legacy);
+}
+
+/**
+ * The DIRECTORY home for a logical subdir (e.g. `_log`), honoring the domain's
+ * layout. Unlike v4ContentPath, this PREFERS whichever of the v4 or legacy dir
+ * already exists on a v4 domain, so a writer/reader never SPLITS content that is
+ * still sitting at the legacy path (it keeps appending there until the migrator
+ * consolidates it), and a clean v4 domain gets the v4 home. A no-op on legacy
+ * domains. Does NOT create the dir — callers mkdir as they already do.
+ */
+export function v4DirPath(domainDir: string, v4Rel: string, legacy: string): string {
+  if (isV4Domain(domainDir)) {
+    const v4 = join(domainDir, v4Rel);
+    if (existsSync(v4)) return v4;
+    const leg = join(domainDir, legacy);
+    if (existsSync(leg)) return leg;
+    return v4;
   }
   return join(domainDir, legacy);
 }
@@ -188,4 +209,114 @@ export function archiveLegacyDomainV4(vaultPath: string, domain: string, stamp: 
     archived.push(name);
   }
   return { archiveDir, archived };
+}
+
+// =============================================================================
+// Consolidation — clean up LEGACY leftovers a non-v4-aware writer re-created at a
+// v4 domain's ROOT after the domain was already migrated (the reported bug). This
+// is the idempotent second pass the "Rebuild structure" button runs: every root
+// entry that has a v4 home (per v4Destination) is MOVED into it, non-destructively.
+// A clean domain is a no-op.
+// =============================================================================
+
+export interface V4ConsolidateResult {
+  domain: string;
+  moved: string[];     // entry -> dest, freshly relocated (dest was absent)
+  deduped: string[];   // root copy was byte-identical to the v4 copy; removed
+  conflicts: string[]; // both kept; the loser parked as <name>.pre-reorg
+  merged: string[];    // a dir merged child-by-child into an existing v4 dir
+}
+
+/** True once a domain root has no more recognized legacy leftovers to move. */
+function sameBytes(a: string, b: string): boolean {
+  try {
+    const sa = statSync(a), sb = statSync(b);
+    if (!sa.isFile() || !sb.isFile() || sa.size !== sb.size) return false;
+    return readFileSync(a).equals(readFileSync(b));
+  } catch { return false; }
+}
+
+// A non-colliding parking name next to `dest`: memory/threads/foo.md ->
+// memory/threads/foo.pre-reorg.md (uniquified). Never overwrites.
+function preReorgName(dest: string): string {
+  const dir = dirname(dest);
+  const base = dest.slice(dir.length + 1);
+  const dot = base.indexOf(".");
+  const stem = dot >= 0 ? base.slice(0, dot) : base;
+  const ext = dot >= 0 ? base.slice(dot) : "";
+  let candidate = join(dir, `${stem}.pre-reorg${ext}`);
+  let n = 2;
+  while (existsSync(candidate)) { candidate = join(dir, `${stem}.pre-reorg-${n}${ext}`); n++; }
+  return candidate;
+}
+
+// Place file `src` at `dest`, non-destructively. dest absent -> move. Identical
+// bytes -> drop the redundant src. Otherwise keep the RICHER (larger; tie: newer)
+// copy at dest and park the loser as <dest>.pre-reorg. Larger-first (not
+// newer-first) so a freshly re-seeded EMPTY placeholder (e.g. a stray MEMORY.md)
+// can never demote the real distilled content to a sidecar. Never deletes content.
+function placeFile(src: string, dest: string): "moved" | "deduped" | "conflict" {
+  mkdirSync(dirname(dest), { recursive: true });
+  if (!existsSync(dest)) { renameSync(src, dest); return "moved"; }
+  if (sameBytes(src, dest)) { rmSync(src, { force: true }); return "deduped"; }
+  const ss = statSync(src), ds = statSync(dest);
+  const srcWins = ss.size > ds.size || (ss.size === ds.size && ss.mtimeMs > ds.mtimeMs);
+  if (srcWins) {
+    renameSync(dest, preReorgName(dest)); // the older v4 copy becomes the loser
+    renameSync(src, dest);                // the newer root copy becomes canonical
+  } else {
+    renameSync(src, preReorgName(dest));  // the older root copy is parked
+  }
+  return "conflict";
+}
+
+// Merge directory `src` into `dest` child-by-child (files via placeFile, dirs
+// recursively). Removes src once it is empty. Used for _threads/, _log/, etc.
+function mergeDir(src: string, dest: string, tally: { moved: number; deduped: number; conflicts: number }): void {
+  mkdirSync(dest, { recursive: true });
+  for (const de of readdirSync(src, { withFileTypes: true })) {
+    const cSrc = join(src, de.name), cDest = join(dest, de.name);
+    if (de.isDirectory()) { mergeDir(cSrc, cDest, tally); continue; }
+    const r = placeFile(cSrc, cDest);
+    if (r === "moved") tally.moved++; else if (r === "deduped") tally.deduped++; else tally.conflicts++;
+  }
+  try { if (readdirSync(src).length === 0) rmdirSync(src); } catch { /* a non-empty remnant stays */ }
+}
+
+/**
+ * Consolidate any legacy leftovers still at a v4 domain's root into their v4
+ * homes. Non-destructive + idempotent: a clean domain (or a non-v4 domain) is a
+ * no-op. Reuses v4Destination for the mapping — never invents new destinations.
+ */
+export function consolidateDomainV4Leftovers(vaultPath: string, domain: string): V4ConsolidateResult {
+  const domainDir = resolveDomainDir(vaultPath, domain);
+  const res: V4ConsolidateResult = { domain, moved: [], deduped: [], conflicts: [], merged: [] };
+  if (!existsSync(domainDir) || !statSync(domainDir).isDirectory() || !isV4Domain(domainDir)) return res;
+  for (const de of readdirSync(domainDir, { withFileTypes: true })) {
+    const name = de.name;
+    if (name === V4_MARKER || name === "source" || name === "memory" || name === ".system") continue;
+    if (name.startsWith("_pre-v4-")) continue; // the migrator's own backup
+    const destRel = v4Destination(name);
+    if (!destRel) continue; // manifest.json and unknown user files stay put
+    const src = join(domainDir, name);
+    const dest = join(domainDir, destRel);
+    if (dest === src) continue; // already at its canonical root home (e.g. ideal.md)
+    if (de.isDirectory()) {
+      if (!existsSync(dest)) {
+        mkdirSync(dirname(dest), { recursive: true });
+        renameSync(src, dest);
+        res.moved.push(`${name} -> ${destRel}`);
+      } else {
+        const t = { moved: 0, deduped: 0, conflicts: 0 };
+        mergeDir(src, dest, t);
+        res.merged.push(`${name} -> ${destRel} (moved ${t.moved}, deduped ${t.deduped}, kept-both ${t.conflicts})`);
+      }
+    } else {
+      const r = placeFile(src, dest);
+      if (r === "moved") res.moved.push(`${name} -> ${destRel}`);
+      else if (r === "deduped") res.deduped.push(`${name} (identical to ${destRel}, root copy removed)`);
+      else res.conflicts.push(`${name} vs ${destRel} (kept both, loser parked as .pre-reorg)`);
+    }
+  }
+  return res;
 }

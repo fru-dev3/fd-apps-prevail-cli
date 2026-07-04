@@ -11,6 +11,7 @@ import type { CliKind } from "./config.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { isCliKind } from "./config.ts";
 import { isSafeEntryName, resolveDomainDir, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
+import { v4ContentPath } from "./vault-layout-v4.ts";
 
 // =============================================================================
 // DomainManifest — the optional per-domain machine-config file (manifest.json).
@@ -575,9 +576,11 @@ export function ensureManifest(vaultPath: string, domain: string): DomainManifes
 function seedMemory(vaultPath: string, domain: string): void {
   const dir = domainDir(vaultPath, domain);
   assertWritable(vaultPath, "MEMORY.md");
-  const file = join(dir, "MEMORY.md");
-  if (existsSync(file)) return;
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  // v4-aware: on a migrated domain the durable-memory file lives at
+  // memory/memory.md, not a root MEMORY.md (which would be a stray duplicate).
+  const file = v4ContentPath(dir, "memory/memory.md", "MEMORY.md");
+  if (existsSync(file)) return;
   const label = defaultLabel(domain);
   const body = [
     `# ${label} — Memory`,

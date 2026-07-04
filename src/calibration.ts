@@ -1,6 +1,7 @@
 import { readdirSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
+import { v4DirPath } from "./vault-layout-v4.ts";
 
 // Calibration loop — "council vs. yourself". Before fanning out to the
 // panel, the user records their gut take in one line. The log entry stores
@@ -90,7 +91,7 @@ export function defaultRetroDue(now = Date.now(), days = DEFAULT_RETRO_DAYS): st
 // Scan every _log/*.md under <domainPath>, parse meta blocks, return entries
 // whose retroDue date has passed AND don't yet have an outcome recorded.
 export function listPendingRetrospectives(domainPath: string, now = Date.now()): LogEntryMeta[] {
-  const dir = join(domainPath, "_log");
+  const dir = v4DirPath(domainPath, ".system/log", "_log");
   if (!existsSync(dir)) return [];
   const today = new Date(now).toISOString().slice(0, 10);
   const out: LogEntryMeta[] = [];
@@ -127,7 +128,7 @@ export function listPendingRetrospectives(domainPath: string, now = Date.now()):
 // Find a log entry by its id (YYYYMMDD-HHMM) and update its outcome.
 // Rewrites the meta line in place. Returns true if found and updated.
 export function recordOutcome(domainPath: string, id: string, outcome: string): boolean {
-  const dir = join(domainPath, "_log");
+  const dir = v4DirPath(domainPath, ".system/log", "_log");
   if (!existsSync(dir)) return false;
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".md")) continue;
@@ -167,7 +168,7 @@ export interface CalibrationStats {
 }
 
 export function computeCalibration(domainPath: string): CalibrationStats {
-  const dir = join(domainPath, "_log");
+  const dir = v4DirPath(domainPath, ".system/log", "_log");
   const stats: CalibrationStats = { total: 0, agreed: 0, rightOnAgreement: 0, rightOnDisagreement: 0, pending: 0 };
   if (!existsSync(dir)) return stats;
   for (const name of readdirSync(dir)) {

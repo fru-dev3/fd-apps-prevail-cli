@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { vappendLine, vreadFile } from "./vault-session.ts";
+import { v4DirPath } from "./vault-layout-v4.ts";
 import { parseVerdict } from "./verdict-parser.ts";
 import { encodeMeta, defaultRetroDue } from "./calibration.ts";
 import { indexEntry } from "./memory.ts";
@@ -60,7 +61,9 @@ export function writeTurnSummary(args: TurnSummaryArgs): void {
   let file = "";
   let headerLine = "";
   try {
-    const logDir = join(args.domainPath, "_log");
+    // v4-aware: the raw transcript log is app plumbing -> .system/log on a
+    // migrated domain (prefer an existing _log so we never split its history).
+    const logDir = v4DirPath(args.domainPath, ".system/log", "_log");
     if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
     file = join(logDir, dayKey(args.ts) + ".md");
     if (!existsSync(file)) {
@@ -219,7 +222,7 @@ export function heuristicSummarize(raw: string, cap: number): string {
 // Read today's log (if any) so the daemon / TUI can offer "what we
 // discussed today" recall. Returns null when the file doesn't exist.
 export function readTodayLog(domainPath: string, ts = Date.now()): string | null {
-  const file = join(domainPath, "_log", dayKey(ts) + ".md");
+  const file = join(v4DirPath(domainPath, ".system/log", "_log"), dayKey(ts) + ".md");
   if (!existsSync(file)) return null;
   try {
     return vreadFile(file);

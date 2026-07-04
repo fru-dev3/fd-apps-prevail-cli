@@ -36,6 +36,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveDomainDir } from "./path-safety.ts";
+import { v4DirPath } from "./vault-layout-v4.ts";
 
 import {
   readManifest,
@@ -200,7 +201,7 @@ function buildSnapshot(vaultPath: string, domain: string): DomainSnapshot {
   const hasJournalDir = exists(journalDir);
   const hasJournal = hasJournalFile || hasJournalDir;
 
-  const logDir = join(dir, "_log");
+  const logDir = v4DirPath(dir, ".system/log", "_log");
   const logFiles = listFiles(logDir).filter((f) => f.endsWith(".md"));
   const hasAnyLog = logFiles.length >= 1;
 
@@ -733,11 +734,12 @@ export interface ScoreHistoryPoint {
 export function appendScoreHistory(vaultPath: string, domain: string, score: ContextScore): void {
   assertWritable(vaultPath, SCORE_LOG_REL);
   const dir = resolveDomainDir(vaultPath, domain);
-  const logDir = join(dir, "_log");
+  // v4-aware: score history is app plumbing -> .system/log on a migrated domain.
+  const logDir = v4DirPath(dir, ".system/log", "_log");
   try {
     if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
     const point: ScoreHistoryPoint = { ts: Date.now(), score: score.score };
-    appendFileSync(join(dir, SCORE_LOG_REL), `${JSON.stringify(point)}\n`);
+    appendFileSync(join(logDir, "score.jsonl"), `${JSON.stringify(point)}\n`);
   } catch {
     /* history is best-effort — never fail a score on a log-write error */
   }
@@ -746,7 +748,7 @@ export function appendScoreHistory(vaultPath: string, domain: string, score: Con
 // Read the score history (oldest → newest) from _log/score.jsonl. Returns []
 // when the file is absent or unreadable.
 export function readScoreHistory(vaultPath: string, domain: string): ScoreHistoryPoint[] {
-  const file = join(resolveDomainDir(vaultPath, domain), SCORE_LOG_REL);
+  const file = join(v4DirPath(resolveDomainDir(vaultPath, domain), ".system/log", "_log"), "score.jsonl");
   if (!exists(file)) return [];
   const out: ScoreHistoryPoint[] = [];
   for (const line of readText(file).split("\n")) {

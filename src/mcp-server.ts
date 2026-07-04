@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { v4ContentPath } from "./vault-layout-v4.ts";
+import { v4ContentPath, v4DirPath } from "./vault-layout-v4.ts";
 import { timingSafeEqual } from "node:crypto";
 import { buildRoot } from "./path-safety.ts";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
@@ -773,7 +773,7 @@ function tReadLog(args: Record<string, unknown>, vaultPath: string): string {
   const date = typeof args.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(args.date)
     ? args.date
     : new Date().toISOString().slice(0, 10);
-  const f = join(domain.path, "_log", `${date}.md`);
+  const f = join(v4DirPath(domain.path, ".system/log", "_log"), `${date}.md`);
   if (!existsSync(f)) return `(no log for ${domain.name} on ${date})`;
   return readFileSync(f, "utf8");
 }
