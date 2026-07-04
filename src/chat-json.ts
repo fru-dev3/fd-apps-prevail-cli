@@ -185,7 +185,13 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const emit = (ev: ChatEvent) => write(JSON.stringify(ev));
 
   const vaultPath = resolve(opts.vaultPath);
-  const sessionId = opts.sessionId?.trim() || makeSessionId();
+  // A network/exFAT vault makes macOS drop AppleDouble "._<thread>.md" sidecars;
+  // if one is ever picked up as the active thread, the resume id arrives as
+  // "._<slug>" and threadJsonlPath rejects it, blocking every follow-up. Strip a
+  // leading dot/underscore prefix so it maps back to the real "<slug>" thread
+  // (continuity preserved), and drop any other disallowed char before use.
+  const rawSession = (opts.sessionId ?? "").trim().replace(/^\._?/, "").replace(/[^A-Za-z0-9_-]/g, "");
+  const sessionId = rawSession || makeSessionId();
   const thread = sessionId;
 
   const fail = (error: string): number => {
