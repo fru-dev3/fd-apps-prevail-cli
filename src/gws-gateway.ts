@@ -140,6 +140,34 @@ function truncate(out: string): string {
   return out.slice(0, MAX_OUTPUT) + "\n…(output truncated)";
 }
 
+// The one principled exception to "writes are never executed inline": sending
+// TO THE USER'S OWN inbox on a channel the user explicitly configured (the
+// briefing "Send to Gmail" delivery). The standing configuration IS the
+// approval, and mailing yourself your own digest contacts nobody else. The
+// recipient is ALWAYS the account's own address (read live from `gws auth
+// status`), never a caller-supplied address, so this can not be repurposed to
+// email third parties. Returns a delivery hook (subject, body) => receipt, or
+// null when gws is not installed. `account` follows the same never-guess
+// resolution the connector uses (label or config dir; undefined = default).
+export function gwsSelfEmailHook(account?: string): ((subject: string, body: string) => Promise<string>) | null {
+  const gws = resolveGwsBinary();
+  if (!gws) return null;
+  return async (subject: string, body: string) => {
+    const env = gwsSpawnEnv(account);
+    const st = spawnSync(gws, ["auth", "status"], { encoding: "utf8", env, maxBuffer: 4 * 1024 * 1024 });
+    let self = "";
+    try { self = String((JSON.parse(st.stdout || "{}") as { user?: unknown }).user ?? "").trim(); } catch { /* fall through */ }
+    if (!self || !self.includes("@")) throw new Error("could not determine the connected Gmail address to deliver to");
+    const run = spawnSync(gws, ["gmail", "+send", "--to", self, "--subject", subject, "--body", body], {
+      encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024,
+    });
+    if (run.error || run.status !== 0) {
+      throw new Error(meaningfulStderr(run.stderr || "") || "gws send failed");
+    }
+    return `sent to ${self}`;
+  };
+}
+
 // Run a READ-only gws command live and return its stdout. Never used for writes
 // — the classifier routes those to the pending queue. Resolves the binary,
 // spawns, and maps spawn failure / non-zero exit to a friendly error. `account`

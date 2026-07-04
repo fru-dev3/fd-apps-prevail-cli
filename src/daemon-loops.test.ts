@@ -24,6 +24,15 @@ test("parseResult: junk returns null", () => {
   expect(parseResult("no json here")).toBeNull();
 });
 
+test("parseResult: did=true marks an action the auto loop already completed", () => {
+  const out = `{"actions":[{"text":"Wrote the briefing to notes/plan.md","task":false,"needs_approval":false,"did":true},{"text":"Email the landlord","task":false,"needs_approval":true}],"done":false,"note":"acted"}`;
+  const r = parseResult(out)!;
+  expect(r.actions[0].did).toBe(true);
+  // did is only ever present when true, so proposal-only actions stay unchanged.
+  expect(r.actions[1].did).toBeUndefined();
+  expect(r.actions[1].needsApproval).toBe(true);
+});
+
 test("appendTask: writes the ledger line once, dedupes case-insensitively", () => {
   const dir = mkdtempSync(join(tmpdir(), "prevail-loop-task-"));
   try {

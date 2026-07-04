@@ -955,6 +955,29 @@ async function buildBriefingHooks(
         }
       }
     }
+    // The user's real Google connection is usually the gws-based Google app, not
+    // a skill-package "gmail" app - without this fallback a fully authenticated
+    // Gmail still reported "skipped (no connector)". Deliver via gws +send TO
+    // THE ACCOUNT'S OWN address (self-delivery only; the configured channel is
+    // the standing approval). Account = the same never-guess resolution chats
+    // use: exactly one connected profile, else the Google app's own binding.
+    if (!hooks.email) {
+      try {
+        const { resolveGwsAccounts } = await import("./calendar-sync.ts");
+        const { gwsSelfEmailHook } = await import("./gws-gateway.ts");
+        const res = resolveGwsAccounts();
+        let account: string | undefined;
+        if (res.kind === "single") account = res.label;
+        else if (res.kind === "ambiguous") {
+          const bound = apps.find((a) => /google|gmail/i.test(a.id) && a.account?.label)?.account?.label;
+          if (bound && res.labels.includes(bound)) account = bound;
+        }
+        if (res.kind === "single" || account) {
+          const hook = gwsSelfEmailHook(account);
+          if (hook) hooks.email = hook;
+        }
+      } catch { /* no gws - channel stays skipped with the honest note */ }
+    }
   }
 
   if (channels.includes("drive")) {

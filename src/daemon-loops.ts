@@ -127,7 +127,7 @@ function safeRead(path: string): string {
 // whole _loops.json with a fixed schema — can never strip it.
 const MAX_HISTORY = 6;
 
-interface LoopAction { text: string; task: boolean; needsApproval: boolean; due?: string; priority?: string }
+interface LoopAction { text: string; task: boolean; needsApproval: boolean; due?: string; priority?: string; did?: boolean }
 interface LoopRun { ts: number; actions: string[]; note: string; done: boolean; tasksCreated: string[] }
 interface LoopRtEntry { history: LoopRun[]; pending: { text: string; ts: number }[] }
 interface LoopRuntime { schema: 1; loops: Record<string, LoopRtEntry> }
@@ -222,7 +222,7 @@ function guardrailRule(a: "suggest" | "tasks" | "ask" | "auto"): string {
   }
 }
 
-function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined, intents: string): string {
+function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined, intents: string, autonomous = false): string {
   return [
     `You are the steward of the "${loop.name}" loop in the ${domainLabel} domain of a personal life-OS.`,
     `A loop is a persistent, self-driving control loop: it continuously reduces the gap between the current state and the desired state, learning and escalating over time. Your job each run: decide the smallest set of highest-leverage next actions (1-3) that move this loop forward RIGHT NOW, building on everything already tried.`,
@@ -249,13 +249,24 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
     "",
     `Think like an operator who PERSISTS: do not repeat actions already tried unless they're genuinely the next step; judge from the state + history whether the gap is closing; if it's stalled, change approach and escalate. Each run should build on the last and get better.`,
     "",
+    autonomous
+      ? [
+          `AUTONOMY IS ON (guardrail "auto"): you have REAL tools and connectors in this run - file operations in this domain, web search, the google_workspace connector, and Prevail's own action tools. For every next action that is NOT consequential (does not spend money, does not contact anyone other than the user, is not irreversible), DO IT NOW in this run instead of only proposing it: create or update the files, run the search, organize the data, produce the document.`,
+          `If a step needs something you don't have (data, a file, a lookup), FIGURE IT OUT: gather it with the tools you have and continue. Do not stop at "the user should provide X" when a tool could get X.`,
+          `The google_workspace connector executes reads immediately and QUEUES writes (like sending email) for the user's one-tap approval under Needs you - queuing a write there counts as completing your part of the action.`,
+          `Consequential actions (spend / contact someone else / irreversible / a decision only the user can make) must NOT be attempted - report them with "needs_approval": true as usual.`,
+          `In the final JSON, report every action you COMPLETED with "did": true and past-tense text of exactly what you did (include ids/paths/links). Unfinished or consequential steps use "did": false with the usual flags.`,
+          "",
+        ].join("\n")
+      : "",
     `FIRST RUN / MISSING BASELINE: if there is no baseline yet, or the foundational data this loop needs does not exist (common right after setup), do NOT end the run with only a passive "no baseline exists" observation. Your highest-leverage move is to ESTABLISH the baseline by FILING concrete trackable tasks (set "task": true) that build it - for example "Document the current ${domainLabel.toLowerCase()} state in state.md", "List the 3-5 things this loop should track", "Gather the key numbers/dates from <source>". Bootstrapping the baseline IS forward progress, and the next run will build on those tasks. Never stall waiting for a baseline you could create.`,
     "",
     `RECURRING OBLIGATIONS: this domain has cyclical things that must happen on a cadence (for example: an annual health physical or screening; quarterly estimated taxes; an annual insurance or policy review; a yearly financial/tax filing). From the desired state, memory, and what's been done, infer the obligations that apply to THIS domain. If one appears DUE or OVERDUE for its current period and is not already a tracked task, propose it as a task with a "due" date and a "priority" ("high", or "critical" if overdue / legally or health time-sensitive). Today is ${todayYmd()}.`,
     "",
     `Respond with ONLY a JSON object on a single line. Each action is an object:`,
-    `{"actions":[{"text":"the next step","task":true,"needs_approval":false,"due":"YYYY-MM-DD","priority":"high"}],"done":false,"note":"one-line read on progress + why these steps"}`,
+    `{"actions":[{"text":"the next step","task":true,"needs_approval":false,"did":false,"due":"YYYY-MM-DD","priority":"high"}],"done":false,"note":"one-line read on progress + why these steps"}`,
     `- "task": true if this is a concrete, trackable step — it will be FILED as a real task in this domain and worked on. false for pure observations/notes.`,
+    `- "did": true ONLY for an action you already completed during this run (autonomy "auto"); it is recorded as done, not filed again.`,
     `- "needs_approval": true if it spends money, contacts someone, is irreversible, or needs a decision/info only the user can give. Those are PROPOSED and wait for the user instead of being done automatically. Be conservative: when unsure, set true.`,
     `- "due": OPTIONAL YYYY-MM-DD deadline. Set it for anything time-sensitive (especially recurring obligations) so it surfaces on the right horizon and alerts. Omit if there's no real deadline.`,
     `- "priority": OPTIONAL "high" or "critical". Use for important or time-critical work; omit for normal. Overdue obligations are "critical".`,
@@ -287,7 +298,8 @@ export function parseResult(out: string): { actions: LoopAction[]; done: boolean
           if (!text) return null;
           const due = typeof o.due === "string" && /^\d{4}-\d{2}-\d{2}$/.test(o.due) ? o.due : undefined;
           const priority = (o.priority === "high" || o.priority === "critical") ? o.priority : undefined;
-          return { text, task: o.task !== false, needsApproval: o.needs_approval === true, due, priority };
+          const did = (o as { did?: unknown }).did === true;
+          return { text, task: o.task !== false, needsApproval: o.needs_approval === true, due, priority, ...(did ? { did } : {}) };
         }
         return null;
       })
@@ -307,7 +319,7 @@ export interface LoopRunResult {
   loop: string;
   note: string;
   done: boolean;
-  actions: { text: string; disposition: "task" | "approval" | "suggested" }[];
+  actions: { text: string; disposition: "task" | "approval" | "suggested" | "done" }[];
   tasksCreated: string[];
   pending: string[];
   briefing?: string; // for briefing loops: the rendered digest that was delivered
@@ -428,11 +440,20 @@ export async function runOneLoop(
   }
 
   try {
-    onPhase("think", `Measuring the gap with ${runModel || cli.label}`);
+    // Agentic steward: with autonomy "auto" (per-loop or global) the run is an
+    // ACT turn - real tools/connectors, full operating manual - so the loop DOES
+    // its non-consequential next actions in this pass instead of only proposing
+    // them. The broker rules stay in the prompt (consequential = needs_approval)
+    // and gws writes still queue for approval, so the safety spine is unchanged.
+    // Non-auto loops keep the propose-only bare turn, byte-identical to before.
+    const autonomous = loop.autonomy === "auto" || cfg.autonomousActs === true;
+    onPhase("think", autonomous ? `Working the loop with ${runModel || cli.label}` : `Measuring the gap with ${runModel || cli.label}`);
     const out = await runChatTurn({
-      prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents),
-      cwd: domainDir, cli, model: runModel, isFirst: true, bare: true,
-      signal: AbortSignal.timeout(LOOP_TURN_TIMEOUT_MS),
+      prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous),
+      cwd: domainDir, cli, model: runModel, isFirst: true, bare: !autonomous,
+      act: autonomous,
+      // Acting takes real time (tool calls, retries); give an act run more room.
+      signal: AbortSignal.timeout(autonomous ? LOOP_TURN_TIMEOUT_MS * 3 : LOOP_TURN_TIMEOUT_MS),
     });
     onPhase("apply", "Applying the decision");
     const res = parseResult(out);
@@ -450,7 +471,12 @@ export async function runOneLoop(
       const nextPending: { text: string; ts: number }[] = [];
       const seenP = new Set<string>();
       for (const a of res.actions) {
-        if (a.needsApproval) {
+        if (a.did) {
+          // Completed during this (autonomy "auto") run: record it as DONE work,
+          // never file it as a task or approval again.
+          actions.push({ text: a.text, disposition: "done" });
+          logActivity(root, { type: "loop_exec", domain: domainLabel, title: `Loop did: ${a.text.length > 80 ? a.text.slice(0, 80) + "…" : a.text}`, status: "ok", ref: loop.id });
+        } else if (a.needsApproval) {
           const key = a.text.trim().toLowerCase();
           if (!seenP.has(key)) { seenP.add(key); nextPending.push({ text: a.text, ts: now }); }
           actions.push({ text: a.text, disposition: "approval" });
@@ -570,7 +596,7 @@ async function runBriefingLoop(p: {
     if (delivered.telegram) sentTo.push(`telegram (${delivered.telegram})`);
     if (emailResult && !emailSkipped && !emailErr) sentTo.push("gmail");
     let note = sentTo.length ? `Briefing delivered to ${sentTo.join(", ")}` : "Briefing generated (not delivered)";
-    if (emailSkipped) note += " - connect Gmail to email it";
+    if (emailSkipped) note += " - connect Google (and, with several accounts, bind or pick one) to email it";
     else if (emailErr) note += ` - gmail failed: ${emailResult.replace(/^error:?\s*/i, "")}`;
 
     loop.lastRunTs = now;
