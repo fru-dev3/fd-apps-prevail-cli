@@ -23,9 +23,21 @@ import {
   detectClis,
   defaultModelFor,
   runChatTurn,
+  MODEL_QUICKPICKS_FALLBACK,
   type AvailableCli,
   type CliKind,
 } from "./cli-bridge.ts";
+import { isLocalCliKind } from "./model-pricing.ts";
+import {
+  normalizeBias,
+  deriveHeuristics,
+  makeCandidate,
+  routeWithFallback,
+  shouldRunClassifier,
+  classifyPrompt,
+  metaFor,
+  type RouteCandidate,
+} from "./model-routing.ts";
 import { generalDir } from "./decisions.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
@@ -42,7 +54,7 @@ import {
 // docs/schemas/ChatEvent.json — kept as a local interface (rather than
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
-  type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done";
+  type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route";
   thread: string;
   ts: number;
   domain?: string;
@@ -55,6 +67,17 @@ export interface ChatEvent {
   };
   engine?: string;
   error?: string;
+  // Emitted once, before the turn, when model === "auto": the model the router
+  // chose and why. Consumers render this as a routing chip. Absent on every
+  // non-auto turn (the stream is byte-identical to before in that case).
+  route?: {
+    cli: string;
+    model: string;
+    reason: string;
+    confidence: number;
+    difficulty?: number;
+    bias?: string;
+  };
 }
 
 // Options for one JSON chat turn.
@@ -76,6 +99,9 @@ export interface ChatJsonOptions {
   // Per-turn web-access override (desktop "Web access" Modes toggle). "deny"
   // hard-blocks web for this turn; absent => fall back to the global setting.
   webAccess?: "allow" | "deny";
+  // Economy / Balanced / Quality bias for the Auto router. Only consulted when
+  // model === "auto"; absent => PREVAIL_ROUTE_BIAS env => "balanced".
+  routeBias?: string;
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
   write?: (line: string) => void;
@@ -190,7 +216,50 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     return fail("no AI CLI detected (claude/codex/antigravity/ollama)");
   }
 
-  const model = (opts.model ?? "").trim();
+  // Resolve the model. The ONLY behavioral change from before is guarded behind
+  // the single `model === "auto"` sentinel check: with any other model value the
+  // stream is byte-identical to before. In auto mode we run the router (over
+  // THIS cli's catalog, after privacy has already restricted the cli under
+  // Bunker/local-only), pick a concrete model, and emit a `route` event.
+  let model = (opts.model ?? "").trim();
+  let routeInfo: NonNullable<ChatEvent["route"]> | null = null;
+  if (model === "auto") {
+    const localOnly = opts.localOnly ?? false;
+    const bias = normalizeBias(opts.routeBias ?? process.env.PREVAIL_ROUTE_BIAS);
+    // Candidate models = what this runtime offers. Empty catalog => the runtime
+    // default (Auto is then a no-op with zero added latency).
+    const catalog = MODEL_QUICKPICKS_FALLBACK[cli.kind] ?? [];
+    const modelIds = catalog.length ? catalog : [defaultModelFor(cli.kind)].filter((m) => m.length > 0);
+    const candidates: RouteCandidate[] = modelIds.map((m) => makeCandidate(cli.kind, m));
+
+    // Layer 1 heuristics decide whether the ambiguous-middle classifier is worth
+    // a call. The classifier runs on THIS cli (already local under Bunker), on
+    // its cheapest model, and fails open to heuristics.
+    let classified = null as Awaited<ReturnType<typeof classifyPrompt>>;
+    const h = deriveHeuristics(message);
+    const classifierIsLocal = isLocalCliKind(cli.kind);
+    if (
+      candidates.length > 1 &&
+      shouldRunClassifier({ ambiguous: h.ambiguous, hasClassifierCli: true, localOnly, classifierIsLocal })
+    ) {
+      const cheapest = [...candidates].sort((a, b) => metaFor(a.model).tier - metaFor(b.model).tier)[0]!;
+      classified = await classifyPrompt({ message, cwd: domain.path, cli, model: cheapest.model });
+    }
+
+    const decision = routeWithFallback(
+      { message, candidates, bias, localOnly, classified, domain: opts.domain },
+      { cli: cli.kind, model: "" },
+    );
+    model = decision.model;
+    routeInfo = {
+      cli: decision.cli,
+      model: decision.model,
+      reason: decision.reason,
+      confidence: decision.confidence,
+      difficulty: decision.difficulty,
+      bias: decision.bias,
+    };
+  }
   const engine = engineLabel(cli, model);
   const startTs = Date.now();
 
@@ -213,6 +282,11 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   emit({ type: "start", thread, ts: startTs, domain: opts.domain, engine });
   // echo the user turn so a consumer building UI from the stream alone has it
   emit({ type: "user", thread, ts: startTs, role: "user", text: message });
+  // route (auto only) — the chosen model + why, for the routing chip. Emitted
+  // before the model call so the UI can label the turn as it streams.
+  if (routeInfo) {
+    emit({ type: "route", thread, ts: startTs, domain: opts.domain, engine, route: routeInfo });
+  }
 
   // Persist the user turn before the model call so a crash mid-stream still
   // leaves the prompt on disk (JSONL source of truth + rebuildable index).
@@ -306,6 +380,7 @@ export async function chatJsonCommand(
   let sessionId: string | undefined;
   let localOnly = false;
   let webAccess: "allow" | "deny" | undefined;
+  let routeBias: string | undefined;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -324,6 +399,8 @@ export async function chatJsonCommand(
     else if (a === "--local-only") localOnly = true;
     else if (a === "--web") { const v = (next ?? "").toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; i++; }
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
+    else if (a === "--route-bias") { routeBias = next; i++; }
+    else if (a.startsWith("--route-bias=")) routeBias = a.slice("--route-bias=".length);
     else if (a === "--vault") { vaultPath = resolve(process.cwd(), next ?? ""); i++; }
     else if (a.startsWith("--vault=")) vaultPath = resolve(process.cwd(), a.slice("--vault=".length));
     // --json is implied by this command path; tolerate it being present.
@@ -355,6 +432,7 @@ export async function chatJsonCommand(
     sessionId,
     localOnly,
     webAccess,
+    routeBias,
   });
 }
 

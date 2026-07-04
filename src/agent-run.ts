@@ -17,7 +17,8 @@
 import { resolve } from "node:path";
 import { mkdirSync, appendFileSync, readFileSync, existsSync } from "node:fs";
 
-import { detectClis, runChatTurn, type CliKind } from "./cli-bridge.ts";
+import { detectClis, runChatTurn, defaultModelFor, MODEL_QUICKPICKS_FALLBACK, type CliKind } from "./cli-bridge.ts";
+import { normalizeBias, makeCandidate, routeWithFallback, type RouteCandidate } from "./model-routing.ts";
 import { generalDir } from "./decisions.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
@@ -92,7 +93,31 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
   const locked = isDomainLocked(vaultPath, opts.domain);
   const act = gate.decision === "auto" && !locked;
 
-  const model = (opts.model ?? "").trim();
+  // Auto routing (mirrors chat-json). Only reached when model === "auto"; every
+  // other value is untouched. Heuristics-only here (no gated classifier call on
+  // the agent path); the classifier layer stays in interactive chat for now.
+  let model = (opts.model ?? "").trim();
+  let routeInfo: NonNullable<ChatEvent["route"]> | null = null;
+  if (model === "auto") {
+    const localOnly = process.env.PREVAIL_BUNKER === "1";
+    const bias = normalizeBias(process.env.PREVAIL_ROUTE_BIAS);
+    const catalog = MODEL_QUICKPICKS_FALLBACK[cli.kind] ?? [];
+    const modelIds = catalog.length ? catalog : [defaultModelFor(cli.kind)].filter((m) => m.length > 0);
+    const candidates: RouteCandidate[] = modelIds.map((m) => makeCandidate(cli.kind, m));
+    const decision = routeWithFallback(
+      { message: goal, candidates, bias, localOnly, classified: null, domain: opts.domain },
+      { cli: cli.kind, model: "" },
+    );
+    model = decision.model;
+    routeInfo = {
+      cli: decision.cli,
+      model: decision.model,
+      reason: decision.reason,
+      confidence: decision.confidence,
+      difficulty: decision.difficulty,
+      bias: decision.bias,
+    };
+  }
   const engine = `${cli.kind}:${model || "default"}`;
   const startTs = Date.now();
 
@@ -111,6 +136,9 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
 
   emit({ type: "start", thread, ts: startTs, domain: opts.domain, engine });
   emit({ type: "user", thread, ts: startTs, role: "user", text: goal });
+  if (routeInfo) {
+    emit({ type: "route", thread, ts: startTs, domain: opts.domain, engine, route: routeInfo });
+  }
   if (autonomy === "auto" && gate.decision === "ask") {
     emit({
       type: "tool",
