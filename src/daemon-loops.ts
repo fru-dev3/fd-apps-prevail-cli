@@ -478,7 +478,30 @@ export async function runOneLoop(
       signal: AbortSignal.timeout(autonomous ? LOOP_TURN_TIMEOUT_MS * 3 : LOOP_TURN_TIMEOUT_MS),
     });
     onPhase("apply", "Applying the decision");
-    const res = parseResult(out);
+    let res = parseResult(out);
+    // Rigor guard (anti-fluff): a pass may conclude "nothing to do" ONLY when
+    // the domain state carries actual evidence. On a thin/empty domain, zero
+    // actions means the model took the lazy exit - the honest move there is to
+    // BUILD the baseline. Force one corrective retry; if the model still
+    // returns nothing, the note says plainly that nothing was verified. A run
+    // must never read as "handled" without evidence.
+    const evidence = state.trim().length >= 80 || (doc.desiredState ?? "").trim().length >= 40;
+    if (res && res.actions.length === 0 && !evidence) {
+      onPhase("think", "Empty pass on a domain with no baseline - demanding real work");
+      const corrective = [
+        buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous),
+        "",
+        `REJECTED: you returned zero actions, but this domain has NO recorded baseline or ideal state - there is no evidence the gap is handled, so "nothing to do" is not an acceptable conclusion. Do the FIRST RUN / MISSING BASELINE work now: ${autonomous ? "gather the data with your tools and write the baseline into the domain, reporting each completed step with \"did\": true" : "file 2-4 concrete baseline-building tasks (\"task\": true)"}. Respond with ONLY the JSON object.`,
+      ].join("\n");
+      const out2 = await runChatTurn({
+        prompt: corrective, cwd: domainDir, cli, model: runModel, isFirst: true, bare: !autonomous,
+        act: autonomous, onTool,
+        signal: AbortSignal.timeout(autonomous ? LOOP_TURN_TIMEOUT_MS * 3 : LOOP_TURN_TIMEOUT_MS),
+      });
+      const res2 = parseResult(out2);
+      if (res2 && res2.actions.length > 0) res = res2;
+      else if (res) res = { ...res, note: "No baseline exists for this domain yet and the model produced no baseline-building work. Nothing was verified as handled - add context (ideal state, state.md) or re-run." };
+    }
     loop.lastRunTs = now;
     const actions: LoopRunResult["actions"] = [];
     const created: string[] = [];
