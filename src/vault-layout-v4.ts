@@ -36,7 +36,21 @@ export function v4Destination(name: string): string | null {
 
   // Root markers — never moved.
   if (lower === "manifest.json") return null;
-  if (lower === "ideal.md" || lower === "soul.md") return "ideal.md"; // soul -> ideal
+  if (lower === "ideal-state.md") return null;
+  // The domain ideal's ONE canonical home is ideal-state.md (what the desktop
+  // Ideal State panel edits, the chat preamble injects, and the loop steward
+  // reads). Adopt every historical / plausible alias so an ideal authored by
+  // hand or by an agent under the "wrong" name self-heals to the canonical
+  // file on the next groom pass instead of being invisible to the UI.
+  if (
+    lower === "ideal.md" ||
+    lower === "soul.md" ||
+    lower === "ideal_state.md" ||
+    lower === "idealstate.md" ||
+    lower === "ideal state.md"
+  ) {
+    return "ideal-state.md";
+  }
 
   // source/  — the user's own material.
   if (lower === "goals.md") return "source/goals.md";
@@ -319,4 +333,96 @@ export function consolidateDomainV4Leftovers(vaultPath: string, domain: string):
     }
   }
   return res;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The in-vault agent contract: a CLAUDE.md at the VAULT ROOT that teaches any
+// agent working directly on the filesystem (Claude Code on any machine) the
+// layout law, the canonical filenames, and the do-not-touch list - so external
+// edits land where the app reads instead of in invisible variants. The block
+// between the markers is auto-managed (rewritten on every groom); anything the
+// user adds outside the markers is preserved. This file is the ONE sanctioned
+// root-level file besides build/ and data/.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CONTRACT_BEGIN = "<!-- BEGIN PREVAIL VAULT CONTRACT (auto-managed - edits inside this block are overwritten) -->";
+const CONTRACT_END = "<!-- END PREVAIL VAULT CONTRACT -->";
+
+export function vaultAgentContract(): string {
+  return [
+    CONTRACT_BEGIN,
+    "# Prevail vault - contract for agents editing these files directly",
+    "",
+    "This vault IS the product; the Prevail app is a UI over it. Edits that follow",
+    "this contract appear in the app (navigate away/back to refresh a panel).",
+    "",
+    "## Layout law",
+    "- Vault root contains ONLY `build/`, `data/`, and this CLAUDE.md.",
+    "- Domains: `data/domains/<slug>/` (lowercase slug). Apps: `data/apps/<id>/`.",
+    "- Never invent new root-level files or directories.",
+    "",
+    "## Per-domain files you may create or edit (`data/domains/<slug>/`)",
+    "- `ideal-state.md` - THE domain ideal (purpose, current reality, target,",
+    "  metrics, habits, what to avoid). Exactly this name; `ideal.md`/`soul.md`",
+    "  are legacy aliases that get auto-renamed to it.",
+    "- `manifest.json` - identity/settings. Safe: identity.label/emoji/summary,",
+    "  goals (string array), config.autoState (bool), routing.keywords.",
+    "- `memory/state.md` - current-state snapshot. NOTE: when",
+    "  manifest.config.autoState is true a daemon may consolidate/rewrite it;",
+    "  durable truths belong in ideal-state.md / source/goals.md / memory/memory.md.",
+    "- `memory/memory.md` - durable long-term memory (injected into chats).",
+    "- `source/` - the user's own material (goals.md, config.md, any files).",
+    "- `_tasks.md` - one task per line: `- [ ] Task text @2026-07-15 ~priority:high`",
+    "  (`~priority:` high|critical; `~owner:ai` hands it to the AI; `- [x]` done;",
+    "  leave `~id:`/`+added` to the app).",
+    "- `_loops.json` - `{ \"desiredState\": \"...\", \"loops\": [{ \"id\", \"name\",",
+    "  \"purpose\", \"kind\": \"steward|briefing\", \"type\": \"open|closed\",",
+    "  \"cadence\": \"daily|weekly|monthly\", \"autonomy\": \"suggest|tasks|ask|auto\",",
+    "  \"signals\": [], \"condition\": \"\", \"evaluation\": \"\", \"enabled\": true,",
+    "  \"status\": \"active\" }] }` (briefing loops also take `\"channel\": \"gmail\"`).",
+    "- `skills/<skill-id>/SKILL.md` - one dir per skill, `description:` near the",
+    "  top. Archive by moving the dir into `skills/_archive/`.",
+    "",
+    "## Vault-global (`build/`)",
+    "- `build/ideal-state.md` - the global constitution (layered under domains).",
+    "- `build/user.md` - who the user is.",
+    "",
+    "## NEVER touch",
+    "- `memory/threads/` (chat transcripts), `.system/` (journals, logs, cursors),",
+    "- `_loops_runtime.json`, `_surface.json`, anything under `build/_meta/`.",
+    "These are app/daemon-managed; hand edits corrupt ledgers or get overwritten.",
+    "",
+    "## New domains by hand",
+    "Create `data/domains/<slug>/` with a `manifest.json` (or just an",
+    "`ideal-state.md` to start) - the app discovers it on next scan. Misnamed",
+    "known files are adopted to canonical names by the groom pass on app launch.",
+    CONTRACT_END,
+    "",
+  ].join("\n");
+}
+
+// Write/refresh the contract at <vault>/CLAUDE.md. Preserves anything the user
+// keeps outside the marker block; inside the block is always regenerated.
+export function writeVaultAgentContract(vaultPath: string): { ok: boolean; path: string; updated: boolean } {
+  const p = join(vaultPath, "CLAUDE.md");
+  const block = vaultAgentContract();
+  try {
+    let existing = "";
+    try { existing = readFileSync(p, "utf8"); } catch { /* new file */ }
+    let next: string;
+    const bi = existing.indexOf(CONTRACT_BEGIN);
+    const ei = existing.indexOf(CONTRACT_END);
+    if (bi !== -1 && ei !== -1 && ei > bi) {
+      next = existing.slice(0, bi) + block.trimEnd() + existing.slice(ei + CONTRACT_END.length);
+    } else if (existing.trim()) {
+      next = `${existing.trimEnd()}\n\n${block}`;
+    } else {
+      next = block;
+    }
+    if (next === existing) return { ok: true, path: p, updated: false };
+    writeFileSync(p, next);
+    return { ok: true, path: p, updated: true };
+  } catch {
+    return { ok: false, path: p, updated: false };
+  }
 }

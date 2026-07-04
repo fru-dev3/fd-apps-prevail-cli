@@ -3719,12 +3719,16 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   // backup (nothing deleted). Non-destructive by construction. Idempotent: an
   // already-migrated domain is skipped. The desktop calls this on vault load.
   if (sub === "migrate-v4") {
-    const { migrateDomainToV4, archiveLegacyDomainV4, listDomainDirs, consolidateDomainV4Leftovers } = await import("./vault-layout-v4.ts");
+    const { migrateDomainToV4, archiveLegacyDomainV4, listDomainDirs, consolidateDomainV4Leftovers, writeVaultAgentContract } = await import("./vault-layout-v4.ts");
     const asJson = args.includes("--json");
     // The `vault` arg-block breaks before the global --vault parse, so read the
     // target vault from THIS command's own args (the desktop passes it).
     const vi = args.indexOf("--vault");
     const targetVault = vi >= 0 && args[vi + 1] ? resolve(process.cwd(), args[vi + 1]) : vault;
+    // Groom side-effect: keep the in-vault agent contract (<vault>/CLAUDE.md)
+    // current so any agent editing the vault directly knows the layout law and
+    // canonical filenames. Idempotent; user content outside the block survives.
+    try { writeVaultAgentContract(targetVault); } catch { /* best effort */ }
     const stamp = "v4"; // stable backup dir name; a re-run just skips migrated domains
     const results: { domain: string; ops: number; archived: number; already: boolean }[] = [];
     try {

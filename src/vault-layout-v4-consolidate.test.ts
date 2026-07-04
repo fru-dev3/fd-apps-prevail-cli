@@ -152,16 +152,18 @@ test("consolidation routes the plumbing cursors to .system/ and is idempotent", 
   expect(second.moved.length + second.deduped.length + second.conflicts.length + second.merged.length).toBe(0);
 });
 
-test("consolidation leaves manifest.json + ideal.md + unknown files at the root", () => {
+test("consolidation keeps manifest + unknowns at root and ADOPTS ideal.md to ideal-state.md", () => {
   const dir = v4Domain();
   writeFileSync(join(dir, "manifest.json"), "{}");
   writeFileSync(join(dir, "ideal.md"), "# ideal");
   writeFileSync(join(dir, "my-notes.txt"), "mine");
   const r = consolidateDomainV4Leftovers(vault, "career");
   expect(existsSync(join(dir, "manifest.json"))).toBe(true);
-  expect(existsSync(join(dir, "ideal.md"))).toBe(true);
+  // The ideal self-heals to its ONE canonical name (the file the app reads).
+  expect(existsSync(join(dir, "ideal-state.md"))).toBe(true);
+  expect(existsSync(join(dir, "ideal.md"))).toBe(false);
   expect(existsSync(join(dir, "my-notes.txt"))).toBe(true);
-  expect(r.moved.length + r.deduped.length + r.conflicts.length + r.merged.length).toBe(0);
+  expect(r.moved.length).toBe(1);
 });
 
 test("consolidation is a no-op on a non-v4 domain", () => {
@@ -171,4 +173,41 @@ test("consolidation is a no-op on a non-v4 domain", () => {
   const r = consolidateDomainV4Leftovers(vault, "career");
   expect(existsSync(join(dir, "MEMORY.md"))).toBe(true); // untouched
   expect(r.moved.length).toBe(0);
+});
+
+// Canonical ideal + the in-vault agent contract (vault-as-the-product law).
+import { v4Destination, vaultAgentContract, writeVaultAgentContract } from "./vault-layout-v4.ts";
+import { mkdtempSync as _mkdtemp2, readFileSync as _read2, writeFileSync as _write2, rmSync as _rm2 } from "node:fs";
+import { join as _join2 } from "node:path";
+import { tmpdir as _tmp2 } from "node:os";
+
+test("v4Destination: every ideal alias adopts to ideal-state.md; canonical stays put", () => {
+  for (const alias of ["ideal.md", "soul.md", "IDEAL.md", "ideal_state.md", "idealstate.md", "ideal state.md"]) {
+    expect(v4Destination(alias)).toBe("ideal-state.md");
+  }
+  expect(v4Destination("ideal-state.md")).toBeNull(); // root marker, never moved
+  expect(v4Destination("manifest.json")).toBeNull();
+});
+
+test("writeVaultAgentContract: creates, is idempotent, and preserves user content", () => {
+  const v = _mkdtemp2(_join2(_tmp2(), "prevail-contract-"));
+  try {
+    const r1 = writeVaultAgentContract(v);
+    expect(r1.ok).toBe(true);
+    expect(r1.updated).toBe(true);
+    const body = _read2(_join2(v, "CLAUDE.md"), "utf8");
+    expect(body).toContain("ideal-state.md");
+    expect(body).toContain("NEVER touch");
+    // Idempotent second write.
+    expect(writeVaultAgentContract(v).updated).toBe(false);
+    // User content outside the block survives a refresh.
+    _write2(_join2(v, "CLAUDE.md"), `My own notes up top.\n\n${vaultAgentContract()}`);
+    const r3 = writeVaultAgentContract(v);
+    expect(r3.ok).toBe(true);
+    const after = _read2(_join2(v, "CLAUDE.md"), "utf8");
+    expect(after).toContain("My own notes up top.");
+    expect(after).toContain("ideal-state.md");
+  } finally {
+    _rm2(v, { recursive: true, force: true });
+  }
 });
