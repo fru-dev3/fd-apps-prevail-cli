@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, appendFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+import {
+  difficultyBand,
+  learnedPreference,
+  recordRouteOverride,
+  readRouteOverrides,
+  routeLearningFile,
+  bucketKey,
+  type RouteOverride,
+} from "./route-learning.ts";
 import {
   chooseModel,
   routeWithFallback,
@@ -311,5 +323,132 @@ describe("cascade integration (router + cheap pick + escalate)", () => {
   test("obvious bands are not ambiguous, so cascade never engages there", () => {
     expect(deriveHeuristics("hi").ambiguous).toBe(false);            // obvious-easy
     expect(deriveHeuristics("Please debug and refactor this algorithm: ```for(;;){}```").ambiguous).toBe(false); // obvious-hard
+  });
+});
+
+// ── Layer 5 learned/personalized router (v1) ────────────────────────────────
+
+describe("difficultyBand + bucketKey", () => {
+  test("bands match the router's light/moderate/hard language", () => {
+    expect(difficultyBand(1)).toBe("light");
+    expect(difficultyBand(2)).toBe("light");
+    expect(difficultyBand(3)).toBe("moderate");
+    expect(difficultyBand(4)).toBe("hard");
+    expect(difficultyBand(5)).toBe("hard");
+    expect(difficultyBand(NaN)).toBe("moderate"); // safe default
+  });
+  test("bucket key folds empty/general into one bucket", () => {
+    expect(bucketKey("", "moderate")).toBe("general::moderate");
+    expect(bucketKey("general", "moderate")).toBe("general::moderate");
+    expect(bucketKey("wealth", "hard")).toBe("wealth::hard");
+  });
+});
+
+describe("learnedPreference (pure)", () => {
+  const ov = (domain: string, band: RouteOverride["band"], toModel: string, ts = 0): RouteOverride =>
+    ({ ts, domain, band, fromModel: "sonnet", toModel });
+
+  test("empty history => null", () => {
+    expect(learnedPreference([], "wealth", "moderate")).toBeNull();
+  });
+  test("below threshold => null", () => {
+    expect(learnedPreference([ov("wealth", "moderate", "opus")], "wealth", "moderate", 2)).toBeNull();
+  });
+  test(">= threshold in the bucket => that model", () => {
+    const hist = [ov("wealth", "moderate", "opus", 1), ov("wealth", "moderate", "opus", 2)];
+    expect(learnedPreference(hist, "wealth", "moderate", 2)).toBe("opus");
+  });
+  test("only counts the matching (domain, band) bucket", () => {
+    const hist = [
+      ov("wealth", "moderate", "opus", 1),
+      ov("wealth", "hard", "opus", 2),      // wrong band
+      ov("health", "moderate", "opus", 3),  // wrong domain
+    ];
+    expect(learnedPreference(hist, "wealth", "moderate", 2)).toBeNull(); // only 1 in-bucket
+  });
+  test("ties break toward the most recent, then model id (deterministic)", () => {
+    const hist = [
+      ov("wealth", "moderate", "opus", 10), ov("wealth", "moderate", "opus", 11),
+      ov("wealth", "moderate", "sonnet", 20), ov("wealth", "moderate", "sonnet", 21),
+    ];
+    // opus and sonnet both hit 2; sonnet's overrides are more recent.
+    expect(learnedPreference(hist, "wealth", "moderate", 2)).toBe("sonnet");
+  });
+});
+
+describe("chooseModel — learned preference consult", () => {
+  const cands = (): RouteCandidate[] => [
+    makeCandidate("claude", "opus"),
+    makeCandidate("claude", "sonnet"),
+    makeCandidate("claude", "haiku"),
+  ];
+  const moderate = { difficulty: 3 }; // difficultyBand(3) === "moderate"
+
+  test("empty/absent store => decision is unchanged vs the pre-learning pick", () => {
+    const base = chooseModel({ message: "x", candidates: cands(), bias: "balanced", classified: moderate, domain: "wealth" });
+    const withEmpty = chooseModel({ message: "x", candidates: cands(), bias: "balanced", classified: moderate, domain: "wealth", overrides: [] });
+    expect(withEmpty.model).toBe(base.model);
+    expect(base.model).toBe("sonnet"); // moderate + balanced => sonnet by heuristic
+  });
+
+  test(">= 2 overrides to opus in the bucket => prefers opus when available", () => {
+    const overrides: RouteOverride[] = [
+      { ts: 1, domain: "wealth", band: "moderate", fromModel: "sonnet", toModel: "opus" },
+      { ts: 2, domain: "wealth", band: "moderate", fromModel: "sonnet", toModel: "opus" },
+    ];
+    const d = chooseModel({ message: "x", candidates: cands(), bias: "balanced", classified: moderate, domain: "wealth", overrides });
+    expect(d.model).toBe("opus");
+    expect(d.reason).toContain("learned");
+    expect(d.confidence).toBeGreaterThanOrEqual(0.9);
+  });
+
+  test("learned pref is ignored when that model is not in the candidate set", () => {
+    const overrides: RouteOverride[] = [
+      { ts: 1, domain: "wealth", band: "moderate", fromModel: "sonnet", toModel: "opus" },
+      { ts: 2, domain: "wealth", band: "moderate", fromModel: "sonnet", toModel: "opus" },
+    ];
+    const noOpus = [makeCandidate("claude", "sonnet"), makeCandidate("claude", "haiku")];
+    const d = chooseModel({ message: "x", candidates: noOpus, bias: "balanced", classified: moderate, domain: "wealth", overrides });
+    expect(d.model).toBe("sonnet"); // unchanged: opus not installed
+    expect(d.reason).not.toContain("learned");
+  });
+
+  test("wrong-bucket overrides do not affect the pick", () => {
+    const overrides: RouteOverride[] = [
+      { ts: 1, domain: "wealth", band: "hard", fromModel: "sonnet", toModel: "opus" },
+      { ts: 2, domain: "wealth", band: "hard", fromModel: "sonnet", toModel: "opus" },
+    ];
+    // This turn is moderate, so the hard-bucket preference must not apply.
+    const d = chooseModel({ message: "x", candidates: cands(), bias: "balanced", classified: moderate, domain: "wealth", overrides });
+    expect(d.model).toBe("sonnet");
+  });
+});
+
+describe("route-learning store (write + read, malformed-tolerant)", () => {
+  test("records round-trip and malformed lines are skipped", () => {
+    const vault = mkdtempSync(join(tmpdir(), "prevail-routelearn-"));
+    try {
+      recordRouteOverride(vault, { domain: "wealth", band: "moderate", fromModel: "sonnet", toModel: "opus" });
+      recordRouteOverride(vault, { domain: "wealth", band: "moderate", fromModel: "haiku", toModel: "opus" });
+      // A malformed line and an incomplete record must both be tolerated + skipped.
+      appendFileSync(routeLearningFile(vault), "this is not json\n");
+      appendFileSync(routeLearningFile(vault), JSON.stringify({ ts: 5, domain: "wealth" }) + "\n"); // no band/toModel
+      const rows = readRouteOverrides(vault);
+      expect(rows.length).toBe(2);
+      expect(rows.every((r) => r.toModel === "opus" && r.band === "moderate")).toBe(true);
+      // And the learned preference reads through the store end to end.
+      expect(learnedPreference(rows, "wealth", "moderate", 2)).toBe("opus");
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
+  });
+
+  test("missing store => empty list (no throw)", () => {
+    const vault = mkdtempSync(join(tmpdir(), "prevail-routelearn-empty-"));
+    try {
+      expect(readRouteOverrides(vault)).toEqual([]);
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+    }
   });
 });

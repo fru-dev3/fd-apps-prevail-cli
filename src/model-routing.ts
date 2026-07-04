@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import type { CliKind } from "./config.ts";
 import { priceFor, isLocalCliKind } from "./model-pricing.ts";
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
+import { difficultyBand, learnedPreference, type RouteOverride } from "./route-learning.ts";
 
 // ---------------------------------------------------------------------------
 // Bias setting (the Economy - Balanced - Quality slider).
@@ -203,6 +204,13 @@ export interface RouteInput {
   // difficulty is 1..5; capabilities are advisory hints.
   classified?: { difficulty: number; capabilities?: string[] } | null;
   domain?: string;
+  // Learned/personalized router (v1): the user's local override history, read by
+  // the caller from the vault store. When the user has settled on a model for THIS
+  // bucket (domain + difficulty band) and it is available, honor it. Empty/absent
+  // => byte-identical to the heuristic pick.
+  overrides?: RouteOverride[];
+  // Overrides needed in a bucket before a learned preference is honored. Default 2.
+  learnThreshold?: number;
 }
 
 export interface RouteDecision {
@@ -318,26 +326,44 @@ export function chooseModel(input: RouteInput): RouteDecision {
     }
   }
 
+  // Layer 5 - learned/personalized preference (v1, local + private). If the user
+  // has repeatedly overridden Auto's pick to the same model in THIS bucket
+  // (domain + difficulty band) and that model is among the currently-available
+  // candidates, honor it over the scored pick. Empty/absent history is a no-op,
+  // so a fresh vault is byte-identical to the heuristic+classifier route.
+  let learnedApplied: string | null = null;
+  if (input.overrides && input.overrides.length > 0) {
+    const pref = learnedPreference(input.overrides, input.domain, difficultyBand(difficulty), input.learnThreshold ?? 2);
+    if (pref) {
+      const hit = pool.find((c) => c.model === pref);
+      if (hit) { best = hit; learnedApplied = pref; }
+    }
+  }
+
   const meta = metaFor(best.model);
-  const reason = buildReason({
-    difficulty,
-    bias,
-    usedClassifier,
-    toolsReq,
-    visionReq,
-    longCtx: ctxReq > DEFAULT_META.ctx,
-    localOnly: !!input.localOnly,
-    single: all.length === 1,
-  });
+  const reason = learnedApplied
+    ? `learned: you usually pick ${learnedApplied} here`
+    : buildReason({
+        difficulty,
+        bias,
+        usedClassifier,
+        toolsReq,
+        visionReq,
+        longCtx: ctxReq > DEFAULT_META.ctx,
+        localOnly: !!input.localOnly,
+        single: all.length === 1,
+      });
 
   // Confidence: clearer decisions score higher. Start from the source, widen by
-  // the margin over the runner-up.
+  // the margin over the runner-up. A learned preference is a deliberate user
+  // choice, so it lands high regardless of the scored margin.
   let confidence = usedClassifier ? 0.72 : h.ambiguous ? 0.58 : 0.82;
   if (all.length === 1) confidence = 0.99;
   if (Number.isFinite(secondScore)) {
     const margin = Math.min(1, Math.abs(bestScore - secondScore) / 10);
     confidence = Math.min(0.99, confidence + margin * 0.12);
   }
+  if (learnedApplied) confidence = Math.max(confidence, 0.9);
 
   return {
     cli: best.cli,

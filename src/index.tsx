@@ -71,6 +71,8 @@ interface Args {
   agentRunArgs: string[];
   score: boolean;
   scoreArgs: string[];
+  routeLearn: boolean;
+  routeLearnArgs: string[];
   alignment: boolean;
   alignmentArgs: string[];
   onboard: boolean;
@@ -172,6 +174,8 @@ function parseArgs(argv: string[]): Args {
   let agentRunArgs: string[] = [];
   let score = false;
   let scoreArgs: string[] = [];
+  let routeLearn = false;
+  let routeLearnArgs: string[] = [];
   let alignment = false;
   let alignmentArgs: string[] = [];
   let onboard = false;
@@ -332,6 +336,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "score") {
       score = true;
       scoreArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "route-learn") {
+      routeLearn = true;
+      routeLearnArgs = argv.slice(i + 1);
       break;
     } else if (a === "alignment" || a === "align") {
       alignment = true;
@@ -505,6 +513,8 @@ function parseArgs(argv: string[]): Args {
     agentRunArgs,
     score,
     scoreArgs,
+    routeLearn,
+    routeLearnArgs,
     alignment,
     alignmentArgs,
     onboard,
@@ -5515,6 +5525,10 @@ async function main() {
   if (args.score) {
     const code = await scoreCommand(args.scoreArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.routeLearn) {
+    const { routeLearnCommand } = await import("./route-learning.ts");
+    process.exit(routeLearnCommand(args.routeLearnArgs, args.vaultPath));
   }
   if (args.alignment) {
     const { computeAlignment } = await import("./alignment.ts");

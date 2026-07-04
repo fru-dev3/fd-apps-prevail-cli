@@ -41,6 +41,7 @@ import {
   cascadeShouldEscalate,
   type RouteCandidate,
 } from "./model-routing.ts";
+import { readRouteOverrides, type RouteOverride } from "./route-learning.ts";
 import { generalDir } from "./decisions.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
@@ -268,8 +269,14 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       classified = await classifyPrompt({ message, cwd: domain.path, cli, model: cheapest.model });
     }
 
+    // Learned router (v1): consult the user's LOCAL override history so Auto can
+    // personalize per bucket. Defensive read: a missing/empty/corrupt store yields
+    // [], which makes chooseModel byte-identical to the heuristic+classifier pick.
+    let overrides: RouteOverride[] = [];
+    try { overrides = readRouteOverrides(vaultPath); } catch { overrides = []; }
+
     const decision = routeWithFallback(
-      { message, candidates, bias, localOnly, classified, domain: opts.domain },
+      { message, candidates, bias, localOnly, classified, domain: opts.domain, overrides },
       { cli: cli.kind, model: "" },
     );
     model = decision.model;
