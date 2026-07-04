@@ -59,7 +59,10 @@ function send(msg: JsonRpcRes): void {
 
 const TOOL_DESCRIPTION =
   "Run Google Workspace operations through the user's authenticated gws CLI (Gmail, Drive, Calendar, Docs, Sheets, Tasks). " +
-  "Pass `args` exactly as you would to `gws` (e.g. [\"gmail\",\"+triage\"] or [\"calendar\",\"events\",\"list\",\"--params\",\"{...}\"]). " +
+  "Pass `args` exactly as you would to `gws`. Grammar: helper commands start with '+' (the easiest path); raw API resources use '<service> <resource> <method>'. " +
+  "Known-good reads: [\"calendar\",\"+agenda\"] (upcoming events across calendars); [\"calendar\",\"events\",\"list\",\"--calendar-id\",\"primary\"]; [\"calendar\",\"calendarList\",\"list\"]; [\"gmail\",\"+triage\"] (unread inbox summary); [\"gmail\",\"+read\",\"--id\",\"<msgId>\"]. " +
+  "Writes look like [\"gmail\",\"+send\",\"--to\",...,\"--subject\",...,\"--body\",...] or [\"calendar\",\"+insert\",...]. " +
+  "There is NO '<service> <resource> list' shortcut like [\"calendar\",\"calendars\",\"list\"] - if gws rejects your args it returns its usage text: read it and correct the args, do NOT conclude an auth failure. " +
   "READS run immediately and return data. " +
   "WRITES (send, insert, update, delete, modify, trash) are NOT executed - they are queued for the user's explicit approval and run only after the user approves. " +
   "Never try to perform writes another way.";
@@ -193,7 +196,13 @@ function dispatch(
       const p = (req.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
       const name = p.name ?? "";
       if (name !== "google_workspace") throw new Error(`unknown tool: ${name}`);
-      return { content: callGoogleWorkspace(p.arguments ?? {}, vaultPath, defaultDomain, defaultAccount) };
+      const content = callGoogleWorkspace(p.arguments ?? {}, vaultPath, defaultDomain, defaultAccount);
+      // Honest failure signaling: an "Error: ..." text result IS a failed call.
+      // Setting isError makes the runtime mark the tool_result failed, so the
+      // step checklist shows a red step with the reason instead of a green
+      // check over an error string.
+      const failed = content.some((c) => typeof c.text === "string" && c.text.startsWith("Error:"));
+      return failed ? { content, isError: true } : { content };
     }
     case "ping":
       return {};

@@ -87,3 +87,34 @@ describe("gws-mcp account precedence (Fix 1)", () => {
     expect(readPendingGws(VAULT).length).toBe(0);
   });
 });
+
+// classifyGwsFailure: errors must name the REAL cause, never a blanket auth story.
+import { classifyGwsFailure } from "./gws-gateway.ts";
+import { describe as describe2, test as test2, expect as expect2 } from "bun:test";
+
+describe2("classifyGwsFailure - honest, actionable errors", () => {
+  test2("invalid argv -> a grammar error naming the CLI usage, explicitly not auth", () => {
+    const msg = classifyGwsFailure("", "error: unrecognized subcommand 'list'\n\nUsage: gws calendars [OPTIONS] <COMMAND>", ["calendar", "calendars", "list"]);
+    expect2(msg).toContain("invalid arguments");
+    expect2(msg).toContain("NOT an auth problem");
+    expect2(msg).toContain("unrecognized subcommand");
+  });
+
+  test2("disabled Google API -> names the service and the one-click activation URL", () => {
+    const out = JSON.stringify({ error: { message: "Google Calendar API has not been used in project 915905035776 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/calendar-json.googleapis.com/overview?project=915905035776 then retry.", status: "PERMISSION_DENIED", reason: "SERVICE_DISABLED" } });
+    const msg = classifyGwsFailure(out, "", ["calendar", "+agenda"]);
+    expect2(msg).toContain("DISABLED");
+    expect2(msg).toContain("console.developers.google.com/apis/api/calendar-json.googleapis.com");
+    expect2(msg).toContain("blocked at Google, not by sign-in");
+  });
+
+  test2("real scope refusal -> the account-named auth message", () => {
+    const msg = classifyGwsFailure("", "ACCESS_TOKEN_SCOPE_INSUFFICIENT: insufficient scope for this call", ["gmail", "+triage"], "work");
+    expect2(msg).toContain("work");
+  });
+
+  test2("unknown failure -> auth guidance but ALWAYS with the real detail attached", () => {
+    const msg = classifyGwsFailure("", "something odd happened: quota exceeded maybe", ["gmail", "+triage"], "work");
+    expect2(msg).toContain("quota exceeded");
+  });
+});

@@ -168,9 +168,40 @@ export function gwsSelfEmailHook(account?: string): ((subject: string, body: str
   };
 }
 
+// Classify a failed gws invocation into an HONEST, actionable error. The old
+// behavior blamed authentication for every non-zero exit, which turned a wrong
+// argv or a disabled Google API into a fake "scope not granted" story that
+// nobody could act on. Exported for tests.
+export function classifyGwsFailure(stdoutText: string, stderrText: string, args: string[], account?: string): string {
+  const all = `${stdoutText}\n${stderrText}`;
+  // 1. gws rejected the command itself - an argv problem, not auth. Return the
+  //    CLI's own usage message so the model can immediately self-correct.
+  if (/unrecognized subcommand|unexpected argument|invalid value|Usage: gws/i.test(all)) {
+    const snip = (stderrText || stdoutText).replace(/\s+/g, " ").trim().slice(0, 400);
+    return `gws rejected the command (invalid arguments, NOT an auth problem). Fix the args and retry. CLI said: ${snip}`;
+  }
+  // 2. The Google API is disabled on the user's OAuth client project. This is a
+  //    one-click, one-time fix in the Cloud console - name it precisely, with
+  //    the activation URL Google itself provides.
+  if (/SERVICE_DISABLED|has not been used in project|accessNotConfigured/i.test(all)) {
+    const url = all.match(/https:\/\/console\.developers\.google\.com\/apis\/api\/[a-z0-9.\-]+\/overview\?project=\d+/i)?.[0];
+    const svc = args[0] ? cap(args[0]) : "This service";
+    return `${svc} is blocked at Google, not by sign-in: the ${svc} API is DISABLED on the Google Cloud project behind your OAuth client. One-time fix: open ${url ?? "the Google Cloud console API library for your project"}, click Enable, wait about a minute, then retry. Every connected account on this machine shares that client, so enabling it fixes all of them.`;
+  }
+  // 3. A genuine permission/scope refusal for this account.
+  if (/insufficient.*scope|invalid_scope|ACCESS_TOKEN_SCOPE_INSUFFICIENT|PERMISSION_DENIED/i.test(all)) {
+    return notAuthedMessage(args, account);
+  }
+  // 4. Unknown: keep the auth guidance but ALWAYS carry the real detail.
+  const detail = (meaningfulStderr(stderrText) || stdoutText.replace(/\s+/g, " ").trim()).slice(0, 300);
+  const base = notAuthedMessage(args, account);
+  return detail ? `${base} (details: ${detail})` : base;
+}
+
 // Run a READ-only gws command live and return its stdout. Never used for writes
 // — the classifier routes those to the pending queue. Resolves the binary,
-// spawns, and maps spawn failure / non-zero exit to a friendly error. `account`
+// spawns, and maps failures through classifyGwsFailure so the error names the
+// REAL cause (bad argv / disabled API / scope / unknown-with-detail). `account`
 // (label or config dir) targets a specific Google account; undefined = default.
 export function runGwsRead(args: string[], account?: string): GwsResult {
   const gws = resolveGwsBinary();
@@ -182,9 +213,7 @@ export function runGwsRead(args: string[], account?: string): GwsResult {
   });
   if (run.error) return { ok: false, error: notAuthedMessage(args, account) };
   if (run.status !== 0) {
-    const detail = meaningfulStderr(run.stderr || "");
-    const base = notAuthedMessage(args, account);
-    return { ok: false, error: detail ? `${base} (details: ${detail})` : base };
+    return { ok: false, error: classifyGwsFailure(run.stdout || "", run.stderr || "", args, account) };
   }
   return { ok: true, output: truncate(run.stdout || "") };
 }
