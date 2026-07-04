@@ -72,6 +72,8 @@ interface Args {
   skillUsageArgs: string[];
   attachmentsCmd: boolean;
   attachmentsArgs: string[];
+  harnessConn: boolean;
+  harnessConnArgs: string[];
   agentRun: boolean;
   agentRunArgs: string[];
   score: boolean;
@@ -179,6 +181,8 @@ function parseArgs(argv: string[]): Args {
   let skillUsageArgs: string[] = [];
   let attachmentsCmd = false;
   let attachmentsArgs: string[] = [];
+  let harnessConn = false;
+  let harnessConnArgs: string[] = [];
   let agentRun = false;
   let agentRunArgs: string[] = [];
   let score = false;
@@ -341,6 +345,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "attachments") {
       attachmentsCmd = true;
       attachmentsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "harness-connections") {
+      harnessConn = true;
+      harnessConnArgs = argv.slice(i + 1);
       break;
     } else if (a === "chat") {
       chat = true;
@@ -529,6 +537,8 @@ function parseArgs(argv: string[]): Args {
     skillUsageArgs,
     attachmentsCmd,
     attachmentsArgs,
+    harnessConn,
+    harnessConnArgs,
     chatArgs,
     agentRun,
     agentRunArgs,
@@ -5617,6 +5627,22 @@ async function main() {
     const { agentRunCommand } = await import("./agent-run.ts");
     const code = await agentRunCommand(args.agentRunArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.harnessConn) {
+    // The superset registry: every connector every installed harness has, in
+    // one normalized inventory.
+    //   prevail harness-connections [--app <id>] [--json]
+    const hArgs = args.harnessConnArgs;
+    const jsonOut = hArgs.includes("--json");
+    const hc = await import("./harness-connections.ts");
+    const scan = hc.scanHarnessConnections();
+    const ai = hArgs.indexOf("--app");
+    const appFilter = ai !== -1 ? (hArgs[ai + 1] ?? "") : "";
+    const rows = appFilter ? hc.matchAppConnections(appFilter, appFilter, scan) : scan.connections;
+    if (jsonOut) { process.stdout.write(`${JSON.stringify({ connections: rows, notes: scan.notes })}\n`); return; }
+    for (const c of rows) console.log(`${c.harness.padEnd(7)} ${c.source.padEnd(12)} ${(c.health ?? "").padEnd(8)} ${c.name}${c.url ? `  ${c.url}` : ""}`);
+    for (const n of scan.notes) console.log(`note: ${n}`);
+    return;
   }
   if (args.attachmentsCmd) {
     // Pasted-attachment intelligence:
