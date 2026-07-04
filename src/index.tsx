@@ -969,8 +969,15 @@ async function buildBriefingHooks(
         let account: string | undefined;
         if (res.kind === "single") account = res.label;
         else if (res.kind === "ambiguous") {
+          // A briefing only ever mails the chosen account's OWN inbox, so the
+          // "never guess between identities" bar is lower here: an explicit app
+          // binding wins; otherwise the machine's DEFAULT profile is itself a
+          // standing user choice (it is labeled DEFAULT in the Google panel) -
+          // worst case the digest lands in one of the user's own inboxes. Only
+          // when there is no binding AND no default profile do we skip.
           const bound = apps.find((a) => /google|gmail/i.test(a.id) && a.account?.label)?.account?.label;
           if (bound && res.labels.includes(bound)) account = bound;
+          else if (res.labels.includes("default")) account = "default";
         }
         if (res.kind === "single" || account) {
           const hook = gwsSelfEmailHook(account);
