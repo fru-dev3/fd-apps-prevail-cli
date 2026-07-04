@@ -70,6 +70,8 @@ interface Args {
   chatArgs: string[];
   skillUsage: boolean;
   skillUsageArgs: string[];
+  attachmentsCmd: boolean;
+  attachmentsArgs: string[];
   agentRun: boolean;
   agentRunArgs: string[];
   score: boolean;
@@ -175,6 +177,8 @@ function parseArgs(argv: string[]): Args {
   let chatArgs: string[] = [];
   let skillUsage = false;
   let skillUsageArgs: string[] = [];
+  let attachmentsCmd = false;
+  let attachmentsArgs: string[] = [];
   let agentRun = false;
   let agentRunArgs: string[] = [];
   let score = false;
@@ -333,6 +337,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "skill-usage") {
       skillUsage = true;
       skillUsageArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "attachments") {
+      attachmentsCmd = true;
+      attachmentsArgs = argv.slice(i + 1);
       break;
     } else if (a === "chat") {
       chat = true;
@@ -519,6 +527,8 @@ function parseArgs(argv: string[]): Args {
     chat,
     skillUsage,
     skillUsageArgs,
+    attachmentsCmd,
+    attachmentsArgs,
     chatArgs,
     agentRun,
     agentRunArgs,
@@ -5607,6 +5617,32 @@ async function main() {
     const { agentRunCommand } = await import("./agent-run.ts");
     const code = await agentRunCommand(args.agentRunArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.attachmentsCmd) {
+    // Pasted-attachment intelligence:
+    //   prevail attachments caption [--limit N] [--json]   caption + rename pending
+    //   prevail attachments index [--json]                 print the index
+    const aArgs = args.attachmentsArgs;
+    const jsonOut = aArgs.includes("--json");
+    const att = await import("./attachments.ts");
+    const v = args.vaultPath ?? readConfig()?.vaultPath ?? bundledDemoVaultPath();
+    const action = aArgs[0];
+    if (action === "caption") {
+      const li = aArgs.indexOf("--limit");
+      const limit = li !== -1 ? Math.max(1, parseInt(aArgs[li + 1] ?? "4", 10) || 4) : 4;
+      const r = await att.captionPendingAttachments(v, limit);
+      if (jsonOut) process.stdout.write(`${JSON.stringify(r)}\n`);
+      else console.log(`captioned ${r.captioned} · renamed ${r.renamed} · skipped ${r.skipped} · remaining ${r.remaining}`);
+      return;
+    }
+    if (action === "index") {
+      const rows = att.readAttachmentIndex(v);
+      if (jsonOut) { process.stdout.write(`${JSON.stringify(rows)}\n`); return; }
+      for (const r of rows) console.log(`${r.file}  ${r.caption ?? "(uncaptioned)"}  [${r.domain ?? ""} · ${new Date(r.ts).toISOString()}]`);
+      return;
+    }
+    console.error("usage: prevail attachments <caption|index> [--limit N] [--json]");
+    process.exit(1);
   }
   if (args.skillUsage) {
     // Skill usage intelligence: record / report / archive / unarchive.
