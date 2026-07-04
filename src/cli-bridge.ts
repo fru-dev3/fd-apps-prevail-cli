@@ -892,6 +892,13 @@ export interface ToolEvent {
   name: string;
   phase: "call" | "result";
   ok?: boolean;
+  // The tool_use id, so a "result" can be matched back to its "call" to flip
+  // that step's status (running -> done/failed) instead of appending a new one.
+  id?: string;
+  // The tool input on the "call" phase, used to derive a human step label (e.g.
+  // the google_workspace gws argv -> "Reading Gmail" / "Creating a Google Doc").
+  // Absent on "result". Never trusted for control flow, only for display.
+  input?: unknown;
 }
 
 export interface ChatTurn {
@@ -1212,11 +1219,17 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // agentMcpConfigForClaude materializes ~/.prevail/agent-mcp.json and returns
     // its path, or null when there is nothing to inject (no Composio key and no
     // connected stdio servers), so this stays a byte-for-byte no-op otherwise.
+    // Whether any MCP tools were actually injected this turn. Gates the switch to
+    // the structured (stream-json) runner below: a chat turn with tools streams
+    // real step events for the checklist; a tool-less chat turn stays on the
+    // plain runCapture path, byte-for-byte unchanged.
+    let toolsInjected = false;
     try {
       const { agentMcpConfigForClaude, agentMcpServerIds } = await import("./agent-mcp.ts");
       const gwsAccount = googleAccount?.trim() || undefined;
       const mcpCfg = agentMcpConfigForClaude(vaultPath, { includeComposio: act, googleAccount: gwsAccount });
       if (mcpCfg) {
+        toolsInjected = true;
         args.push("--mcp-config", mcpCfg);
         // In headless `-p` there is no TTY to approve tool use, so on a non-act
         // (chat) turn the injected MCP tools would be auto-denied and the agent
@@ -1229,15 +1242,21 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
         // only need this on chat turns.
         if (!act) {
           const ids = agentMcpServerIds(vaultPath, { includeComposio: act, googleAccount: gwsAccount });
-          if (ids.length) args.push("--allowedTools", ...ids.map((id) => `mcp__${id}`));
+          // Also allow TodoWrite: it is a local planning tool with no external
+          // effect, and letting the model maintain a todo list is how we surface a
+          // "Plan" header for a multi-step job (the engine turns each TodoWrite
+          // into a plan event). Harmless when the model never plans.
+          if (ids.length) args.push("--allowedTools", ...ids.map((id) => `mcp__${id}`), "TodoWrite");
         }
       }
     } catch { /* never let MCP wiring break a turn */ }
-    // Ground-truth tool capture: on the agent/act path (onTool set) switch to
-    // structured stream-json so we can report the REAL tools the model invokes
-    // (including runtime-native connectors like AllTrails). Normal chat has no
-    // onTool and keeps the plain-text stream byte-for-byte unchanged.
-    if (onTool) {
+    // Ground-truth tool capture: switch to structured stream-json so we can
+    // report the REAL tools the model invokes (including runtime-native
+    // connectors like AllTrails). This runs on the Act/agent path AND on a normal
+    // chat turn that injected tools (so the desktop can render a live step
+    // checklist). A tool-less chat turn keeps the plain-text runCapture stream
+    // byte-for-byte unchanged.
+    if (onTool && (act || toolsInjected)) {
       args.push("--output-format", "stream-json", "--verbose");
       args.push(...head);
       return runClaudeStream(cli.bin, args, cwd, signal, onChunk, onTool, maxOutputChars);
@@ -2027,14 +2046,14 @@ function runClaudeStream(
             if (onChunk && accLen <= cap) onChunk(b.text);
           } else if (b && b.type === "tool_use" && b.name) {
             if (b.id) toolNames.set(String(b.id), String(b.name));
-            try { onTool({ name: String(b.name), phase: "call" }); } catch { /* never break on callback */ }
+            try { onTool({ name: String(b.name), phase: "call", id: b.id ? String(b.id) : undefined, input: b.input }); } catch { /* never break on callback */ }
           }
         }
       } else if (ev.type === "user" && ev.message && Array.isArray(ev.message.content)) {
         for (const b of ev.message.content) {
           if (b && b.type === "tool_result") {
             const nm = toolNames.get(String(b.tool_use_id)) ?? "tool";
-            try { onTool({ name: nm, phase: "result", ok: b.is_error !== true }); } catch { /* noop */ }
+            try { onTool({ name: nm, phase: "result", ok: b.is_error !== true, id: b.tool_use_id ? String(b.tool_use_id) : undefined }); } catch { /* noop */ }
           }
         }
       } else if (ev.type === "result" && typeof ev.result === "string") {

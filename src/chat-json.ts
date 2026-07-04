@@ -26,7 +26,9 @@ import {
   MODEL_QUICKPICKS_FALLBACK,
   type AvailableCli,
   type CliKind,
+  type ToolEvent,
 } from "./cli-bridge.ts";
+import { stepLabel } from "./tool-labels.ts";
 import { isLocalCliKind } from "./model-pricing.ts";
 import {
   normalizeBias,
@@ -82,6 +84,23 @@ export interface ChatEvent {
     difficulty?: number;
     bias?: string;
   };
+  // A live execution step: one REAL tool call, streamed during the turn so the
+  // desktop can render a checklist of what the model is actually doing (Reading
+  // Gmail, Creating a Google Doc, Saving to Drive...) instead of an opaque
+  // spinner. Emitted on `type: "tool"` events. `text` mirrors `step.label` for
+  // back-compat with older consumers. `status` flips running -> done/failed when
+  // the tool returns, matched by `id`. Present on app AND domain chats (both go
+  // through the same turn path). Absent on turns with no tools, so those stream
+  // byte-for-byte as before.
+  step?: {
+    id: string;
+    label: string;
+    status: "running" | "done" | "failed";
+  };
+  // The model's declared plan for a multi-step job (from its TodoWrite list),
+  // rendered as a header above the live checklist. Re-sent whenever the model
+  // revises the plan. Absent on simple one-shot replies.
+  plan?: string[];
 }
 
 // Options for one JSON chat turn.
@@ -361,6 +380,45 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   });
 
   let reply = "";
+  // Live step reporting: turn each REAL tool call into a structured `tool` event
+  // so the desktop renders a checklist of what the model is doing. Best-effort
+  // and display-only - it never affects the reply text or control flow. Shared by
+  // app and domain chats (both reach this same turn path). runChatTurn only
+  // switches to the structured (stream-json) runner when tools are actually
+  // injected, so a tool-less turn streams byte-for-byte as before.
+  const stepLabels = new Map<string, string>();
+  let stepSeq = 0;
+  const onTool = (ev: ToolEvent) => {
+    try {
+      // The model's own plan: a TodoWrite call carries a todo list we surface as a
+      // Plan header, not as a checklist step. Re-emitted on every revision.
+      if (ev.phase === "call" && ev.name === "TodoWrite") {
+        const todos = (ev.input as { todos?: Array<{ content?: unknown }> } | undefined)?.todos;
+        if (Array.isArray(todos)) {
+          const plan = todos
+            .map((t) => (typeof t?.content === "string" ? t.content.trim() : ""))
+            .filter((s) => s.length > 0);
+          if (plan.length) emit({ type: "tool", thread, ts: Date.now(), plan });
+        }
+        return;
+      }
+      const id = ev.id || `step-${++stepSeq}`;
+      if (ev.phase === "call") {
+        const label = stepLabel(ev.name, ev.input);
+        stepLabels.set(id, label);
+        emit({ type: "tool", thread, ts: Date.now(), text: label, step: { id, label, status: "running" } });
+      } else {
+        const label = stepLabels.get(id) ?? stepLabel(ev.name);
+        emit({
+          type: "tool",
+          thread,
+          ts: Date.now(),
+          text: label,
+          step: { id, label, status: ev.ok === false ? "failed" : "done" },
+        });
+      }
+    } catch { /* display only - never let step reporting break a turn */ }
+  };
   // The model that actually produced the final reply. Equals `model` on every
   // non-cascade turn (so the assistant/usage/persistence are byte-identical); on
   // a cascade escalation it becomes the escalated target.
@@ -405,6 +463,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
           isFirst: !opts.sessionId,
           webAccess: opts.webAccess,
           googleAccount: opts.googleAccount,
+          onTool,
           onChunk: (delta: string) => {
             if (!delta) return;
             reply += delta;
@@ -426,6 +485,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         isFirst: !opts.sessionId, // resume → not first (claude uses --continue)
         webAccess: opts.webAccess,
         googleAccount: opts.googleAccount,
+        onTool,
         onChunk: (delta: string) => {
           if (!delta) return;
           reply += delta;
