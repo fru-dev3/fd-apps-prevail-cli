@@ -18,6 +18,30 @@ import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis, type ToolEvent } from "./cli-bridge.ts";
 import { stepLabel } from "./tool-labels.ts";
+import { spawnSync } from "node:child_process";
+
+// Whether the 1Password CLI ("op") is available - cached per process. When it
+// is, agentic runs are TOLD about it: the capability was always reachable via
+// the shell, but the model never used what it didn't know existed. Safe to
+// advertise because 1Password's own authorization prompt (the desktop app's
+// Touch ID sheet) fires on each access, so every credential read is consented
+// by the user at the moment of use - the approval spine is 1Password's own.
+let opCliCached: boolean | null = null;
+function opCliAvailable(): boolean {
+  if (opCliCached !== null) return opCliCached;
+  try {
+    const r = spawnSync("op", ["--version"], { encoding: "utf8", timeout: 3000 });
+    opCliCached = r.status === 0;
+  } catch {
+    opCliCached = false;
+  }
+  return opCliCached;
+}
+
+function opCliNote(): string {
+  if (!opCliAvailable()) return "";
+  return `CREDENTIALS: the user's 1Password CLI ("op") is installed and signed in. When a step needs to sign in to a service (a deploy target, an API, a registry), fetch the credential with op (op item list --categories Login; op item get "<item>" --fields label=username,label=password; op read "op://<vault>/<item>/<field>"). 1Password itself prompts the user to authorize each access - that prompt IS the consent, so use it for the task at hand rather than stopping at "no credentials". Never print, log, or store secret values in your reports, notes, or files; use them directly and reference items by name only.`;
+}
 import { scanVault, scanApps } from "./vault.ts";
 import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
@@ -265,10 +289,11 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
           `AUTONOMY IS ON (guardrail "auto"): you have REAL tools and connectors in this run - file operations in this domain, web search, the google_workspace connector, and Prevail's own action tools. For every next action that is NOT consequential (does not spend money, does not contact anyone other than the user, is not irreversible), DO IT NOW in this run instead of only proposing it: create or update the files, run the search, organize the data, produce the document.`,
           `If a step needs something you don't have (data, a file, a lookup), FIGURE IT OUT: gather it with the tools you have and continue. Do not stop at "the user should provide X" when a tool could get X.`,
           `The google_workspace connector executes reads immediately and QUEUES writes (like sending email) for the user's one-tap approval under Needs you - queuing a write there counts as completing your part of the action.`,
+          opCliNote(),
           `Consequential actions (spend / contact someone else / irreversible / a decision only the user can make) must NOT be attempted - report them with "needs_approval": true as usual.`,
           `In the final JSON, report every action you COMPLETED with "did": true and past-tense text of exactly what you did (include ids/paths/links). Unfinished or consequential steps use "did": false with the usual flags.`,
           "",
-        ].join("\n")
+        ].filter(Boolean).join("\n")
       : "",
     `FIRST RUN / MISSING BASELINE: if there is no baseline yet, or the foundational data this loop needs does not exist (common right after setup), do NOT end the run with only a passive "no baseline exists" observation. Your highest-leverage move is to ESTABLISH the baseline by FILING concrete trackable tasks (set "task": true) that build it - for example "Document the current ${domainLabel.toLowerCase()} state in state.md", "List the 3-5 things this loop should track", "Gather the key numbers/dates from <source>". Bootstrapping the baseline IS forward progress, and the next run will build on those tasks. Never stall waiting for a baseline you could create.`,
     "",
@@ -790,6 +815,7 @@ export async function executeAction(cfg: LoopsConfig, domainName: string, action
     `- Do NOT do anything beyond this one approved action.`,
     `- If NO available tool or connector can perform it, do nothing and reply with exactly: "NO_CONNECTOR: <one-line reason>".`,
     `- When finished, reply with a one-paragraph report of precisely what you did, including any IDs, links, or recipients.`,
+    opCliNote(),
   ].filter(Boolean).join("\n");
   const out = await runChatTurn({
     prompt,
@@ -860,6 +886,7 @@ async function runAiTask(domainDir: string, cfg: LoopsConfig, task: Task): Promi
         `- Else, actually perform it now using your tools/connectors (MCP servers, file ops, configured app connectors). Don't merely describe it.`,
         `- If no available tool/connector can perform it, reply with exactly "NO_CONNECTOR: <one-line reason>".`,
         `- When you DID it, reply with a one-paragraph report of precisely what you did (IDs, links, recipients).`,
+        ...(opCliNote() ? [opCliNote()] : []),
       ]
     : [
         `PROPOSE ONLY — autonomous execution is OFF. You must NOT use any tools/connectors, send anything, spend anything, or modify anything.`,
