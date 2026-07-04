@@ -223,13 +223,23 @@ function guardrailRule(a: "suggest" | "tasks" | "ask" | "auto"): string {
   }
 }
 
-function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined, intents: string, autonomous = false): string {
+function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined, intents: string, autonomous = false, ideal = ""): string {
+  const desired = (doc.desiredState || "").trim() || ideal.trim();
   return [
     `You are the steward of the "${loop.name}" loop in the ${domainLabel} domain of a personal life-OS.`,
     `A loop is a persistent, self-driving control loop: it continuously reduces the gap between the current state and the desired state, learning and escalating over time. Your job each run: decide the smallest set of highest-leverage next actions (1-3) that move this loop forward RIGHT NOW, building on everything already tried.`,
     "",
-    `DESIRED STATE (domain):\n${doc.desiredState || "(not set)"}`,
+    `DESIRED STATE (domain):\n${desired || "(not set)"}`,
     "",
+    desired
+      ? ""
+      : [
+          `MISSING IDEAL STATE - THIS IS A BLOCKER YOU FIX, NOT A REASON TO STOP: the desired state is not set, so the gap cannot be measured. Your FIRST action this run is to unblock yourself by DRAFTING it: 3-6 concrete sentences of what thriving looks like for the ${domainLabel} domain (the key numbers, coverage, cadences, and outcomes), grounded in the domain's purpose, current state, memory, and the user's intents.`,
+          autonomous
+            ? `Write your draft to the file ideal.md at the ROOT of this domain directory (create it), then report it as a completed action with "did": true. Continue the rest of the run measuring against your draft.`
+            : `File it as a task (set "task": true) whose text begins "Approve this draft ideal state:" followed by your full draft, so the user only has to accept or edit it. Then continue the run measuring against your draft.`,
+          "",
+        ].join("\n"),
     `LOOP`,
     `- purpose / goal: ${loop.purpose || loop.name}`,
     `- type: ${loop.type}${loop.type === "closed" ? ` (closed: finishes when the condition is met)` : " (open: ongoing)"}`,
@@ -370,6 +380,10 @@ export async function runOneLoop(
   onPhase("read", "Reading state and memory");
   const state = safeRead(v4ContentPath(domainDir, "memory/state.md", "_state.md")) || safeRead(join(domainDir, "state.md"));
   const memory = safeRead(v4ContentPath(domainDir, "memory/memory.md", "_memory.md"));
+  // The domain's ideal state (Context panel; ideal.md at the domain root, legacy
+  // soul.md). This is what "loops measure the gap to" - it MUST reach the
+  // steward even when the loop doc's own desiredState was never filled in.
+  const ideal = safeRead(join(domainDir, "ideal.md")) || safeRead(join(domainDir, "soul.md"));
   const domainIntents = readDomainIntents(root, domainLabel);
   const clis = await detectClis();
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
@@ -470,7 +484,7 @@ export async function runOneLoop(
         }
       : undefined;
     const out = await runChatTurn({
-      prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous),
+      prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous, ideal),
       cwd: domainDir, cli, model: runModel, isFirst: true, bare: !autonomous,
       act: autonomous,
       onTool,
@@ -485,11 +499,11 @@ export async function runOneLoop(
     // BUILD the baseline. Force one corrective retry; if the model still
     // returns nothing, the note says plainly that nothing was verified. A run
     // must never read as "handled" without evidence.
-    const evidence = state.trim().length >= 80 || (doc.desiredState ?? "").trim().length >= 40;
+    const evidence = state.trim().length >= 80 || (doc.desiredState ?? "").trim().length >= 40 || ideal.trim().length >= 40;
     if (res && res.actions.length === 0 && !evidence) {
       onPhase("think", "Empty pass on a domain with no baseline - demanding real work");
       const corrective = [
-        buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous),
+        buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous, ideal),
         "",
         `REJECTED: you returned zero actions, but this domain has NO recorded baseline or ideal state - there is no evidence the gap is handled, so "nothing to do" is not an acceptable conclusion. Do the FIRST RUN / MISSING BASELINE work now: ${autonomous ? "gather the data with your tools and write the baseline into the domain, reporting each completed step with \"did\": true" : "file 2-4 concrete baseline-building tasks (\"task\": true)"}. Respond with ONLY the JSON object.`,
       ].join("\n");
