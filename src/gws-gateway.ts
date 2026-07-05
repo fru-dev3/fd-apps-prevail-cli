@@ -149,16 +149,21 @@ function truncate(out: string): string {
 // email third parties. Returns a delivery hook (subject, body) => receipt, or
 // null when gws is not installed. `account` follows the same never-guess
 // resolution the connector uses (label or config dir; undefined = default).
-export function gwsSelfEmailHook(account?: string): ((subject: string, body: string) => Promise<string>) | null {
+export function gwsSelfEmailHook(account?: string): ((subject: string, body: string, meta?: import("./briefings.ts").DeliveryMeta) => Promise<string>) | null {
   const gws = resolveGwsBinary();
   if (!gws) return null;
-  return async (subject: string, body: string) => {
+  return async (subject: string, body: string, meta?: import("./briefings.ts").DeliveryMeta) => {
     const env = gwsSpawnEnv(account);
     const st = spawnSync(gws, ["auth", "status"], { encoding: "utf8", env, maxBuffer: 4 * 1024 * 1024 });
     let self = "";
     try { self = String((JSON.parse(st.stdout || "{}") as { user?: unknown }).user ?? "").trim(); } catch { /* fall through */ }
     if (!self || !self.includes("@")) throw new Error("could not determine the connected Gmail address to deliver to");
-    const run = spawnSync(gws, ["gmail", "+send", "--to", self, "--subject", subject, "--body", body], {
+    // Branded notification: render the markdown through the shared template
+    // (header, meta row, rendered body, provenance footer) instead of dumping
+    // raw markdown into the email. Plain sends were the "wall of text" bug.
+    const { renderNotificationEmail } = await import("./notification-email.ts");
+    const rendered = renderNotificationEmail(meta ?? { kind: "notification", name: subject }, body);
+    const run = spawnSync(gws, ["gmail", "+send", "--to", self, "--subject", rendered.subject, "--body", rendered.html, "--html"], {
       encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024,
     });
     if (run.error || run.status !== 0) {

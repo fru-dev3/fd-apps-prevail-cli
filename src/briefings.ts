@@ -38,7 +38,14 @@ export interface BriefingEntry {
 // Pluggable delivery for the extensible channels. The caller (desktop/daemon)
 // wires these to a connected app (e.g. the gmail connector for email). Each
 // returns a short receipt string. Absent hook → that channel is skipped.
-export type DeliveryFn = (subject: string, body: string) => Promise<string>;
+export interface DeliveryMeta {
+  kind: string;      // "loop-briefing" | "briefing" | ...
+  name: string;      // the producing loop/routine
+  domain?: string;
+  cadence?: string;
+  appPath?: string;  // in-app navigation hint for the provenance footer
+}
+export type DeliveryFn = (subject: string, body: string, meta?: DeliveryMeta) => Promise<string>;
 export interface DeliveryHooks { email?: DeliveryFn; drive?: DeliveryFn }
 
 interface BriefingFile {
@@ -101,15 +108,24 @@ export async function deliverBriefing(
     delivered.log = true;
   }
   if ((entry.deliver === "telegram" || entry.deliver === "both") && deliverTelegram) {
-    const header = `🔔 ${entry.name}  ·  ${entry.domain}\n\n`;
+    const header = `[Prevail] ${entry.name} · ${entry.domain}\n\n`;
     try { delivered.telegram = await deliverTelegram(header + output); }
     catch { /* never fail a briefing on a delivery hiccup */ }
   }
   const subject = `${entry.name} · ${entry.domain}`;
+  // Provenance for the branded notification template: what produced this,
+  // where it lives in the app. Channels that ignore it lose nothing.
+  const meta = {
+    kind: entry.mode === "council" ? "council-briefing" : "loop-briefing",
+    name: entry.name,
+    domain: entry.domain,
+    cadence: entry.cron || undefined,
+    appPath: `Domains > ${entry.domain} > Loops > ${entry.name}`,
+  };
   for (const ch of entry.channels ?? []) {
     const hook = hooks?.[ch];
     if (!hook) { (delivered.channels ??= {})[ch] = "skipped (no connector)"; continue; }
-    try { (delivered.channels ??= {})[ch] = await hook(subject, output); }
+    try { (delivered.channels ??= {})[ch] = await hook(subject, output, meta); }
     catch (e) { (delivered.channels ??= {})[ch] = `error: ${e instanceof Error ? e.message : e}`; }
   }
   return delivered;
