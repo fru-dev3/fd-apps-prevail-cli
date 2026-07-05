@@ -19,7 +19,8 @@ export type FrameworkId =
   | "sbar"
   | "ooda"
   | "proscons"
-  | "steelman";
+  | "steelman"
+  | "go-nogo";
 
 export interface Framework {
   id: FrameworkId;
@@ -81,6 +82,13 @@ export const FRAMEWORKS: readonly Framework[] = [
     blurb: "Strongest counter-argument first, then your real recommendation",
     instruction:
       "Apply the Steelman framework. First, in a labeled **STEELMAN** section, argue the strongest possible case AGAINST what the user is proposing or assuming. Take the opposing view seriously and present its best form. Then, in a labeled **MY VIEW** section, give your actual recommendation — informed by the pressure-test you just ran.",
+  },
+  {
+    id: "go-nogo",
+    label: "GO/NO-GO",
+    blurb: "Rigorous analysis, then one committed verdict: GO or NO-GO",
+    instruction:
+      "Apply the GO / NO-GO framework for a decision. Do a rigorous, honest analysis: state the decision, the key evidence for and against, the biggest risks and unknowns, and what would change the answer. Then commit to ONE verdict - either GO or NO-GO, never both, never a maybe. Open with the verdict in bold (**GO** or **NO-GO**), one line of the single most important reason, then the supporting analysis, and end with the top 2-3 conditions or next steps that follow from it.",
   },
 ];
 
