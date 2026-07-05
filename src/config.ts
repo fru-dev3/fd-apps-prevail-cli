@@ -56,6 +56,9 @@ function migrateLegacyCliKindList(list: readonly string[] | null | undefined): C
 }
 
 export interface UserConfig {
+  // Global outbound-contact guardrail for email: self-only | draft-others |
+  // allow. Absent = draft-others (locked down by default).
+  emailPolicy?: string;
   vaultPath: string;
   createdAt: string;
   // Global toggle: when "deny", the AGENTS-operating preamble injected into

@@ -74,6 +74,8 @@ interface Args {
   attachmentsArgs: string[];
   harnessConn: boolean;
   harnessConnArgs: string[];
+  emailPolicyCmd: boolean;
+  emailPolicyArgs: string[];
   agentRun: boolean;
   agentRunArgs: string[];
   score: boolean;
@@ -183,6 +185,8 @@ function parseArgs(argv: string[]): Args {
   let attachmentsArgs: string[] = [];
   let harnessConn = false;
   let harnessConnArgs: string[] = [];
+  let emailPolicyCmd = false;
+  let emailPolicyArgs: string[] = [];
   let agentRun = false;
   let agentRunArgs: string[] = [];
   let score = false;
@@ -349,6 +353,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "harness-connections") {
       harnessConn = true;
       harnessConnArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "email-policy") {
+      emailPolicyCmd = true;
+      emailPolicyArgs = argv.slice(i + 1);
       break;
     } else if (a === "chat") {
       chat = true;
@@ -539,6 +547,8 @@ function parseArgs(argv: string[]): Args {
     attachmentsArgs,
     harnessConn,
     harnessConnArgs,
+    emailPolicyCmd,
+    emailPolicyArgs,
     chatArgs,
     agentRun,
     agentRunArgs,
@@ -5637,6 +5647,29 @@ async function main() {
     const { agentRunCommand } = await import("./agent-run.ts");
     const code = await agentRunCommand(args.agentRunArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.emailPolicyCmd) {
+    // The global outbound-email guardrail.
+    //   prevail email-policy get [--json]
+    //   prevail email-policy set <self-only|draft-others|allow> [--json]
+    const ep = await import("./email-policy.ts");
+    const a0 = args.emailPolicyArgs[0];
+    const jsonOut = args.emailPolicyArgs.includes("--json");
+    if (a0 === "set") {
+      const v = args.emailPolicyArgs[1];
+      if (v !== "self-only" && v !== "draft-others" && v !== "allow") {
+        console.error("usage: prevail email-policy set <self-only|draft-others|allow>");
+        process.exit(1);
+      }
+      ep.writeEmailPolicy(v);
+      if (jsonOut) { process.stdout.write(`${JSON.stringify({ ok: true, policy: v })}\n`); return; }
+      console.log(`email policy set to ${v}`);
+      return;
+    }
+    const cur = ep.readEmailPolicy();
+    if (jsonOut) { process.stdout.write(`${JSON.stringify({ policy: cur })}\n`); return; }
+    console.log(cur);
+    return;
   }
   if (args.harnessConn) {
     // The superset registry: every connector every installed harness has, in

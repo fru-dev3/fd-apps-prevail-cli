@@ -173,10 +173,18 @@ export function callGoogleWorkspace(
   }
   // Write: queue it (with its target account). NEVER execute here.
   const rec = addPendingGws(vaultPath, { domain, summary, args, account });
+  // Transparency: if the global email guardrail will refuse or draft this at
+  // execution, say so NOW so the model can tell the user honestly.
+  let guardNote = "";
+  try {
+    const { applyEmailPolicy } = require("./email-policy.ts") as typeof import("./email-policy.ts");
+    const d = applyEmailPolicy(args);
+    if (d.action !== "allow") guardNote = ` NOTE: ${d.reason}`;
+  } catch { /* policy check is advisory here; execution enforces */ }
   return wrapText(
     `Queued for your approval: ${summary}. ` +
     `It will run only after you approve it under Needs you. ` +
-    `Command: gws ${args.join(" ")}. (id ${rec.id})`,
+    `Command: gws ${args.join(" ")}. (id ${rec.id})${guardNote}`,
   );
 }
 

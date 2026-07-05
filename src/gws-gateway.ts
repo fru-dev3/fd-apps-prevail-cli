@@ -302,9 +302,23 @@ export function runGwsApproved(vaultRoot: string, id: string): GwsResult {
   if (!item) return { ok: false, error: "no such pending action" };
   const gws = resolveGwsBinary();
   if (!gws) return { ok: false, error: NOT_INSTALLED };
+  // GLOBAL EMAIL GUARDRAIL - enforced HERE, at execution, so approval taps and
+  // prompt phrasing can never route mail to a third party. Per the user's
+  // policy, an external-recipient send is refused or downgraded to a DRAFT.
+  const { applyEmailPolicy } = require("./email-policy.ts") as typeof import("./email-policy.ts");
+  const decision = applyEmailPolicy(item.args);
+  if (decision.action === "refuse") {
+    const refused: GwsResult = { ok: false, error: decision.reason };
+    auditAction(vaultRoot, {
+      ts: Date.now(), domain: item.domain, action: item.summary,
+      outcome: "blocked_by_email_policy", report: decision.reason,
+    });
+    removePendingGws(vaultRoot, id);
+    return refused;
+  }
   // Run against the SAME account the write was queued under (the approval spine
   // preserves it), so an approved send/delete targets the intended account.
-  const run = spawnSync(gws, item.args, {
+  const run = spawnSync(gws, decision.args, {
     encoding: "utf8",
     env: gwsSpawnEnv(item.account),
     maxBuffer: 16 * 1024 * 1024,
@@ -317,7 +331,8 @@ export function runGwsApproved(vaultRoot: string, id: string): GwsResult {
     const base = notAuthedMessage(item.args, item.account);
     result = { ok: false, error: detail ? `${base} (details: ${detail})` : base };
   } else {
-    result = { ok: true, output: truncate(run.stdout || "") };
+    const note = decision.action === "draft" ? `${decision.reason}\n` : "";
+    result = { ok: true, output: truncate(note + (run.stdout || "")) };
   }
   // Durable, redacted record of the approved write and its outcome.
   auditAction(vaultRoot, {
