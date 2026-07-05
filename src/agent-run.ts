@@ -56,6 +56,26 @@ function findDomain(vaultPath: string, name: string): Domain | null {
 
 // Run one agent task and stream ChatEvent NDJSON. Resolves to a process exit
 // code (0 ok, non-zero on error) so the index command wrapper can exit with it.
+// The anti-fabrication contract (verified-action footer), extracted as a PURE
+// function so its behavior is locked by golden tests: the "what I actually did"
+// line is built from the ACTION LEDGER (ground truth), never the model's prose,
+// so a reply that merely SOUNDS like it acted cannot masquerade as having acted.
+export interface VerifiedLedgerRec { ts: number; tool: string; ok: boolean; detail: string; ref?: string; queued?: boolean }
+
+export function buildVerifiedFooter(ledger: VerifiedLedgerRec[], act: boolean, cliKind: string): string {
+  const lines = ledger.map((r) => `${!r.ok ? "\u2717" : r.queued ? "\u23f3" : "\u2713"} ${r.detail}`);
+  if (lines.length > 0) {
+    return `\n\n---\nWhat I actually did (verified by Prevail):\n${lines.join("\n")}`;
+  }
+  // act on but no tool ran: state it plainly - only on claude, where the ledger
+  // + tool stream are authoritative. Other runtimes act via their own file tools
+  // the ledger can't see, so "no actions" would itself be a false claim.
+  if (act && cliKind === "claude") {
+    return "\n\n---\nWhat I actually did (verified by Prevail): no actions were taken. Nothing was created, sent, queued, or changed.";
+  }
+  return "";
+}
+
 export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
   const write = opts.write ?? ((line: string) => process.stdout.write(line + "\n"));
   const emit = (ev: ChatEvent) => write(JSON.stringify(ev));
@@ -243,26 +263,13 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
     }
   } catch { /* ledger read is best-effort */ }
 
-  let footer = "";
-  {
-    const lines: string[] = [];
-    for (const r of ledger) {
-      const mark = !r.ok ? "✗" : r.queued ? "⏳" : "✓"; // cross / hourglass / check
-      const text = `${mark} ${r.detail}`;
-      lines.push(text);
-      emit({ type: "tool", thread, ts: r.ts, role: "system", text });
-    }
-    if (lines.length > 0) {
-      footer = `\n\n---\nWhat I actually did (verified by Prevail):\n${lines.join("\n")}`;
-    } else if (act && cli.kind === "claude") {
-      // act was on but no tool ran: state that plainly so a prose-only reply
-      // that *sounds* like it acted cannot masquerade as having done so. Only on
-      // claude, where the ledger + tool stream are authoritative; other runtimes
-      // (e.g. codex) act via their own file tools that the ledger can't see, so
-      // "no actions" would be a false claim there.
-      footer = "\n\n---\nWhat I actually did (verified by Prevail): no actions were taken. Nothing was created, sent, queued, or changed.";
-    }
+  // Emit each verified action to the live stream (unchanged), then build the
+  // footer from the SAME ledger via the pure, golden-tested contract.
+  for (const r of ledger) {
+    const mark = !r.ok ? "✗" : r.queued ? "⏳" : "✓";
+    emit({ type: "tool", thread, ts: r.ts, role: "system", text: `${mark} ${r.detail}` });
   }
+  const footer = buildVerifiedFooter(ledger, act, cli.kind);
   const finalReply = reply + footer;
 
   const doneTs = Date.now();
