@@ -1280,7 +1280,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     if (toolsInjected || inheritUserMcp || act) {
       try {
         const { actGateSettingsPath } = await import("./act-gate.ts");
-        args.push("--settings", actGateSettingsPath(vaultPath, basename(cwd) || "general"));
+        args.push("--settings", actGateSettingsPath(vaultPath, basename(cwd) || "general", vaultLockOn()));
       } catch { /* the gws spine still holds for Google; never break the turn */ }
     }
     // Ground-truth tool capture: switch to structured stream-json so we can
@@ -1326,13 +1326,19 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // Agent/act path: unlock Codex's tools so a user-approved run can actually
     // act. Codex exec exposes its OWN connectors (mcp__codex_apps__*) plus file/
     // shell tools, but gates them behind approvals+sandbox; the bypass flag is
-    // Codex's analogue of claude's --dangerously-skip-permissions. This is what
-    // makes Codex pass-through real: a Codex agent run uses the connectors you
-    // authorized in Codex, and can write to the vault directly (the model-
-    // agnostic file fallback for the create_skill/create_loop primitives, since
-    // Codex can't load Prevail's stdio MCP servers). Gated on `act`, so a normal
-    // advisory turn is unchanged.
-    const codexActArgs = act ? ["--dangerously-bypass-approvals-and-sandbox"] : [];
+    // Codex act runs (C1 fix): use Codex's OWN OS sandbox, scoped to the vault,
+    // instead of --dangerously-bypass-approvals-and-sandbox (which disabled the
+    // sandbox entirely - an injected instruction could then run any command).
+    // `workspace-write` confines file writes to the working root (cwd = the
+    // domain dir) and denies network by default, while still letting an act run
+    // write to the vault. When Vault Lock is OFF the user has chosen unconfined
+    // access, so we fall back to full access. --skip-git-repo-check already set
+    // in `base`; -a on-failure keeps it non-interactive without disabling the box.
+    const codexActArgs = act
+      ? (vaultLockOn()
+          ? ["--sandbox", "workspace-write", "--add-dir", vaultPath]
+          : ["--dangerously-bypass-approvals-and-sandbox"])
+      : [];
     const args = [...base, ...modelArgs, ...codexActArgs, codexPrompt];
     const raw = await runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
     return extractCodexReply(raw);
