@@ -1,4 +1,4 @@
-import { readdirSync, writeFileSync, existsSync } from "node:fs";
+import { readdirSync, writeFileSync, existsSync, statSync } from "node:fs";
 
 import { vreadFile } from "./vault-session.ts";
 import { join } from "node:path";
@@ -96,6 +96,46 @@ export interface MemoryHit {
 // Walk every _log/*.md across every domain in the vault and find the top-k
 // most semantically similar entries to the query. Pure linear scan; at
 // personal-vault scale this is fast enough not to need an index.
+// Parsed embedding sections for one daily log, cached by (path, mtime). Old
+// daily logs never change, so after the first read they cost a stat() - not a
+// decrypt + full parse - on every subsequent council turn. This is what keeps
+// recall() from degrading as the vault's _log corpus grows over years.
+interface ParsedSection { embed: number[]; excerpt: string; hhmm: string; }
+const parseCache = new Map<string, { mtimeMs: number; sections: ParsedSection[] }>();
+
+function parseLogFile(path: string): ParsedSection[] {
+  let mtimeMs = 0;
+  try { mtimeMs = statSync(path).mtimeMs; } catch { return []; }
+  const cached = parseCache.get(path);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.sections;
+  let content: string;
+  try { content = vreadFile(path); } catch { return []; }
+  const lines = content.split("\n");
+  const sections: ParsedSection[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const headerMatch = lines[i]!.match(/^##\s+(\d{2}:\d{2})/);
+    if (!headerMatch) { i++; continue; }
+    const startLine = i;
+    let embed: number[] | null = null;
+    let bodyEnd = startLine + 1;
+    for (let j = startLine + 1; j < lines.length; j++) {
+      if (j > startLine + 1 && /^##\s/.test(lines[j]!)) { bodyEnd = j; break; }
+      if (!embed) { const dec = decodeEmbedding(lines[j]!); if (dec) embed = dec; }
+      bodyEnd = j + 1;
+    }
+    if (embed) {
+      sections.push({ embed, excerpt: lines.slice(startLine, bodyEnd).join("\n").trim(), hhmm: headerMatch[1]! });
+    }
+    i = bodyEnd;
+  }
+  parseCache.set(path, { mtimeMs, sections });
+  return sections;
+}
+
+/** Test/maintenance hook: clear the per-file parse cache. */
+export function resetRecallCache(): void { parseCache.clear(); }
+
 export async function recall(args: {
   vaultPath: string;
   query: string;
@@ -127,49 +167,16 @@ export async function recall(args: {
     }
     for (const f of files) {
       const path = join(logDir, f);
-      let content: string;
-      try {
-        content = vreadFile(path);
-      } catch {
-        continue;
-      }
-      // Sections within a daily log are demarcated by "## HH:MM" headers.
-      // Walk forward, accumulate header → meta → embed → body, score the
-      // embed against qvec.
-      const lines = content.split("\n");
-      let i = 0;
-      while (i < lines.length) {
-        const headerMatch = lines[i]!.match(/^##\s+(\d{2}:\d{2})/);
-        if (!headerMatch) {
-          i++;
-          continue;
-        }
-        const startLine = i;
-        let embed: number[] | null = null;
-        let bodyEnd = startLine + 1;
-        for (let j = startLine + 1; j < lines.length; j++) {
-          if (j > startLine + 1 && /^##\s/.test(lines[j]!)) {
-            bodyEnd = j;
-            break;
-          }
-          if (!embed) {
-            const dec = decodeEmbedding(lines[j]!);
-            if (dec) embed = dec;
-          }
-          bodyEnd = j + 1;
-        }
-        if (embed && embed.length === qvec.length) {
-          const score = dot(qvec, embed);
-          const excerpt = lines.slice(startLine, bodyEnd).join("\n").trim();
-          hits.push({
-            domain,
-            file: path,
-            excerpt,
-            score,
-            ts: parseHeaderDate(f, headerMatch[1]!),
-          });
-        }
-        i = bodyEnd;
+      // Cached by mtime: unchanged daily logs are not re-read or re-decrypted.
+      for (const sec of parseLogFile(path)) {
+        if (sec.embed.length !== qvec.length) continue;
+        hits.push({
+          domain,
+          file: path,
+          excerpt: sec.excerpt,
+          score: dot(qvec, sec.embed),
+          ts: parseHeaderDate(f, sec.hhmm),
+        });
       }
     }
   }
