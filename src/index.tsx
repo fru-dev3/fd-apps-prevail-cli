@@ -1320,6 +1320,15 @@ async function usageCommand(args: string[], vaultOverride: string | null): Promi
   const sinceMs = parseSince(since) ?? undefined;
   const allEntries = readUsage(vault, sinceMs);
 
+  // `entries` — the RAW usage records (bounded personal volume), so a rich
+  // client dashboard can pivot/filter/heatmap on every dimension itself.
+  if (sub === "entries") {
+    let out = allEntries;
+    if (domain) out = filterByDomain(out, domain);
+    process.stdout.write(JSON.stringify(out) + "\n");
+    return;
+  }
+
   // `summary` — one combined multi-dimension roll-up for a stats dashboard.
   // Always JSON (it's a machine surface). Honors --domain / --since.
   if (sub === "summary") {

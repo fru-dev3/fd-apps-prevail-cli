@@ -17,6 +17,7 @@
 // are the whole point and domains are vault-scoped.
 
 import { existsSync, mkdirSync } from "node:fs";
+import { hostname } from "node:os";
 
 import { vreadFile } from "./vault-session.ts";
 import { appendLedger, readLedgerAll } from "./ledger.ts";
@@ -108,6 +109,7 @@ export interface UsageEntry {
   token_source: TokenSource;
   est_cost_usd: number;
   billed: boolean;
+  host: string; // machine this turn ran on (os.hostname); "" for legacy entries
 }
 
 export function dayKey(ts: number = Date.now()): string {
@@ -138,7 +140,10 @@ export interface RecordUsageInput {
   outputChars?: number;
   billed?: boolean;
   ts?: number;
+  host?: string;
 }
+
+function safeHostname(): string { try { return hostname(); } catch { return ""; } }
 
 export function buildEntry(input: RecordUsageInput): UsageEntry {
   const reported = input.inputTokens != null || input.outputTokens != null;
@@ -160,6 +165,7 @@ export function buildEntry(input: RecordUsageInput): UsageEntry {
     token_source: reported ? "reported" : "estimated",
     est_cost_usd: costUsd(cli, model, inTok, outTok),
     billed: input.billed ?? false,
+    host: input.host ?? safeHostname(),
   };
 }
 
