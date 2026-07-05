@@ -18,7 +18,8 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 
-import { vappendLine, vreadFile } from "./vault-session.ts";
+import { vreadFile } from "./vault-session.ts";
+import { appendLedger, readLedgerAll } from "./ledger.ts";
 import { dirname, join, resolve } from "node:path";
 import { runtimePath } from "./path-safety.ts";
 
@@ -170,7 +171,9 @@ export function recordUsage(vaultPath: string, input: RecordUsageInput): UsageEn
   try {
     const dir = dirname(file);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    vappendLine(file, JSON.stringify(entry) + "\n");
+    // Locked + size-bounded append (auto-archives old months). Kills the
+    // concurrent-writer lost-update race and the O(n^2) encrypted-append cliff.
+    appendLedger(file, JSON.stringify(entry), Date.now());
     return entry;
   } catch {
     return null;
@@ -179,19 +182,14 @@ export function recordUsage(vaultPath: string, input: RecordUsageInput): UsageEn
 
 export function readUsage(vaultPath: string, sinceMs?: number): UsageEntry[] {
   const file = usageLedgerPath(vaultPath);
-  if (!existsSync(file)) return [];
-  let raw: string;
-  try {
-    raw = vreadFile(file);
-  } catch {
-    return [];
-  }
+  // Merge archived months + the live tail so a since-window that reaches back
+  // past a rotation still sees everything. A tight recent window pays only for
+  // the shards it needs (they are month-named), but reading all is correct and
+  // bounded by real usage volume.
+  const all = readLedgerAll<UsageEntry>(file);
   const out: UsageEntry[] = [];
-  for (const line of raw.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
+  for (const e of all) {
     try {
-      const e = JSON.parse(t) as UsageEntry;
       if (typeof e.ts !== "number") continue;
       if (sinceMs != null && e.ts < sinceMs) continue;
       out.push(e);

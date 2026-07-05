@@ -13,7 +13,8 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 
-import { vappendLine, vreadFile, vwriteFile } from "./vault-session.ts";
+import { vreadFile, vwriteFile } from "./vault-session.ts";
+import { appendLedger, readLedgerAll } from "./ledger.ts";
 import { dirname, join, resolve } from "node:path";
 import { v4ContentPath } from "./vault-layout-v4.ts";
 import { resolveDomainDir, dataRoot, DOMAINS_DIR } from "./path-safety.ts";
@@ -101,7 +102,9 @@ export function appendDecision(
     type: record.type ?? "decision",
     ...record,
   };
-  vappendLine(decisionsFile(vaultPath, domain), `${JSON.stringify(full)}\n`);
+  // Locked + bounded append (auto-archives old months). Each council verdict
+  // hits this; the lock prevents the daemon+desktop lost-update race.
+  appendLedger(decisionsFile(vaultPath, domain), JSON.stringify(full), Date.now());
   return full;
 }
 
@@ -112,23 +115,8 @@ export function readDecisions(
   limit?: number,
 ): DecisionRecord[] {
   const file = decisionsFile(vaultPath, domain);
-  if (!existsSync(file)) return [];
-  let text = "";
-  try {
-    text = vreadFile(file);
-  } catch {
-    return [];
-  }
-  const out: DecisionRecord[] = [];
-  for (const line of text.split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    try {
-      out.push(JSON.parse(t) as DecisionRecord);
-    } catch {
-      /* skip malformed line */
-    }
-  }
+  // Live tail + archived months, newest first. Bounded by real decision volume.
+  const out = readLedgerAll<DecisionRecord>(file);
   out.reverse(); // newest first
   return typeof limit === "number" && limit >= 0 ? out.slice(0, limit) : out;
 }

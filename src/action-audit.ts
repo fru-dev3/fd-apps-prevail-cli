@@ -10,7 +10,8 @@
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { vappendLine, vreadFile } from "./vault-session.ts";
+import { vreadFile } from "./vault-session.ts";
+import { appendLedger, readLedgerAll } from "./ledger.ts";
 import { shardPathFor, shardPaths } from "./ledger-shard.ts";
 import { redact } from "./privacy.ts";
 import { classifyAction, type ActionClass } from "./action-policy.ts";
@@ -46,7 +47,7 @@ export function auditAction(vaultRoot: string, entry: ActionAuditEntry): void {
     };
     // Per-host shard (G4): this machine appends to action-audit.<host>.jsonl,
     // so a two-way file sync never has two writers for one file. Readers merge.
-    vappendLine(shardPathFor(actionAuditPath(vaultRoot)), `${JSON.stringify(safe)}\n`);
+    appendLedger(shardPathFor(actionAuditPath(vaultRoot)), JSON.stringify(safe), Date.now());
   } catch {
     /* best-effort */
   }
@@ -57,13 +58,8 @@ export function auditAction(vaultRoot: string, entry: ActionAuditEntry): void {
 export function readActionAudit(vaultRoot: string): ActionAuditEntry[] {
   const out: ActionAuditEntry[] = [];
   for (const path of shardPaths(actionAuditPath(vaultRoot))) {
-    let text = "";
-    try { text = vreadFile(path); } catch { continue; }
-    for (const line of text.split("\n")) {
-      const t = line.trim();
-      if (!t) continue;
-      try { out.push(JSON.parse(t) as ActionAuditEntry); } catch { /* skip bad line */ }
-    }
+    // Each host shard's live tail PLUS its archived months.
+    for (const rec of readLedgerAll<ActionAuditEntry>(path)) out.push(rec);
   }
   return out.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
 }
