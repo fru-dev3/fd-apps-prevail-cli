@@ -177,9 +177,12 @@ export function callGoogleWorkspace(
   // execution, say so NOW so the model can tell the user honestly.
   let guardNote = "";
   try {
-    const { applyEmailPolicy } = require("./email-policy.ts") as typeof import("./email-policy.ts");
+    const { applyEmailPolicy, selfAddresses } = require("./email-policy.ts") as typeof import("./email-policy.ts");
     const d = applyEmailPolicy(args);
     if (d.action !== "allow") guardNote = ` NOTE: ${d.reason}`;
+    const { applyEgressGuardToGws } = require("./egress-guard.ts") as typeof import("./egress-guard.ts");
+    const g = applyEgressGuardToGws(d.args, selfAddresses());
+    if (g.action === "hold") guardNote += ` NOTE: ${g.reason}.`;
   } catch { /* policy check is advisory here; execution enforces */ }
   return wrapText(
     `Queued for your approval: ${summary}. ` +

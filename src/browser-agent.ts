@@ -242,6 +242,21 @@ export async function runBrowserAgent(goal: AgentGoal, deps: { driver: DriverLik
       continue;
     }
 
+    // SENSITIVE EGRESS GUARD: an external website is a PUBLIC audience. Any
+    // text the agent is about to type (or smuggle into a URL) is scanned in
+    // code before it reaches the page; a hold blocks this single action and
+    // tells the agent why, in categories only. docs/sensitive-egress-guard.md.
+    const outbound = [action.text, action.action === "navigate" ? action.url : ""].filter(Boolean).join("\n");
+    if (outbound) {
+      const { evaluateEgress } = require("./egress-guard.ts") as typeof import("./egress-guard.ts");
+      const egress = evaluateEgress("public", [outbound]);
+      if (egress.verdict === "hold") {
+        emit({ phase: "blocked", n: turn, reason: egress.reason });
+        note = `That action was blocked: ${egress.reason}. Do NOT retype the sensitive value in any form. Proceed without it, or stop and tell the user what approval is needed.`;
+        continue;
+      }
+    }
+
     // Guard executable actions in code, using the target element's name.
     const targetEl = elementByRef(snap, action.ref);
     const guard = guardAgentAction(action, targetEl?.name || "", targetEl?.isPassword);

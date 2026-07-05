@@ -29,6 +29,10 @@ export interface GwsResult {
   ok: boolean;
   output?: string;
   error?: string;
+  /** Set when the sensitive-egress guard held the action: the pending record
+   *  is KEPT so the user can release it with an explicit --allow-sensitive
+   *  re-approval. `categories` are honest labels, never the values. */
+  held?: { categories: string[] };
 }
 
 // Max bytes we hand back as a tool result. gws can emit very large JSON (a full
@@ -296,7 +300,7 @@ export function removePendingGws(vaultRoot: string, id: string): void {
 // write: load the queued item by id, run the exact command the user approved,
 // append an audit record, drop it from the queue, and return the result. A
 // missing id is a no-op error (never runs anything).
-export function runGwsApproved(vaultRoot: string, id: string): GwsResult {
+export function runGwsApproved(vaultRoot: string, id: string, opts?: { allowSensitive?: boolean }): GwsResult {
   const items = readPendingGws(vaultRoot);
   const item = items.find((i) => i.id === id);
   if (!item) return { ok: false, error: "no such pending action" };
@@ -305,7 +309,7 @@ export function runGwsApproved(vaultRoot: string, id: string): GwsResult {
   // GLOBAL EMAIL GUARDRAIL - enforced HERE, at execution, so approval taps and
   // prompt phrasing can never route mail to a third party. Per the user's
   // policy, an external-recipient send is refused or downgraded to a DRAFT.
-  const { applyEmailPolicy } = require("./email-policy.ts") as typeof import("./email-policy.ts");
+  const { applyEmailPolicy, selfAddresses } = require("./email-policy.ts") as typeof import("./email-policy.ts");
   const decision = applyEmailPolicy(item.args);
   if (decision.action === "refuse") {
     const refused: GwsResult = { ok: false, error: decision.reason };
@@ -316,9 +320,37 @@ export function runGwsApproved(vaultRoot: string, id: string): GwsResult {
     removePendingGws(vaultRoot, id);
     return refused;
   }
+  // SENSITIVE EGRESS GUARD - the second, independent dial: WHAT the content
+  // may contain, after the email policy decided WHO may receive it. Runs on
+  // the post-email-policy argv (so a third-party send already downgraded to a
+  // draft counts as self and passes: a draft never leaves the account).
+  // docs/sensitive-egress-guard.md. Enforced here so every surface - chat,
+  // loops, agents, desktop approvals, the CLI - hits the same gate.
+  const { applyEgressGuardToGws } = require("./egress-guard.ts") as typeof import("./egress-guard.ts");
+  const guard = applyEgressGuardToGws(decision.args, selfAddresses(), opts?.allowSensitive === true);
+  let execArgs = decision.args;
+  let egressNote = "";
+  if (guard.action === "hold") {
+    const isGmailSend = (decision.args[0] ?? "").toLowerCase() === "gmail";
+    if (isGmailSend && !guard.unscannable) {
+      // Gmail's release valve is built in: hold the mail as a DRAFT. Pressing
+      // Send in Gmail IS the user's approval of the exact content.
+      if (!execArgs.includes("--draft")) execArgs = [...execArgs, "--draft"];
+      egressNote = `${guard.reason}. Saved as a DRAFT for you to review and send yourself.\n`;
+    } else {
+      // No draft equivalent (calendar invite, document share): refuse, keep
+      // the pending record, and tell the user exactly how to release it.
+      const message = `${guard.reason}. The action was NOT run. To release it exactly as written, re-approve with sensitive info allowed (gws run --id ${id} --allow-sensitive).`;
+      auditAction(vaultRoot, {
+        ts: Date.now(), domain: item.domain, action: item.summary,
+        outcome: "blocked_by_egress_guard", report: message,
+      });
+      return { ok: false, error: message, held: { categories: guard.categories } };
+    }
+  }
   // Run against the SAME account the write was queued under (the approval spine
   // preserves it), so an approved send/delete targets the intended account.
-  const run = spawnSync(gws, decision.args, {
+  const run = spawnSync(gws, execArgs, {
     encoding: "utf8",
     env: gwsSpawnEnv(item.account),
     maxBuffer: 16 * 1024 * 1024,
@@ -331,7 +363,7 @@ export function runGwsApproved(vaultRoot: string, id: string): GwsResult {
     const base = notAuthedMessage(item.args, item.account);
     result = { ok: false, error: detail ? `${base} (details: ${detail})` : base };
   } else {
-    const note = decision.action === "draft" ? `${decision.reason}\n` : "";
+    const note = (decision.action === "draft" ? `${decision.reason}\n` : "") + egressNote;
     result = { ok: true, output: truncate(note + (run.stdout || "")) };
   }
   // Durable, redacted record of the approved write and its outcome.

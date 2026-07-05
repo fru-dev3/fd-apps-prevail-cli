@@ -76,6 +76,8 @@ interface Args {
   harnessConnArgs: string[];
   emailPolicyCmd: boolean;
   emailPolicyArgs: string[];
+  egressGuardCmd: boolean;
+  egressGuardArgs: string[];
   agentRun: boolean;
   agentRunArgs: string[];
   score: boolean;
@@ -187,6 +189,8 @@ function parseArgs(argv: string[]): Args {
   let harnessConnArgs: string[] = [];
   let emailPolicyCmd = false;
   let emailPolicyArgs: string[] = [];
+  let egressGuardCmd = false;
+  let egressGuardArgs: string[] = [];
   let agentRun = false;
   let agentRunArgs: string[] = [];
   let score = false;
@@ -357,6 +361,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "email-policy") {
       emailPolicyCmd = true;
       emailPolicyArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "egress-guard") {
+      egressGuardCmd = true;
+      egressGuardArgs = argv.slice(i + 1);
       break;
     } else if (a === "chat") {
       chat = true;
@@ -549,6 +557,8 @@ function parseArgs(argv: string[]): Args {
     harnessConnArgs,
     emailPolicyCmd,
     emailPolicyArgs,
+    egressGuardCmd,
+    egressGuardArgs,
     chatArgs,
     agentRun,
     agentRunArgs,
@@ -5243,7 +5253,7 @@ async function gwsCommand(args: string[], vaultOverride: string | null): Promise
       return 1;
     }
     const { runGwsApproved } = await import("./gws-gateway.ts");
-    const result = runGwsApproved(vault, id);
+    const result = runGwsApproved(vault, id, { allowSensitive: args.includes("--allow-sensitive") });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return result.ok ? 0 : 1;
   }
@@ -5647,6 +5657,38 @@ async function main() {
     const { agentRunCommand } = await import("./agent-run.ts");
     const code = await agentRunCommand(args.agentRunArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.egressGuardCmd) {
+    // The sensitive-information egress guardrail (docs/sensitive-egress-guard.md).
+    //   prevail egress-guard get [--json]
+    //   prevail egress-guard set <on|off> [--json]
+    //   prevail egress-guard test <text...>   what the scanner finds, verifiably
+    const eg = await import("./egress-guard.ts");
+    const a0 = args.egressGuardArgs[0];
+    const jsonOut = args.egressGuardArgs.includes("--json");
+    if (a0 === "set") {
+      const v = args.egressGuardArgs[1];
+      if (v !== "on" && v !== "off") {
+        console.error("usage: prevail egress-guard set <on|off>");
+        process.exit(1);
+      }
+      eg.writeEgressGuard(v);
+      if (jsonOut) { process.stdout.write(`${JSON.stringify({ ok: true, mode: v })}\n`); return; }
+      console.log(`egress guard ${v}`);
+      return;
+    }
+    if (a0 === "test") {
+      const text = args.egressGuardArgs.slice(1).filter((x) => x !== "--json").join(" ");
+      const findings = eg.scanSensitive(text);
+      if (jsonOut) { process.stdout.write(`${JSON.stringify({ findings })}\n`); return; }
+      if (findings.length === 0) { console.log("no sensitive content detected"); return; }
+      for (const f of findings) console.log(`${f.category}: ${f.label}${f.preview ? ` (${f.preview})` : ""}`);
+      return;
+    }
+    const mode = eg.readEgressGuard();
+    if (jsonOut) { process.stdout.write(`${JSON.stringify({ mode })}\n`); return; }
+    console.log(mode);
+    return;
   }
   if (args.emailPolicyCmd) {
     // The global outbound-email guardrail.

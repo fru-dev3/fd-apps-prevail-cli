@@ -14,7 +14,7 @@ import { vappendLine } from "./vault-session.ts";
 import { redact } from "./privacy.ts";
 import { classifyAction, type ActionClass } from "./action-policy.ts";
 
-export type ActionOutcome = "executed" | "no_connector" | "error" | "proposed" | "blocked_by_email_policy";
+export type ActionOutcome = "executed" | "no_connector" | "error" | "proposed" | "blocked_by_email_policy" | "blocked_by_egress_guard";
 
 export interface ActionAuditEntry {
   ts: number;
