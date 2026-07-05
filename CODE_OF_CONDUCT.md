@@ -24,7 +24,7 @@ This applies to all project surfaces: GitHub issues, pull requests, discussions,
 
 If someone's behavior is making the project unsafe or unproductive to participate in:
 
-- For a serious or sensitive matter, open a private [GitHub Security Advisory](https://github.com/fru-dev3/prevail/security/advisories/new). It's the right channel for anything that shouldn't be aired in public.
+- For a serious or sensitive matter, open a private [GitHub Security Advisory](https://github.com/fru-dev3/prevail-cli/security/advisories/new). It's the right channel for anything that shouldn't be aired in public.
 - For lower-stakes issues, contact the maintainer directly via the email in the latest commit metadata, or open a discussion if it's about a project norm rather than a specific person.
 
 Reports stay private. The maintainer will acknowledge within 7 days, investigate, and decide on a response — which may range from a private note to revoking access to the repository.

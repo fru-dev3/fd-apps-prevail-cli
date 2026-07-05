@@ -55,7 +55,7 @@ When cutting a new release (say, `v0.9.0`):
    - Replace the four `PLACEHOLDER_SHA256_*` strings with the real hashes.
    - Update the four `url "..."` lines so the `vX.Y.Z` path segment matches the new tag.
 
-4. **Create the GitHub release** at `https://github.com/fru-dev3/prevail/releases/new`:
+4. **Create the GitHub release** at `https://github.com/fru-dev3/prevail-cli/releases/new`:
    - Tag: `vX.Y.Z`
    - Attach all 4 prebuilt binaries as release assets, using the exact filenames the formula expects (`prevail-darwin-arm64`, etc.).
 

@@ -2,7 +2,7 @@
 
 prevAIl is a **single-user terminal application** that runs locally on your machine, executes AI CLIs as subprocesses, and reads/writes plain markdown in a vault folder you control. The threat model — and what's in scope vs out of scope — flows from that.
 
-If you find a security issue, please report it via [GitHub Security Advisories](https://github.com/fru-dev3/prevail/security/advisories/new) (preferred) or email the maintainer privately. Do **not** open a public issue for security reports.
+If you find a security issue, please report it via [GitHub Security Advisories](https://github.com/fru-dev3/prevail-cli/security/advisories/new) (preferred) or email the maintainer privately. Do **not** open a public issue for security reports.
 
 We aim to acknowledge reports within 48 hours and ship a fix within two weeks for high-severity issues.
 
@@ -88,8 +88,8 @@ The following are intentionally NOT defended against. If you need any of them, p
 
 ## Reporting a vulnerability
 
-- **Preferred:** Open a private security advisory at <https://github.com/fru-dev3/prevail/security/advisories/new>.
-- **Acceptable:** Email the maintainer (see [git log](https://github.com/fru-dev3/prevail/commits/main) for current contact).
+- **Preferred:** Open a private security advisory at <https://github.com/fru-dev3/prevail-cli/security/advisories/new>.
+- **Acceptable:** Email **security@fru.dev** with details and steps to reproduce.
 - **Not acceptable:** Open a public GitHub issue. Please give us a chance to fix and ship before disclosure.
 
 Include:
@@ -102,4 +102,4 @@ We'll acknowledge within 48 hours and aim to publish a fix + advisory within 14 
 
 ---
 
-*This document tracks the actual code as of v0.9.0. If you find a gap between what's written here and what the code does, that's a bug — please report it.*
+*This document tracks the current `main`. If you find a gap between what's written here and what the code does, that's a bug — please report it.*

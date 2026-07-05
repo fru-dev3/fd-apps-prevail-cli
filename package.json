@@ -1,5 +1,5 @@
 {
-  "name": "fd-apps-prevail-cli",
+  "name": "prevail-cli",
   "version": "1.9.9",
   "description": "prevAIl \u2014 a terminal cockpit for your life domains.",
   "type": "module",
@@ -24,8 +24,7 @@
     "opentui"
   ],
   "bin": {
-    "prevail": "./src/index.tsx",
-    "aru": "./src/index.tsx"
+    "prevail": "./src/index.tsx"
   },
   "files": [
     "src",

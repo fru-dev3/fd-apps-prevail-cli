@@ -1,6 +1,6 @@
 class Prevail < Formula
   desc "Terminal cockpit for hard personal decisions — Claude + Codex + Gemini + Ollama council"
-  homepage "https://github.com/fru-dev3/prevail"
+  homepage "https://github.com/fru-dev3/prevail-cli"
   version "0.8.2"
   license "GPL-3.0-only"
 
@@ -11,22 +11,22 @@ class Prevail < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/fru-dev3/prevail/releases/download/v0.8.2/prevail-darwin-arm64"
+      url "https://github.com/fru-dev3/prevail-cli/releases/download/v0.8.2/prevail-darwin-arm64"
       sha256 "PLACEHOLDER_SHA256_DARWIN_ARM64"
     end
     on_intel do
-      url "https://github.com/fru-dev3/prevail/releases/download/v0.8.2/prevail-darwin-x64"
+      url "https://github.com/fru-dev3/prevail-cli/releases/download/v0.8.2/prevail-darwin-x64"
       sha256 "PLACEHOLDER_SHA256_DARWIN_X64"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/fru-dev3/prevail/releases/download/v0.8.2/prevail-linux-arm64"
+      url "https://github.com/fru-dev3/prevail-cli/releases/download/v0.8.2/prevail-linux-arm64"
       sha256 "PLACEHOLDER_SHA256_LINUX_ARM64"
     end
     on_intel do
-      url "https://github.com/fru-dev3/prevail/releases/download/v0.8.2/prevail-linux-x64"
+      url "https://github.com/fru-dev3/prevail-cli/releases/download/v0.8.2/prevail-linux-x64"
       sha256 "PLACEHOLDER_SHA256_LINUX_X64"
     end
   end

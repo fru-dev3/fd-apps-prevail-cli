@@ -23,7 +23,7 @@
 
 ---
 
-**One question. Four engines. One verdict.** Every part of your life — wealth, health, tax, career — is a folder of markdown. Open one, ask, and prevAIl fans the question out to every CLI you already have logged in. A chair model reads all four replies and writes one decisive answer, with a dedicated panel surfacing the *disagreement* — which is the point. Works from your terminal or your phone (Telegram bridge). Single 95 MB binary. No daemon, no Docker, no API keys.
+**One question. Four engines. One verdict.** Every part of your life — wealth, health, tax, career — is a folder of markdown. Open one, ask, and prevAIl fans the question out to every CLI you already have logged in. A chair model reads all four replies and writes one decisive answer, with a dedicated panel surfacing the *disagreement* — which is the point. Works from your terminal or your phone (Telegram bridge). Single 95 MB binary. No Docker, no mandatory API keys; the optional Telegram bridge runs a lightweight daemon only if you turn it on.
 
 <p align="center">
   <img src="./assets/deliberation.gif" alt="prevAIl — navigate to a domain, switch tabs, see the deliberation chips" width="900"/>
