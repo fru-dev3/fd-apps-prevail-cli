@@ -1271,6 +1271,18 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
         }
       }
     } catch { /* never let MCP wiring break a turn */ }
+    // ACTION GATEWAY (G1): every claude turn that can see MCP tools carries the
+    // PreToolUse act-gate hook, so connector writes (inherited claude.ai
+    // connectors, Composio, any user MCP server) queue for approval and pass
+    // the egress guard - the same spine gws writes already use. Verified to
+    // fire even under --dangerously-skip-permissions. Engine-owned servers
+    // (google_workspace, prevail) self-gate and pass through.
+    if (toolsInjected || inheritUserMcp || act) {
+      try {
+        const { actGateSettingsPath } = await import("./act-gate.ts");
+        args.push("--settings", actGateSettingsPath(vaultPath, basename(cwd) || "general"));
+      } catch { /* the gws spine still holds for Google; never break the turn */ }
+    }
     // Ground-truth tool capture: switch to structured stream-json so we can
     // report the REAL tools the model invokes (including runtime-native
     // connectors like AllTrails). This runs on the Act/agent path AND on a normal

@@ -78,6 +78,10 @@ interface Args {
   emailPolicyArgs: string[];
   egressGuardCmd: boolean;
   egressGuardArgs: string[];
+  actGateHook: boolean;
+  actGateArgs: string[];
+  actsCmd: boolean;
+  actsArgs: string[];
   agentRun: boolean;
   agentRunArgs: string[];
   score: boolean;
@@ -191,6 +195,10 @@ function parseArgs(argv: string[]): Args {
   let emailPolicyArgs: string[] = [];
   let egressGuardCmd = false;
   let egressGuardArgs: string[] = [];
+  let actGateHook = false;
+  let actGateArgs: string[] = [];
+  let actsCmd = false;
+  let actsArgs: string[] = [];
   let agentRun = false;
   let agentRunArgs: string[] = [];
   let score = false;
@@ -365,6 +373,14 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "egress-guard") {
       egressGuardCmd = true;
       egressGuardArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "act-gate-hook") {
+      actGateHook = true;
+      actGateArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "acts") {
+      actsCmd = true;
+      actsArgs = argv.slice(i + 1);
       break;
     } else if (a === "chat") {
       chat = true;
@@ -559,6 +575,10 @@ function parseArgs(argv: string[]): Args {
     emailPolicyArgs,
     egressGuardCmd,
     egressGuardArgs,
+    actGateHook,
+    actGateArgs,
+    actsCmd,
+    actsArgs,
     chatArgs,
     agentRun,
     agentRunArgs,
@@ -5657,6 +5677,48 @@ async function main() {
     const { agentRunCommand } = await import("./agent-run.ts");
     const code = await agentRunCommand(args.agentRunArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.actGateHook) {
+    // Claude Code PreToolUse hook (the Action Gateway). stdin: hook JSON;
+    // stdout: permission decision. See act-gate.ts.
+    const flag = (name: string) => {
+      const i = args.actGateArgs.indexOf(`--${name}`);
+      return i >= 0 ? (args.actGateArgs[i + 1] ?? "") : "";
+    };
+    const { runActGateHook } = await import("./act-gate.ts");
+    const vault = flag("vault") || readConfig()?.vaultPath || "";
+    await runActGateHook(vault, flag("domain") || "general");
+    return;
+  }
+  if (args.actsCmd) {
+    // The connector-act approval queue (Action Gateway).
+    //   prevail acts pending-list [--vault V] [--json]
+    //   prevail acts approve --id <id> [--allow-sensitive] [--vault V]
+    //   prevail acts dismiss --id <id> [--vault V]
+    const sub = args.actsArgs[0];
+    const flag = (name: string) => {
+      const i = args.actsArgs.indexOf(`--${name}`);
+      return i >= 0 ? (args.actsArgs[i + 1] ?? "") : "";
+    };
+    const ag = await import("./act-gate.ts");
+    const vault = flag("vault") || readConfig()?.vaultPath || "";
+    if (sub === "pending-list") {
+      process.stdout.write(`${JSON.stringify(ag.readPendingActs(vault))}\n`);
+      return;
+    }
+    if (sub === "approve") {
+      const r = ag.approvePendingAct(vault, flag("id"), args.actsArgs.includes("--allow-sensitive"));
+      process.stdout.write(`${JSON.stringify(r)}\n`);
+      if (!r.ok) process.exit(1);
+      return;
+    }
+    if (sub === "dismiss") {
+      ag.removePendingAct(vault, flag("id"));
+      process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+      return;
+    }
+    console.error("usage: prevail acts pending-list|approve --id <id> [--allow-sensitive]|dismiss --id <id>");
+    process.exit(1);
   }
   if (args.egressGuardCmd) {
     // The sensitive-information egress guardrail (docs/sensitive-egress-guard.md).
