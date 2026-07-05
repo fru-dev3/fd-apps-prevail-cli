@@ -2024,7 +2024,7 @@ function runCapture(
 // REAL tool invocations to onTool (ground truth — the model's own narration is
 // never trusted for "what ran"). Returns the final assistant text. Used only on
 // the agent/act path; normal chat keeps runCapture's plain-text stream.
-function runClaudeStream(
+export function runClaudeStream(
   bin: string,
   args: string[],
   cwd: string,
@@ -2057,15 +2057,27 @@ function runClaudeStream(
     const acc: string[] = [];
     let accLen = 0;
     const toolNames = new Map<string, string>();
+    // Narration blocks arrive as SEPARATE text blocks with tool calls between
+    // them ("checking X" -> tool -> "found Y"). Joined raw they render as one
+    // run-on blob ("...exposes.Yes, I can."); insert a paragraph break when a
+    // new text block follows tool activity so streamed narration reads as the
+    // distinct thoughts it actually was. Applied to acc AND onChunk so the
+    // streamed view and the saved reply agree.
+    let sawToolSinceText = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleEvent = (ev: any) => {
       if (!ev || typeof ev !== "object") return;
       if (ev.type === "assistant" && ev.message && Array.isArray(ev.message.content)) {
         for (const b of ev.message.content) {
           if (b && b.type === "text" && typeof b.text === "string" && b.text) {
-            acc.push(b.text); accLen += b.text.length;
-            if (onChunk && accLen <= cap) onChunk(b.text);
+            const prev = acc.length ? acc[acc.length - 1]! : "";
+            const needBreak = acc.length > 0 && sawToolSinceText && !prev.endsWith("\n") && !b.text.startsWith("\n");
+            const chunk = (needBreak ? "\n\n" : "") + b.text;
+            sawToolSinceText = false;
+            acc.push(chunk); accLen += chunk.length;
+            if (onChunk && accLen <= cap) onChunk(chunk);
           } else if (b && b.type === "tool_use" && b.name) {
+            sawToolSinceText = true;
             if (b.id) toolNames.set(String(b.id), String(b.name));
             try { onTool({ name: String(b.name), phase: "call", id: b.id ? String(b.id) : undefined, input: b.input }); } catch { /* never break on callback */ }
           }
@@ -2073,6 +2085,7 @@ function runClaudeStream(
       } else if (ev.type === "user" && ev.message && Array.isArray(ev.message.content)) {
         for (const b of ev.message.content) {
           if (b && b.type === "tool_result") {
+            sawToolSinceText = true;
             const nm = toolNames.get(String(b.tool_use_id)) ?? "tool";
             // On failure, pull a short error snippet from the result content so
             // the step checklist can show WHY (debuggability for multi-step runs).
