@@ -1,42 +1,38 @@
 class Prevail < Formula
   desc "Terminal cockpit for hard personal decisions — Claude + Codex + Gemini + Ollama council"
   homepage "https://github.com/fru-dev3/prevail-cli"
-  version "0.8.2"
+  version "1.9.7"
   license "GPL-3.0-only"
 
-  # NOTE: The SHA256 values below are placeholders. After cutting a release
-  # with prebuilt binaries attached, run `shasum -a 256 <binary>` for each
-  # platform asset and replace the PLACEHOLDER_* strings. See Formula/README.md
-  # for the full release process (or future release.yml automation).
+  # Checksums are the real sha256 of the v1.9.7 release tarballs. To bump:
+  # publish a new cli release, then run `shasum -a 256 prevail-v<ver>-*.tar.gz`
+  # for each asset and update the version + urls + sha256 below. See
+  # Formula/README.md.
 
   on_macos do
     on_arm do
-      url "https://github.com/fru-dev3/prevail-cli/releases/download/v0.8.2/prevail-darwin-arm64"
-      sha256 "PLACEHOLDER_SHA256_DARWIN_ARM64"
+      url "https://github.com/fru-dev3/prevail-cli/releases/download/v1.9.7/prevail-v1.9.7-darwin-arm64.tar.gz"
+      sha256 "0445e6edcfa7ec367278cf6c9c532efd043c7a0591f472eb421b4efc2ac96cc9"
     end
-    on_intel do
-      url "https://github.com/fru-dev3/prevail-cli/releases/download/v0.8.2/prevail-darwin-x64"
-      sha256 "PLACEHOLDER_SHA256_DARWIN_X64"
-    end
+    # Intel macOS: no prebuilt darwin-x64 asset is published yet. Install from
+    # source (see the README) or run under Rosetta until one exists.
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/fru-dev3/prevail-cli/releases/download/v0.8.2/prevail-linux-arm64"
-      sha256 "PLACEHOLDER_SHA256_LINUX_ARM64"
+      url "https://github.com/fru-dev3/prevail-cli/releases/download/v1.9.7/prevail-v1.9.7-linux-arm64.tar.gz"
+      sha256 "43eac76c265826366fc43150cbf0438d12cedb8b970912a5401acb9a9a2cc2c6"
     end
     on_intel do
-      url "https://github.com/fru-dev3/prevail-cli/releases/download/v0.8.2/prevail-linux-x64"
-      sha256 "PLACEHOLDER_SHA256_LINUX_X64"
+      url "https://github.com/fru-dev3/prevail-cli/releases/download/v1.9.7/prevail-v1.9.7-linux-x64.tar.gz"
+      sha256 "e5446162ec73a7e9d774cb7f88550a4f71b00735ee6c7c76f284eb06e8307fce"
     end
   end
 
   def install
-    # The downloaded file IS the binary itself (Bun --compile output).
-    # Rename to "prevail" so users can run it as `prevail` rather than
-    # `prevail-darwin-arm64`.
-    binary_name = Dir["prevail-*"].first || "prevail"
-    bin.install binary_name => "prevail"
+    # The release tarball contains the compiled `prevail` binary at its root
+    # (plus a bundled demo vault we do not install).
+    bin.install "prevail"
   end
 
   test do
