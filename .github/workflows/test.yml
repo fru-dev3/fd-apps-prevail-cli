@@ -18,6 +18,13 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Scrub gate (no personal data in demo vault)
         run: bash scripts/scrub-gate.sh
+      - name: Validate critical files (non-empty valid JSON/TS)
+        run: |
+          test -s package.json || { echo "::error::package.json is empty"; exit 1; }
+          node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))" \
+            || { echo "::error::package.json is not valid JSON"; exit 1; }
+          test -s src/version.ts || { echo "::error::src/version.ts is empty"; exit 1; }
+          grep -q 'VERSION' src/version.ts || { echo "::error::src/version.ts missing VERSION"; exit 1; }
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
