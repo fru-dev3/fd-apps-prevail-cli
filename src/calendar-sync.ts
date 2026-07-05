@@ -266,7 +266,7 @@ function gwsProfileEmail(configDir: string): string | null {
 // Resolve an account selector to a gws config dir, or undefined for the default
 // profile (caller then leaves GOOGLE_WORKSPACE_CLI_CONFIG_DIR unset → ~/.config/gws).
 // Accepts a label ("work"), the literal "default", an absolute config-dir path,
-// or an EMAIL / email local-part ("2354595+fru-dev3@users.noreply.github.com" / "alex.rivera") - the UI
+// or an EMAIL / email local-part ("you@gmail.com" / "you") - the UI
 // shows emails, so users and models naturally pass them; a selector containing
 // "@" or "." can never be a label (labels are slugs), so the email probe only
 // runs when nothing else can match.

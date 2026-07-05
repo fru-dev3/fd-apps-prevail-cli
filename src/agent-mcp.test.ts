@@ -85,10 +85,10 @@ describe("gws-mcp launch honors the picked Google account (Fix 1)", () => {
   }
 
   test("a picked account adds --account <label> to the gws-mcp launch", () => {
-    const args = gwsArgs("fru.dev");
+    const args = gwsArgs("work");
     const idx = args.indexOf("--account");
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toBe("fru.dev");
+    expect(args[idx + 1]).toBe("work");
   });
 
   test("no picked account => no --account flag (backward compatible)", () => {

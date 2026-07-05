@@ -30,13 +30,13 @@ describe("gws-mcp account precedence (Fix 1)", () => {
   afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
   test("launched --account is used when the model passes no account", () => {
-    callGoogleWorkspace({ args: SEND_ARGS }, VAULT, "general", "fru.dev");
-    expect(lastQueuedAccount()).toBe("fru.dev");
+    callGoogleWorkspace({ args: SEND_ARGS }, VAULT, "general", "personal");
+    expect(lastQueuedAccount()).toBe("personal");
   });
 
   test("an explicit tool-arg account overrides the launched --account", () => {
-    callGoogleWorkspace({ args: SEND_ARGS, account: "alex.rivera" }, VAULT, "general", "fru.dev");
-    expect(lastQueuedAccount()).toBe("alex.rivera");
+    callGoogleWorkspace({ args: SEND_ARGS, account: "work" }, VAULT, "general", "personal");
+    expect(lastQueuedAccount()).toBe("work");
   });
 
   test("no pick + zero or one connected account => proceeds (unambiguous)", () => {

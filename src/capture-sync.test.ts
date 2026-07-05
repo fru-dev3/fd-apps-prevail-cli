@@ -48,7 +48,7 @@ describe("capture-sync checkpoint namespacing", () => {
     const legacy = join(vault, "build", "_meta", "capture_sync_checkpoint.json");
     const legacyCp: CaptureCheckpoint = {
       version: 1,
-      files: { "/Users/dev/.claude/projects/x/s.jsonl": 12345 },
+      files: { "/Users/alice/.claude/projects/x/s.jsonl": 12345 },
       prevailLastTs: 999,
       opencodeLastTs: 42,
     };
@@ -58,7 +58,7 @@ describe("capture-sync checkpoint namespacing", () => {
     const cp = readCheckpoint(vault);
     expect(cp.prevailLastTs).toBe(999);
     expect(cp.opencodeLastTs).toBe(42);
-    expect(cp.files["/Users/dev/.claude/projects/x/s.jsonl"]).toBe(12345);
+    expect(cp.files["/Users/alice/.claude/projects/x/s.jsonl"]).toBe(12345);
 
     // Per-host file now exists, seeded from legacy; legacy is left untouched.
     const hostFile = checkpointPath(vault);
@@ -75,7 +75,7 @@ describe("capture-sync checkpoint namespacing", () => {
     process.env.PREVAIL_HOST_SLUG = "mini";
     writeCheckpoint(vault, {
       version: 1,
-      files: { "/Users/dev/.claude/projects/a.jsonl": 100 },
+      files: { "/Users/alice/.claude/projects/a.jsonl": 100 },
       prevailLastTs: 100,
       opencodeLastTs: 0,
     });
@@ -85,7 +85,7 @@ describe("capture-sync checkpoint namespacing", () => {
     process.env.PREVAIL_HOST_SLUG = "laptop";
     writeCheckpoint(vault, {
       version: 1,
-      files: { "/Users/dev/.claude/projects/a.jsonl": 500 },
+      files: { "/Users/alice/.claude/projects/a.jsonl": 500 },
       prevailLastTs: 500,
       opencodeLastTs: 0,
     });
