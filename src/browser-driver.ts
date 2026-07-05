@@ -428,26 +428,50 @@ export async function runBrowserDriverChild(): Promise<void> {
     // Google sign-in survives across every later run — no 120MB Chromium
     // download. An explicit chromiumPath (a bundled Chromium) overrides as a
     // fallback for machines without Chrome.
-    const execPath = req.chromiumPath || process.env.PREVAIL_CHROMIUM_PATH || undefined;
+    // Launch ladder (each failure is REMEMBERED so the final error names every
+    // rung, not just the last):
+    //   1. the user's installed Google Chrome (channel:"chrome") - real-browser
+    //      behavior: passkeys, extensions, familiar sign-in;
+    //   2. an explicit bundled Chromium, only if the file actually exists
+    //      (a stale PREVAIL_CHROMIUM_PATH must not beat working Chrome);
+    //   3. Playwright's default Chromium, auto-downloading it on the spot when
+    //      missing (one-time; progress is emitted).
+    const fsMod = require("node:fs") as typeof import("node:fs");
+    let execPath = req.chromiumPath || process.env.PREVAIL_CHROMIUM_PATH || undefined;
+    if (execPath && !fsMod.existsSync(execPath)) execPath = undefined; // stale override
     const baseOpts: any = { headless: !req.headed, acceptDownloads: true, viewport: req.viewport || { width: 1280, height: 860 } };
-    if (execPath) baseOpts.executablePath = execPath;
-    else baseOpts.channel = "chrome";
     // Callers always pass a machine-local profileDir. The fallback stays
     // machine-local too (never the vault) so a stray launch can't write a Chrome
     // profile into a synced vault.
     const profileDir = req.profileDir || browserProfileDir("default");
     mkdirSync(profileDir, { recursive: true });
-    try {
-      context = await pw.chromium.launchPersistentContext(profileDir, baseOpts);
-    } catch (e) {
-      // Chrome not found (no channel) and no bundled Chromium → last-resort the
-      // default Playwright Chromium (requires ensureChromium to have installed it).
-      if (baseOpts.channel) {
-        delete baseOpts.channel;
-        context = await pw.chromium.launchPersistentContext(profileDir, baseOpts);
-      } else {
-        throw e;
+    const failures: string[] = [];
+    const tryLaunch = async (opts: any, label: string): Promise<boolean> => {
+      try {
+        context = await pw.chromium.launchPersistentContext(profileDir, opts);
+        return true;
+      } catch (e) {
+        failures.push(`${label}: ${String((e as Error)?.message || e).split("\n")[0].slice(0, 220)}`);
+        return false;
       }
+    };
+    let launched = await tryLaunch({ ...baseOpts, channel: "chrome" }, "installed Chrome");
+    if (!launched && execPath) launched = await tryLaunch({ ...baseOpts, executablePath: execPath }, "bundled Chromium");
+    if (!launched) {
+      // Default Playwright Chromium; if its executable is absent, download it
+      // now (one-time) and retry - a fresh machine must not dead-end here.
+      launched = await tryLaunch(baseOpts, "default Chromium");
+      if (!launched && /doesn't exist|does not exist|Executable/i.test(failures[failures.length - 1] ?? "")) {
+        try {
+          await ensureChromium((ev) => emit({ event: "status", ...ev } as any));
+          launched = await tryLaunch(baseOpts, "downloaded Chromium");
+        } catch (e) {
+          failures.push(`chromium download: ${String((e as Error)?.message || e).slice(0, 160)}`);
+        }
+      }
+    }
+    if (!launched) {
+      throw new Error(`no usable browser. Tried - ${failures.join(" | ")}. Install Google Chrome, or check your network for the one-time Chromium download.`);
     }
     page = context.pages()[0] || (await context.newPage());
     attachDownloads(page);
