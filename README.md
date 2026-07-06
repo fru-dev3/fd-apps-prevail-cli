@@ -9,26 +9,31 @@
 
 <p align="center">
   <a href="https://github.com/fru-dev3/prevail-cli/releases"><img src="https://img.shields.io/github/v/release/fru-dev3/prevail-cli?color=C4A35A&label=release" alt="release"/></a>
+  <a href="https://github.com/fru-dev3/prevail-cli/releases"><img src="https://img.shields.io/github/downloads/fru-dev3/prevail-cli/total?color=C4A35A&label=downloads" alt="downloads"/></a>
+  <a href="https://github.com/fru-dev3/prevail-cli/stargazers"><img src="https://img.shields.io/github/stars/fru-dev3/prevail-cli?color=C4A35A&label=stars" alt="stars"/></a>
   <a href="#install"><img src="https://img.shields.io/badge/install-curl%20%7C%20bash-3CD8FF" alt="install"/></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-bun%20single%20binary-C4A35A" alt="bun"/></a>
-  <a href="https://opentui.com"><img src="https://img.shields.io/badge/tui-OpenTUI-3CD8FF" alt="OpenTUI"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-C4A35A" alt="GPL-3.0"/></a>
 </p>
 
 <p align="center">
-  <img src="./assets/demo.gif" alt="prevAIl cockpit — 20+ life domains, council × framework × lens × web × save × serendipity × auto" width="900"/>
+  <b>Like it? <a href="https://github.com/fru-dev3/prevail-cli">Star the repo</a>.</b> It is the best way to help other people find it.
+</p>
+
+<p align="center">
+  <img src="./assets/demo.gif" alt="prevAIl cockpit: 20+ life domains, council × framework × lens × web × save × serendipity × auto" width="900"/>
   <br/>
-  <sub><b>The cockpit at a glance.</b> 20+ life domains in the sidebar. The active workspace on the right (here: chief). A single ConfigBar at the bottom carries every per-turn dial — <b>Council</b> · <b>Framework</b> · <b>Lens</b> · <b>Web</b> · <b>Save</b> · <b>Serendipity</b> · <b>Auto</b> — each clickable.</sub>
+  <sub><b>The cockpit at a glance.</b> 20+ life domains in the sidebar. The active workspace on the right (here: chief). A single ConfigBar at the bottom carries every per-turn dial: <b>Council</b> · <b>Framework</b> · <b>Lens</b> · <b>Web</b> · <b>Save</b> · <b>Serendipity</b> · <b>Auto</b>, each clickable.</sub>
 </p>
 
 ---
 
-**One question. Four engines. One verdict.** Every part of your life — wealth, health, tax, career — is a folder of markdown. Open one, ask, and prevAIl fans the question out to every CLI you already have logged in. A chair model reads all four replies and writes one decisive answer, with a dedicated panel surfacing the *disagreement* — which is the point. Works from your terminal or your phone (Telegram bridge). Single 95 MB binary. No Docker, no mandatory API keys; the optional Telegram bridge runs a lightweight daemon only if you turn it on.
+**One question. Four engines. One verdict.** Every part of your life (wealth, health, tax, career) is a folder of markdown. Open one, ask, and prevAIl fans the question out to every CLI you already have logged in. A chair model reads all four replies and writes one decisive answer, with a dedicated panel surfacing the *disagreement*, which is the point. Works from your terminal or your phone (Telegram bridge). Single 95 MB binary. No Docker, no mandatory API keys; the optional Telegram bridge runs a lightweight daemon only if you turn it on.
 
 <p align="center">
-  <img src="./assets/deliberation.gif" alt="prevAIl — navigate to a domain, switch tabs, see the deliberation chips" width="900"/>
+  <img src="./assets/deliberation.gif" alt="prevAIl: navigate to a domain, switch tabs, see the deliberation chips" width="900"/>
   <br/>
-  <sub><b>Per-domain workspaces.</b> Each domain has its own <code>chat / state / quick start / prompts / skills</code> tabs. Frameworks (BLUF, SCQA, …) and lenses (FIRST PRINCIPLES, CONTRARIAN, MOM, DAD, …) override per-domain — what you set on <code>wealth</code> stays on <code>wealth</code>.</sub>
+  <sub><b>Per-domain workspaces.</b> Each domain has its own <code>chat / state / quick start / prompts / skills</code> tabs. Frameworks (BLUF, SCQA, …) and lenses (FIRST PRINCIPLES, CONTRARIAN, MOM, DAD, …) override per-domain: what you set on <code>wealth</code> stays on <code>wealth</code>.</sub>
 </p>
 
 ```
@@ -73,9 +78,9 @@ First launch runs a 30-second wizard. Pick the bundled demo vault (synthetic, sa
 
 | | |
 |---|---|
-| **◆ Council, not a single voice** | Four models in parallel, one chair synthesizes. Disagreement gets its own panel — that's where the value is. |
+| **◆ Council, not a single voice** | Four models in parallel, one chair synthesizes. Disagreement gets its own panel, that's where the value is. |
 | **◇ Domain = folder** | `wealth/`, `health/`, `tax/`. Plain markdown. Edit anywhere. Sync with git, iCloud, Tailscale. No database. |
-| **● Uses CLIs you already pay for** | Spawns `claude`, `codex`, `gemini` — inherits every login, MCP server, and skill. No API keys to manage. |
+| **● Uses CLIs you already pay for** | Spawns `claude`, `codex`, `gemini`, inherits every login, MCP server, and skill. No API keys to manage. |
 | **◇ Local-private when it matters** | Ollama auto-detected at `localhost:11434`. Run health or wealth on a local-only council. |
 | **▸ Off-the-keyboard** | `prevail daemon --telegram` exposes the cockpit on your phone. Same engines, same council. Chat-ID allowlist enforced. |
 | **◆ Scheduled briefings** | `prevail briefing add --cron "0 7 * * *" --domain wealth --prompt "what's new this week?"`. Verdict lands on your phone at 7am. |
@@ -113,7 +118,7 @@ First launch runs a 30-second wizard. Pick the bundled demo vault (synthetic, sa
 
 ```bash
 # Boot the cockpit
-prevail demo                    # safe synthetic vault — explore first
+prevail demo                    # safe synthetic vault, explore first
 prevail                         # use your own vault
 
 # Inside, type:
@@ -130,7 +135,7 @@ prevail telegram add-user <chat-id>    # mandatory allowlist
 prevail daemon --telegram              # poll Telegram + tick briefings
 ```
 
-Now `/council`, `/domain wealth`, `/framework bluf` — from anywhere.
+Now `/council`, `/domain wealth`, `/framework bluf`, from anywhere.
 
 ## Connectors
 
@@ -161,7 +166,7 @@ prevail agent-run --cli <h> ...  hand a task to an agent harness (Hermes/Pi/Open
 
 ### Agent harnesses (new)
 
-Beyond chat CLIs, prevAIl can now drive **agent harnesses** — `hermes`, `pi`, `opencode`, `openclaw` — as autonomous task runners. Each is invoked with its *real* headless flags (verified per-harness, not a guessed `-p`: Hermes uses `-z`, OpenCode uses `run`, …), the run is gated by the autonomy broker (safe/propose by default, `--autonomy auto` for full agency), and output streams as the same `ChatEvent` NDJSON as `chat`:
+Beyond chat CLIs, prevAIl can now drive **agent harnesses** (`hermes`, `pi`, `opencode`, `openclaw`) as autonomous task runners. Each is invoked with its *real* headless flags (verified per-harness, not a guessed `-p`: Hermes uses `-z`, OpenCode uses `run`, …), the run is gated by the autonomy broker (safe/propose by default, `--autonomy auto` for full agency), and output streams as the same `ChatEvent` NDJSON as `chat`:
 
 ```
 prevail agent-run --domain wealth --goal "summarize my open tasks" --cli hermes --json
@@ -177,7 +182,7 @@ prevAIl is bun-only. Currently builds for:
 - macOS x86_64 (Intel)
 - Linux arm64
 - Linux x86_64
-- Windows via WSL only (no native Windows build — bun's Windows support is preview-quality as of bun 1.3.x; we'll add Windows binaries when bun's Windows story stabilizes)
+- Windows via WSL only (no native Windows build: bun's Windows support is preview-quality as of bun 1.3.x; we'll add Windows binaries when bun's Windows story stabilizes)
 
 A terminal with UTF-8 + true-color is required. Tested on iTerm2, kitty, alacritty, WezTerm, Ghostty, GNOME Terminal. Should work in most modern xterm-256color terminals.
 
@@ -185,7 +190,7 @@ A terminal with UTF-8 + true-color is required. Tested on iTerm2, kitty, alacrit
 
 - One or more of: [Claude Code](https://claude.com/code) · [Codex](https://github.com/openai/codex) · [Antigravity CLI / `agy`](https://github.com/google/antigravity-cli) · [Ollama](https://ollama.com)
 - Terminal with UTF-8 + true color
-- macOS / Linux (Windows via WSL — see [Platform](#platform))
+- macOS / Linux (Windows via WSL, see [Platform](#platform))
 
 ## Built with
 
@@ -193,13 +198,13 @@ A terminal with UTF-8 + true-color is required. Tested on iTerm2, kitty, alacrit
 
 ## Docs · changelog · roadmap
 
-- [**CHANGELOG**](./CHANGELOG.md) — what shipped in each tag
-- [**Releases**](https://github.com/fru-dev3/prevail-cli/releases) — pre-built binaries
-- [**Demo vault**](./vault-demo) — synthetic "Alex Rivera" persona
-- [**Connector architecture**](./docs/connector-architecture.md) — auth probes, OAuth runner, manual recipes
-- [**Threat model**](./docs/threat-model.md) — long-form threat model + worked example
-- [**Data flow**](./docs/data-flow.md) — how a turn moves through cockpit / vault / log / journal / benchmark
-- [**Extending**](./docs/extending.md) — how to add a framework, lens, CLI bridge, ConfigBar chip, slash command
+- [**CHANGELOG**](./CHANGELOG.md): what shipped in each tag
+- [**Releases**](https://github.com/fru-dev3/prevail-cli/releases): pre-built binaries
+- [**Demo vault**](./vault-demo): synthetic "Alex Rivera" persona
+- [**Connector architecture**](./docs/connector-architecture.md): auth probes, OAuth runner, manual recipes
+- [**Threat model**](./docs/threat-model.md): long-form threat model + worked example
+- [**Data flow**](./docs/data-flow.md): how a turn moves through cockpit / vault / log / journal / benchmark
+- [**Extending**](./docs/extending.md): how to add a framework, lens, CLI bridge, ConfigBar chip, slash command
 
 ## Scope
 
