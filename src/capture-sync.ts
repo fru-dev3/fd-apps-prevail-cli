@@ -1,11 +1,17 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { type BatchItem, ingestBatch } from "./capture.ts";
+import { type BatchItem, hostSlug, ingestBatch } from "./capture.ts";
 import { runtimePath } from "./path-safety.ts";
 import { getAllUserPromptsSince } from "./session.ts";
+
+// The per-machine host identity lives in capture.ts (it keys both the per-host
+// capture files and these per-host checkpoints, so a machine maps to one name
+// everywhere). Re-exported here for callers/tests that reach for it via the
+// sync module where the per-host checkpoint is defined.
+export { hostSlug } from "./capture.ts";
 
 // =============================================================================
 // `prevail capture sync` - the PULL backstop. Where a harness has no submit
@@ -40,18 +46,6 @@ export interface CaptureCheckpoint {
  *  migration can seed the per-host file from it. */
 function legacyCheckpointPath(vault: string): string {
   return join(runtimePath(vault, "_meta"), "capture_sync_checkpoint.json");
-}
-
-/** hostname lowercased and sanitized to [a-z0-9-] so it is a safe filename
- *  segment. Empty/odd hostnames collapse to "host". PREVAIL_HOST_SLUG is a test
- *  seam (os.hostname() is fixed for the process): it lets a test simulate a
- *  second machine sharing the vault. It is sanitized the same way. */
-export function hostSlug(): string {
-  const raw = process.env.PREVAIL_HOST_SLUG && process.env.PREVAIL_HOST_SLUG.length > 0
-    ? process.env.PREVAIL_HOST_SLUG
-    : hostname();
-  const slug = raw.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-  return slug || "host";
 }
 
 /** Per-machine checkpoint path. The checkpoint lives in the SHARED vault but is
