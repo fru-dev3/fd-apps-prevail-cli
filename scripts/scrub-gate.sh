@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy gate — fail if real/personal data leaked into the SHIPPED demo vault.
-# The bundled vault-demo must be 100% synthetic (the "Alex Rivera" persona); the
-# founder's real identity (email, name, home path) must never reach users.
+# The bundled vault-demo must be 100% synthetic (the "Alex Rivera" persona); no
+# maintainer-identifying data (email, name, home path) may reach users.
 # Mirrors prevail-desktop/scripts/scrub-gate.sh. Run: bash scripts/scrub-gate.sh
 set -euo pipefail
 
@@ -11,10 +11,12 @@ if [ ! -d "$TARGET" ]; then
   exit 0
 fi
 
+# Name patterns are base64-encoded so this script itself never contains the
+# strings it exists to keep out of the tree (grep/code-search finds plaintext).
 PATTERNS=(
-  'fru\.dev3'       # real email local-part
-  'Fru'         # real legal name
-  'Fru'       # legacy real-name variant
+  'fru\.dev3'       # email local-part of the project account
+  "$(printf 'RnJ1IE5kZQ==' | base64 -d)"
+  "$(printf 'RnJ1IExvdWlz' | base64 -d)"
   '/Users/[a-z]'    # any real home-dir path — runtime leak
 )
 ALLOW='your_email|example\.com|alex\.rivera|jordan|maria@austincpa|you@|user@|name@'
