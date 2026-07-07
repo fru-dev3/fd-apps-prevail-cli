@@ -8,7 +8,7 @@
 // Read-only and bounded: one auth-status spawn per profile.
 
 import { spawnSync } from "node:child_process";
-import { resolveGwsBinary, listGwsProfiles, augmentedPath } from "./calendar-sync.ts";
+import { resolveGwsBinary, listGwsProfiles, augmentedPath, type GwsProfile } from "./calendar-sync.ts";
 
 export interface GwsAuthStatus {
   user?: string;
@@ -57,13 +57,20 @@ function fetchStatus(configDir: string): GwsAuthStatus {
   }
 }
 
-// Produce the human/agent-readable health report. `fetch` is injectable so
-// tests can pin machine state.
-export function runGwsDoctor(fetch: (configDir: string) => GwsAuthStatus = fetchStatus): string {
-  if (!resolveGwsBinary()) {
+// Produce the human/agent-readable health report. `fetch` and `machine` are
+// injectable so tests can pin machine state instead of depending on whatever
+// gws binary/profiles the running host happens to have.
+export function runGwsDoctor(
+  fetch: (configDir: string) => GwsAuthStatus = fetchStatus,
+  machine: { hasBinary: () => boolean; profiles: () => GwsProfile[] } = {
+    hasBinary: () => resolveGwsBinary() !== null,
+    profiles: listGwsProfiles,
+  },
+): string {
+  if (!machine.hasBinary()) {
     return "Google connector doctor: the gws CLI is NOT installed on this machine. Install it (brew install gws) and connect an account from the Prevail Google panel.";
   }
-  const profiles = listGwsProfiles();
+  const profiles = machine.profiles();
   if (profiles.length === 0) {
     return "Google connector doctor: gws is installed but NO Google accounts are connected on this machine. Connect one from the Prevail Google panel.";
   }

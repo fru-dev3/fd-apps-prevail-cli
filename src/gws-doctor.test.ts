@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { runGwsDoctor, type GwsAuthStatus } from "./gws-doctor.ts";
 
-// The doctor must turn raw auth-status data into named remedial actions. The
-// fetcher is injected; profile discovery uses the live machine, so these tests
-// only assert on the classification of injected statuses when profiles exist.
+// The doctor must turn raw auth-status data into named remedial actions. Both
+// the fetcher and the machine (binary presence + profiles) are injected, so
+// these tests are hermetic: they pass on a box with zero gws state (CI) and on
+// a developer machine with real accounts.
+const MACHINE = {
+  hasBinary: () => true,
+  profiles: () => [{ label: "work", configDir: "/tmp/gws" }],
+};
 const HEALTHY: GwsAuthStatus = {
   user: "someone@example.com", token_valid: true, has_refresh_token: true,
   scopes: ["https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/tasks"],
@@ -13,7 +18,7 @@ const HEALTHY: GwsAuthStatus = {
 
 describe("gws doctor", () => {
   test("healthy account reports identity + token and stays quiet per service", () => {
-    const out = runGwsDoctor(() => HEALTHY);
+    const out = runGwsDoctor(() => HEALTHY, MACHINE);
     expect(out).toContain("someone@example.com");
     expect(out).toContain("token valid");
     expect(out).not.toContain("DISABLED");
@@ -21,20 +26,20 @@ describe("gws doctor", () => {
   });
 
   test("disabled API names the service, project, and activation URL", () => {
-    const out = runGwsDoctor(() => ({ ...HEALTHY, enabled_apis: ["gmail.googleapis.com"] }));
+    const out = runGwsDoctor(() => ({ ...HEALTHY, enabled_apis: ["gmail.googleapis.com"] }), MACHINE);
     expect(out).toContain("Calendar API is DISABLED");
     expect(out).toContain("project=p-123");
     expect(out).toContain("calendar-json.googleapis.com");
   });
 
   test("missing scope names the account re-authorization fix", () => {
-    const out = runGwsDoctor(() => ({ ...HEALTHY, scopes: ["https://www.googleapis.com/auth/calendar"] }));
+    const out = runGwsDoctor(() => ({ ...HEALTHY, scopes: ["https://www.googleapis.com/auth/calendar"] }), MACHINE);
     expect(out).toContain("Gmail: scope NOT granted");
     expect(out).toContain("re-authorize");
   });
 
   test("keychain-style probe failure is named as a context problem", () => {
-    const out = runGwsDoctor(() => ({ error: "SecKeychain: access denied for item gws" }));
+    const out = runGwsDoctor(() => ({ error: "SecKeychain: access denied for item gws" }), MACHINE);
     expect(out).toContain("PROBE FAILED");
     expect(out).toContain("Keychain");
   });
