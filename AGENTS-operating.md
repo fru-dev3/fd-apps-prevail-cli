@@ -2,7 +2,7 @@
 
 > This file is written **to you** — the AI agent spawned inside an prevail chat session. Read this first, every session. It tells you what the user expects, what's in the vault, what's off-limits, and how to use the available skills.
 >
-> If you're an agent working on the *codebase* (not the vault), the project map is in [`AGENTS.md`](./AGENTS.md). This file is about working with a user's **vault** through the cockpit.
+> If you're an agent working on the *codebase* (not the vault), start with [`CONTRIBUTING.md`](./CONTRIBUTING.md). This file is about working with a user's **vault** through the cockpit.
 
 ---
 

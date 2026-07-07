@@ -213,8 +213,9 @@ field, not an afterthought.
 
 ## 8. Concurrency & conflicts
 
-Your setup is multi-writer by design (two machines over Tailscale + Paperclip +
-OpenClaw + the desktop app). The architecture makes most conflicts *non-events*:
+A vault is multi-writer by design (several machines over file sync, background
+agents, the CLI, and the desktop app). The architecture makes most conflicts
+*non-events*:
 
 | Layer | Conflict policy |
 |---|---|
