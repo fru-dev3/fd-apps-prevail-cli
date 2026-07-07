@@ -13,7 +13,8 @@
 // the vault; the cached token file is written 0600 and lives under ~/.prevail,
 // not in the synced vault.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { writeSecretFile } from "./secret-file.ts";
 import { join } from "node:path";
 
 import { authDir } from "./oauth-flow.ts";
@@ -50,7 +51,10 @@ function readCache(connectorId: string): CachedToken | null {
 function writeCache(connectorId: string, c: CachedToken): void {
   const dir = authDir(connectorId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(tokenPath(connectorId), JSON.stringify(c, null, 2), { mode: 0o600 });
+  // Live bearer token: use writeSecretFile, which forces 0600 and THROWS if the
+  // chmod fails, closing the create-time race that a bare writeFileSync({mode})
+  // leaves open (mode is only applied if the file did not already exist).
+  writeSecretFile(tokenPath(connectorId), JSON.stringify(c, null, 2));
 }
 
 /**

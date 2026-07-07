@@ -701,7 +701,7 @@ USAGE
   prevail modes get|set [<domain>] --json
                               per-domain turn dials: --web --save --serendipity
                                                      --auto --framework --lens
-  prevail privacy get|set --json [--bunker on|off]
+  prevail privacy get|set --json [--bunker on|off] [--vault-lock on|off]
                               read/set Bunker Mode (global local-only switch)
   prevail search <query> --json [--limit N]
                               full-text search across indexed chat history
@@ -5085,7 +5085,13 @@ async function privacyCommand(args: string[]): Promise<number> {
   if (sub === "set" && (flags.bunker === "on" || flags.bunker === "off")) {
     cfg.setBunker(flags.bunker === "on");
   }
-  process.stdout.write(`${JSON.stringify({ bunker: cfg.readBunker() })}\n`);
+  // Vault Lock (filesystem-scope confinement). Persisted, global, default ON.
+  // Lets a standalone terminal user opt out of confinement without editing
+  // config by hand; the daemon and MCP server read the same value.
+  if (sub === "set" && (flags["vault-lock"] === "on" || flags["vault-lock"] === "off")) {
+    cfg.setVaultLock(flags["vault-lock"] === "on");
+  }
+  process.stdout.write(`${JSON.stringify({ bunker: cfg.readBunker(), vaultLock: cfg.readVaultLock() })}\n`);
   return 0;
 }
 

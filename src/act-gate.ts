@@ -69,7 +69,11 @@ export function actHash(tool: string, argsJson: string): string {
 const ENGINE_OWNED = /^mcp__(google_workspace|prevail)(__|$)/;
 
 // Read-shaped verbs: run live. Matched against the tool's last segment.
-const READ_RE = /(^|[-_])(get|list|search|read|fetch|find|query|browse|check|describe|view|status|help|info|show|lookup|suggest|estimate|preview|export|download|count|report|answer|resolve|discover|authenticate|complete[-_]authentication)([-_]|$)/i;
+// NOTE: `export` and `download` are deliberately NOT read verbs. An
+// `export-design` / `download_file` style tool moves a whole document to a
+// shareable/local location — an exfiltration vector — so it must gate for
+// approval, not run live under a read classification.
+const READ_RE = /(^|[-_])(get|list|search|read|fetch|find|query|browse|check|describe|view|status|help|info|show|lookup|suggest|estimate|preview|count|report|answer|resolve|discover|authenticate|complete[-_]authentication)([-_]|$)/i;
 
 // Write-shaped verbs: unmistakably act on the world.
 const WRITE_RE = /(^|[-_])(create|send|update|delete|post|add|remove|pay|publish|insert|set|write|cancel|refund|transfer|invoice|reply|submit|upload|move|archive|trash|modify|execute|apply|label|merge|copy|import|assign|save|start|commit|book|order|buy|purchase|schedule|respond|toggle|switch|claim)([-_]|$)/i;
@@ -185,6 +189,16 @@ function consumeGrant(vault: string, hash: string): ActGrant | null {
 const NET_CMD_RE = /\b(curl|wget|nc|ncat|netcat|telnet|ssh|scp|sftp|ftp|rsync|socat|nmap)\b/;
 // In-language network escapes (python/node/ruby/perl one-liners, /dev/tcp).
 const NET_ESCAPE_RE = /\/dev\/(tcp|udp)\/|urllib|requests\.(get|post)|http\.client|socket\.|fetch\(|https?:\/\/|import\s+urllib|net\/http|Net::HTTP|LWP::/i;
+// Home-directory references. A confined run has no business touching the home
+// dir (~/Library/LaunchAgents persistence, ~/.ssh, browser cookies, other
+// apps' data). The absolute-path scan below only catches tokens starting with
+// "/", so `~/…`, `$HOME/…`, `${HOME}/…` slipped straight through.
+const HOME_REF_RE = /(^|[\s"'=(])(~\/|~$|\$HOME\b|\$\{HOME\})/;
+// Decode-then-execute obfuscation. `echo <b64> | base64 -d | sh` and friends
+// hide a `curl`/network payload from the plain keyword scan above; likewise an
+// interpreter fed decoded bytes. Not exhaustive (the real fix is OS sandboxing,
+// tracked), but it closes the cheapest, most common bypasses.
+const OBFUSC_EXEC_RE = /\b(base64|base32|xxd|openssl\s+enc|uudecode)\b[\s\S]*\|\s*(sh|bash|zsh|dash|python[0-9.]*|node|perl|ruby|osascript)\b|\beval\b|\|\s*(sh|bash|zsh)\s*$/;
 
 function withinVault(vault: string, target: string): boolean {
   try {
@@ -244,6 +258,12 @@ export function gateBuiltin(vault: string, vaultLockOn: boolean, toolName: strin
     const cmd = (toolInput && typeof toolInput === "object" ? String((toolInput as Record<string, unknown>).command ?? "") : "");
     if (NET_CMD_RE.test(cmd) || NET_ESCAPE_RE.test(cmd)) {
       return { action: "deny", reason: `Vault Lock is on: that shell command reaches the network, which is blocked during a confined run (it could exfiltrate data or fetch code). Remove the network call, or the user can turn off Vault Lock.` };
+    }
+    if (OBFUSC_EXEC_RE.test(cmd)) {
+      return { action: "deny", reason: `Vault Lock is on: that shell command decodes-and-executes or evaluates data, which is blocked during a confined run (it can hide a network call or run arbitrary code). Run the command in the clear, or the user can turn off Vault Lock.` };
+    }
+    if (HOME_REF_RE.test(cmd)) {
+      return { action: "deny", reason: `Vault Lock is on: that shell command references your home directory (~ or $HOME), which is outside the vault. Blocked. Work within the vault, or the user can turn off Vault Lock.` };
     }
     // Absolute paths clearly outside the vault in the command are also blocked.
     const outsideAbs = cmd.match(/(^|\s)(\/[^\s"']+)/g) ?? [];

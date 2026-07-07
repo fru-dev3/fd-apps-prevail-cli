@@ -309,15 +309,23 @@ export async function downloadBinary(
     safeUnlink(targetPath);
     throw err;
   }
-  if (sha256Url) {
-    const expected = await fetchExpectedDigest(sha256Url, fetcher);
-    const actual = hash.digest("hex").toLowerCase();
-    if (expected !== actual) {
-      safeUnlink(targetPath);
-      throw new Error(
-        `checksum mismatch — expected ${expected}, got ${actual}. download was corrupted or tampered with.`,
-      );
-    }
+  // Integrity check is MANDATORY (fail-closed). Previously this was gated on
+  // `if (sha256Url)`, so a release missing its .sha256 sidecar silently skipped
+  // verification and renamed the downloaded bytes over the running binary — a
+  // fail-open self-update. If no checksum is available we refuse to install.
+  if (!sha256Url) {
+    safeUnlink(targetPath);
+    throw new Error(
+      `refusing to self-update: no published SHA-256 checksum for this release, so the download cannot be verified. Reinstall from the official installer instead.`,
+    );
+  }
+  const expected = await fetchExpectedDigest(sha256Url, fetcher);
+  const actual = hash.digest("hex").toLowerCase();
+  if (expected !== actual) {
+    safeUnlink(targetPath);
+    throw new Error(
+      `checksum mismatch — expected ${expected}, got ${actual}. download was corrupted or tampered with.`,
+    );
   }
 }
 

@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { Domain, ViewKey } from "./vault.ts";
-import { readResponseFramework, readWebAccess } from "./config.ts";
+import { readResponseFramework, readWebAccess, vaultLockActive } from "./config.ts";
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
 import { buildRoot } from "./path-safety.ts";
@@ -243,8 +243,17 @@ function buildVaultLockPreamble(): string {
   );
 }
 
+// Vault Lock master switch. Precedence:
+//   1. PREVAIL_VAULT_LOCK env, when explicitly set — the desktop injects "1"
+//      (on) or "0" (off) per engine spawn, so its UI toggle stays authoritative.
+//   2. Persisted CLI config (readVaultLock) — for standalone terminal use.
+//   3. Default ON (fail-closed).
+// The critical property: when NO signal is present — the exact case for the
+// `prevail --loops`/`--sync` launchd daemons and the `prevail mcp` server, none
+// of which the desktop spawns with the env — confinement is ON, not off. The
+// prior `=== "1"` test defaulted those autonomous processes to UNCONFINED.
 function vaultLockOn(): boolean {
-  return process.env.PREVAIL_VAULT_LOCK === "1";
+  try { return vaultLockActive(); } catch { return true; }
 }
 
 // "ollama" is an OpenAI-compatible HTTP endpoint (default
@@ -298,7 +307,13 @@ const SECRET_ENV_PREFIXES = [
   "GH_TOKEN",
   "OP_SERVICE_ACCOUNT_TOKEN",
 ];
-const SECRET_ENV_SUBSTRINGS = ["_SECRET", "_PRIVATE_KEY", "_PASSWORD"];
+// Substring matches so an app/connector env we never enumerated (STRIPE_APIKEY,
+// MYAPP_TOKEN, FOO_CREDENTIAL) still can't ride into a tool-using model child and
+// be `env`-dumped by prompt injection. Kept broad but shaped to secret-ish names.
+const SECRET_ENV_SUBSTRINGS = [
+  "_SECRET", "SECRET_", "_PRIVATE_KEY", "_PASSWORD", "PASSWD", "PASSPHRASE",
+  "TOKEN", "APIKEY", "API_KEY", "ACCESS_KEY", "CREDENTIAL", "AUTH_KEY",
+];
 
 export function scrubbedEnv(): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
@@ -1195,6 +1210,27 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   return sanitizeEmDashes(reply);
 
   async function dispatchTurn(): Promise<string> {
+  // CONFINEMENT GUARD (fail-closed). An `act` run hands the model its full
+  // tool surface under a skip-permissions flag. Only two engines can be
+  // technically confined: `claude` (the PreToolUse act-gate hook, wired below)
+  // and `codex` (its own OS sandbox, scoped to the vault below). Every other
+  // provider — antigravity/gemini, the harness families (hermes/pi/opencode/…),
+  // and the best-effort `-p` fallbacks — gets full agency with NO Prevail gate
+  // and NO OS sandbox; the Vault Lock preamble is only a soft prompt request an
+  // injected instruction can override. So when Vault Lock is ON we refuse an
+  // act run on an unconfinable engine rather than execute it unconfined. (A
+  // normal chat/council turn — act=false — is unaffected: no agency is granted.)
+  // Turning Vault Lock OFF is the explicit, visible way to opt into this.
+  if (act && vaultLockOn()) {
+    const confinable = cli.kind === "claude" || cli.kind === "codex";
+    if (!confinable) {
+      throw new Error(
+        `Vault Lock is on, but the "${cli.label || cli.kind}" engine cannot be confined for an action run ` +
+        `(no execution gate and no OS sandbox — only Claude and Codex support confined acting). ` +
+        `This action was NOT run. Use Claude or Codex for acting, or turn Vault Lock off in Privacy to allow unconfined agency on this engine.`,
+      );
+    }
+  }
   if (cli.kind === "claude") {
     const head = isFirst ? ["-p", framedPrompt] : ["--continue", "-p", framedPrompt];
     const args: string[] = [];

@@ -59,6 +59,28 @@ say "downloading $ASSET..."
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL -o "$tmp/$ASSET" "$URL"
+
+# Integrity check (MANDATORY, fail-closed). Fetch the published .sha256 sidecar
+# and verify the tarball before extracting/installing it — otherwise a corrupted
+# or tampered download would be executed. Refuse to install if the checksum is
+# missing or does not match.
+say "verifying checksum..."
+if ! curl -fsSL -o "$tmp/$ASSET.sha256" "$URL.sha256"; then
+  echo "✗ no published checksum for $ASSET — refusing to install unverified bytes"; exit 1
+fi
+expected=$(sed -E 's/^([0-9a-fA-F]{64}).*/\1/' "$tmp/$ASSET.sha256" | head -1 | tr 'A-F' 'a-f')
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$tmp/$ASSET" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  actual=$(shasum -a 256 "$tmp/$ASSET" | awk '{print $1}')
+else
+  echo "✗ no sha256 tool (sha256sum/shasum) available to verify the download"; exit 1
+fi
+if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+  echo "✗ checksum mismatch — expected ${expected:-<none>}, got $actual. Download was corrupted or tampered with."; exit 1
+fi
+say "checksum ok"
+
 tar -xzf "$tmp/$ASSET" -C "$tmp"
 
 mkdir -p "$BIN_DIR"

@@ -48,6 +48,26 @@ describe("gateBuiltin under Vault Lock", () => {
     expect(gateBuiltin(VAULT, false, "Write", { file_path: "/tmp/x" })?.action).toBe("allow");
   });
 
+  test("Bash referencing the home dir (~ / $HOME) is denied", () => {
+    for (const cmd of [
+      "echo hi > ~/Library/LaunchAgents/x.plist",
+      "cp secret $HOME/.ssh/leak",
+      "cat ${HOME}/.aws/credentials",
+    ]) {
+      expect(gateBuiltin(VAULT, true, "Bash", { command: cmd })?.action).toBe("deny");
+    }
+  });
+
+  test("Bash decode-and-execute obfuscation is denied", () => {
+    for (const cmd of [
+      "echo Y3VybCBldmls | base64 -d | sh",
+      "echo aaa | base64 --decode | bash",
+      "eval \"$(echo something)\"",
+    ]) {
+      expect(gateBuiltin(VAULT, true, "Bash", { command: cmd })?.action).toBe("deny");
+    }
+  });
+
   test("non-builtin tools defer to the connector classifier (null)", () => {
     expect(gateBuiltin(VAULT, true, "mcp__claude_ai_PayPal__create_invoice", {})).toBeNull();
     expect(gateBuiltin(VAULT, true, "TodoWrite", {})).toBeNull();

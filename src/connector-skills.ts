@@ -3,6 +3,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { vappendLine, vreadFile, vwriteFile } from "./vault-session.ts";
 import { homedir } from "node:os";
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
+import { vaultLockActive } from "./config.ts";
 import type { AppSkill } from "./vault.ts";
 
 // Connector skill execution layer. A skill is a unit of work the connector
@@ -760,6 +761,27 @@ export async function runSkill(
       outputsWritten: [],
       durationMs: 0,
     };
+  }
+  // Vault Lock confinement (fail-closed). The cli runner executes an arbitrary
+  // `/bin/sh -c` command template — it is on NEITHER the builtin act-gate path
+  // NOR the egress guard, so during a confined run it is an unguarded shell that
+  // can read anything on the machine and exfiltrate freely. The exploit: a model
+  // authors a SKILL.md inside the vault (its confined Write allows that — apps/
+  // is in the vault) with a read-class `op:` so the autonomy gate passes, then a
+  // `command:` that curls a secret out, and triggers it via sync. A confined run
+  // must not shell out to arbitrary commands, so we refuse cli-runner skills
+  // while Vault Lock is on. API/oauth/mcp/browser connectors are unaffected.
+  if (skill.runner === "cli") {
+    let locked = true;
+    try { locked = vaultLockActive(); } catch { /* fail closed */ }
+    if (locked) {
+      return {
+        ok: false,
+        message: `blocked: the "${skill.id}" skill runs a shell command, which is not allowed while Vault Lock is on (a confined run cannot execute arbitrary local commands). Turn Vault Lock off in Privacy to use shell-based connectors.`,
+        outputsWritten: [],
+        durationMs: 0,
+      };
+    }
   }
   if (skill.runner === "llm") return runSkillLLM(skill, inputs, opts);
   if (skill.runner === "cli") {

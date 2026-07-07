@@ -20,6 +20,19 @@ import { browserProfileDir } from "./path-safety.ts";
 import { spawn } from "node:child_process";
 import type { SkillSpec, SkillRunResult, SkillRunOpts } from "./connector-skills.ts";
 import { substitute, safeOutputPath, buildSkillEnv } from "./connector-skills.ts";
+import { readEgressGuard, scanSensitive, findingCategories } from "./egress-guard.ts";
+
+// When the egress guard is on, scan outbound text for sensitive categories and
+// return a human summary of what was found (else null). Used to gate the http/
+// a2a runners, which reach arbitrary public hosts and would otherwise carry
+// vault PII off-machine without the scan act-gate already applies to MCP writes.
+function scanEgressOrNull(text: string): string | null {
+  try {
+    if (readEgressGuard() !== "on") return null;
+    const cats = findingCategories(scanSensitive(text));
+    return cats.length ? cats.join("; ") : null;
+  } catch { return null; }
+}
 
 const MAX_CAPTURE = 512 * 1024; // 512KB stdout/response cap
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
@@ -269,6 +282,15 @@ export async function runSkillHttp(
   if (isUnsafeRemoteUrl(url)) {
     return { ok: false, message: `refusing unsafe http url (SSRF guard): ${url.slice(0, 60)}`, outputsWritten: [], durationMs: 0 };
   }
+  // Egress guard on the OUTBOUND request. The http runner reaches an arbitrary
+  // public host and was NOT on the egress-scan path (act-gate scans MCP
+  // connector writes the same way), so a poisoned/AI-authored manifest could
+  // POST vault PII to any attacker host unguarded. Scan the url + body + header
+  // values for sensitive categories and refuse the send when found.
+  const egressBlock = scanEgressOrNull([url, body ?? "", ...Object.values(headers)].join("\n"));
+  if (egressBlock) {
+    return { ok: false, message: `blocked by egress guard: this request would send ${egressBlock} to ${new URL(url).host}. Not sent.`, outputsWritten: [], durationMs: 0 };
+  }
   const method = typeof skill.extra?.method === "string" ? skill.extra.method.toUpperCase() : "GET";
 
   let text = "";
@@ -278,7 +300,7 @@ export async function runSkillHttp(
     const killer = setTimeout(() => ctl.abort(), DEFAULT_TIMEOUT_MS);
     const onAbort = () => ctl.abort();
     opts.signal?.addEventListener("abort", onAbort, { once: true });
-    const res = await fetch(url, { method, headers, body, signal: ctl.signal });
+    const res = await fetchGuarded(url, { method, headers, body, signal: ctl.signal });
     status = res.status;
     text = (await res.text()).slice(0, MAX_CAPTURE);
     clearTimeout(killer);
@@ -445,6 +467,31 @@ export async function runSkillMcp(
 // NOTE: this is a string-level guard. DNS-rebinding (a public name that resolves
 // to a private IP) is NOT covered here — resolving the host and pinning the
 // resolved IP is the job of the unified ToolRunner (C5). (B8/O8/O9.)
+// Fetch that follows redirects MANUALLY, re-running the SSRF guard on every
+// hop. Node/Bun's default redirect handling would follow a 302 from an
+// attacker-controlled public host to `http://169.254.169.254/…` (cloud
+// metadata) or a private address — the initial-URL check alone can't see that
+// (B8/O8 follow-up). We cap at 5 hops and re-validate each Location.
+async function fetchGuarded(
+  url: string,
+  init: RequestInit,
+  maxHops = 5,
+): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const res = await fetch(current, { ...init, redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+    const loc = res.headers.get("location");
+    if (!loc) return res;
+    const next = new URL(loc, current).toString();
+    if (isUnsafeRemoteUrl(next)) {
+      throw new Error(`refusing unsafe redirect (SSRF guard): ${next.slice(0, 60)}`);
+    }
+    current = next;
+  }
+  throw new Error("too many redirects");
+}
+
 export function isUnsafeRemoteUrl(raw: string): boolean {
   let u: URL;
   try { u = new URL(raw); } catch { return true; }
@@ -500,12 +547,16 @@ export async function runSkillA2a(
   if (typeof skill.extra?.auth_header === "string") {
     try { const idx = skill.extra.auth_header.indexOf(":"); if (idx > 0) headers[skill.extra.auth_header.slice(0, idx).trim()] = await substituteFull(skill.extra.auth_header.slice(idx + 1).trim(), skill, inputs, opts); } catch { /* skip */ }
   }
+  const a2aBody = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: argsObj } });
+  // Egress guard on the outbound JSON-RPC payload (same rationale as the http runner).
+  const a2aEgress = scanEgressOrNull([url, a2aBody, ...Object.values(headers)].join("\n"));
+  if (a2aEgress) return { ok: false, message: `blocked by egress guard: this a2a call would send ${a2aEgress} to ${new URL(url).host}. Not sent.`, outputsWritten: [], durationMs: 0 };
   let text = "";
   try {
     const ctl = new AbortController();
     const killer = setTimeout(() => ctl.abort(), DEFAULT_TIMEOUT_MS);
     opts.signal?.addEventListener("abort", () => ctl.abort(), { once: true });
-    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: argsObj } }), signal: ctl.signal });
+    const res = await fetchGuarded(url, { method: "POST", headers, body: a2aBody, signal: ctl.signal });
     clearTimeout(killer);
     if (!res.ok) return { ok: false, message: `a2a HTTP ${res.status}`, outputsWritten: [], durationMs: Date.now() - started };
     const body = (await res.text()).slice(0, MAX_CAPTURE);

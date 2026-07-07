@@ -65,6 +65,9 @@ export interface UserConfig {
   // every CLI launch explicitly forbids WebSearch / WebFetch / network tools.
   // Default (when missing) is "allow" — so existing configs keep working.
   webAccess?: "allow" | "deny";
+  // Vault Lock — filesystem-scope confinement. Absent = ON (fail-closed).
+  // See readVaultLock(). Only "false" turns it off for standalone/daemon runs.
+  vaultLock?: boolean;
   // /council panel — which CLIs participate (default: all detected) and which
   // models to run per CLI (default: each CLI's default). councilModels became
   // string[] in v0.3 so you can compare Claude Opus 4.7 vs 4.8 in the same
@@ -308,6 +311,34 @@ function writeCouncilModels(
 
 export function readWebAccess(): "allow" | "deny" {
   return readConfig()?.webAccess ?? "allow";
+}
+
+// Vault Lock (global filesystem-scope guarantee: the assistant and its agent
+// CLIs may only touch files inside the vault, and confined runs are denied
+// network reach). Default ON (fail-closed): an absent setting means locked,
+// matching the desktop's own default. This is read by the CLI bridge for
+// standalone/daemon runs where no PREVAIL_VAULT_LOCK env is injected; the
+// desktop still overrides per-spawn via that env. Turning it off is an
+// explicit, persisted choice.
+export function readVaultLock(): boolean {
+  return readConfig()?.vaultLock ?? true;
+}
+
+export function setVaultLock(on: boolean): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  writeConfig({ ...cfg, vaultLock: on });
+}
+
+// Effective Vault Lock state, honoring the desktop's per-spawn override.
+// Precedence: explicit PREVAIL_VAULT_LOCK env ("1"/"0") wins, else persisted
+// config, else default ON. Single source of truth for the CLI bridge AND the
+// connector-skill runner so a confined run is confined on every path.
+export function vaultLockActive(): boolean {
+  const env = process.env.PREVAIL_VAULT_LOCK;
+  if (env === "1") return true;
+  if (env === "0") return false;
+  return readVaultLock();
 }
 
 // Bunker Mode (global local-only privacy switch). Off by default.

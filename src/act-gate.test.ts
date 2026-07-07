@@ -30,6 +30,10 @@ describe("classifyAct", () => {
   test("unknown verbs gate (paranoid default, same as the gws classifier)", () => {
     expect(classifyAct("mcp__somesrv__frobnicate_widget")).toBe("gate");
   });
+  test("export/download gate — they move documents to shareable locations", () => {
+    expect(classifyAct("mcp__claude_ai_Canva__export-design")).toBe("gate");
+    expect(classifyAct("mcp__claude_ai_Google_Drive__download_file_content")).toBe("gate");
+  });
   test("summaries are human, not tool-id soup", () => {
     expect(actSummary("mcp__claude_ai_PayPal__create_invoice")).toBe("PayPal: create_invoice");
   });
