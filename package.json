@@ -1,6 +1,6 @@
 {
   "name": "prevail-cli",
-  "version": "1.9.12",
+  "version": "1.9.13",
   "description": "prevAIl \u2014 a terminal cockpit for your life domains.",
   "type": "module",
   "private": false,
