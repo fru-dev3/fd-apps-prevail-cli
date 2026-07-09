@@ -373,7 +373,7 @@ export const OLLAMA_DEFAULT_MODEL = process.env.PREVAIL_OLLAMA_MODEL || "llama3.
 export const CLI_MODEL_HINT: Record<CliKind, string> = {
   ...(Object.fromEntries(EXTRA_CLI_FAMILIES.map((f) => [f.kind, "leave blank for the runtime's default, or whatever model id its CLI accepts"])) as Record<ExtraCliKind, string>),
   claude: "e.g. opus, sonnet, haiku, or full id like claude-opus-4-7",
-  codex: "e.g. gpt-5, gpt-5.4, o3 (whatever your codex install accepts)",
+  codex: "e.g. gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna (append @medium/@high for effort), or gpt-5.5 — whatever your codex login accepts",
   ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
   antigravity: 'e.g. "Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Medium)" — run `agy models` for the full list (Antigravity now uses display names, not short ids)',
   openrouter: "e.g. anthropic/claude-opus-4.1, openai/gpt-5.6-sol, google/gemini-2.5-pro — any model id from openrouter.ai/models",
@@ -408,7 +408,9 @@ const CLAUDE_VERSIONS = [
   "claude-sonnet-4-6",
   "claude-haiku-4-5",
 ];
-const CODEX_VERSIONS = ["gpt-5.4", "gpt-5", "gpt-5-codex", "o3"];
+// GPT-5.6 tiers (Sol/Terra/Luna) lead; gpt-5.5 kept as a fallback for Codex
+// logins that haven't received 5.6 yet. Append @medium/@high for reasoning effort.
+const CODEX_VERSIONS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "o3"];
 // Antigravity (`agy`) uses display-style model names that include
 // thinking-budget suffixes — verified via `agy models`. These are passed
 // to `--model` verbatim. The list will need updating as Google ships new
