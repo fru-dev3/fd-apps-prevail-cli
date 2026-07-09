@@ -41,6 +41,12 @@ const RATES: Array<{ match: RegExp; inUsd: number; outUsd: number }> = [
   { match: /\bo1\b|\bo3\b|\bo4\b/i, inUsd: 15, outUsd: 60 },
   { match: /gpt-4/i, inUsd: 10, outUsd: 30 },
   { match: /gpt-3\.5/i, inUsd: 0.5, outUsd: 1.5 },
+  // GPT-5.6 family (Sol flagship / Terra balanced / Luna fast). Tier-specific
+  // rates must come BEFORE the generic gpt-5 rule below (first match wins). Bare
+  // "gpt-5.6" routes to Sol. Rates per OpenAI + OpenRouter, July 2026.
+  { match: /gpt-5\.6-luna/i, inUsd: 1, outUsd: 6 },
+  { match: /gpt-5\.6-terra/i, inUsd: 2.5, outUsd: 15 },
+  { match: /gpt-5\.6(-sol)?/i, inUsd: 5, outUsd: 30 },
   { match: /gpt-5|gpt5/i, inUsd: 5, outUsd: 15 },
   // Google
   { match: /gemini.*flash/i, inUsd: 0.075, outUsd: 0.3 },
