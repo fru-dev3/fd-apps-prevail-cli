@@ -30,6 +30,8 @@ interface Args {
   briefingArgs: string[];
   connectors: boolean;
   connectorsArgs: string[];
+  obsidian: boolean;
+  obsidianArgs: string[];
   calendar: boolean;
   calendarArgs: string[];
   recommendations: boolean;
@@ -147,6 +149,8 @@ function parseArgs(argv: string[]): Args {
   let briefingArgs: string[] = [];
   let connectors = false;
   let connectorsArgs: string[] = [];
+  let obsidian = false;
+  let obsidianArgs: string[] = [];
   let calendar = false;
   let calendarArgs: string[] = [];
   let recommendations = false;
@@ -271,6 +275,9 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "connectors" || a === "connector") {
       connectors = true;
       connectorsArgs = argv.slice(i + 1);
+    } else if (a === "obsidian") {
+      obsidian = true;
+      obsidianArgs = argv.slice(i + 1);
     } else if (a === "calendar") {
       calendar = true;
       calendarArgs = argv.slice(i + 1);
@@ -528,6 +535,8 @@ function parseArgs(argv: string[]): Args {
     briefingArgs,
     connectors,
     connectorsArgs,
+    obsidian,
+    obsidianArgs,
     calendar,
     calendarArgs,
     recommendations,
@@ -2462,6 +2471,52 @@ async function calendarCommand(args: string[], vaultDefault: string | null): Pro
 
   console.error("usage: prevail calendar pull-google --vault <path> [--account <label> | --all] [--json]");
   process.exit(1);
+}
+
+// `prevail obsidian import --from <vault-dir> [--into <domain>]` - bring an
+// existing Obsidian vault into Prevail as AI-readable source. Registers/updates
+// an `obsidian` connector app so it shows in the app list and can re-sync.
+async function obsidianCommand(args: string[]): Promise<void> {
+  const sub = args[0];
+  const flag = (names: string[]): string | undefined => {
+    for (const n of names) { const i = args.indexOf(n); if (i >= 0 && args[i + 1]) return args[i + 1]; }
+    return undefined;
+  };
+  const json = args.includes("--json");
+  if (sub !== "import") {
+    console.error("usage: prevail obsidian import --from <obsidian-vault-dir> [--into <domain>]");
+    process.exitCode = 1;
+    return;
+  }
+  const vault = await resolveVaultFromArgs(args);
+  // --from, or the first non-flag positional after "import".
+  const positional = args.slice(1).find((a) => !a.startsWith("-"));
+  const from = flag(["--from", "-f"]) ?? positional;
+  const domain = (flag(["--into", "--domain", "-d"]) ?? "notes").trim();
+  if (!from) {
+    console.error("obsidian import: pass --from <path to your Obsidian vault folder>");
+    process.exitCode = 1;
+    return;
+  }
+  const { importObsidianVault, adoptObsidianApp } = await import("./obsidian-import.ts");
+  try {
+    const r = importObsidianVault({ from, vault, domain });
+    // Adopt/refresh an `obsidian` connector app pointed at the imported source,
+    // so the Map + Apps list show it as connected and it can be re-synced.
+    try { adoptObsidianApp(vault, domain, from); } catch { /* app adoption is best-effort */ }
+    if (json) {
+      console.log(JSON.stringify({ ok: true, imported: r.imported, domain, destDir: r.destDir, tags: r.tags }));
+    } else {
+      console.log(`Imported ${r.imported} note${r.imported === 1 ? "" : "s"} from ${from}`);
+      console.log(`  into  ${r.destDir}`);
+      if (r.tags.length) console.log(`  tags  ${r.tags.slice(0, 20).map((t) => "#" + t).join(" ")}`);
+      console.log(`Re-run this command any time to sync new or changed notes.`);
+    }
+  } catch (e) {
+    if (json) console.log(JSON.stringify({ ok: false, error: String(e instanceof Error ? e.message : e) }));
+    else console.error(`obsidian import failed: ${e instanceof Error ? e.message : e}`);
+    process.exitCode = 1;
+  }
 }
 
 async function connectorsCommand(args: string[]): Promise<void> {
@@ -5362,6 +5417,10 @@ async function main() {
   }
   if (args.connectors) {
     await connectorsCommand(args.connectorsArgs);
+    return;
+  }
+  if (args.obsidian) {
+    await obsidianCommand(args.obsidianArgs);
     return;
   }
   if (args.calendar) {
