@@ -372,12 +372,12 @@ export const OLLAMA_DEFAULT_MODEL = process.env.PREVAIL_OLLAMA_MODEL || "llama3.
 
 export const CLI_MODEL_HINT: Record<CliKind, string> = {
   ...(Object.fromEntries(EXTRA_CLI_FAMILIES.map((f) => [f.kind, "leave blank for the runtime's default, or whatever model id its CLI accepts"])) as Record<ExtraCliKind, string>),
-  claude: "e.g. opus, sonnet, haiku, or full id like claude-opus-4-7",
+  claude: "e.g. opus, sonnet, haiku, or full id like claude-opus-5",
   codex: "e.g. gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna (append @medium/@high for effort), or gpt-5.5 — whatever your codex login accepts",
   ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
   antigravity: 'e.g. "Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Medium)" — run `agy models` for the full list (Antigravity now uses display names, not short ids)',
   openrouter: "e.g. anthropic/claude-opus-4.1, openai/gpt-5.6-sol, google/gemini-2.5-pro — any model id from openrouter.ai/models",
-  anthropic: "e.g. claude-opus-4-1, claude-sonnet-4-5, claude-haiku-4-5 (your Anthropic API key)",
+  anthropic: "e.g. claude-opus-5, claude-sonnet-4-5, claude-haiku-4-5 (your Anthropic API key)",
   openai: "e.g. gpt-5.6-sol, gpt-5.6-luna, o4-mini (your OpenAI API key)",
   xai: "e.g. grok-4, grok-3, grok-3-mini (your xAI key)",
   kimi: "e.g. kimi-k2-0711-preview, moonshot-v1-128k (your Moonshot key)",
@@ -401,6 +401,7 @@ export const CLI_MODEL_HINT: Record<CliKind, string> = {
 // harmless — the CLI rejects them and the panelist returns an error bubble.
 const CLAUDE_ALIASES = ["opus", "sonnet", "haiku"];
 const CLAUDE_VERSIONS = [
+  "claude-opus-5",
   "claude-opus-4-7",
   "claude-opus-4-6",
   "claude-opus-4-5",
@@ -442,6 +443,7 @@ const OLLAMA_VERSIONS = ["llama3.1", "llama3.2", "mistral", "qwen2.5", "phi3", "
 // user reported "the rest don't tell me which model is responding."
 // OpenRouter routed model ids (provider/model). One key, every model.
 export const OPENROUTER_MODELS: string[] = [
+  "anthropic/claude-opus-5",
   "anthropic/claude-opus-4.1",
   "anthropic/claude-sonnet-4.5",
   "openai/gpt-5.6-sol",
@@ -470,7 +472,7 @@ export interface DirectProvider {
 }
 export const DIRECT_PROVIDERS: DirectProvider[] = [
   { id: "anthropic", label: "Anthropic", baseUrl: "https://api.anthropic.com/v1", keyEnv: "PREVAIL_ANTHROPIC_KEY", native: true,
-    models: ["claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"] },
+    models: ["claude-opus-5", "claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"] },
   { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyEnv: "PREVAIL_OPENAI_KEY",
     models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.1", "o4-mini"] },
   { id: "xai", label: "xAI", baseUrl: "https://api.x.ai/v1", keyEnv: "PREVAIL_XAI_KEY",
