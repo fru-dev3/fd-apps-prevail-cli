@@ -17,19 +17,19 @@ import {
 
 describe("usage — pricing", () => {
   test("resolves per-model rates by substring, vendor fallback, free local", () => {
-    expect(rateFor("claude", "claude-opus-4-8").outUsdPerMtok).toBe(75);
-    expect(rateFor("claude", "claude-sonnet-4-6").outUsdPerMtok).toBe(15);
+    expect(rateFor("claude", "claude-opus-4-8").outUsdPerMtok).toBe(25);
+    expect(rateFor("claude", "claude-sonnet-4-6").outUsdPerMtok).toBe(10);
     expect(rateFor("codex", "gpt-5.5").inUsdPerMtok).toBe(1.25);
     expect(rateFor("ollama", "llama3.2")).toEqual({ inUsdPerMtok: 0, outUsdPerMtok: 0 });
     // unknown model on a known vendor → vendor default
-    expect(rateFor("claude", "mystery-model").outUsdPerMtok).toBe(75);
+    expect(rateFor("claude", "mystery-model").outUsdPerMtok).toBe(25);
   });
 
   test("estimateTokens ~ chars/4 and costUsd uses in/out split", () => {
     expect(estimateTokens("12345678")).toBe(2);
-    // opus: 1M in @ $15, 1M out @ $75
-    expect(costUsd("claude", "opus", 1_000_000, 0)).toBeCloseTo(15, 5);
-    expect(costUsd("claude", "opus", 0, 1_000_000)).toBeCloseTo(75, 5);
+    // opus: 1M in @ $5, 1M out @ $25 (Opus 5 pricing)
+    expect(costUsd("claude", "opus", 1_000_000, 0)).toBeCloseTo(5, 5);
+    expect(costUsd("claude", "opus", 0, 1_000_000)).toBeCloseTo(25, 5);
     expect(costUsd("ollama", "llama3.2", 1_000_000, 1_000_000)).toBe(0);
   });
 
