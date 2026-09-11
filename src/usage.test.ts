@@ -14,7 +14,7 @@ import {
 
 describe("pricing", () => {
   it("matches model substrings, most specific first", () => {
-    expect(rateFor("claude", "claude-opus-4-8").inUsdPerMtok).toBe(15);
+    expect(rateFor("claude", "claude-opus-4-8").inUsdPerMtok).toBe(5);
     expect(rateFor("claude", "claude-haiku-4-5").inUsdPerMtok).toBe(1);
     expect(rateFor("codex", "gpt-5").inUsdPerMtok).toBe(1.25);
   });
@@ -22,8 +22,8 @@ describe("pricing", () => {
     expect(costUsd("ollama", "llama3.1", 1_000_000, 1_000_000)).toBe(0);
   });
   it("costs input/output at their separate rates", () => {
-    // opus: 15 in / 75 out per Mtok → 1M in + 1M out = 90
-    expect(costUsd("claude", "opus", 1_000_000, 1_000_000)).toBe(90);
+    // opus: 5 in / 25 out per Mtok → 1M in + 1M out = 30 (Opus 5 pricing)
+    expect(costUsd("claude", "opus", 1_000_000, 1_000_000)).toBe(30);
   });
 });
 

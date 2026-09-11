@@ -7,6 +7,18 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.18] — 2026-09-11 · Sep 2026 model lineup, corrected pricing
+
+### Added
+- **Claude Fable 5.1**: the `fable` alias joins the Claude quickpicks as Anthropic's frontier tier, with `claude-fable-5-1` and `claude-sonnet-5` pinnable.
+- **GPT-6 Astra** on the Codex path (GA 2026-09-03), alongside the GPT-5.6 tiers. Sol stays the default. Retired `o3` dropped.
+- **Gemini 3.8 / 3.7 / 3.6 Flash** for Antigravity; 3.5 Flash removed (gone from `agy models`).
+- **Refreshed hosted catalogs**: OpenRouter and the direct providers carry current ids (Grok 4.6, Kimi K3, DeepSeek V4 Pro, Qwen3.8 Max, GLM 5.3, Gemini 3.8 Flash). The Google key path had still been on Gemini 2.5.
+- **`model-catalog.test.ts`**: guards that no catalog offers a retired id and every default is one of its own quickpicks.
+
+### Fixed
+- **Pricing was stale in both tables**: Opus was billed at the old $15/$75 when Opus 5 is $5/$25, Fable and GPT-6 were unpriced, the GPT-5.6 tier rates had come down since July, and Gemini 3.x Flash is priced well above the 2.x Flash rate assumed. Shadow costs and the 3D Arena read these tables.
+
 ## [1.9.4] — 2026-06-30 · App ideal-state AI draft, darwin-x64 build fix
 
 ### Added

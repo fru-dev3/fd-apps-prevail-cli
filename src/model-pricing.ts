@@ -31,29 +31,35 @@ const LOCAL_CLIS = new Set([
 
 // Substring → rate. First match wins, so order most-specific first.
 const RATES: Array<{ match: RegExp; inUsd: number; outUsd: number }> = [
-  // Anthropic
-  { match: /opus/i, inUsd: 15, outUsd: 75 },
-  { match: /sonnet/i, inUsd: 3, outUsd: 15 },
-  { match: /haiku/i, inUsd: 0.8, outUsd: 4 },
+  // Anthropic (refreshed 2026-09-11). Fable is the frontier tier; Opus 5 is
+  // $5/$25, a third of the Opus 4.x price this table used to carry.
+  { match: /fable|mythos/i, inUsd: 10, outUsd: 50 },
+  { match: /opus/i, inUsd: 5, outUsd: 25 },
+  { match: /sonnet/i, inUsd: 2, outUsd: 10 },
+  { match: /haiku/i, inUsd: 1, outUsd: 5 },
   // OpenAI
   { match: /gpt-4o-mini|4o-mini|o4-mini|o3-mini/i, inUsd: 0.15, outUsd: 0.6 },
   { match: /gpt-4o|gpt-4\.1|chatgpt/i, inUsd: 2.5, outUsd: 10 },
   { match: /\bo1\b|\bo3\b|\bo4\b/i, inUsd: 15, outUsd: 60 },
   { match: /gpt-4/i, inUsd: 10, outUsd: 30 },
   { match: /gpt-3\.5/i, inUsd: 0.5, outUsd: 1.5 },
+  // GPT-6 Astra, the flagship (GA 2026-09-03).
+  { match: /gpt-6|astra/i, inUsd: 10, outUsd: 50 },
   // GPT-5.6 family (Sol flagship / Terra balanced / Luna fast). Tier-specific
   // rates must come BEFORE the generic gpt-5 rule below (first match wins). Bare
-  // "gpt-5.6" routes to Sol. Rates per OpenAI + OpenRouter, July 2026.
-  { match: /gpt-5\.6-luna/i, inUsd: 1, outUsd: 6 },
-  { match: /gpt-5\.6-terra/i, inUsd: 2.5, outUsd: 15 },
-  { match: /gpt-5\.6(-sol)?/i, inUsd: 5, outUsd: 30 },
-  { match: /gpt-5|gpt5/i, inUsd: 5, outUsd: 15 },
-  // Google
+  // "gpt-5.6" routes to Sol. Re-checked against OpenRouter on 2026-09-11: all
+  // three tiers came down since the July rates this table carried.
+  { match: /gpt-5\.6-luna/i, inUsd: 0.2, outUsd: 1.2 },
+  { match: /gpt-5\.6-terra/i, inUsd: 2, outUsd: 12 },
+  { match: /gpt-5\.6(-sol)?/i, inUsd: 2, outUsd: 10 },
+  { match: /gpt-5|gpt5/i, inUsd: 1.25, outUsd: 10 },
+  // Google — the 3.x Flash generations are priced well above the old 2.x Flash.
+  { match: /gemini.*3\.\d.*flash|gemini-3.*flash/i, inUsd: 0.75, outUsd: 3.75 },
   { match: /gemini.*flash/i, inUsd: 0.075, outUsd: 0.3 },
   { match: /gemini.*pro|gemini-2|gemini-1\.5/i, inUsd: 1.25, outUsd: 5 },
   { match: /gemini/i, inUsd: 1.25, outUsd: 5 },
   // xAI
-  { match: /grok/i, inUsd: 2, outUsd: 10 },
+  { match: /grok/i, inUsd: 2, outUsd: 6 },
   // DeepSeek (hosted)
   { match: /deepseek/i, inUsd: 0.27, outUsd: 1.1 },
   // Mistral (hosted)

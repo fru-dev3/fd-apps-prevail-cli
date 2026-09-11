@@ -372,17 +372,17 @@ export const OLLAMA_DEFAULT_MODEL = process.env.PREVAIL_OLLAMA_MODEL || "llama3.
 
 export const CLI_MODEL_HINT: Record<CliKind, string> = {
   ...(Object.fromEntries(EXTRA_CLI_FAMILIES.map((f) => [f.kind, "leave blank for the runtime's default, or whatever model id its CLI accepts"])) as Record<ExtraCliKind, string>),
-  claude: "e.g. opus, sonnet, haiku, or full id like claude-opus-5",
-  codex: "e.g. gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna (append @medium/@high for effort), or gpt-5.5 — whatever your codex login accepts",
+  claude: "e.g. fable, opus, sonnet, haiku, or full id like claude-opus-5",
+  codex: "e.g. gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna (append @medium/@high for effort), or gpt-5.5 — whatever your codex login accepts",
   ollama: "e.g. llama3.1, mistral, qwen2.5 — must be already pulled locally (`ollama pull <name>`)",
-  antigravity: 'e.g. "Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Medium)" — run `agy models` for the full list (Antigravity now uses display names, not short ids)',
-  openrouter: "e.g. anthropic/claude-opus-4.1, openai/gpt-5.6-sol, google/gemini-2.5-pro — any model id from openrouter.ai/models",
-  anthropic: "e.g. claude-opus-5, claude-sonnet-4-5, claude-haiku-4-5 (your Anthropic API key)",
-  openai: "e.g. gpt-5.6-sol, gpt-5.6-luna, o4-mini (your OpenAI API key)",
-  xai: "e.g. grok-4, grok-3, grok-3-mini (your xAI key)",
+  antigravity: 'e.g. "Gemini 3.8 Flash (High)", "Gemini 3.1 Pro (High)" — run `agy models` for the full list (Antigravity now uses display names, not short ids)',
+  openrouter: "e.g. anthropic/claude-fable-5.1, openai/gpt-6-astra, google/gemini-3.8-flash — any model id from openrouter.ai/models",
+  anthropic: "e.g. claude-opus-5, claude-fable-5-1, claude-sonnet-5, claude-haiku-4-5 (your Anthropic API key)",
+  openai: "e.g. gpt-5.6-sol, gpt-6-astra, gpt-5.6-luna (your OpenAI API key)",
+  xai: "e.g. grok-4.6, grok-4.5, grok-4 (your xAI key)",
   kimi: "e.g. kimi-k2-0711-preview, moonshot-v1-128k (your Moonshot key)",
   deepseek: "e.g. deepseek-chat, deepseek-reasoner (your DeepSeek key)",
-  google: "e.g. gemini-2.5-pro, gemini-2.5-flash (your Google AI key)",
+  google: "e.g. gemini-3.8-flash, gemini-3.7-flash (your Google AI key)",
 };
 
 // Quick-pick chips shown in the council config bubble. Two tiers:
@@ -399,30 +399,37 @@ export const CLI_MODEL_HINT: Record<CliKind, string> = {
 //
 // Add new versions here when providers ship them. Stale entries are
 // harmless — the CLI rejects them and the panelist returns an error bubble.
-const CLAUDE_ALIASES = ["opus", "sonnet", "haiku"];
+// `fable` is Anthropic's frontier tier (above opus); Claude Code resolves it to
+// Fable 5.1. Verified against `claude --model <alias>` on 2026-09-11.
+const CLAUDE_ALIASES = ["fable", "opus", "sonnet", "haiku"];
 const CLAUDE_VERSIONS = [
   "claude-opus-5",
-  "claude-opus-4-7",
-  "claude-opus-4-6",
-  "claude-opus-4-5",
-  "claude-sonnet-4-7",
-  "claude-sonnet-4-6",
+  "claude-fable-5-1",
+  "claude-sonnet-5",
   "claude-haiku-4-5",
+  "claude-fable-5",
+  "claude-opus-4-8",
 ];
 // GPT-5.6 tiers (Sol/Terra/Luna) lead; gpt-5.5 kept as a fallback for Codex
-// logins that haven't received 5.6 yet. Append @medium/@high for reasoning effort.
-const CODEX_VERSIONS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "o3"];
+// logins that haven't received 5.6 yet. Append @medium/@high for reasoning effort
+// (these models also accept @xhigh/@max, and Astra/Sol/Terra accept @ultra).
+// gpt-6-astra joins as the flagship (GA 2026-09-03); o3 is retired and drops.
+// Ids checked against the CLI's own catalog (~/.codex/models_cache.json) and
+// smoke-tested through `codex exec` on 2026-09-11.
+const CODEX_VERSIONS = ["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"];
 // Antigravity (`agy`) uses display-style model names that include
 // thinking-budget suffixes — verified via `agy models`. These are passed
 // to `--model` verbatim. The list will need updating as Google ships new
 // Gemini generations through Antigravity. To refresh against your local
 // install: `agy models`.
 const ANTIGRAVITY_VERSIONS = [
+  "Gemini 3.8 Flash (High)",
+  "Gemini 3.8 Flash (Medium)",
+  "Gemini 3.8 Flash (Low)",
+  "Gemini 3.7 Flash (High)",
+  "Gemini 3.6 Flash (High)",
   "Gemini 3.1 Pro (High)",
   "Gemini 3.1 Pro (Low)",
-  "Gemini 3.5 Flash (High)",
-  "Gemini 3.5 Flash (Medium)",
-  "Gemini 3.5 Flash (Low)",
   // Antigravity also exposes other providers through the same launcher:
   "Claude Sonnet 4.6 (Thinking)",
   "Claude Opus 4.6 (Thinking)",
@@ -442,19 +449,22 @@ const OLLAMA_VERSIONS = ["llama3.1", "llama3.2", "mistral", "qwen2.5", "phi3", "
 // running on default models showed just `claude` / `codex` and the
 // user reported "the rest don't tell me which model is responding."
 // OpenRouter routed model ids (provider/model). One key, every model.
+// Ids verified live against https://openrouter.ai/api/v1/models on 2026-09-11.
 export const OPENROUTER_MODELS: string[] = [
   "anthropic/claude-opus-5",
-  "anthropic/claude-opus-4.1",
-  "anthropic/claude-sonnet-4.5",
+  "anthropic/claude-fable-5.1",
+  "anthropic/claude-sonnet-5",
+  "openai/gpt-6-astra",
   "openai/gpt-5.6-sol",
   "openai/gpt-5.6-terra",
   "openai/gpt-5.6-luna",
-  "openai/gpt-5.1",
-  "google/gemini-2.5-pro",
-  "x-ai/grok-4",
-  "deepseek/deepseek-chat",
-  "qwen/qwen-2.5-72b-instruct",
-  "meta-llama/llama-3.3-70b-instruct",
+  "google/gemini-3.8-flash",
+  "x-ai/grok-4.6",
+  "moonshotai/kimi-k3",
+  "deepseek/deepseek-v4-pro-0813",
+  "qwen/qwen3.8-max-0902",
+  "z-ai/glm-5.3",
+  "meta-llama/llama-4-maverick",
 ];
 
 // G1 — direct single-vendor providers. Each works once the user adds their key
@@ -472,17 +482,17 @@ export interface DirectProvider {
 }
 export const DIRECT_PROVIDERS: DirectProvider[] = [
   { id: "anthropic", label: "Anthropic", baseUrl: "https://api.anthropic.com/v1", keyEnv: "PREVAIL_ANTHROPIC_KEY", native: true,
-    models: ["claude-opus-5", "claude-opus-4-1", "claude-sonnet-4-5", "claude-haiku-4-5"] },
+    models: ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-4-5"] },
   { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyEnv: "PREVAIL_OPENAI_KEY",
-    models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.1", "o4-mini"] },
+    models: ["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna"] },
   { id: "xai", label: "xAI", baseUrl: "https://api.x.ai/v1", keyEnv: "PREVAIL_XAI_KEY",
-    models: ["grok-4", "grok-3", "grok-3-mini"] },
+    models: ["grok-4.6", "grok-4.5", "grok-4"] },
   { id: "kimi", label: "Kimi (Moonshot)", baseUrl: "https://api.moonshot.ai/v1", keyEnv: "PREVAIL_KIMI_KEY",
-    models: ["kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k"] },
+    models: ["kimi-k3", "kimi-k2-0711-preview", "moonshot-v1-128k"] },
   { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", keyEnv: "PREVAIL_DEEPSEEK_KEY",
     models: ["deepseek-chat", "deepseek-reasoner"] },
   { id: "google", label: "Google AI", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", keyEnv: "PREVAIL_GOOGLE_KEY",
-    models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"] },
+    models: ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"] },
 ];
 export const DIRECT_PROVIDER_BY_ID: Record<DirectProviderKind, DirectProvider> =
   Object.fromEntries(DIRECT_PROVIDERS.map((p) => [p.id, p])) as Record<DirectProviderKind, DirectProvider>;

@@ -44,23 +44,31 @@ interface PriceRule {
 }
 
 // Ordered: most specific first.
+// Rates refreshed 2026-09-11 against the public price lists. NOTE the haystack
+// is "<cli> <model>", so a rule matching a CLI name ("codex") fires on every
+// model that CLI runs: keep model-specific rules ABOVE those.
 const PRICE_RULES: PriceRule[] = [
-  // Anthropic
-  { match: ["opus"], rate: { inUsdPerMtok: 15, outUsdPerMtok: 75 } },
+  // Anthropic — Fable is the frontier tier; Opus dropped to $5/$25 at Opus 5.
+  { match: ["fable", "mythos"], rate: { inUsdPerMtok: 10, outUsdPerMtok: 50 } },
+  { match: ["opus"], rate: { inUsdPerMtok: 5, outUsdPerMtok: 25 } },
   { match: ["haiku"], rate: { inUsdPerMtok: 1, outUsdPerMtok: 5 } },
-  { match: ["sonnet"], rate: { inUsdPerMtok: 3, outUsdPerMtok: 15 } },
+  { match: ["sonnet"], rate: { inUsdPerMtok: 2, outUsdPerMtok: 10 } },
   // OpenAI / Codex
+  { match: ["gpt-6", "astra"], rate: { inUsdPerMtok: 10, outUsdPerMtok: 50 } },
+  { match: ["luna"], rate: { inUsdPerMtok: 0.2, outUsdPerMtok: 1.2 } },
+  { match: ["terra"], rate: { inUsdPerMtok: 2, outUsdPerMtok: 12 } },
+  { match: ["sol"], rate: { inUsdPerMtok: 2, outUsdPerMtok: 10 } },
   { match: ["gpt-5", "gpt5", "codex", "o3", "o1"], rate: { inUsdPerMtok: 1.25, outUsdPerMtok: 10 } },
   { match: ["gpt-4o", "gpt-4"], rate: { inUsdPerMtok: 2.5, outUsdPerMtok: 10 } },
   // Google / Antigravity
-  { match: ["flash"], rate: { inUsdPerMtok: 0.3, outUsdPerMtok: 2.5 } },
+  { match: ["flash"], rate: { inUsdPerMtok: 0.75, outUsdPerMtok: 3.75 } },
   { match: ["gemini", "antigravity", "agy", "pro"], rate: { inUsdPerMtok: 1.25, outUsdPerMtok: 5 } },
   // Local — free
   { match: ["ollama", "llama", "qwen", "mistral", "gpt-oss", "local"], rate: { inUsdPerMtok: 0, outUsdPerMtok: 0 } },
 ];
 
 const VENDOR_DEFAULT: Record<string, Rate> = {
-  claude: { inUsdPerMtok: 15, outUsdPerMtok: 75 },
+  claude: { inUsdPerMtok: 5, outUsdPerMtok: 25 },
   codex: { inUsdPerMtok: 1.25, outUsdPerMtok: 10 },
   antigravity: { inUsdPerMtok: 1.25, outUsdPerMtok: 5 },
   ollama: { inUsdPerMtok: 0, outUsdPerMtok: 0 },
