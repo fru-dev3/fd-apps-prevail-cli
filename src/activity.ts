@@ -71,27 +71,3 @@ export function logActivity(vaultRoot: string, ev: Omit<ActivityEvent, "ts"> & {
     /* best effort — observability must not break the producer */
   }
 }
-
-// Read the most recent events, newest first. Tolerates malformed lines. Reads
-// the whole file (encryption-aware) then slices — fine at v1 volumes; if the log
-// ever grows huge we'd tail it instead.
-export function readActivity(vaultRoot: string, limit = 200): ActivityEvent[] {
-  try {
-    const f = activityFile(vaultRoot);
-    if (!existsSync(f)) return [];
-    const raw = vreadFile(f);
-    const out: ActivityEvent[] = [];
-    for (const line of raw.split("\n")) {
-      const t = line.trim();
-      if (!t) continue;
-      try {
-        const ev = JSON.parse(t) as ActivityEvent;
-        if (ev && typeof ev.ts === "number" && typeof ev.title === "string") out.push(ev);
-      } catch { /* skip malformed */ }
-    }
-    out.sort((a, b) => b.ts - a.ts);
-    return out.slice(0, Math.max(1, limit));
-  } catch {
-    return [];
-  }
-}

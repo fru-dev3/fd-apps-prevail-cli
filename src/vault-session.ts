@@ -61,10 +61,6 @@ export function setVaultSession(dek: Buffer | null, encrypted: boolean, vaultRoo
   sessionVaultRoot = vaultRoot;
 }
 
-export function vaultSessionDek(): Buffer | null {
-  return sessionDek;
-}
-
 export function isVaultSessionEncrypted(): boolean {
   return sessionEncrypted;
 }

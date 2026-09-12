@@ -122,11 +122,6 @@ export function readVaultFile(path: string, dek: Buffer | null, encrypted: boole
   return decryptText(dek, raw);
 }
 
-/** Ensure the keyring directory exists (mirrors config dir). */
-export function ensureKeyringDir(): void {
-  mkdirSync(configDir(), { recursive: true });
-}
-
 // Re-exported for callers/tests that need to assert on a directory's shape.
 export function isDirectory(p: string): boolean {
   return existsSync(p) && statSync(p).isDirectory();

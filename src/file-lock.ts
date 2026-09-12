@@ -157,8 +157,3 @@ export async function withLock<T>(path: string, fn: () => Promise<T>): Promise<T
     lock.release();
   }
 }
-
-// Re-exported for tests that want to assert lock files don't persist.
-export function lockExists(path: string): boolean {
-  return existsSync(path);
-}

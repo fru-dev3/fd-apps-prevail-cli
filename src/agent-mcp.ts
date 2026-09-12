@@ -24,7 +24,6 @@ import { resolveGwsBinary } from "./calendar-sync.ts";
 // the shared contract the desktop relies on; do not change the URL or header.
 export const COMPOSIO_URL = "https://connect.composio.dev/mcp";
 export const COMPOSIO_KEY_ENV = "COMPOSIO_API_KEY";
-export const NANGO_KEY_ENV = "NANGO_SECRET_KEY";
 
 // The machine-local agent MCP config. Lives under ~/.prevail (always writable,
 // machine-scoped) NOT the vault, because it embeds the Composio API key and the

@@ -60,9 +60,6 @@ export function selfAddresses(fetch?: (configDir: string) => string | null): Set
   return out;
 }
 
-/** Test hook: reset the per-process self-address cache. */
-export function resetSelfCache(): void { selfCache = null; }
-
 // Is this gws argv an email SEND (as opposed to any other write)?
 function isEmailSend(args: string[]): boolean {
   if ((args[0] ?? "").toLowerCase() !== "gmail") return false;

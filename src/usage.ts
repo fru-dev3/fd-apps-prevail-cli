@@ -23,14 +23,14 @@ import { vreadFile } from "./vault-session.ts";
 import { appendLedger, readLedgerAll } from "./ledger.ts";
 import { dirname, join, resolve } from "node:path";
 import { runtimePath } from "./path-safety.ts";
+import { priceForOrDefault } from "./model-pricing.ts";
 
 // =============================================================================
-// Pricing — USD per million tokens, approximate public API list prices as a
-// shadow-cost reference (rates as of 2026-06; update freely, this is data-only).
-// Generalizes the flat per-call heuristic in council-cost.ts / budget.ts into
-// real per-model input/output rates. Resolved by matching substrings of
-// "<cli> <model>" (lowercased), first match wins; falls back to a vendor
-// default, then a global default. Local engines are free.
+// Pricing: USD per million tokens. The rate table itself lives in
+// src/model-pricing.ts (the single pricing owner, shared with the 3D Arena,
+// council-cost.ts and budget.ts); this module only adapts its shape. Local
+// engines are free; an unpriced model falls back to a vendor default, then a
+// global default, so the ledger always has a number.
 // =============================================================================
 
 export interface Rate {
@@ -38,50 +38,9 @@ export interface Rate {
   outUsdPerMtok: number;
 }
 
-interface PriceRule {
-  match: string[]; // all-lowercase substrings; ANY hit selects this rule
-  rate: Rate;
-}
-
-// Ordered: most specific first.
-// Rates refreshed 2026-09-11 against the public price lists. NOTE the haystack
-// is "<cli> <model>", so a rule matching a CLI name ("codex") fires on every
-// model that CLI runs: keep model-specific rules ABOVE those.
-const PRICE_RULES: PriceRule[] = [
-  // Anthropic — Fable is the frontier tier; Opus dropped to $5/$25 at Opus 5.
-  { match: ["fable", "mythos"], rate: { inUsdPerMtok: 10, outUsdPerMtok: 50 } },
-  { match: ["opus"], rate: { inUsdPerMtok: 5, outUsdPerMtok: 25 } },
-  { match: ["haiku"], rate: { inUsdPerMtok: 1, outUsdPerMtok: 5 } },
-  { match: ["sonnet"], rate: { inUsdPerMtok: 2, outUsdPerMtok: 10 } },
-  // OpenAI / Codex
-  { match: ["gpt-6", "astra"], rate: { inUsdPerMtok: 10, outUsdPerMtok: 50 } },
-  { match: ["luna"], rate: { inUsdPerMtok: 0.2, outUsdPerMtok: 1.2 } },
-  { match: ["terra"], rate: { inUsdPerMtok: 2, outUsdPerMtok: 12 } },
-  { match: ["sol"], rate: { inUsdPerMtok: 2, outUsdPerMtok: 10 } },
-  { match: ["gpt-5", "gpt5", "codex", "o3", "o1"], rate: { inUsdPerMtok: 1.25, outUsdPerMtok: 10 } },
-  { match: ["gpt-4o", "gpt-4"], rate: { inUsdPerMtok: 2.5, outUsdPerMtok: 10 } },
-  // Google / Antigravity
-  { match: ["flash"], rate: { inUsdPerMtok: 0.75, outUsdPerMtok: 3.75 } },
-  { match: ["gemini", "antigravity", "agy", "pro"], rate: { inUsdPerMtok: 1.25, outUsdPerMtok: 5 } },
-  // Local — free
-  { match: ["ollama", "llama", "qwen", "mistral", "gpt-oss", "local"], rate: { inUsdPerMtok: 0, outUsdPerMtok: 0 } },
-];
-
-const VENDOR_DEFAULT: Record<string, Rate> = {
-  claude: { inUsdPerMtok: 5, outUsdPerMtok: 25 },
-  codex: { inUsdPerMtok: 1.25, outUsdPerMtok: 10 },
-  antigravity: { inUsdPerMtok: 1.25, outUsdPerMtok: 5 },
-  ollama: { inUsdPerMtok: 0, outUsdPerMtok: 0 },
-};
-
-const GLOBAL_DEFAULT: Rate = { inUsdPerMtok: 5, outUsdPerMtok: 15 };
-
 export function rateFor(cli: string, model: string): Rate {
-  const hay = `${cli} ${model}`.toLowerCase();
-  for (const rule of PRICE_RULES) {
-    if (rule.match.some((m) => hay.includes(m))) return rule.rate;
-  }
-  return VENDOR_DEFAULT[cli.toLowerCase()] ?? GLOBAL_DEFAULT;
+  const p = priceForOrDefault(cli, model);
+  return { inUsdPerMtok: p.inUsd, outUsdPerMtok: p.outUsd };
 }
 
 const CHARS_PER_TOKEN = 4;

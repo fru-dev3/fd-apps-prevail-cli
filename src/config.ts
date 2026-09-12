@@ -166,18 +166,6 @@ export function readCouncilMaxCallsPerTurn(): number {
   return Math.floor(raw);
 }
 
-export function setCouncilMaxCallsPerTurn(n: number): void {
-  const cfg = readConfig();
-  if (!cfg) return;
-  const next = { ...cfg };
-  if (!Number.isFinite(n) || n < 1) {
-    delete next.councilMaxCallsPerTurn;
-  } else {
-    next.councilMaxCallsPerTurn = Math.floor(n);
-  }
-  writeConfig(next);
-}
-
 export function readGlobalCouncilDefault(): boolean {
   return readConfig()?.councilDefaultOn ?? false;
 }

@@ -7,6 +7,25 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.19] - 2026-09-11 · Truth and safety: privacy guard, real fetchers, cleanup
+
+### Added
+- **Privacy guard on every turn**: outbound prompts pass the vault privacy policy before any engine sees them, on chat, council and loop paths alike.
+- **MCP approve gate and encrypted reads**: write-capable MCP tools stop at an explicit approval, and MCP reads go through the encryption-aware vault reader.
+- **Real fetchers**: app sync runs actual fetchers per integration method; `llm` is no longer treated as a fetcher.
+- **Plaid via `/transactions/sync`**: the bank connector follows the sync checkpoint instead of paging `/transactions/get`.
+- **Keychain for the daemon**: the daemon reads its secrets from the macOS Keychain rather than plaintext env files.
+
+### Changed
+- **One pricing owner**: `src/model-pricing.ts` is the single rate table. `usage.rateFor` delegates to it, and the council convening estimate and the budget guard derive their per-call figure from those rates times an assumed call size instead of carrying their own literals. Fable and GPT-6 are priced on every path.
+- **Terminal cockpit gated**: `prevail` with no verb prints the help unless `PREVAIL_TUI=1` is set. The TUI is legacy; the desktop app and MCP server are the supported surfaces. No TUI files were removed.
+
+### Fixed
+- **v4 vault readers**: the readers follow the v4 layout (`ideal-state.md`, `memory/state.md`) instead of the legacy names.
+
+### Removed
+- Orphan modules with no importers (`rpc.ts`, `git-vault.ts`, `domain-list.tsx`, `gateway/artifact-router.ts`, `gateway/telegram-adapter.ts`) and two dozen exports nothing referenced.
+
 ## [1.9.18] — 2026-09-11 · Sep 2026 model lineup, corrected pricing
 
 ### Added

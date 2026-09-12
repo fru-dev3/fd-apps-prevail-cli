@@ -197,11 +197,6 @@ export function listDomainDirs(vaultPath: string): string[] {
   return [...names];
 }
 
-/** Migrate (or dry-run) every domain in the vault. */
-export function migrateVaultToV4(vaultPath: string, apply: boolean): V4MigrateResult[] {
-  return listDomainDirs(vaultPath).map((d) => migrateDomainToV4(vaultPath, d, apply));
-}
-
 /**
  * Archive the now-migrated ORIGINAL entries into <domain>/_pre-v4-<stamp>/ so the
  * root is clean. Separate + explicit (never auto-run): only call once the reader

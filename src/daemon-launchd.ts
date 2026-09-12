@@ -114,10 +114,6 @@ export async function uninstallLaunchAgent(): Promise<void> {
   }
 }
 
-export function isLaunchAgentInstalled(): boolean {
-  return existsSync(plistPath());
-}
-
 async function run(argv: string[]): Promise<{ ok: boolean; err?: string }> {
   try {
     const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
