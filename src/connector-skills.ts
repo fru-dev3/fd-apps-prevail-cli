@@ -143,6 +143,10 @@ export interface SkillRunResult {
   // uses this to queue a re-learn + notify the user, rather than auto-launching
   // a headed browser. Carries why it broke and which step.
   needsRelearn?: { reason: string; failedStep?: number };
+  // Which runner produced this result. The sync daemon's fetch gate needs it:
+  // an llm runner makes a bare model call with no credentials and writes
+  // whatever the model emits, so its output can never count as fetched data.
+  runner?: SkillRunner;
 }
 
 // Load every skill declared by a connector. Reads connector/skills/*.md
@@ -557,11 +561,14 @@ export function safeOutputPath(connectorDir: string, relPath: string): string | 
 // explicitly declared. Belt-and-suspenders: even if a skill prompt-injects
 // the model into trying to read other secrets, they aren't in the env.
 import { scrubbedEnv } from "./cli-bridge.ts";
+import { readAppSecret } from "./app-secrets.ts";
 
 export function buildSkillEnv(skill: SkillSpec): NodeJS.ProcessEnv {
   const env = scrubbedEnv();
   for (const key of skill.auth) {
-    const v = process.env[key];
+    // process.env first, then the desktop's Keychain item (darwin) so a
+    // headless daemon sees the same credentials the desktop injected.
+    const v = readAppSecret(key);
     if (v !== undefined) env[key] = v;
   }
   return env;
@@ -693,6 +700,7 @@ export async function runSkillLLM(
     outputsWritten: written,
     durationMs: Date.now() - t0,
     raw: raw.slice(0, 8000),
+    runner: "llm",
   };
 }
 
@@ -747,6 +755,17 @@ export async function runSkill(
   skill: SkillSpec,
   inputs: Record<string, unknown>,
   opts: SkillRunOpts = {},
+): Promise<SkillRunResult> {
+  // Stamp the runner on every result here, at the one choke point, so provider
+  // modules and runners that build their own result objects cannot forget it.
+  const res = await dispatchSkill(skill, inputs, opts);
+  return { ...res, runner: skill.runner };
+}
+
+async function dispatchSkill(
+  skill: SkillSpec,
+  inputs: Record<string, unknown>,
+  opts: SkillRunOpts,
 ): Promise<SkillRunResult> {
   // Autonomy gate: applies to every runner. The op class comes from the
   // skill's declared op; llm-only skills are read-class by definition (they

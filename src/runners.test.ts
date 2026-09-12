@@ -140,6 +140,105 @@ describe("pattern runners", () => {
     }
   });
 
+  // Cursor pagination, Plaid /transactions/sync shaped: keep POSTing while
+  // has_more, feed next_cursor back into the body, collect `added` across pages
+  // into a JSONL ledger, and return the FINAL cursor for the daemon to persist.
+  test("http runner paginates on paginate_while, threads the cursor, appends items as JSONL", async () => {
+    const spec = makeSkill("http-paged", [
+      "---", "id: sync", "runner: api",
+      "url: https://api.test.local/transactions/sync",
+      "method: POST",
+      "headers:",
+      '  - "Content-Type: application/json"',
+      `body: '{"cursor":"\${cursor.next_cursor}","count":2}'`,
+      "cursor_path: next_cursor",
+      "paginate_while: has_more",
+      "items_path: added",
+      "outputs:",
+      "  - { path: transactions/recent.jsonl, kind: append }",
+      "---", "Sync transactions.",
+    ].join("\n"));
+
+    const seen: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const sent = JSON.parse(String(init?.body ?? "{}")) as { cursor: string };
+      seen.push(sent.cursor);
+      if (sent.cursor === "") return Response.json({ added: [{ id: 1 }, { id: 2 }], has_more: true, next_cursor: "c1" });
+      if (sent.cursor === "c1") return Response.json({ added: [{ id: 3 }], has_more: false, next_cursor: "c2" });
+      return Response.json({ added: [], has_more: false, next_cursor: sent.cursor });
+    }) as typeof fetch;
+    try {
+      const r = await runSkillHttp(spec, {}, { cursor: {} });
+      expect(r.ok).toBe(true);
+      expect(seen).toEqual(["", "c1"]);
+      expect(r.cursor?.next_cursor).toBe("c2");
+      expect(r.summary).toBe("3 items across 2 pages");
+      const file = join(spec.connectorDir, r.outputsWritten[0]!);
+      expect(readFileSync(file, "utf8")).toBe('{"id":1}\n{"id":2}\n{"id":3}\n');
+
+      // A later "nothing new" run resumes from the persisted cursor and appends nothing.
+      const again = await runSkillHttp(spec, {}, { cursor: { next_cursor: "c2" } });
+      expect(again.ok).toBe(true);
+      expect(seen[seen.length - 1]).toBe("c2");
+      expect(again.cursor?.next_cursor).toBe("c2");
+      expect(again.summary).toBe("0 items across 1 page");
+      expect(readFileSync(file, "utf8")).toBe('{"id":1}\n{"id":2}\n{"id":3}\n');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("http runner refuses paginate_while without a cursor_path", async () => {
+    const spec = makeSkill("http-paged-bad", [
+      "---", "id: sync", "runner: api",
+      "url: https://api.test.local/sync",
+      "paginate_while: has_more",
+      "---", "Sync.",
+    ].join("\n"));
+    const r = await runSkillHttp(spec, {}, {});
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain("cursor_path");
+  });
+
+  // A quoted API secret of 40+ chars looks like a "verbatim quote" to the egress
+  // guard. Declared auth values are what the request exists to send, so they are
+  // masked before the scan and the credentialed POST goes out.
+  test("http runner does not let the egress guard block the skill's own declared auth values", async () => {
+    process.env.HTTP_TEST_SECRET = "access-production-" + "a".repeat(40);
+    const spec = makeSkill("http-auth-body", [
+      "---", "id: sync", "runner: api",
+      "auth: [HTTP_TEST_SECRET]",
+      "url: https://api.test.local/sync",
+      "method: POST",
+      `body: '{"access_token":"\${env.HTTP_TEST_SECRET}"}'`,
+      "---", "Sync.",
+    ].join("\n"));
+    const realFetch = globalThis.fetch;
+    let sentBody = "";
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      sentBody = String(init?.body ?? "");
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    try {
+      const r = await runSkillHttp(spec, {}, {});
+      expect(r.ok).toBe(true);
+      expect(sentBody).toContain(process.env.HTTP_TEST_SECRET!);
+    } finally {
+      globalThis.fetch = realFetch;
+      delete process.env.HTTP_TEST_SECRET;
+    }
+  });
+
+  test("runSkill stamps the runner on every result", async () => {
+    const spec = makeSkill("cli-stamp", [
+      "---", "id: pull", "runner: cli", 'command: printf "hi"', "---", "Pull.",
+    ].join("\n"));
+    const r = await runSkill(spec, {}, {});
+    expect(r.ok).toBe(true);
+    expect(r.runner).toBe("cli");
+  });
+
   test("http runner rejects non-https urls", async () => {
     const spec = makeSkill("http-insecure", [
       "---", "id: pull", "runner: api",

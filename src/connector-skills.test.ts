@@ -17,6 +17,7 @@ import {
   type SkillSpec,
 } from "./connector-skills.ts";
 import type { AppSkill } from "./vault.ts";
+import { _setAppSecretLookupForTests } from "./app-secrets.ts";
 
 // Minimal SkillSpec factory for pack-ordering tests.
 function spec(id: string, runner: SkillSpec["runner"], extra: Partial<SkillSpec> = {}): SkillSpec {
@@ -174,6 +175,21 @@ describe("buildSkillEnv", () => {
     } finally {
       delete process.env.PREVAIL_TELEGRAM_TOKEN;
       delete process.env.MY_TEST_AUTH;
+    }
+  });
+
+  // Headless runs: a declared auth key missing from process.env is read from
+  // the desktop's Keychain item (stubbed here), and only declared keys are.
+  test("falls back to the Keychain for declared auth keys missing from process.env", () => {
+    delete process.env.MY_KEYCHAIN_AUTH;
+    delete process.env.MY_UNDECLARED_AUTH;
+    _setAppSecretLookupForTests((key) => (key === "MY_KEYCHAIN_AUTH" || key === "MY_UNDECLARED_AUTH" ? `kc:${key}` : undefined));
+    try {
+      const env = buildSkillEnv(spec("x", "api", { auth: ["MY_KEYCHAIN_AUTH"] }));
+      expect(env.MY_KEYCHAIN_AUTH).toBe("kc:MY_KEYCHAIN_AUTH");
+      expect(env.MY_UNDECLARED_AUTH).toBeUndefined();
+    } finally {
+      _setAppSecretLookupForTests(null);
     }
   });
 });

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   syncOnce, syncApp, refreshToCron, refreshIntervalMs, nextRefreshDue, globMatch, readSyncState, looksLikeSecretFile, backoffNextDue,
-  producedRealData,
+  producedRealData, runProducedRealData, isFetchRunner,
   type SyncConfig,
 } from "./daemon-sync.ts";
 
@@ -18,7 +18,14 @@ const ROOT = join(TMP_BASE, `prevail-sync-${process.pid}`);
 const VAULT = join(ROOT, "vault");
 const APPS = join(ROOT, "apps");
 
-function seedWorld(opts: { command?: string; refresh?: object; routes?: object[]; failProbe?: boolean; noOutputs?: boolean } = {}) {
+function seedWorld(opts: {
+  command?: string; refresh?: object; routes?: object[]; failProbe?: boolean; noOutputs?: boolean;
+  // Tag the cli skill with a trigger (e.g. "refresh") for primary-selection tests.
+  cliTrigger?: string;
+  // Add a second, llm-runner skill. Its id sorts before "pull" so the OLD
+  // first-trigger:refresh selection would have picked it.
+  llmSkill?: { id: string; trigger?: string };
+} = {}) {
   rmSync(ROOT, { recursive: true, force: true });
   for (const d of ["wealth", "insurance"]) {
     mkdirSync(join(VAULT, d), { recursive: true });
@@ -46,6 +53,7 @@ function seedWorld(opts: { command?: string; refresh?: object; routes?: object[]
     "---",
     "id: pull",
     "runner: cli",
+    ...(opts.cliTrigger ? [`trigger: ${opts.cliTrigger}`] : []),
     opts.command ?? 'command: printf "===SUMMARY===\\n2 statements downloaded\\n" && printf "st1" > data/statement-jun.pdf && printf "x" > data/token.txt',
     // The fetch gate test needs a run that produces NO artifact and NO payload;
     // omit the declared output so artifacts[] stays empty.
@@ -57,6 +65,20 @@ function seedWorld(opts: { command?: string; refresh?: object; routes?: object[]
     "---",
     "Pull statements.",
   ].join("\n"));
+  if (opts.llmSkill) {
+    writeFileSync(join(app, "skills", `${opts.llmSkill.id}.md`), [
+      "---",
+      `id: ${opts.llmSkill.id}`,
+      "runner: llm",
+      "panelist: claude",
+      ...(opts.llmSkill.trigger ? [`trigger: ${opts.llmSkill.trigger}`] : []),
+      "outputs:",
+      "  - path: summary.md",
+      "    kind: replace",
+      "---",
+      "Summarize the statements.",
+    ].join("\n"));
+  }
   process.env.PREVAIL_APPS_DIR = APPS;
 }
 
@@ -196,6 +218,38 @@ describe("producedRealData (the fetch-gate predicate)", () => {
     expect(producedRealData({ ...base, raw: '{"score":712,"accounts":[{"name":"Checking"}]}' }, [])).toBe(true);
     expect(producedRealData({ ...base, raw: "Statement for June: 14 transactions, no error flags." }, [])).toBe(true);
   });
+  // An llm runner is a bare model call with no credentials: whatever it emits
+  // (however plausible) and whatever file it wrote is invented, never fetched.
+  test("an llm-runner result NEVER counts as real data, even with payload and artifacts", () => {
+    const rich = '[{"date":"2026-06-01","amount":42.18,"name":"Whole Foods"}]';
+    expect(producedRealData({ ...base, runner: "llm", raw: rich }, [])).toBe(false);
+    expect(producedRealData({ ...base, runner: "llm", raw: rich }, ["data/transactions/recent.jsonl"])).toBe(false);
+    expect(producedRealData({ ...base, runner: "llm" }, ["data/out.json"])).toBe(false);
+  });
+  test("an api-runner result with content DOES count", () => {
+    const rich = '{"added":[{"transaction_id":"t1","amount":12.5}],"has_more":false,"next_cursor":"abc"}';
+    expect(producedRealData({ ...base, runner: "api", raw: rich }, [])).toBe(true);
+    expect(producedRealData({ ...base, runner: "api", raw: rich }, ["data/transactions/recent.jsonl"])).toBe(true);
+    for (const runner of ["cli", "mcp", "browser"] as const) {
+      expect(producedRealData({ ...base, runner, raw: rich }, [])).toBe(true);
+    }
+  });
+  // The whole-run gate: a real fetch followed by an after: llm summarizer (the
+  // last result in the chain) still verifies; an llm-only chain never does.
+  test("runProducedRealData looks at every result, so a trailing llm summarizer does not hide a real fetch", () => {
+    const fetched = { ...base, runner: "api" as const, raw: '{"items":[1,2]}', artifacts: ["data/items.json"] };
+    const summarized = { ...base, runner: "llm" as const, raw: "Two items were pulled.", artifacts: ["data/summary.md"] };
+    expect(runProducedRealData([fetched, summarized])).toBe(true);
+    expect(runProducedRealData([summarized])).toBe(false);
+    expect(runProducedRealData([{ ...base, runner: "llm" as const, raw: '[{"amount":1}]' }, summarized])).toBe(false);
+    expect(runProducedRealData([])).toBe(false);
+  });
+  test("isFetchRunner: every runner except llm can fetch", () => {
+    expect(isFetchRunner({ runner: "llm" })).toBe(false);
+    for (const runner of ["api", "cli", "mcp", "browser", "browser-agent", "a2a"] as const) {
+      expect(isFetchRunner({ runner })).toBe(true);
+    }
+  });
 });
 
 describe("looksLikeSecretFile", () => {
@@ -240,6 +294,44 @@ describe("syncOnce (pattern-agnostic end to end)", () => {
     await syncOnce(CFG);
     const again = await syncOnce(CFG);
     expect(again.ran).toBe(0);
+  });
+
+  // Primary selection skips llm runners: with no refresh.skill declared, the
+  // first trigger:refresh skill by id would be the llm one ("aaa-summarize"
+  // sorts before "pull"); the daemon must pick the cli skill instead.
+  test("runAppRefresh picks a non-llm trigger:refresh skill over an llm one", async () => {
+    seedWorld({
+      refresh: { every: "daily", at: "02:00" },
+      cliTrigger: "refresh",
+      llmSkill: { id: "aaa-summarize", trigger: "refresh" },
+    });
+    const r = await syncApp(CFG, "demo-bank");
+    expect(r.ok).toBe(true);
+    // The cli skill ran (its summary was routed); the llm skill wrote nothing.
+    const ledger = readFileSync(join(VAULT, "wealth", "_intents.jsonl"), "utf8");
+    expect(ledger).toContain("2 statements downloaded");
+    expect(existsSync(join(APPS, "demo-bank", "data", "summary.md"))).toBe(false);
+    const st = readSyncState(appShim());
+    expect(st.first_fetch_ok).toBe(true);
+  });
+
+  // refresh.skill pointing at an llm skill, with no fetch-capable alternative,
+  // is a configuration error the user can act on, not a green "Connected".
+  test("llm-only refresh candidates fail with the 'no fetch skill' error", async () => {
+    seedWorld({
+      refresh: { every: "daily", at: "02:00", skill: "aaa-summarize" },
+      llmSkill: { id: "aaa-summarize", trigger: "refresh" },
+    });
+    const r = await syncApp(CFG, "demo-bank");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("no fetch skill");
+    expect(r.error).toContain("llm skills summarize");
+    expect(existsSync(join(APPS, "demo-bank", "data", "summary.md"))).toBe(false);
+    const st = readSyncState(appShim());
+    expect(st.first_fetch_ok).toBe(false);
+    expect(st.last_run_ok).toBe(false);
+    const conn = JSON.parse(readFileSync(join(APPS, "demo-bank", "connection-status.json"), "utf8"));
+    expect(conn.status).not.toBe("connected");
   });
 
   test("syncApp runs one app on demand (ignores schedule) and routes", async () => {
