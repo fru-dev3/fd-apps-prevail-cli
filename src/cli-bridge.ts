@@ -103,10 +103,6 @@ function syncHarnessManual(cwd: string, kind: string, vaultPath: string, webMode
   }
 }
 
-export function refreshOperatingManualCache(): void {
-  operatingManualCache = null;
-}
-
 // The user's Ideal State — their constitution. Lives at <vault>/ideal-state.md.
 // It is the HIGHEST-PRECEDENCE context: injected ahead of the operating manual,
 // framework, domain state, and memory in every model turn (chat, council,
@@ -139,10 +135,6 @@ function findIdealState(vaultPath: string): string | null {
   return content;
 }
 
-export function refreshIdealStateCache(): void {
-  idealStateCache = null;
-}
-
 // Omega — the app-wide LEARNED knowledge layer. Lives at <vault>/omega.md, beside
 // ideal-state.md. Durable, cross-cutting lessons / preferences / meta-patterns
 // distilled across every domain + the app. Injected just BELOW the Ideal State
@@ -171,10 +163,6 @@ function findOmega(vaultPath: string): string | null {
   }
   omegaCache = { vaultPath, content };
   return content;
-}
-
-export function refreshOmegaCache(): void {
-  omegaCache = null;
 }
 
 // M6 (Monday feedback): per-domain ideal state. Lives at <domain>/ideal-state.md.
@@ -535,53 +523,6 @@ export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
   openrouter: OPENROUTER_MODELS,
 };
 
-// Run `<bin> --help` and pull every quoted token that looks like a model
-// alias or full id. None of the three CLIs ship a real `models list`
-// endpoint, so this is the closest we get to "what does THIS install
-// actually know about" — it picks up new aliases as the CLI's own docs
-// update. Codex/Gemini hint less than Claude; the fallback fills the gap.
-export async function discoverModelHints(cli: AvailableCli, timeoutMs = 4000): Promise<string[]> {
-  const help = await new Promise<string>((resolve) => {
-    let out = "";
-    let settled = false;
-    let child;
-    try {
-      child = spawn(cli.bin, ["--help"], {
-        env: scrubbedEnv(),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch {
-      resolve("");
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try { child!.kill(); } catch {}
-      resolve(out);
-    }, timeoutMs);
-    child.stdout.on("data", (b) => (out += b.toString()));
-    child.stderr.on("data", (b) => (out += b.toString()));
-    child.on("close", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(out);
-    });
-  });
-  if (!help) return [];
-  // Grab any single- or double-quoted token that looks model-ish: kebab/
-  // dot/digit + letters. Tightly scoped so we don't pull random words.
-  const re = /['"]([a-zA-Z][a-zA-Z0-9._-]{2,40})['"]/g;
-  const found = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(help)) !== null) {
-    const tok = m[1]!;
-    if (looksLikeModel(cli.kind, tok)) found.add(tok);
-  }
-  return Array.from(found);
-}
-
 function looksLikeModel(kind: CliKind, t: string): boolean {
   const low = t.toLowerCase();
   if (kind === "claude") {
@@ -857,53 +798,9 @@ export async function detectClis(opts?: { force?: boolean }): Promise<AvailableC
   return out;
 }
 
-// Pull the actually-installed Ollama models so the model picker can offer
-// real options instead of the static fallback. Returns null if Ollama isn't
-// reachable or the response can't be parsed. Used by the model-discovery
-// pass in app.tsx the same way --help is scraped for claude/codex/gemini.
-export async function discoverOllamaModels(): Promise<string[] | null> {
-  try {
-    const base = OLLAMA_BASE_URL.replace(/\/+$/, "");
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`${base}/api/tags`, { signal: controller.signal });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const body = (await res.json()) as { models?: Array<{ name?: string }> };
-    if (!Array.isArray(body.models)) return null;
-    const names = body.models
-      .map((m) => m.name)
-      .filter((n): n is string => typeof n === "string" && n.length > 0);
-    return names.length > 0 ? names : null;
-  } catch {
-    return null;
-  }
-}
-
 export interface SpawnResult {
   ok: boolean;
   message: string;
-}
-
-export function runExternal(
-  bin: string,
-  args: string[],
-  cwd: string,
-): SpawnResult {
-  try {
-    const r = spawnSync(bin, args, {
-      stdio: "inherit",
-      cwd,
-      env: scrubbedEnv(),
-    });
-    if (r.error) return { ok: false, message: r.error.message };
-    if (r.status !== 0 && r.status !== null) {
-      return { ok: true, message: `exited with code ${r.status}` };
-    }
-    return { ok: true, message: "" };
-  } catch (err) {
-    return { ok: false, message: (err as Error).message };
-  }
 }
 
 export function buildChatPrompt(domain: Domain, view: ViewKey): string {

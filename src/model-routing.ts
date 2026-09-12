@@ -600,8 +600,3 @@ export function parseClassifyResponse(raw: string): ClassifyResult | null {
     : [];
   return { difficulty, capabilities };
 }
-
-// Test-only: clear the classify cache between cases.
-export function _clearClassifyCache(): void {
-  _classifyCache.clear();
-}

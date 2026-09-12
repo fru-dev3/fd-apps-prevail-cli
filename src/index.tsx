@@ -6055,6 +6055,14 @@ async function main() {
     return;
   }
 
+  // No verb matched. The terminal cockpit is legacy (the desktop app and the
+  // MCP server are the supported surfaces), so it only boots when explicitly
+  // asked for with PREVAIL_TUI=1; otherwise show the help and exit cleanly.
+  if (process.env.PREVAIL_TUI !== "1") {
+    printHelp();
+    process.exit(0);
+  }
+
   let vaultPath = args.vaultPath;
 
   if (args.demo) {

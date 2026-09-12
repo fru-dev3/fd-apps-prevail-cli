@@ -18,30 +18,22 @@
 // chair always fires exactly once regardless of lens fanout — it
 // synthesizes the whole panel into one verdict.
 
-// Per-call USD estimate by CLI kind. Tuned for our typical prompt+reply
-// sizes (a few KB in, a few KB out) at each CLI's default model. Local
-// CLIs are free.
-const PER_CALL_USD: Record<string, number> = {
-  claude: 0.005,
-  codex: 0.004,
-  gemini: 0.003,
-  ollama: 0,
-};
+import { estimatePerCallUsd } from "./model-pricing.ts";
 
-// Fallback for unknown / future CLIs. Same as claude — conservative
-// enough that we don't accidentally under-warn the user.
-const PER_CALL_USD_UNKNOWN = 0.005;
+// Per-call USD estimate: the model's published rate (src/model-pricing.ts,
+// the single pricing owner) times an assumed typical call size. A panelist
+// with no recognised model gets its CLI's default tier; an unknown CLI gets
+// a conservative global default. Local CLIs are free.
+function perCallUsd(cliKind: string, model: string): number {
+  return estimatePerCallUsd(cliKind, model);
+}
 
 // Chair (synthesis) call cost. Chair is one extra call on top of the
 // panel; we don't know which CLI will end up doing synthesis at
 // estimate-time (it depends on which panelist replied first or the
 // pinned chair config), so we pick a single representative price
 // rather than threading the chair CLI through the estimator.
-const CHAIR_CALL_USD = 0.005;
-
-function perCallUsd(cliKind: string): number {
-  return cliKind in PER_CALL_USD ? PER_CALL_USD[cliKind]! : PER_CALL_USD_UNKNOWN;
-}
+const CHAIR_CALL_USD = perCallUsd("claude", "");
 
 export interface CostEstimate {
   panelistCount: number;       // distinct (cli, model) panelists
@@ -68,13 +60,12 @@ export function estimateCouncilCost(args: EstimateArgs): CostEstimate {
   const totalCalls = panelistCount * lensCount + 1;
 
   // Aggregate per-CLI spend so the convening line can break it down
-  // ("claude: $0.02, codex: $0.016, ollama: free"). We sum by kind, not
-  // by (cli, model) pair — different model variants of the same CLI
-  // share the heuristic price.
+  // ("claude: $0.02, codex: $0.016, ollama: free"). Each panelist is priced
+  // on its own model; the breakdown is then summed by kind.
   const perCli: Record<string, number> = {};
   let panelCost = 0;
   for (const p of args.panelists) {
-    const per = perCallUsd(p.cliKind);
+    const per = perCallUsd(p.cliKind, p.model);
     const cost = per * lensCount;
     perCli[p.cliKind] = (perCli[p.cliKind] ?? 0) + cost;
     panelCost += cost;

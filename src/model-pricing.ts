@@ -91,6 +91,52 @@ export function priceFor(cli: string | undefined | null, model: string | undefin
   return null;
 }
 
+// Vendor defaults for when a call names a CLI but no (or an unrecognised)
+// model: the rate of each CLI's default tier. Used by the shadow-cost ledger
+// (usage.ts) and the council / budget heuristics, which must always return a
+// number. Direct-provider kinds (anthropic, openai, ...) map to the same tiers.
+const VENDOR_DEFAULT: Record<string, { inUsd: number; outUsd: number }> = {
+  claude: { inUsd: 5, outUsd: 25 }, // Opus 5
+  anthropic: { inUsd: 5, outUsd: 25 },
+  codex: { inUsd: 2, outUsd: 10 }, // GPT-5.6 Sol, the Codex default
+  openai: { inUsd: 2, outUsd: 10 },
+  antigravity: { inUsd: 1.25, outUsd: 5 }, // Gemini Pro tier
+  gemini: { inUsd: 1.25, outUsd: 5 },
+  google: { inUsd: 1.25, outUsd: 5 },
+  xai: { inUsd: 2, outUsd: 6 },
+  kimi: { inUsd: 0.6, outUsd: 2.5 },
+  deepseek: { inUsd: 0.27, outUsd: 1.1 },
+};
+
+// Conservative catch-all for a CLI kind we have never priced: better to
+// over-warn than to under-warn on a budget cap.
+const GLOBAL_DEFAULT = { inUsd: 5, outUsd: 15 };
+
+// Like priceFor, but never null: falls back to the vendor default, then the
+// global default. Local CLIs stay free.
+export function priceForOrDefault(cli: string | undefined | null, model: string | undefined | null): ModelPrice {
+  const exact = priceFor(cli, model);
+  if (exact) return exact;
+  const vendor = VENDOR_DEFAULT[(cli ?? "").toLowerCase()] ?? GLOBAL_DEFAULT;
+  return { inUsd: vendor.inUsd, outUsd: vendor.outUsd, source: "frontier" };
+}
+
+// Assumed size of one "typical" call for the coarse per-call heuristics
+// (council convening line, budget caps): a few KB of prompt in, a shorter
+// reply out. The dollar figure is rates times these counts.
+export const ASSUMED_CALL_INPUT_TOKENS = 1000;
+export const ASSUMED_CALL_OUTPUT_TOKENS = 500;
+
+// Rough USD for one typical call on (cli, model). Always a number; $0 for
+// local engines.
+export function estimatePerCallUsd(cli: string | undefined | null, model: string | undefined | null): number {
+  const price = priceForOrDefault(cli, model);
+  return (
+    (ASSUMED_CALL_INPUT_TOKENS / 1_000_000) * price.inUsd +
+    (ASSUMED_CALL_OUTPUT_TOKENS / 1_000_000) * price.outUsd
+  );
+}
+
 // Rough token estimate from a character count (about 4 chars/token English).
 export function estimateTokens(chars: number): number {
   return Math.max(0, Math.round(chars / 4));

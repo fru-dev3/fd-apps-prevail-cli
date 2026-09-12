@@ -737,9 +737,6 @@ export type ApiProviderRun = (
   opts: SkillRunOpts,
 ) => Promise<SkillRunResult>;
 const API_PROVIDERS = new Map<string, ApiProviderRun>();
-export function registerApiProvider(name: string, run: ApiProviderRun): void {
-  API_PROVIDERS.set(name, run);
-}
 
 export interface SkillRunOpts {
   signal?: AbortSignal;
@@ -901,11 +898,6 @@ export function buildSkillPacks(skills: SkillSpec[]): SkillPack[] {
     packs.push({ capability, connectorId: members[0]!.connectorId, skills: orderSkillPack(members) });
   }
   return packs.sort((a, b) => a.capability.localeCompare(b.capability));
-}
-
-// Convenience: load an app's skills and return them grouped into packs.
-export function loadSkillPacksForConnector(app: AppSkill): SkillPack[] {
-  return buildSkillPacks(loadSkillsForConnector(app));
 }
 
 // One attempt within a fallback run, for auditing / UI.

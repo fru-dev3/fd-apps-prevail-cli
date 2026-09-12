@@ -15,9 +15,10 @@
 // recordSpend() is called AFTER (or instead, with the same estimate) to commit
 // the spend to the in-memory run total and append it to the daily ledger.
 //
-// Cost estimation reuses the same coarse per-call heuristic as
-// src/council-cost.ts so the numbers the user sees in the council convening
-// line and the numbers the budget enforces come from the same source of truth.
+// Cost estimation reuses the same per-call heuristic as src/council-cost.ts
+// (published rates from src/model-pricing.ts times an assumed call size) so the
+// numbers the user sees in the council convening line and the numbers the
+// budget enforces come from the same source of truth.
 //
 // Ledger location follows the SQLite/vault rule in VAULT-SPEC.md §4: the daily
 // spend ledger is a LOCAL, rebuildable index — it lives under ~/.prevail, NOT
@@ -28,37 +29,19 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { CliKind, ExtraCliKind } from "./config.ts";
-import { EXTRA_CLI_KINDS, configDir } from "./config.ts";
+import type { CliKind } from "./config.ts";
+import { configDir } from "./config.ts";
+import { estimatePerCallUsd } from "./model-pricing.ts";
 
 // =============================================================================
-// Cost heuristic — kept structurally parallel to src/council-cost.ts so the
-// two never silently diverge. Local engines are free; cloud CLIs are priced
-// per-call at a coarse default tuned for a few-KB-in / few-KB-out turn.
+// Cost heuristic: the same derivation as src/council-cost.ts so the two never
+// silently diverge: the model's published rate (src/model-pricing.ts, the
+// single pricing owner) times an assumed few-KB-in / few-KB-out call. Local
+// engines are free; a CLI with no recognised model gets its default tier.
 // =============================================================================
 
-const PER_CALL_USD: Record<CliKind, number> = {
-  // Additional spawnable CLI families — subscription/local agent CLIs, so a small
-  // nominal per-call estimate for the budget heuristic.
-  ...(Object.fromEntries(EXTRA_CLI_KINDS.map((k) => [k, 0.004])) as Record<ExtraCliKind, number>),
-  claude: 0.005,
-  codex: 0.004,
-  antigravity: 0.003,
-  ollama: 0,
-  openrouter: 0.005,
-  // Direct providers — rough per-call estimates for the budget heuristic.
-  anthropic: 0.005,
-  openai: 0.005,
-  xai: 0.005,
-  kimi: 0.003,
-  deepseek: 0.002,
-  google: 0.003,
-};
-
-const PER_CALL_USD_UNKNOWN = 0.005;
-
-function perCallUsd(kind: CliKind): number {
-  return kind in PER_CALL_USD ? PER_CALL_USD[kind] : PER_CALL_USD_UNKNOWN;
+function perCallUsd(kind: CliKind, model?: string): number {
+  return estimatePerCallUsd(kind, model ?? "");
 }
 
 // ~4 chars per token is a decent cross-model rule of thumb (same constant
@@ -79,13 +62,14 @@ export interface SpendEstimate {
 // front, so it defaults to a typical few-KB reply for the token estimate).
 export function estimateTurnCost(args: {
   cli: CliKind;
+  model?: string;
   promptChars: number;
   replyChars?: number;
 }): SpendEstimate {
   const promptChars = Math.max(0, args.promptChars | 0);
   const replyChars = Math.max(0, (args.replyChars ?? 2000) | 0);
   const tokens = Math.round((promptChars + replyChars) / CHARS_PER_TOKEN);
-  return { cli: args.cli, usd: perCallUsd(args.cli), tokens };
+  return { cli: args.cli, usd: perCallUsd(args.cli, args.model), tokens };
 }
 
 // =============================================================================
@@ -136,16 +120,6 @@ export class BudgetExceeded extends Error {
 // =============================================================================
 
 let runSpendUsd = 0;
-
-export function getRunSpendUsd(): number {
-  return runSpendUsd;
-}
-
-/** Reset the in-memory per-run total. Exposed for tests and long-lived
- *  daemons that want to roll the "run" window without restarting. */
-export function resetRunSpend(): void {
-  runSpendUsd = 0;
-}
 
 // =============================================================================
 // Per-day accounting — persisted JSONL ledger under ~/.prevail.
@@ -271,16 +245,4 @@ export function recordSpend(estimate: SpendEstimate, caps: BudgetCaps = {}): voi
   } catch {
     // best effort — run cap still enforced in-memory above
   }
-}
-
-// Convenience: estimate → check → (caller runs the turn) → recordSpend.
-// Most callers want check-before / record-after, so this only does the
-// pre-flight check and returns the estimate to hand to recordSpend later.
-export function preflightTurn(
-  args: { cli: CliKind; promptChars: number; replyChars?: number },
-  caps: BudgetCaps = {},
-): SpendEstimate {
-  const est = estimateTurnCost(args);
-  checkBudget(est, caps);
-  return est;
 }

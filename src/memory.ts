@@ -133,9 +133,6 @@ function parseLogFile(path: string): ParsedSection[] {
   return sections;
 }
 
-/** Test/maintenance hook: clear the per-file parse cache. */
-export function resetRecallCache(): void { parseCache.clear(); }
-
 export async function recall(args: {
   vaultPath: string;
   query: string;

@@ -117,9 +117,9 @@ First launch runs a 30-second wizard. Pick the bundled demo vault (synthetic, sa
 ## 30 seconds in
 
 ```bash
-# Boot the cockpit
-prevail demo                    # safe synthetic vault, explore first
-prevail                         # use your own vault
+# Boot the cockpit (legacy: the terminal cockpit is gated, set PREVAIL_TUI=1)
+PREVAIL_TUI=1 prevail demo      # safe synthetic vault, explore first
+PREVAIL_TUI=1 prevail           # use your own vault
 
 # Inside, type:
 /council should I sell or rent? # fans to all engines, gives one verdict
