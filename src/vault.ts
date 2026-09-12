@@ -142,14 +142,25 @@ export function resolveDefaultVaultPath(): string {
 /** True if a directory is a domain: declared intent (soul.md, v2) OR a snapshot
  *  (state.md v1 / _state.md v2). */
 export function isDomainDir(domainPath: string): boolean {
-  return existsSync(join(domainPath, "soul.md"))
+  return existsSync(join(domainPath, ".prevail-layout-v4"))
+    || existsSync(join(domainPath, "ideal-state.md"))
+    || existsSync(join(domainPath, "soul.md"))
     || existsSync(join(domainPath, "_state.md"))
     || existsSync(join(domainPath, "state.md"));
 }
 
-/** The domain's current-state file: v2 `_state.md`, else v1 `state.md`, else null
- *  (a fresh v2 domain that has intent but no derived state yet). */
+/** The domain's current-state file: v4 `memory/state.md`, else v2 `_state.md`,
+ *  else v1 `state.md`, else null (a fresh domain that has intent but no derived
+ *  state yet).
+ *
+ *  The v4 entry matters: the distillers (desktop distill.rs and the engine's
+ *  daemon-learn.ts) write `memory/state.md` on a migrated domain. Until this
+ *  function knew about it, every domain list, preview, and context score kept
+ *  reading the frozen pre-migration `_state.md`, so the app "learned" into a
+ *  file nothing read back. */
 export function resolveStatePath(domainPath: string): string | null {
+  const v4 = join(domainPath, "memory", "state.md");
+  if (existsSync(v4)) return v4;
   const v2 = join(domainPath, "_state.md");
   if (existsSync(v2)) return v2;
   const v1 = join(domainPath, "state.md");

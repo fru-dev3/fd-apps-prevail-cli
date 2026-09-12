@@ -17,6 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { detectClis, runChatTurn, type AvailableCli } from "./cli-bridge.ts";
 import { domainDir, runtimeFile } from "./decisions.ts";
 import { scanVault } from "./vault.ts";
+import { vreadFile } from "./vault-session.ts";
 
 const TTL_MS = 6 * 60 * 60 * 1000; // 6h, matches surface.rs
 
@@ -27,11 +28,13 @@ export interface SurfaceResult {
   stale: boolean;
 }
 
-// Pull the head of a file (if present) under a labeled section.
+// Pull the head of a file (if present) under a labeled section. Reads through
+// the crypto-aware vault reader so an encrypted vault yields text, not
+// ciphertext.
 function readHead(path: string, label: string, max: number): string {
   try {
     if (!existsSync(path)) return "";
-    const s = readFileSync(path, "utf8").trim();
+    const s = vreadFile(path).trim();
     if (!s) return "";
     return `## ${label}\n${s.slice(0, max)}\n\n`;
   } catch {
@@ -39,12 +42,48 @@ function readHead(path: string, label: string, max: number): string {
   }
 }
 
+// First existing candidate wins. Every layout still readable in the vault has
+// its own home for these files (v4 `memory/`, v2 `_`-prefixed, v1 flat), and
+// the distillers write the v4 names on a migrated domain, so the v4 candidate
+// must come first or the surface reasons over a frozen pre-migration snapshot.
+function readFirst(candidates: string[], label: string, max: number): string {
+  for (const p of candidates) {
+    if (existsSync(p)) return readHead(p, label, max);
+  }
+  return "";
+}
+
+// Recent decisions: v4/v2 keep them as JSONL (one decision per line); v1 kept
+// a markdown journal. Render the last few JSONL entries as bullets.
+function readRecentDecisions(dir: string, max: number): string {
+  for (const p of [join(dir, "memory", "decisions.jsonl"), join(dir, "_decisions.jsonl")]) {
+    if (!existsSync(p)) continue;
+    try {
+      const lines = vreadFile(p).split("\n").filter((l) => l.trim());
+      const recent = lines.slice(-8).map((l) => {
+        try {
+          const o = JSON.parse(l) as Record<string, unknown>;
+          const text = (o.decision ?? o.text ?? o.summary ?? o.title ?? "") as string;
+          return text ? `- ${String(text)}` : "";
+        } catch {
+          return "";
+        }
+      }).filter(Boolean);
+      if (recent.length === 0) return "";
+      return `## Recent decisions\n${recent.join("\n").slice(0, max)}\n\n`;
+    } catch {
+      return "";
+    }
+  }
+  return readHead(join(dir, "_journal", "decisions.md"), "Recent decisions", max);
+}
+
 // Compact context blob: distilled memory + state + recent decisions/journal.
 function gatherContext(dir: string): string {
   let out = "";
-  out += readHead(join(dir, "_memory.md"), "Long-term memory", 2400);
-  out += readHead(join(dir, "state.md"), "Current state", 2400);
-  out += readHead(join(dir, "_journal", "decisions.md"), "Recent decisions", 1600);
+  out += readFirst([join(dir, "memory", "memory.md"), join(dir, "_memory.md"), join(dir, "MEMORY.md")], "Long-term memory", 2400);
+  out += readFirst([join(dir, "memory", "state.md"), join(dir, "_state.md"), join(dir, "state.md")], "Current state", 2400);
+  out += readRecentDecisions(dir, 1600);
   out += readHead(join(dir, "_journal", "facts.md"), "Known facts", 1600);
   return out.trim();
 }
