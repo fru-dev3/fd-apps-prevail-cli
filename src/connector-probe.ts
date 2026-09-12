@@ -4,6 +4,7 @@ import { browserProfilePath } from "./path-safety.ts";
 import { spawn } from "node:child_process";
 import type { AppSkill, ConnectorStatus } from "./vault.ts";
 import { scrubbedEnv } from "./cli-bridge.ts";
+import { readAppSecret } from "./app-secrets.ts";
 
 // Per-app authentication probe. Each integration type has a different
 // "what does it mean to be connected" question:
@@ -21,7 +22,8 @@ import { scrubbedEnv } from "./cli-bridge.ts";
 
 export interface AuthCheckSpec {
   kind: "env-keys" | "file-exists" | "command" | "http" | "mcp" | "manual" | "browser-session";
-  // env-keys: every listed key must be set + non-empty in process.env
+  // env-keys: every listed key must be set + non-empty in process.env (or, on
+  // darwin, present in the desktop's "prevail.appsecrets" Keychain item)
   env_keys?: string[];
   // file-exists: every listed path must exist (~ and $HOME expanded).
   // `paths` is accepted as an alias for `files` (manifests use either key).
@@ -205,7 +207,9 @@ function probeEnvKeys(spec: AuthCheckSpec, ts: number): ProbeResult {
   if (keys.length === 0) {
     return { ok: false, status: "not-configured", message: "auth_check.env_keys is empty", ts };
   }
-  const missing = keys.filter((k) => !process.env[k] || process.env[k]!.length === 0);
+  // readAppSecret falls back to the desktop's Keychain item so a headless
+  // daemon does not report "missing" for a secret the user already saved.
+  const missing = keys.filter((k) => !readAppSecret(k));
   if (missing.length === 0) {
     return {
       ok: true,
@@ -337,7 +341,7 @@ async function probeHttp(spec: AuthCheckSpec, ts: number): Promise<ProbeResult> 
   }
   const headers: Record<string, string> = { accept: "application/json,text/*;q=0.5" };
   if (spec.auth_header_env) {
-    const v = process.env[spec.auth_header_env];
+    const v = readAppSecret(spec.auth_header_env);
     if (!v) {
       return {
         ok: false,

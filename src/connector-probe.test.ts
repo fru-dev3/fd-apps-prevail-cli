@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { probeConnector } from "./connector-probe.ts";
 import type { AppSkill } from "./vault.ts";
+import { _setAppSecretLookupForTests } from "./app-secrets.ts";
 
 const fakeApp = (id: string): AppSkill => ({
   id,
@@ -52,6 +53,24 @@ describe("probeConnector — env-keys kind", () => {
       expect(r.fixHint).toBeDefined();
     } finally {
       delete process.env.PROBE_TEST_KEY_A;
+    }
+  });
+
+  // Headless daemon: a key the desktop saved to the Keychain (stubbed here) but
+  // that is absent from process.env still counts as present.
+  test("a key present only in the Keychain → connected", async () => {
+    delete process.env.PROBE_TEST_KEY_KC;
+    delete process.env.PROBE_TEST_KEY_NONE;
+    _setAppSecretLookupForTests((key) => (key === "PROBE_TEST_KEY_KC" ? "stored" : undefined));
+    try {
+      const ok = await probeConnector(fakeApp("envtest"), { kind: "env-keys", env_keys: ["PROBE_TEST_KEY_KC"] });
+      expect(ok.ok).toBe(true);
+      expect(ok.status).toBe("connected");
+      const bad = await probeConnector(fakeApp("envtest"), { kind: "env-keys", env_keys: ["PROBE_TEST_KEY_KC", "PROBE_TEST_KEY_NONE"] });
+      expect(bad.ok).toBe(false);
+      expect(bad.missing).toEqual(["PROBE_TEST_KEY_NONE"]);
+    } finally {
+      _setAppSecretLookupForTests(null);
     }
   });
 });

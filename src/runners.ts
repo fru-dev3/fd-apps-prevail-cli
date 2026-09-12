@@ -250,6 +250,19 @@ export async function runSkillCli(
 //   cursor_path: nextCursor           (optional: JSON path in the response
 //                                      whose value becomes ${cursor.<last seg>})
 //   summary_path: summary             (optional: JSON path rendered as summary)
+// Cursor pagination (optional, Plaid /transactions/sync style):
+//   paginate_while: has_more          (JSON path; keep requesting while truthy,
+//                                      capped at MAX_PAGES; needs cursor_path)
+//   items_path: added                 (JSON path of an array; the saved output
+//                                      becomes JSONL, one item per line, across
+//                                      every page; without it the LAST page's
+//                                      body is saved)
+// Between pages the cursor_path value is fed back as ${cursor.<last seg>}, so
+// the url/body/header templates re-resolve with the new cursor. The final
+// value is what the daemon persists to sync-state.json. The save path honors
+// the declared output `kind` (append for a JSONL ledger, replace otherwise).
+const MAX_PAGES = 50;
+
 export async function runSkillHttp(
   skill: SkillSpec,
   inputs: Record<string, unknown>,
@@ -260,67 +273,123 @@ export async function runSkillHttp(
   if (!urlTpl) {
     return { ok: false, message: `api skill "${skill.id}" has no provider and no url: field`, outputsWritten: [], durationMs: 0 };
   }
-  let url: string;
-  let body: string | undefined;
-  const headers: Record<string, string> = {};
-  try {
-    url = await substituteFull(urlTpl, skill, inputs, opts);
-    if (typeof skill.extra?.body === "string") body = await substituteFull(skill.extra.body, skill, inputs, opts);
-    const hdrList = Array.isArray(skill.extra?.headers) ? skill.extra.headers : [];
-    for (const h of hdrList) {
-      if (typeof h !== "string") continue;
-      const idx = h.indexOf(":");
-      if (idx <= 0) continue;
-      headers[h.slice(0, idx).trim()] = await substituteFull(h.slice(idx + 1).trim(), skill, inputs, opts);
-    }
-  } catch (e) {
-    return { ok: false, message: String(e instanceof Error ? e.message : e), outputsWritten: [], durationMs: 0 };
-  }
-  // https-only AND SSRF guard (loopback/private/link-local/etc.) — the http
-  // runner previously only checked the scheme, so a templated url: could reach
-  // internal services (B8/O8).
-  if (isUnsafeRemoteUrl(url)) {
-    return { ok: false, message: `refusing unsafe http url (SSRF guard): ${url.slice(0, 60)}`, outputsWritten: [], durationMs: 0 };
-  }
-  // Egress guard on the OUTBOUND request. The http runner reaches an arbitrary
-  // public host and was NOT on the egress-scan path (act-gate scans MCP
-  // connector writes the same way), so a poisoned/AI-authored manifest could
-  // POST vault PII to any attacker host unguarded. Scan the url + body + header
-  // values for sensitive categories and refuse the send when found.
-  const egressBlock = scanEgressOrNull([url, body ?? "", ...Object.values(headers)].join("\n"));
-  if (egressBlock) {
-    return { ok: false, message: `blocked by egress guard: this request would send ${egressBlock} to ${new URL(url).host}. Not sent.`, outputsWritten: [], durationMs: 0 };
-  }
   const method = typeof skill.extra?.method === "string" ? skill.extra.method.toUpperCase() : "GET";
+  const cursorPath = typeof skill.extra?.cursor_path === "string" ? skill.extra.cursor_path : "";
+  const summaryPath = typeof skill.extra?.summary_path === "string" ? skill.extra.summary_path : "";
+  const morePath = typeof skill.extra?.paginate_while === "string" ? skill.extra.paginate_while : "";
+  const itemsPath = typeof skill.extra?.items_path === "string" ? skill.extra.items_path : "";
+  if (morePath && !cursorPath) {
+    return { ok: false, message: `api skill "${skill.id}": paginate_while needs cursor_path (the value fed back as \${cursor.<key>} on the next page)`, outputsWritten: [], durationMs: 0 };
+  }
+  const cursorKey = cursorPath ? cursorPath.split(".").pop()! : "";
 
+  // Page loop state. The cursor is threaded page to page through opts.cursor so
+  // the request templates see the latest value; `cursor` is what we return.
+  let pageCursor: Record<string, unknown> = { ...(opts.cursor ?? {}) };
+  const cursor: Record<string, unknown> = {};
+  const items: unknown[] = [];
+  let summary: string | undefined;
   let text = "";
   let status = 0;
-  try {
-    const ctl = new AbortController();
-    const killer = setTimeout(() => ctl.abort(), DEFAULT_TIMEOUT_MS);
-    const onAbort = () => ctl.abort();
-    opts.signal?.addEventListener("abort", onAbort, { once: true });
-    const res = await fetchGuarded(url, { method, headers, body, signal: ctl.signal });
-    status = res.status;
-    text = (await res.text()).slice(0, MAX_CAPTURE);
-    clearTimeout(killer);
-    opts.signal?.removeEventListener("abort", onAbort);
-    if (!res.ok) {
-      return {
-        ok: false,
-        message: `HTTP ${status}: ${text.trim().slice(0, 200)}`,
-        outputsWritten: [],
-        durationMs: Date.now() - started,
-        raw: text.slice(0, 8192),
-      };
+  let pages = 0;
+
+  for (;;) {
+    pages++;
+    const pageOpts: SkillRunOpts = { ...opts, cursor: pageCursor };
+    let url: string;
+    let body: string | undefined;
+    const headers: Record<string, string> = {};
+    try {
+      url = await substituteFull(urlTpl, skill, inputs, pageOpts);
+      if (typeof skill.extra?.body === "string") body = await substituteFull(skill.extra.body, skill, inputs, pageOpts);
+      const hdrList = Array.isArray(skill.extra?.headers) ? skill.extra.headers : [];
+      for (const h of hdrList) {
+        if (typeof h !== "string") continue;
+        const idx = h.indexOf(":");
+        if (idx <= 0) continue;
+        headers[h.slice(0, idx).trim()] = await substituteFull(h.slice(idx + 1).trim(), skill, inputs, pageOpts);
+      }
+    } catch (e) {
+      return { ok: false, message: String(e instanceof Error ? e.message : e), outputsWritten: [], durationMs: 0 };
     }
-  } catch (e) {
-    return { ok: false, message: `request failed: ${e}`, outputsWritten: [], durationMs: Date.now() - started };
+    // https-only AND SSRF guard (loopback/private/link-local/etc.): the http
+    // runner previously only checked the scheme, so a templated url: could reach
+    // internal services (B8/O8).
+    if (isUnsafeRemoteUrl(url)) {
+      return { ok: false, message: `refusing unsafe http url (SSRF guard): ${url.slice(0, 60)}`, outputsWritten: [], durationMs: 0 };
+    }
+    // Egress guard on the OUTBOUND request. The http runner reaches an arbitrary
+    // public host and was NOT on the egress-scan path (act-gate scans MCP
+    // connector writes the same way), so a poisoned/AI-authored manifest could
+    // POST vault PII to any attacker host unguarded. Scan the url + body + header
+    // values for sensitive categories and refuse the send when found. The
+    // skill's declared auth values are masked first: they are what the request
+    // exists to send, and a long quoted API secret would otherwise read as a
+    // "verbatim quote" and block every credentialed POST.
+    const egressBlock = scanEgressOrNull(maskAuthValues([url, body ?? "", ...Object.values(headers)].join("\n"), skill));
+    if (egressBlock) {
+      return { ok: false, message: `blocked by egress guard: this request would send ${egressBlock} to ${new URL(url).host}. Not sent.`, outputsWritten: [], durationMs: 0 };
+    }
+
+    try {
+      const ctl = new AbortController();
+      const killer = setTimeout(() => ctl.abort(), DEFAULT_TIMEOUT_MS);
+      const onAbort = () => ctl.abort();
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
+      const res = await fetchGuarded(url, { method, headers, body, signal: ctl.signal });
+      status = res.status;
+      text = (await res.text()).slice(0, MAX_CAPTURE);
+      clearTimeout(killer);
+      opts.signal?.removeEventListener("abort", onAbort);
+      if (!res.ok) {
+        return {
+          ok: false,
+          message: `HTTP ${status}: ${text.trim().slice(0, 200)}`,
+          outputsWritten: [],
+          durationMs: Date.now() - started,
+          raw: text.slice(0, 8192),
+        };
+      }
+    } catch (e) {
+      return { ok: false, message: `request failed: ${e}`, outputsWritten: [], durationMs: Date.now() - started };
+    }
+
+    // Cursor + summary + items extraction from the JSON response.
+    let parsed: unknown;
+    let isJson = false;
+    if (cursorPath || summaryPath || morePath || itemsPath) {
+      try { parsed = JSON.parse(text); isJson = true; } catch { /* non-JSON response: skip extraction */ }
+    }
+    if (isJson) {
+      if (cursorPath) {
+        const v = jsonPath(parsed, cursorPath);
+        if (v !== undefined) {
+          cursor[cursorKey] = v;
+          pageCursor = { ...pageCursor, [cursorKey]: v };
+        }
+      }
+      if (summaryPath) {
+        const v = jsonPath(parsed, summaryPath);
+        if (v !== undefined) summary = String(v).slice(0, 600);
+      }
+      if (itemsPath) {
+        const arr = jsonPath(parsed, itemsPath);
+        if (Array.isArray(arr)) items.push(...arr);
+      }
+    }
+    if (!morePath || !isJson || !jsonPath(parsed, morePath)) break;
+    // No cursor came back: re-sending the same page would loop forever.
+    if (cursor[cursorKey] === undefined) break;
+    if (pages >= MAX_PAGES) break;
   }
 
-  // Save the response: explicit save: path, else first declared output.
+  // Save: explicit save: path, else first declared output. With items_path the
+  // saved text is the JSONL of every collected item, else the last page's body.
   const written: string[] = [];
   const saveTpl = typeof skill.extra?.save === "string" ? skill.extra.save : skill.outputs[0]?.path;
+  const outText = itemsPath
+    ? items.map((it) => JSON.stringify(it)).join("\n") + (items.length ? "\n" : "")
+    : text;
   if (saveTpl) {
     let rel: string;
     try {
@@ -333,40 +402,39 @@ export async function runSkillHttp(
       return { ok: false, message: `save path escapes connector dir: ${rel}`, outputsWritten: [], durationMs: Date.now() - started };
     }
     mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, text);
+    const kind = skill.outputs.find((o) => o.path === saveTpl)?.kind ?? "replace";
+    if (kind === "append") appendFileSync(abs, outText.endsWith("\n") || !outText ? outText : outText + "\n");
+    else if (kind === "markdown") appendFileSync(abs, `\n## ${new Date().toISOString()}\n\n${outText}\n`);
+    else writeFileSync(abs, outText);
     written.push(relative(skill.connectorDir, abs));
   }
 
-  // Cursor + summary extraction from the JSON response.
-  const cursor: Record<string, unknown> = {};
-  let summary: string | undefined;
-  const cursorPath = typeof skill.extra?.cursor_path === "string" ? skill.extra.cursor_path : "";
-  const summaryPath = typeof skill.extra?.summary_path === "string" ? skill.extra.summary_path : "";
-  if (cursorPath || summaryPath) {
-    try {
-      const parsed = JSON.parse(text);
-      if (cursorPath) {
-        const v = jsonPath(parsed, cursorPath);
-        const key = cursorPath.split(".").pop()!;
-        if (v !== undefined) cursor[key] = v;
-      }
-      if (summaryPath) {
-        const v = jsonPath(parsed, summaryPath);
-        if (v !== undefined) summary = String(v).slice(0, 600);
-      }
-    } catch { /* non-JSON response: skip extraction */ }
-  }
-
+  const pageNote = pages > 1 ? `, ${pages} pages` : "";
   return {
     ok: true,
-    message: `HTTP ${status} ok${written.length ? ` (saved ${written[0]})` : ""}`,
+    message: `HTTP ${status} ok${written.length ? ` (saved ${written[0]}${pageNote})` : ""}`,
     outputsWritten: written,
     durationMs: Date.now() - started,
     raw: text.slice(0, 8192),
-    summary: summary ?? extractSummary(text, false),
+    summary: summary ?? (itemsPath
+      ? `${items.length} item${items.length === 1 ? "" : "s"} across ${pages} page${pages === 1 ? "" : "s"}`
+      : extractSummary(text, false)),
     cursor: Object.keys(cursor).length ? cursor : undefined,
     artifacts: written,
   };
+}
+
+// Replace the skill's declared auth values in outbound text with a placeholder
+// before the egress scan. Only the exact secret strings are masked, so any vault
+// PII riding along in the same request is still caught.
+function maskAuthValues(text: string, skill: SkillSpec): string {
+  const env = buildSkillEnv(skill);
+  let out = text;
+  for (const key of skill.auth) {
+    const v = env[key];
+    if (v && v.length >= 4) out = out.split(v).join(`<${key}>`);
+  }
+  return out;
 }
 
 // mcp runner. Calls a tool on a local stdio MCP server and ingests the text

@@ -20,7 +20,7 @@ import { join, basename, dirname } from "node:path";
 import type { AppSkill, AppRoute } from "./vault.ts";
 import { scanCommunityApps, scanApps, scanVault } from "./vault.ts";
 import { loadSkillsForConnector, logSkillRun, packForSkill, runSkillPackWithFallback, effectiveCapability } from "./connector-skills.ts";
-import type { SkillRunResult, SkillPack } from "./connector-skills.ts";
+import type { SkillRunResult, SkillPack, SkillSpec } from "./connector-skills.ts";
 import { logActivity } from "./activity.ts";
 import { probeConnector } from "./connector-probe.ts";
 import type { AuthCheckSpec } from "./connector-probe.ts";
@@ -80,6 +80,10 @@ const EMPTY_STATE: SyncState = {
 // HTTP body / MCP tool content / LLM reply). A skill that "succeeds" but writes
 // nothing and returns an empty body is NOT a verified connection.
 export function producedRealData(result: SkillRunResult, artifacts: string[]): boolean {
+  // INTEGRITY: an llm runner never fetched anything. It is a bare model call
+  // with no credentials that writes whatever the model emits, so a plausible
+  // looking reply (or the file it wrote) must not latch "connected".
+  if (result.runner === "llm") return false;
   const raw = typeof result.raw === "string" ? result.raw.trim() : "";
   // INTEGRITY: a response that is an auth challenge, an error, a help/usage dump,
   // or "no data" is NEVER real data, even if some bytes or a (possibly empty) file
@@ -102,6 +106,13 @@ export function producedRealData(result: SkillRunResult, artifacts: string[]): b
   }
   // No usable payload: fall back to a real written artifact.
   return artifacts.length > 0;
+}
+
+// The fetch gate over a whole run. Evaluated per result, not on the last one
+// only: an after: llm summarizer is often the final link of the chain and its
+// output never counts, but the real fetch before it does.
+export function runProducedRealData(results: SkillRunResult[]): boolean {
+  return results.some((r) => producedRealData(r, (r.artifacts ?? []).filter((p) => !looksLikeSecretFile(p))));
 }
 
 // A trimmed payload that is structurally empty: [], {}, null, "", 0.
@@ -359,6 +370,12 @@ interface RunOutcome {
   needsRelearn?: { reason: string; failedStep?: number };
 }
 
+// A runner that reaches the app with real credentials (api, cli, mcp, browser,
+// browser-agent, a2a). The llm runner is the one that does not.
+export function isFetchRunner(skill: Pick<SkillSpec, "runner">): boolean {
+  return skill.runner !== "llm";
+}
+
 // Run one app's refresh: the refresh skill plus any `after:` chained skills.
 // activeConnection — if set, we first look for the matching connection entry's
 // skill override before falling back to refresh.skill / trigger:refresh.
@@ -370,12 +387,21 @@ async function runAppRefresh(app: AppSkill, state: SyncState, activeConnection?:
     ? app.connections?.find((c) => c.kind === activeConnection)?.skill
     : undefined;
   const primaryId = connSkillId ?? app.refresh?.skill;
+  // Only a runner that actually reaches the app can lead a refresh. An llm
+  // skill is a bare model call with no credentials: it summarizes, it does not
+  // fetch, so it is skipped here (it may still run AFTER a real fetch via
+  // after: chaining, see the pack chain below).
+  const explicit = primaryId ? skills.find((s) => s.id === primaryId) : undefined;
   const primary =
-    (primaryId && skills.find((s) => s.id === primaryId)) ||
-    skills.find((s) => s.trigger === "refresh") ||
+    (explicit && isFetchRunner(explicit) ? explicit : undefined) ??
+    skills.find((s) => s.trigger === "refresh" && isFetchRunner(s)) ??
     null;
   if (!primary) {
-    return { outcome: { ok: false, error: "no refresh skill (declare refresh.skill or a skill with trigger: refresh)", skillsRun: 0 }, results: [] };
+    const llmOnly = explicit?.runner === "llm" || skills.some((s) => s.trigger === "refresh" && s.runner === "llm");
+    const error = llmOnly
+      ? "no fetch skill: llm skills summarize, they do not fetch; add an api/cli/mcp/browser skill or teach one with browser-learn"
+      : "no refresh skill (declare refresh.skill or a skill with trigger: refresh)";
+    return { outcome: { ok: false, error, skillsRun: 0 }, results: [] };
   }
 
   const results: SkillRunResult[] = [];
@@ -391,7 +417,10 @@ async function runAppRefresh(app: AppSkill, state: SyncState, activeConnection?:
       const sp = skills.find((s) => s.id === id);
       return sp ? effectiveCapability(sp) : id;
     };
-    const primaryPack = packForSkill(primary, skills);
+    // The lead pack's fallbacks are fetch runners only: falling through to an
+    // llm sibling would "succeed" with invented data. after: chains keep the
+    // full skill list so llm summarizers still run once a real fetch landed.
+    const primaryPack = packForSkill(primary, skills.filter(isFetchRunner));
     const packChain: SkillPack[] = [primaryPack];
     // Resolve after: chains at the CAPABILITY level. With fallback only one method
     // of a capability actually runs, so chaining keys off the capability that ran,
@@ -691,7 +720,7 @@ export async function syncOnce(cfg: SyncConfig): Promise<{ ran: number; ok: numb
         state.consecutive_failures = 0;
         state.elevated = false;
         // The fetch gate: latch first_fetch_ok the first time we pull real data.
-        if (!state.first_fetch_ok && producedRealData(last, artifacts)) {
+        if (!state.first_fetch_ok && runProducedRealData(results)) {
           state.first_fetch_ok = true;
           state.first_fetch_ts = now;
         }
@@ -794,7 +823,7 @@ export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolea
     state.elevated = false;
     // The fetch gate (same as syncOnce): a clean run only counts as "connected"
     // once it has actually pulled data; until then it's "configured"/verifying.
-    const verified = producedRealData(last, artifacts);
+    const verified = runProducedRealData(results);
     if (!state.first_fetch_ok && verified) {
       state.first_fetch_ok = true;
       state.first_fetch_ts = now;
