@@ -1180,13 +1180,20 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   // not echoed); CLIs without a system-prompt flag get it prepended to the
   // prompt instead, so it still governs the turn. It applies even in bare mode
   // (council panelists), where the operating manual is intentionally skipped.
-  const idealState = findIdealState(vaultPath);
+  // The desktop assembles its own prompt and already inlines the Ideal State
+  // and Omega (helpers2.tsx buildIdealStatePreamble / buildOmegaPreamble) before
+  // handing the turn to the engine. Injecting them again here doubled both
+  // blocks on every desktop turn (and for Claude sent one copy inline plus one
+  // via the system channel). Detect the desktop's headers and skip ours.
+  const promptHasConstitution = /^# THE USER'S IDEAL STATE/m.test(prompt);
+  const promptHasOmega = /^# OMEGA/m.test(prompt);
+  const idealState = promptHasConstitution ? null : findIdealState(vaultPath);
   const constitution = idealState ? buildConstitutionPreamble(idealState) : null;
   const promptConstitution = constitution && cli.kind !== "claude" ? constitution : "";
   // Omega — learned app-wide context, injected just below the constitution and
   // above the framework/domain/memory. Applies in every turn, including bare
   // (council) mode, same as the constitution.
-  const omega = findOmega(vaultPath);
+  const omega = promptHasOmega ? null : findOmega(vaultPath);
   const omegaPreamble = omega ? buildOmegaPreamble(omega) : null;
   const promptOmega = omegaPreamble && cli.kind !== "claude" ? omegaPreamble : "";
   // M6: per-domain ideal, just below the global ideal and above omega/framework.

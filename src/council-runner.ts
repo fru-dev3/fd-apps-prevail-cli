@@ -84,6 +84,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 // returns plain data so any frontend can render it. The interfaces are
 // kept simple on purpose — no streaming, no incremental updates. v2 can
 // add an AsyncIterable variant if we need live progress in the daemon.
+// Privacy guard for every council turn: with it present, runChatTurn asks
+// privacy.resolveModelForDomain, which redirects a cloud panelist to the local
+// engine when the domain manifest says privacy.localOnly (or under Bunker).
+// Without it the manifest flag was never consulted on the council path.
+const COUNCIL_GUARD = { localOnly: process.env.PREVAIL_BUNKER === "1" };
+
 export async function runCouncilOneShot(args: {
   prompt: string;
   cwd: string;
@@ -237,6 +243,7 @@ export async function runCouncilOneShot(args: {
           cwd: args.cwd,
           cli: j.cli,
           model: j.model,
+          guard: COUNCIL_GUARD,
           isFirst: true,
           bare: true,
           signal: jobSignal,
@@ -380,6 +387,7 @@ export async function runCouncilOneShot(args: {
         cwd: args.cwd,
         cli: chairCli,
         model: chairModel,
+        guard: COUNCIL_GUARD,
         isFirst: true,
         bare: true,
         signal: args.signal,

@@ -1,5 +1,8 @@
 import { hostname } from "node:os";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
+// Every vault read goes through the crypto-aware reader: on an encrypted vault
+// a raw readFileSync handed MCP clients ciphertext for every read tool.
+import { vreadFile } from "./vault-session.ts";
 import { dirname, join } from "node:path";
 import { v4ContentPath, v4DirPath } from "./vault-layout-v4.ts";
 import { timingSafeEqual } from "node:crypto";
@@ -16,6 +19,8 @@ import { buildRecommendations } from "./recommendations.ts";
 import { runSurface } from "./surface.ts";
 import { readTasks, writeTasks, setTaskStatus, effectiveStatus } from "./tasks.ts";
 import { appendTask, runOneLoop, executeAction, DEFAULT_LOOPS, type LoopsConfig } from "./daemon-loops.ts";
+import { gateAction } from "./broker.ts";
+import { isAuto } from "./autonomy.ts";
 import { syncApp } from "./daemon-sync.ts";
 import { connectApp } from "./connect-app.ts";
 import { vappendLine } from "./vault-session.ts";
@@ -738,6 +743,9 @@ async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<
     model,
     isFirst: true,
     bare: true,
+    // Honor the domain's privacy.localOnly and Bunker on the MCP path too; an
+    // external agent must not be able to route a local-only domain to the cloud.
+    guard: { localOnly: process.env.PREVAIL_BUNKER === "1" },
   });
   const ts = Date.now();
   writeTurnSummary({
@@ -770,7 +778,7 @@ function tReadState(args: Record<string, unknown>, vaultPath: string): string {
   const domain = resolveDomain(vaultPath, args.domain);
   const f = v4ContentPath(domain.path, "memory/state.md", "state.md");
   if (!existsSync(f)) return `(no state.md for ${domain.name})`;
-  return readFileSync(f, "utf8");
+  return vreadFile(f);
 }
 
 function tReadLog(args: Record<string, unknown>, vaultPath: string): string {
@@ -780,7 +788,7 @@ function tReadLog(args: Record<string, unknown>, vaultPath: string): string {
     : new Date().toISOString().slice(0, 10);
   const f = join(v4DirPath(domain.path, ".system/log", "_log"), `${date}.md`);
   if (!existsSync(f)) return `(no log for ${domain.name} on ${date})`;
-  return readFileSync(f, "utf8");
+  return vreadFile(f);
 }
 
 // ── intelligence reads (intents / decisions / recommendations / surface / memory)
@@ -792,7 +800,7 @@ function tReadIntents(args: Record<string, unknown>, vaultPath: string): string 
   const f = v4ContentPath(dirname(legacyF), ".system/journal.jsonl", "_intents.jsonl");
   if (!existsSync(f)) return `(no intents recorded for ${domain.name})`;
   const rows: string[] = [];
-  for (const line of readFileSync(f, "utf8").split("\n")) {
+  for (const line of vreadFile(f).split("\n")) {
     const t = line.trim();
     if (!t) continue;
     try {
@@ -846,7 +854,7 @@ function tReadMemory(args: Record<string, unknown>, vaultPath: string): string {
     const domain = resolveDomain(vaultPath, name);
     const f = v4ContentPath(domainDir(vaultPath, domain.name), "memory/memory.md", "MEMORY.md");
     if (!existsSync(f)) return `(no learned MEMORY.md for ${domain.name} yet)`;
-    return readFileSync(f, "utf8");
+    return vreadFile(f);
   }
   // Canonical layout keeps omega.md under build/ (build/ wins); fall back to the
   // legacy vault-root location for pre-build vaults. Mirrors findOmega in cli-bridge.
@@ -854,7 +862,7 @@ function tReadMemory(args: Record<string, unknown>, vaultPath: string): string {
   const rootF = join(vaultPath, "omega.md");
   const f = existsSync(buildF) ? buildF : rootF;
   if (!existsSync(f)) return "(no omega.md yet - vault-wide learned memory is empty)";
-  return readFileSync(f, "utf8");
+  return vreadFile(f);
 }
 
 // ── task management ────────────────────────────────────────────────────────────
@@ -937,7 +945,7 @@ function tListLoops(args: Record<string, unknown>, vaultPath: string): string {
   if (!existsSync(f)) return `(no loops defined for ${domain.name})`;
   let loops: Array<Record<string, unknown>> = [];
   try {
-    const doc = JSON.parse(readFileSync(f, "utf8")) as { loops?: Array<Record<string, unknown>> };
+    const doc = JSON.parse(vreadFile(f)) as { loops?: Array<Record<string, unknown>> };
     loops = Array.isArray(doc.loops) ? doc.loops : [];
   } catch {
     return `(could not read loops for ${domain.name})`;
@@ -967,6 +975,16 @@ async function tApproveLoopAction(args: Record<string, unknown>, vaultPath: stri
   const domain = resolveDomain(vaultPath, args.domain);
   const action = String(args.action ?? "").trim();
   if (!action) throw new Error("action is required");
+  // An external agent is not the user. Route the action through the same broker
+  // the loop daemon applies to its own proposals (pause -> per-class policy ->
+  // global opt-in -> spend cap). Only an action the user's policy already lets
+  // run unattended executes here; anything that needs a human goes to the
+  // Decision Inbox. Previously this ran ANY action string with act:true on an
+  // agent's say-so, bypassing every gate the desktop enforces.
+  const gate = gateAction(action, { vault: vaultPath, autonomousActs: isAuto(vaultPath) });
+  if (gate.decision !== "auto") {
+    return `Not executed (${gate.cls}: ${gate.reason ?? "needs approval"}). This action needs the user's approval in Prevail's Decision Inbox.`;
+  }
   const clis = await detectClis();
   if (clis.length === 0) throw new Error("no CLIs detected");
   const result = await executeAction(loopsCfg(vaultPath, clis[0]!.kind), domain.name, action);

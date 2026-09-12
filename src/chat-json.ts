@@ -254,6 +254,12 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
 
   const available = await detectClis();
   const cli = pickCli(available, wantedCli, opts.localOnly ?? false);
+  // Privacy + cost guard for every turn on this path. runChatTurn's guard was
+  // opt-in and NO caller passed it, so a domain whose manifest says
+  // privacy.localOnly still ran on a cloud CLI, and budget caps never fired.
+  // With the guard present, resolveModelForDomain redirects a cloud pick to the
+  // local engine for local-only domains (and under Bunker / --local-only).
+  const turnGuard = { localOnly: opts.localOnly ?? process.env.PREVAIL_BUNKER === "1" };
   if (!cli) {
     if (opts.localOnly) return fail("no local engine available (ollama not detected)");
     if (wantedCli) return fail(`engine not available: ${wantedCli}`);
@@ -442,6 +448,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         prompt: message,
         cwd: domain.path,
         cli,
+        guard: turnGuard,
         model: cascadePlan.cheapModel,
         isFirst: !opts.sessionId,
         webAccess: opts.webAccess,
@@ -471,6 +478,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
           prompt: message,
           cwd: domain.path,
           cli,
+          guard: turnGuard,
           model: ranModel,
           isFirst: !opts.sessionId,
           webAccess: opts.webAccess,
@@ -493,6 +501,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         prompt: message,
         cwd: domain.path,
         cli,
+        guard: turnGuard,
         model,
         isFirst: !opts.sessionId, // resume → not first (claude uses --continue)
         webAccess: opts.webAccess,
