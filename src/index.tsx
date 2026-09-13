@@ -2062,20 +2062,27 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       };
       const profileCtx = readBuild("_profile.md", 2500) || readBuild("profile.md", 2500) || readVaultRoot("profile.md", 2500) || readVaultRoot("user.md", 2500);
       const idealCtx = readBuild("ideal-state.md", 1500) || readVaultRoot("ideal-state.md", 1500);
+      // The v4 vault keeps a domain's living record under memory/ and its
+      // constitution at the domain root. The legacy names are kept as
+      // fallbacks for un-migrated vaults. Reading only the legacy names was
+      // why "Suggest with AI" failed on EVERY domain of a current vault with
+      // "nothing to draft from": state.md, tasks.md and ideal-state.md were
+      // all there, in the places this did not look.
       const sections = ([
         ["WHO THEY ARE — user profile", profileCtx],
         ["HOW THEY DECIDE — ideal-state constitution", idealCtx],
-        ["_state.md", readCtx("_state.md", 3000) || readCtx("state.md", 3000)],
+        ["this domain's ideal state", readCtx("ideal-state.md", 1500)],
+        ["state", readCtx("memory/state.md", 3000) || readCtx("_state.md", 3000) || readCtx("state.md", 3000)],
         ["goals.md", readCtx("goals.md", 1500)],
         ["config.md", readCtx("config.md", 800)],
         ["soul.md", readCtx("soul.md", 800)],
-        ["_tasks.md", readCtx("_tasks.md", 800)],
-        ["_memory.md", readCtx("_memory.md", 1200)],
+        ["tasks", readCtx("memory/tasks.md", 800) || readCtx("_tasks.md", 800)],
+        ["memory", readCtx("memory/memory.md", 1200) || readCtx("_memory.md", 1200)],
         ["recent _log decisions", logCtx],
         ["latest thread", threadCtx],
       ] as [string, string][]).filter(([, t]) => t);
       if (sections.length === 0) {
-        failures.push(`${domain}: nothing to draft from (no state, goals, config, soul, tasks, or threads)`);
+        failures.push(`${domain}: nothing to draft from (no memory/state.md, memory/tasks.md, ideal-state.md, or threads in this domain)`);
         continue;
       }
 
