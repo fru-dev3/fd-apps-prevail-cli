@@ -1468,7 +1468,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
     // unless --run <name> is passed. Default judge: claude (first
     // detected; can override with --judge-cli/--judge-model). Skip the
     // LLM-as-judge layer with --no-judge for a fast mechanical pass.
-    const { scoreRun, runsDir } = await import("./canonical-bench.ts");
+    const { scoreRun, runsDir, needsScoring } = await import("./canonical-bench.ts");
     const { vreadFile } = await import("./vault-session.ts");
     let runName: string | null = null;
     let noJudge = false;
@@ -1494,7 +1494,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
       process.exit(1);
     }
     // Resolve the judge engine once (shared across --all).
-    let judgeCli;
+    let judgeCli: import("./cli-bridge.ts").AvailableCli | undefined;
     if (!noJudge) {
       const { detectClis } = await import("./cli-bridge.ts");
       let allClis = await detectClis();
@@ -1519,8 +1519,16 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
           ? allClis.find((c) => c.kind === judgeCliKind)
           : allClis.find((c) => c.kind === "claude") ?? allClis[0];
         if (!judgeCli) {
-          console.error("no CLI available to act as judge. install one or pass --no-judge.");
-          process.exit(1);
+          // Exiting here used to throw away a whole paid-for batch: the answers
+          // were already on disk and cost real tokens, and scoring wrote
+          // nothing at all. Do the mechanical keyword pass instead and leave
+          // judge_avg null, which is what marks a run as still needing the
+          // judge - so re-scoring picks these up once a judge exists.
+          console.error(
+            "no CLI available to act as judge - scoring keywords only. "
+            + "These runs stay marked unscored; re-score once a judge CLI is installed.",
+          );
+          noJudge = true;
         }
       }
     }
@@ -1538,24 +1546,66 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
           }
           return true;
         })
-        .filter((d) => rescore || !existsSync(join(d, "score.json")));
+        // A run that has a score.json but no judge_avg was never actually
+        // judged (the judge errored on every question, or none was available).
+        // Skipping it made that permanent: it showed as unscored forever and
+        // no amount of re-scoring would touch it. Pick those back up whenever
+        // a judge is available.
+        .filter((d) => {
+          const sf = join(d, "score.json");
+          const hasScoreFile = existsSync(sf);
+          let scoreJson: string | null = null;
+          if (hasScoreFile) { try { scoreJson = vreadFile(sf); } catch { scoreJson = null; } }
+          return needsScoring({ hasScoreFile, scoreJson, rescore, hasJudge: !!judgeCli });
+        });
       if (dirs.length === 0) {
         console.log(batchId ? `nothing to score for batch ${batchId}.` : "nothing to score — every run already has a score.json (use --rescore to redo).");
         return;
       }
+      // One run used to be able to end the whole pass: an exception anywhere in
+      // the loop abandoned every run after it, which is how a finished batch
+      // ended up with most of its runs unscored. Each run now stands alone,
+      // and anything that fails gets a second attempt at the end.
+      const failed: string[] = [];
+      let scored = 0;
+      const scoreOne = async (runDir: string): Promise<boolean> => {
+        const name = runDir.split("/").pop();
+        console.log(`scoring ${name}${judgeCli ? ` · judge: ${judgeCli.kind}` : " · keyword-only"}…`);
+        try {
+          const result = await scoreRun({
+            vaultPath: vault,
+            runDir,
+            judgeCli,
+            judgeModel: judgeModel ?? undefined,
+            onProgress: (id) => process.stdout.write(`  ${id}…\r`),
+          });
+          console.log("");
+          console.log(`  ✓ ${result.questionScores.length} q · judge ${result.judge_avg ?? "—"}/10 · kw ${result.keyword_avg ?? "—"}%`);
+          return true;
+        } catch (e) {
+          console.log("");
+          console.error(`  × ${name}: ${e instanceof Error ? e.message : String(e)}`);
+          return false;
+        }
+      };
       for (const runDir of dirs) {
-        console.log(`scoring ${runDir.split("/").pop()}${judgeCli ? ` · judge: ${judgeCli.kind}` : " · keyword-only"}…`);
-        const result = await scoreRun({
-          vaultPath: vault,
-          runDir,
-          judgeCli,
-          judgeModel: judgeModel ?? undefined,
-          onProgress: (id) => process.stdout.write(`  ${id}…\r`),
-        });
-        console.log("");
-        console.log(`  ✓ ${result.questionScores.length} q · judge ${result.judge_avg ?? "—"}/10 · kw ${result.keyword_avg ?? "—"}%`);
+        if (await scoreOne(runDir)) scored++; else failed.push(runDir);
       }
-      console.log(`✓ scored ${dirs.length} run${dirs.length === 1 ? "" : "s"}`);
+      if (failed.length > 0) {
+        console.log(`retrying ${failed.length} failed run${failed.length === 1 ? "" : "s"}…`);
+        const retry = [...failed];
+        failed.length = 0;
+        for (const runDir of retry) {
+          if (await scoreOne(runDir)) scored++; else failed.push(runDir);
+        }
+      }
+      console.log(`✓ scored ${scored} run${scored === 1 ? "" : "s"}`);
+      if (failed.length > 0) {
+        // Say it plainly and exit non-zero so the desktop can surface it,
+        // rather than reporting a clean finish over unscored runs.
+        console.error(`× ${failed.length} run${failed.length === 1 ? "" : "s"} could not be scored: ${failed.map((d) => d.split("/").pop()).join(", ")}`);
+        process.exit(1);
+      }
       return;
     }
     const candidates = readdirSync(root).sort().reverse();

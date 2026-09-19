@@ -765,25 +765,73 @@ async function judgeOne(
     "MODEL'S REPLY:",
     record.reply.slice(0, 8000),
   ].join("\n");
-  let raw = "";
-  try {
-    raw = await runChatTurn({
-      prompt,
-      cwd: process.cwd(),
-      cli: judgeCli,
-      model: judgeModel,
-      isFirst: true,
-      bare: true,
-      signal,
-    });
-  } catch {
-    return { score: null, rationale: null };
+  // The judge is a network call to another model, so it fails the way network
+  // calls fail: rate limits, cold starts, a truncated reply that carries no
+  // SCORE line. A single attempt used to lose that question's score for good,
+  // silently and with no rationale - the run had already been paid for. Retry
+  // a few times with backoff, and when it still will not answer, say why in
+  // the rationale instead of leaving a blank.
+  const ATTEMPTS = 3;
+  let lastWhy = "judge did not return a SCORE line";
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    if (signal?.aborted) return { score: null, rationale: "cancelled" };
+    let raw = "";
+    try {
+      raw = await runChatTurn({
+        prompt,
+        cwd: process.cwd(),
+        cli: judgeCli,
+        model: judgeModel,
+        isFirst: true,
+        bare: true,
+        signal,
+      });
+    } catch (e) {
+      lastWhy = `judge call failed: ${e instanceof Error ? e.message : String(e)}`;
+      if (attempt < ATTEMPTS) { await sleep(attempt * 2000); continue; }
+      return { score: null, rationale: `unjudged (${lastWhy})` };
+    }
+    const scoreMatch = raw.match(/^SCORE:\s*(\d+)/im);
+    const whyMatch = raw.match(/^WHY:\s*(.+)$/im);
+    if (scoreMatch) {
+      const score = Math.max(0, Math.min(10, parseInt(scoreMatch[1]!, 10)));
+      return { score, rationale: whyMatch?.[1]?.trim() ?? null };
+    }
+    // A bare number on its own is a judge that ignored the format, not a
+    // failure. Take it rather than throwing the answer away.
+    const loose = raw.trim().match(/^(\d{1,2})\b/);
+    if (loose) {
+      const n = parseInt(loose[1]!, 10);
+      if (n >= 0 && n <= 10) return { score: n, rationale: whyMatch?.[1]?.trim() ?? null };
+    }
+    if (attempt < ATTEMPTS) await sleep(attempt * 2000);
   }
-  const scoreMatch = raw.match(/^SCORE:\s*(\d+)/im);
-  const whyMatch = raw.match(/^WHY:\s*(.+)$/im);
-  if (!scoreMatch) return { score: null, rationale: null };
-  const score = Math.max(0, Math.min(10, parseInt(scoreMatch[1]!, 10)));
-  return { score, rationale: whyMatch?.[1]?.trim() ?? null };
+  return { score: null, rationale: `unjudged (${lastWhy})` };
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/// Should this run directory be (re-)scored?
+///
+/// A run with no score.json has plainly never been scored. The subtler case is
+/// a run that HAS a score.json whose judge_avg is null: nothing was ever
+/// judged there, either because no judge was available or because every judge
+/// call failed. Treating that as "already scored" made it permanent - the run
+/// showed as unscored forever and re-scoring skipped right over it. So once a
+/// judge is available, those come back into scope.
+export function needsScoring(
+  opts: { hasScoreFile: boolean; scoreJson?: string | null; rescore?: boolean; hasJudge: boolean },
+): boolean {
+  if (opts.rescore) return true;
+  if (!opts.hasScoreFile) return true;
+  if (!opts.hasJudge) return false;
+  try {
+    const parsed = JSON.parse(opts.scoreJson ?? "") as { judge_avg?: number | null };
+    return parsed.judge_avg == null;
+  } catch {
+    // An unreadable or truncated score.json is not a score.
+    return true;
+  }
 }
 
 export interface ScoreArgs {
