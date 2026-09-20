@@ -84,6 +84,29 @@ interface ShadowHandle {
 
 const NO_SHADOW: ShadowHandle = { settle: async (actual) => actual };
 
+// Shadow recording must be strictly free. The decision call is started before
+// the LLM classifier, but "started earlier" is not the same as "finished
+// first": a fast classifier and a slow decision service would otherwise make
+// the user wait on a call whose answer is being thrown away. So in shadow mode
+// nothing is awaited on the request path at all; the row is written whenever
+// the call lands. Only live mode waits, because there the verdict depends on it.
+const pendingShadowWrites = new Set<Promise<void>>();
+
+function writeInBackground(work: Promise<void>): void {
+  const p = work.catch(() => {}).finally(() => pendingShadowWrites.delete(p));
+  pendingShadowWrites.add(p);
+}
+
+/**
+ * Await any shadow rows still in flight. For tests, and for a short-lived
+ * process that would otherwise exit before a row is written.
+ */
+export async function flushDecisionShadow(): Promise<void> {
+  while (pendingShadowWrites.size > 0) {
+    await Promise.allSettled([...pendingShadowWrites]);
+  }
+}
+
 function beginDecisionShadow(args: ClassifyArgs): ShadowHandle {
   let layer;
   try {
@@ -100,7 +123,7 @@ function beginDecisionShadow(args: ClassifyArgs): ShadowHandle {
     // real verdict is known, so the row carries what Prevail actually did.
     return {
       settle: async (actual, baselineMs) => {
-        record(args, null, actual, baselineMs, layer.reason ?? "unavailable");
+        writeInBackground((async () => record(args, null, actual, baselineMs, layer.reason ?? "unavailable"))());
         return actual;
       },
     };
@@ -116,20 +139,29 @@ function beginDecisionShadow(args: ClassifyArgs): ShadowHandle {
     { signal: args.signal },
   ).catch(() => null);
 
+  const finish = async (actual: boolean, baselineMs: number): Promise<boolean> => {
+    let result: DecisionResult | null = null;
+    try {
+      result = await inFlight;
+    } catch {
+      result = null;
+    }
+    const liveCtx: RoutingContext = { ...ctx, currentPlan: actual ? "council" : "single" };
+    const { proposed, effective } = planRoute(liveCtx, result, { shadow: !layer.live });
+    record(args, result, actual, baselineMs, result ? null : "decision provider returned nothing", proposed.mode);
+    // In shadow, planRoute already returns today's plan as `effective`, so
+    // this is the same boolean that came in. In live mode it is the layer's.
+    return effective.mode === "council";
+  };
+
+  if (layer.live) {
+    // Live mode genuinely needs the answer before it can route.
+    return { settle: finish };
+  }
   return {
     settle: async (actual, baselineMs) => {
-      let result: DecisionResult | null = null;
-      try {
-        result = await inFlight;
-      } catch {
-        result = null;
-      }
-      const liveCtx: RoutingContext = { ...ctx, currentPlan: actual ? "council" : "single" };
-      const { proposed, effective } = planRoute(liveCtx, result, { shadow: !layer.live });
-      record(args, result, actual, baselineMs, result ? null : "decision provider returned nothing", proposed.mode);
-      // In shadow, planRoute already returns today's plan as `effective`, so
-      // this is the same boolean that came in. In live mode it is the layer's.
-      return effective.mode === "council";
+      writeInBackground(finish(actual, baselineMs).then(() => {}));
+      return actual;
     },
   };
 }
@@ -187,9 +219,9 @@ function record(
 // sees a council fire they didn't ask for due to a flaky call.
 export async function classifyAsCouncilWorthy(args: ClassifyArgs): Promise<boolean> {
   // Start the decision layer FIRST, so it runs alongside the LLM classifier
-  // rather than after it. Jev answers in well under a second and the
-  // classifier is a full model turn, so in shadow mode this costs the user
-  // no measurable wall-clock time at all.
+  // rather than after it. In shadow mode nothing on this path ever waits for
+  // it: the verdict returns as soon as the classifier is done and the row is
+  // written whenever the decision call lands.
   const shadow = beginDecisionShadow(args);
 
   const prompt = [

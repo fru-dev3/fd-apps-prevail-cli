@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { classifyAsCouncilWorthy } from "./auto-council.ts";
+import { classifyAsCouncilWorthy, flushDecisionShadow } from "./auto-council.ts";
 import { resetDecisionLayerCache } from "./decision-config.ts";
 import { readDecisionShadow } from "./decision-shadow.ts";
 import type { AvailableCli } from "./cli-bridge.ts";
@@ -93,6 +93,7 @@ describe("auto-council with a decision layer behind it", () => {
     // the user still got exactly what they would have got before.
     expect(verdict).toBe(false);
 
+    await flushDecisionShadow();
     const rows = readDecisionShadow(vault);
     expect(rows).toHaveLength(1);
     const r = rows[0]!;
@@ -118,6 +119,7 @@ describe("auto-council with a decision layer behind it", () => {
       domain: "real-estate",
       availableModels: 4,
     });
+    await flushDecisionShadow();
     expect(seen).not.toBeNull();
     expect(seen!.auth).toBe("Bearer e2e-key");
     const body = seen!.body as { model: string; state: Record<string, unknown>; questions: Record<string, unknown> };
@@ -137,6 +139,7 @@ describe("auto-council with a decision layer behind it", () => {
     expect(seen).toBeNull();
     // The skip is still recorded, with the reason, so an empty report is
     // explainable rather than mysterious.
+    await flushDecisionShadow();
     const rows = readDecisionShadow(vault);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.proposed).toBeNull();
@@ -147,6 +150,7 @@ describe("auto-council with a decision layer behind it", () => {
     reply = { status: 500, body: { detail: { message: "boom" } } };
     const verdict = await classify();
     expect(verdict).toBe(false);
+    await flushDecisionShadow();
     const rows = readDecisionShadow(vault);
     expect(rows[0]!.proposed).toBeNull();
     expect(rows[0]!.skipped).toMatch(/returned nothing/);
@@ -161,6 +165,7 @@ describe("auto-council with a decision layer behind it", () => {
     const verdict = await classify();
     // Same stub, same signal, different switch: now it convenes a council.
     expect(verdict).toBe(true);
+    await flushDecisionShadow();
     const rows = readDecisionShadow(vault);
     expect(rows[0]!.proposed).toBe("council");
   });
@@ -175,10 +180,40 @@ describe("auto-council with a decision layer behind it", () => {
       availableModels: 1,
     });
     expect(verdict).toBe(false);
+    await flushDecisionShadow();
     const body = seen!.body as { questions: { route: { criteria: Record<string, string> } } };
     // The impossible branch was never even offered to the model.
     expect(Object.keys(body.questions.route.criteria)).not.toContain("council");
+    await flushDecisionShadow();
     expect(readDecisionShadow(vault)[0]!.proposed).toBe("single");
+  });
+
+  test("shadow mode does not make the user wait for a slow decision service", async () => {
+    // The failure this guards against: a fast classifier and a slow decision
+    // call, where shadow mode would otherwise add the difference to every
+    // single turn for data the user never sees.
+    server!.stop(true);
+    const slow = Bun.serve({
+      port: 0,
+      async fetch() {
+        await Bun.sleep(3_000);
+        return new Response("{}", { status: 200 });
+      },
+    });
+    process.env.PREVAIL_TYPESAFE_URL = `http://127.0.0.1:${slow.port}/v1/systemone`;
+    resetDecisionLayerCache();
+    try {
+      const t0 = Date.now();
+      await classify();
+      const elapsed = Date.now() - t0;
+      // Measured at 1ms. Were the path awaiting the decision call, this
+      // would be the full 1.2s deadline, so the margin here is decisive.
+      expect(elapsed).toBeLessThan(200);
+    } finally {
+      slow.stop(true);
+      // Let the abandoned call finish so it does not leak into the next test.
+      await flushDecisionShadow();
+    }
   });
 
   test("no vault means no recording and no behaviour change", async () => {
@@ -189,6 +224,7 @@ describe("auto-council with a decision layer behind it", () => {
       availableModels: 4,
     });
     expect(verdict).toBe(false);
+    await flushDecisionShadow();
     expect(readDecisionShadow(vault)).toEqual([]);
   });
 });
