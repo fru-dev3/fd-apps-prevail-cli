@@ -121,6 +121,31 @@ export interface DecisionProvider {
  */
 export const DECISION_TIMEOUT_MS = 1_200;
 
+/**
+ * Ask a provider a set of questions. This is the only entry point routing code
+ * should use, and it cannot throw: a missing provider, an unconfigured one, a
+ * slow one or a broken one all come back as null, which means "no hint, decide
+ * the way you already would".
+ */
+export async function evaluateDecision(
+  provider: DecisionProvider | null | undefined,
+  state: unknown,
+  questions: Record<string, DecisionQuestion>,
+  opts: EvaluateOptions = {},
+): Promise<DecisionResult | null> {
+  if (!provider || !provider.available()) return null;
+  try {
+    return await provider.evaluate(state, questions, {
+      timeoutMs: opts.timeoutMs ?? DECISION_TIMEOUT_MS,
+      signal: opts.signal,
+    });
+  } catch {
+    // A provider is contractually not supposed to throw. If one does, that is
+    // still not a reason to fail the user's actual request.
+    return null;
+  }
+}
+
 // ── Guards that keep a hint from becoming a decision ───────────────────
 
 /**

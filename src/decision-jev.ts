@@ -99,7 +99,9 @@ export class JevProvider implements DecisionProvider {
   private readonly breaker = new Breaker();
 
   constructor(opts: JevProviderOptions = {}) {
-    this.getKey = opts.apiKey ?? (() => process.env.TYPESAFE_API_KEY);
+    // PREVAIL_TYPESAFE_KEY is the house convention (and survives the env
+    // scrubber); TYPESAFE_API_KEY is what the vendor's own SDK reads.
+    this.getKey = opts.apiKey ?? (() => process.env.PREVAIL_TYPESAFE_KEY || process.env.TYPESAFE_API_KEY);
     this.model = opts.model ?? DEFAULT_MODEL;
     this.endpoint = opts.endpoint ?? ENDPOINT;
     this.doFetch = opts.fetchImpl ?? fetch;

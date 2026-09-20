@@ -122,6 +122,25 @@ export interface UserConfig {
   // to silently routing through runCouncil instead. "off" disables.
   autoCouncil?: "off" | "suggest" | "auto";
   domainAutoCouncil?: Record<string, "off" | "suggest" | "auto">;
+  // Decision layer. A fast, cheap decision model consulted BEFORE the
+  // expensive ones, to judge how a request should be handled. It never
+  // decides anything by itself: it returns probabilities and Prevail's own
+  // rules pick the branch. "off" (the default) skips it entirely.
+  //
+  // mode "shadow" runs it and records what it WOULD have chosen without
+  // changing behaviour; "live" lets its signals actually move routing.
+  // Shadow is the default whenever a provider is configured, so turning a
+  // provider on can never change what the app does until that is asked for
+  // separately.
+  decisionProvider?: "off" | "jev";
+  decisionMode?: "shadow" | "live";
+  // How much of a request may be shown to the decision model. "signals" sends
+  // derived features only (length, domain, whether it asks a question);
+  // "redacted" (the default) adds the request text with emails, URLs, phone
+  // numbers and amounts stripped; "full" sends it verbatim. The decision layer
+  // is a third party on the network, so this is a privacy control, and Bunker
+  // Mode disables the whole layer regardless of what is set here.
+  decisionPrivacy?: "signals" | "redacted" | "full";
   // Bunker Mode — a persisted, global privacy switch. When on, frontends pass
   // --local-only on every engine call and the engine forces local-only as a
   // backstop, so no prompt ever reaches a cloud provider. Mirrors the desktop's
@@ -582,6 +601,42 @@ export function setAutoCouncil(mode: AutoCouncilMode, domainKey?: string): void 
     next.autoCouncil = mode;
   }
   writeConfig(next);
+}
+
+// Decision layer resolution. Every default here is the inert one: no
+// provider, and shadow mode even once a provider exists. Turning the layer on
+// is two deliberate steps, and the first one cannot change behaviour.
+export type DecisionProviderId = "off" | "jev";
+export type DecisionMode = "shadow" | "live";
+export type DecisionPrivacy = "signals" | "redacted" | "full";
+
+export function readDecisionProvider(): DecisionProviderId {
+  return readConfig()?.decisionProvider ?? "off";
+}
+
+export function readDecisionMode(): DecisionMode {
+  // Anything other than an explicit "live" is shadow. A typo in the config
+  // file must not silently hand routing to the decision model.
+  return readConfig()?.decisionMode === "live" ? "live" : "shadow";
+}
+
+export function readDecisionPrivacy(): DecisionPrivacy {
+  const v = readConfig()?.decisionPrivacy;
+  return v === "signals" || v === "full" ? v : "redacted";
+}
+
+export function setDecisionLayer(next: {
+  provider?: DecisionProviderId;
+  mode?: DecisionMode;
+  privacy?: DecisionPrivacy;
+}): void {
+  const cfg = readConfig();
+  if (!cfg) return;
+  const out = { ...cfg };
+  if (next.provider) out.decisionProvider = next.provider;
+  if (next.mode) out.decisionMode = next.mode;
+  if (next.privacy) out.decisionPrivacy = next.privacy;
+  writeConfig(out);
 }
 
 export function configDir(): string {

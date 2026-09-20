@@ -727,7 +727,14 @@ async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<
   if (readAutoCouncil(domain.name) === "auto") {
     let worthy = false;
     try {
-      worthy = await classifyAsCouncilWorthy({ cwd: domain.path, cli, userPrompt: prompt });
+      worthy = await classifyAsCouncilWorthy({
+        cwd: domain.path,
+        cli,
+        userPrompt: prompt,
+        vault: vaultPath,
+        domain: domain.name,
+        availableModels: clis.length,
+      });
     } catch {
       worthy = false;
     }

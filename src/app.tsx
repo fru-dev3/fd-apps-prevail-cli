@@ -1674,6 +1674,9 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           cwd: session.hostDomain.path,
           cli: session.cli,
           userPrompt: text,
+          vault: vaultPath,
+          domain: session.hostDomain.name,
+          availableModels: clis.length,
         });
         if (worthy) runCouncil(key, text);
         else sendMessage(key, text, { skipAutoCouncil: true });
@@ -1720,6 +1723,9 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
           cwd: session.hostDomain.path,
           cli: session.cli,
           userPrompt: text,
+          vault: vaultPath,
+          domain: session.hostDomain.name,
+          availableModels: clis.length,
         });
         if (!worthy) return;
         const sTs = Date.now();

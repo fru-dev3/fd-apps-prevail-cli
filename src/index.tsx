@@ -54,6 +54,8 @@ interface Args {
   benchArgs: string[];
   usage: boolean;
   usageArgs: string[];
+  decision: boolean;
+  decisionArgs: string[];
   appmode: boolean;
   appmodeArgs: string[];
   models: boolean;
@@ -173,6 +175,8 @@ function parseArgs(argv: string[]): Args {
   let benchArgs: string[] = [];
   let usage = false;
   let usageArgs: string[] = [];
+  let decision = false;
+  let decisionArgs: string[] = [];
   let appmode = false;
   let appmodeArgs: string[] = [];
   let models = false;
@@ -336,6 +340,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "usage") {
       usage = true;
       usageArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "decision-layer") {
+      decision = true;
+      decisionArgs = argv.slice(i + 1);
       break;
     } else if (a === "appmode") {
       appmode = true;
@@ -559,6 +567,8 @@ function parseArgs(argv: string[]): Args {
     benchArgs,
     usage,
     usageArgs,
+    decision,
+    decisionArgs,
     appmode,
     appmodeArgs,
     models,
@@ -712,6 +722,10 @@ USAGE
                                                      --auto --framework --lens
   prevail privacy get|set --json [--bunker on|off] [--vault-lock on|off]
                               read/set Bunker Mode (global local-only switch)
+  prevail decision-layer status|report|set [--json] [--since 7d]
+                              fast decision layer in front of council/model
+                              calls; report compares what it WOULD have
+                              chosen against what actually happened
   prevail search <query> --json [--limit N]
                               full-text search across indexed chat history
   prevail reset [--json] [--dry-run] [--include-vault] [--yes]
@@ -1281,6 +1295,130 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
 //   prevail usage record '<json>'           append one turn (used by front-ends)
 //   prevail usage [--json]                   raw ledger (default: pretty totals)
 //   prevail usage --by day|domain|model|session|cli|surface [--since 7d] [--json]
+// `prevail decision-layer` — inspect and configure the decision layer.
+// Named with the suffix because `prevail decisions` is already the vault's
+// council verdict log, and the two are unrelated.
+//
+//   status                     is it on, in what mode, and why not
+//   report [--since 7d] [--json]  what it WOULD have decided vs what happened
+//   set --provider jev|off --mode shadow|live --privacy signals|redacted|full
+//
+// The report is the point of shadow mode: it is how you find out whether the
+// cheap path agrees often enough to be worth switching on.
+async function decisionCommand(args: string[], vaultOverride: string | null): Promise<void> {
+  const { readConfig: rc } = await import("./config.ts");
+  const { setDecisionLayer, readDecisionProvider, readDecisionMode, readDecisionPrivacy } = await import("./config.ts");
+  const { resolveDecisionLayer, decisionApiKey } = await import("./decision-config.ts");
+  const { readDecisionShadow, summarizeDecisionShadow, decisionShadowFile } = await import("./decision-shadow.ts");
+  const cfg = rc();
+  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  const sub = args[0] ?? "status";
+
+  if (sub === "set") {
+    const val = (flag: string): string | undefined => {
+      const i = args.indexOf(flag);
+      return i >= 0 ? args[i + 1] : undefined;
+    };
+    const provider = val("--provider");
+    const mode = val("--mode");
+    const privacy = val("--privacy");
+    if (provider && provider !== "jev" && provider !== "off") {
+      console.error(`unknown provider "${provider}" (expected jev or off)`);
+      process.exit(1);
+    }
+    if (mode && mode !== "shadow" && mode !== "live") {
+      console.error(`unknown mode "${mode}" (expected shadow or live)`);
+      process.exit(1);
+    }
+    if (privacy && !["signals", "redacted", "full"].includes(privacy)) {
+      console.error(`unknown privacy "${privacy}" (expected signals, redacted or full)`);
+      process.exit(1);
+    }
+    setDecisionLayer({
+      provider: provider as "jev" | "off" | undefined,
+      mode: mode as "shadow" | "live" | undefined,
+      privacy: privacy as "signals" | "redacted" | "full" | undefined,
+    });
+    console.log(`decision layer: provider=${readDecisionProvider()} mode=${readDecisionMode()} privacy=${readDecisionPrivacy()}`);
+    if (readDecisionMode() === "live") {
+      console.log("live mode: signals can now change how requests are routed.");
+    }
+    return;
+  }
+
+  if (sub === "status") {
+    const l = resolveDecisionLayer();
+    const json = args.includes("--json");
+    const out = {
+      provider: readDecisionProvider(),
+      mode: readDecisionMode(),
+      privacy: readDecisionPrivacy(),
+      active: l.provider !== null,
+      reason: l.reason,
+      key_present: !!decisionApiKey(),
+      ledger: decisionShadowFile(vault),
+    };
+    if (json) { console.log(JSON.stringify(out, null, 2)); return; }
+    console.log(`provider  ${out.provider}`);
+    console.log(`mode      ${out.mode}${out.mode === "shadow" ? " (records only, changes nothing)" : " (signals can change routing)"}`);
+    console.log(`privacy   ${out.privacy}`);
+    console.log(`api key   ${out.key_present ? "present" : "missing (set PREVAIL_TYPESAFE_KEY)"}`);
+    console.log(`active    ${out.active ? "yes" : `no - ${out.reason}`}`);
+    console.log(`ledger    ${out.ledger}`);
+    return;
+  }
+
+  if (sub === "report") {
+    const sinceArg = args.includes("--since") ? args[args.indexOf("--since") + 1] : undefined;
+    const cutoff = parseSinceMs(sinceArg);
+    let rows = readDecisionShadow(vault);
+    if (cutoff !== null) rows = rows.filter((r) => r.ts >= cutoff);
+    const sum = summarizeDecisionShadow(rows);
+    if (args.includes("--json")) { console.log(JSON.stringify({ ...sum, rows: rows.length }, null, 2)); return; }
+
+    if (rows.length === 0) {
+      console.log("no shadow rows yet.");
+      console.log("turn the layer on with: prevail decision-layer set --provider jev");
+      return;
+    }
+    const pctS = (n: number | null) => (n === null ? "-" : `${Math.round(n * 100)}%`);
+    const ms = (n: number | null) => (n === null ? "-" : `${n}ms`);
+    const usd = (n: number) => `$${n.toFixed(6)}`;
+    console.log(`rows            ${rows.length} (${sum.compared} compared, ${sum.skipped} skipped)`);
+    console.log(`agreement       ${sum.agreed}/${sum.compared}  ${pctS(sum.agreementRate)}`);
+    console.log(`decision p50    ${ms(sum.decisionMsP50)}   p95 ${ms(sum.decisionMsP95)}`);
+    console.log(`baseline  p50   ${ms(sum.baselineMsP50)}`);
+    console.log(`spend           decision ${usd(sum.decisionSpendUsd)}  baseline ${usd(sum.baselineSpendUsd)}`);
+    console.log(`est. savings    ${usd(sum.estimatedSavingsUsd)}`);
+    if (sum.disagreements.length > 0) {
+      console.log("");
+      console.log("where they differed:");
+      for (const d of sum.disagreements) {
+        console.log(`  Prevail ${d.actual} -> would have been ${d.proposed}   x${d.count}`);
+      }
+    }
+    if (sum.skipReasons.length > 0) {
+      console.log("");
+      console.log("skipped because:");
+      for (const r of sum.skipReasons) console.log(`  ${r.reason}   x${r.count}`);
+    }
+    return;
+  }
+
+  console.error(`unknown subcommand "${sub}" (expected status, report or set)`);
+  process.exit(1);
+}
+
+/** "7d" / "24h" / "30m" -> absolute ms cutoff. Null when absent or unparseable. */
+function parseSinceMs(spec: string | undefined): number | null {
+  if (!spec) return null;
+  const m = /^(\d+)([dhm])$/.exec(spec.trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = m[2] === "d" ? 86_400_000 : m[2] === "h" ? 3_600_000 : 60_000;
+  return Date.now() - n * unit;
+}
+
 async function usageCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const { recordUsage, readUsage, aggregateUsage, parseSince, filterByDomain, summarizeAll } = await import("./usage.ts");
   const cfg = readConfig();
@@ -5782,6 +5920,10 @@ async function main() {
   }
   if (args.usage) {
     await usageCommand(args.usageArgs, args.vaultPath);
+    return;
+  }
+  if (args.decision) {
+    await decisionCommand(args.decisionArgs, args.vaultPath);
     return;
   }
   if (args.appmode) {

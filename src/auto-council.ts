@@ -1,4 +1,14 @@
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
+import { decisionLayer } from "./decision-config.ts";
+import { evaluateDecision, type DecisionResult } from "./decision.ts";
+import {
+  buildRoutingQuestions,
+  buildRoutingState,
+  planRoute,
+  type RoutingContext,
+} from "./decision-routing.ts";
+import { recordDecisionShadow } from "./decision-shadow.ts";
+import { estimateCostUsd } from "./model-pricing.ts";
 
 // Auto-council classifier.
 //
@@ -50,6 +60,125 @@ export interface ClassifyArgs {
   cli: AvailableCli;
   userPrompt: string;
   signal?: AbortSignal;
+  // ── Decision layer (optional, inert unless configured) ───────────────
+  // Passing a vault turns on shadow recording: the decision model answers
+  // the same question in parallel and both answers are written down. It
+  // cannot change the verdict unless the layer is explicitly set to live.
+  vault?: string | null;
+  domain?: string | null;
+  /** How many runtimes are usable, so the layer is not offered an impossible branch. */
+  availableModels?: number;
+}
+
+// ── Decision layer shadow hook ─────────────────────────────────────────
+//
+// This is the whole integration. It is written so that the ONLY way it can
+// affect the returned verdict is when the layer is explicitly configured
+// live; in every other case `settle` hands back exactly the boolean it was
+// given. Nothing here throws, and nothing here awaits anything that was not
+// already in flight before the expensive classifier started.
+
+interface ShadowHandle {
+  settle(actual: boolean, baselineMs: number): Promise<boolean>;
+}
+
+const NO_SHADOW: ShadowHandle = { settle: async (actual) => actual };
+
+function beginDecisionShadow(args: ClassifyArgs): ShadowHandle {
+  let layer;
+  try {
+    layer = decisionLayer();
+  } catch {
+    return NO_SHADOW;
+  }
+  // Nothing to record against without a vault, and nothing to ask without a
+  // provider. Either way the classifier runs exactly as it always did.
+  if (!args.vault) return NO_SHADOW;
+  if (!layer.provider) {
+    // Still worth one row: "the layer was off, and here is why" is the first
+    // thing to check when a shadow report comes back empty. Recorded once the
+    // real verdict is known, so the row carries what Prevail actually did.
+    return {
+      settle: async (actual, baselineMs) => {
+        record(args, null, actual, baselineMs, layer.reason ?? "unavailable");
+        return actual;
+      },
+    };
+  }
+
+  const ctx = baseContext(args);
+  // Fire now, await later. By the time the LLM classifier returns, this has
+  // almost always already settled.
+  const inFlight: Promise<DecisionResult | null> = evaluateDecision(
+    layer.provider,
+    buildRoutingState(ctx, { privacy: layer.privacy }),
+    buildRoutingQuestions(ctx),
+    { signal: args.signal },
+  ).catch(() => null);
+
+  return {
+    settle: async (actual, baselineMs) => {
+      let result: DecisionResult | null = null;
+      try {
+        result = await inFlight;
+      } catch {
+        result = null;
+      }
+      const liveCtx: RoutingContext = { ...ctx, currentPlan: actual ? "council" : "single" };
+      const { proposed, effective } = planRoute(liveCtx, result, { shadow: !layer.live });
+      record(args, result, actual, baselineMs, result ? null : "decision provider returned nothing", proposed.mode);
+      // In shadow, planRoute already returns today's plan as `effective`, so
+      // this is the same boolean that came in. In live mode it is the layer's.
+      return effective.mode === "council";
+    },
+  };
+}
+
+function baseContext(args: ClassifyArgs): RoutingContext {
+  const models = args.availableModels ?? 1;
+  return {
+    prompt: args.userPrompt,
+    domain: args.domain ?? null,
+    availableModels: models,
+    // This hook only ever chooses between one model and a council, so the
+    // other branches are not offered here. Widening that is a separate
+    // change at a call site that can actually honour them.
+    councilPossible: models > 1,
+    agentPossible: false,
+    currentPlan: "single",
+  };
+}
+
+function record(
+  args: ClassifyArgs,
+  result: DecisionResult | null,
+  actual: boolean,
+  baselineMs: number,
+  skipped: string | null,
+  proposedMode?: string,
+): void {
+  try {
+    if (!args.vault) return;
+    const route = result?.answers.route;
+    recordDecisionShadow(args.vault, {
+      surface: "auto-council",
+      domain: args.domain ?? null,
+      provider: result ? "jev" : null,
+      model: result?.model ?? null,
+      actual: actual ? "council" : "single",
+      proposed: result ? (proposedMode ?? null) : null,
+      confidence: route && route.type === "choice" ? route.confidence : null,
+      decision_ms: result?.latencyMs ?? null,
+      decision_usd: result?.costUsd ?? null,
+      baseline_ms: baselineMs,
+      // The classifier prompt is fixed-length and the reply is one token, so
+      // a character estimate is close enough to compare orders of magnitude.
+      baseline_usd: estimateCostUsd(args.cli.kind, "", CLASSIFIER_INSTRUCTION.length + args.userPrompt.length, 8),
+      skipped,
+    });
+  } catch {
+    /* a shadow row is never worth disturbing a turn for */
+  }
 }
 
 // Returns true when the classifier judges the prompt council-worthy.
@@ -57,6 +186,12 @@ export interface ClassifyArgs {
 // reply, abort) — fail-safe to "don't escalate" so the user never
 // sees a council fire they didn't ask for due to a flaky call.
 export async function classifyAsCouncilWorthy(args: ClassifyArgs): Promise<boolean> {
+  // Start the decision layer FIRST, so it runs alongside the LLM classifier
+  // rather than after it. Jev answers in well under a second and the
+  // classifier is a full model turn, so in shadow mode this costs the user
+  // no measurable wall-clock time at all.
+  const shadow = beginDecisionShadow(args);
+
   const prompt = [
     CLASSIFIER_INSTRUCTION,
     "",
@@ -64,6 +199,7 @@ export async function classifyAsCouncilWorthy(args: ClassifyArgs): Promise<boole
     args.userPrompt.slice(0, 4000),
   ].join("\n");
   let reply = "";
+  const startedAt = Date.now();
   try {
     reply = await runChatTurn({
       prompt,
@@ -83,11 +219,14 @@ export async function classifyAsCouncilWorthy(args: ClassifyArgs): Promise<boole
       maxOutputChars: 200,
     });
   } catch {
-    return false;
+    // The classifier itself failed. Record that too: a shadow report needs to
+    // know how often the path it would replace is the one falling over.
+    return await shadow.settle(false, Date.now() - startedAt);
   }
   const norm = reply.trim().toUpperCase();
   // Strict YES match — anything else (no answer, prose, NO, error) is
   // treated as a no-go. The classifier was explicitly instructed to
   // default to NO on uncertainty, so this matches its bias.
-  return norm.startsWith("YES");
+  const verdict = norm.startsWith("YES");
+  return await shadow.settle(verdict, Date.now() - startedAt);
 }
