@@ -804,9 +804,38 @@ async function judgeOne(
       const n = parseInt(loose[1]!, 10);
       if (n >= 0 && n <= 10) return { score: n, rationale: whyMatch?.[1]?.trim() ?? null };
     }
+    // A judge that has run out of quota answers instantly and forever with
+    // the same non-answer. Retrying that is pure waste, and 1772 questions in
+    // one vault were lost exactly this way: the judge was capped partway
+    // through a long pass and every later question came back blank.
+    if (looksLikeQuotaRefusal(raw)) {
+      return { score: null, rationale: `unjudged (${QUOTA_MARK}: ${firstLine(raw)})` };
+    }
     if (attempt < ATTEMPTS) await sleep(attempt * 2000);
   }
   return { score: null, rationale: `unjudged (${lastWhy})` };
+}
+
+/** Marker the batch loop greps for to tell "this judge is done" from "this answer was odd". */
+export const QUOTA_MARK = "judge unavailable";
+
+const QUOTA_PATTERNS = [
+  /usage limit/i,
+  /rate limit/i,
+  /quota/i,
+  /upgrade to pro/i,
+  /too many requests/i,
+  /insufficient (credit|balance|funds)/i,
+  /please try again later/i,
+];
+
+function looksLikeQuotaRefusal(raw: string): boolean {
+  const head = raw.slice(0, 400);
+  return QUOTA_PATTERNS.some((re) => re.test(head));
+}
+
+function firstLine(raw: string): string {
+  return (raw.split("\n").find((l) => l.trim()) ?? "").trim().slice(0, 120);
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -843,11 +872,19 @@ export interface ScoreArgs {
   onProgress?: (id: string) => void;
 }
 
+/**
+ * How many questions in a row the judge may fail before we call the judge dead
+ * and abandon the run. A genuinely odd answer or two is normal; a steady run of
+ * them means the judge is refusing, not judging.
+ */
+const MAX_CONSECUTIVE_JUDGE_FAILURES = 5;
+
 export async function scoreRun(args: ScoreArgs): Promise<RunScore> {
   const jsonFile = join(args.runDir, "results.json");
   const raw = vreadFile(jsonFile);
   const records: CanonicalRunRecord[] = JSON.parse(raw);
   const questionScores: QuestionScore[] = [];
+  let consecutiveJudgeFailures = 0;
   for (const r of records) {
     args.onProgress?.(r.id);
     // A failed turn (provider/API error or empty reply) isn't a real answer.
@@ -874,6 +911,22 @@ export async function scoreRun(args: ScoreArgs): Promise<RunScore> {
       const j = await judgeOne(args.judgeCli, args.judgeModel ?? "", r, args.signal);
       judge_score = j.score;
       judge_rationale = j.rationale;
+      // Once the judge is out of quota it will not recover inside this pass.
+      // Stop now and say so, instead of writing a score.json full of blanks
+      // that looks like a completed scoring run.
+      if (j.rationale?.includes(QUOTA_MARK)) {
+        throw new Error(`judge stopped answering: ${j.rationale}`);
+      }
+      if (j.score === null) {
+        consecutiveJudgeFailures++;
+        if (consecutiveJudgeFailures >= MAX_CONSECUTIVE_JUDGE_FAILURES) {
+          throw new Error(
+            `judge failed on ${consecutiveJudgeFailures} questions in a row; stopping rather than recording a run of blanks`,
+          );
+        }
+      } else {
+        consecutiveJudgeFailures = 0;
+      }
     }
     questionScores.push({
       id: r.id,
