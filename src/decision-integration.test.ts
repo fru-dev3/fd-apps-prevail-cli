@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { planRoute, shouldConveneCouncil, buildRoutingState, type RoutingContext } from "./decision-routing.ts";
+import { planRoute, probabilityOf, shouldConveneCouncil, buildRoutingState, type RoutingContext } from "./decision-routing.ts";
 import { resolveDecisionLayer, resetDecisionLayerCache, decisionEgressAllowed } from "./decision-config.ts";
 import {
   recordDecisionShadow,
@@ -94,6 +94,87 @@ describe("the deterministic rules own the decision", () => {
       },
     };
     expect(shouldConveneCouncil(ctx, unsure).convene).toBe(false);
+  });
+});
+
+describe("the council rule reads the distribution, not just the winner", () => {
+  // These are the numbers the real service returned on 2026-09-20 for
+  // "Should I take the promotion that pays more but removes my equity?".
+  const realJudgmentCall: DecisionResult = {
+    answers: {
+      route: {
+        type: "choice",
+        choice: "council",
+        confidence: 0.31,
+        probabilities: { single: 0.07, council: 0.54, more_context: 0.39 },
+      },
+      stakes: { type: "score", score: 2.0, confidence: 1.0, probabilities: { "2": 1.0 } },
+    },
+    latencyMs: 526,
+    costUsd: 0.00002507,
+    model: "jev-1.13.0",
+  };
+
+  test("a high-stakes call where one model is nearly ruled out convenes", () => {
+    // The winner only led 0.54 to 0.39 and the vendor's confidence read 0.31,
+    // so an argmax-plus-confidence rule called this "not decisive". But the
+    // model put `single` at 0.07: it was not undecided about whether one
+    // model would do, only about how to escalate.
+    const r = shouldConveneCouncil(ctx, realJudgmentCall);
+    expect(r.convene).toBe(true);
+    expect(r.reason).toMatch(/unlikely to be enough/);
+  });
+
+  // And the trivial case from the same run.
+  const realTrivial: DecisionResult = {
+    answers: {
+      route: {
+        type: "choice",
+        choice: "single",
+        confidence: 0.74,
+        probabilities: { single: 0.83, council: 0, more_context: 0.17 },
+      },
+      stakes: { type: "score", score: 0.37, confidence: 0.44, probabilities: {} },
+    },
+    latencyMs: 177,
+    costUsd: 0.00002474,
+    model: "jev-1.13.0",
+  };
+
+  test("a clearly simple request stays on one model", () => {
+    const r = shouldConveneCouncil(ctx, realTrivial);
+    expect(r.convene).toBe(false);
+    expect(r.reason).toMatch(/one model is enough/);
+  });
+
+  test("a genuine three-way split keeps the status quo", () => {
+    const split: DecisionResult = {
+      ...realJudgmentCall,
+      answers: {
+        route: { type: "choice", choice: "council", confidence: 0.4, probabilities: { single: 0.4, council: 0.35, more_context: 0.25 } },
+        stakes: realJudgmentCall.answers.stakes!,
+      },
+    };
+    expect(shouldConveneCouncil(ctx, split).convene).toBe(false);
+    expect(shouldConveneCouncil({ ...ctx, currentPlan: "council" }, split).convene).toBe(true);
+  });
+
+  test("low probability on single is still not enough when the stakes are ordinary", () => {
+    const lowStakes: DecisionResult = {
+      ...realJudgmentCall,
+      answers: {
+        route: realJudgmentCall.answers.route!,
+        stakes: { type: "score", score: 0.3, confidence: 0.9, probabilities: {} },
+      },
+    };
+    expect(shouldConveneCouncil(ctx, lowStakes).convene).toBe(false);
+  });
+
+  test("probabilityOf reports an unmentioned option as zero, and absence as unknown", () => {
+    const withDist = { type: "choice", choice: "council", confidence: 0.9, probabilities: { council: 0.9 } } as const;
+    expect(probabilityOf(withDist, "single")).toBe(0);
+    const noDist = { type: "choice", choice: "council", confidence: 0.9, probabilities: {} } as const;
+    expect(probabilityOf(noDist, "single")).toBeNull();
   });
 });
 

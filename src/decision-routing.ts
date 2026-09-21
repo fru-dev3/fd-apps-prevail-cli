@@ -190,6 +190,30 @@ export interface RouteOptions {
  *   3. A confident single-model recommendation on low stakes stands one down.
  *   4. Otherwise keep doing whatever Prevail does today.
  */
+/**
+ * Probability the model assigned to one option, or null when it did not say.
+ *
+ * This matters more than the winning option. A three-way question can put
+ * `single` at 0.07 and split the remaining 0.93 between two different ways of
+ * escalating: the argmax is barely ahead and the vendor's own `confidence`
+ * reads low, yet the answer to "is one model enough" is a clear no. Reading
+ * only the argmax throws that away, which is exactly what the first live run
+ * against the service did.
+ */
+export function probabilityOf(a: ChoiceAnswer | undefined, key: string): number | null {
+  if (!a || a.type !== "choice") return null;
+  const p = a.probabilities[key];
+  if (typeof p === "number" && Number.isFinite(p)) return p;
+  // An option the model never mentioned is not evidence either way, unless it
+  // reported a distribution at all, in which case an absent key means zero.
+  return Object.keys(a.probabilities).length > 0 ? 0 : null;
+}
+
+/** One model is enough at or above this probability. */
+const P_SINGLE_SUFFICIENT = 0.6;
+/** One model is unlikely to be enough at or below this probability. */
+const P_SINGLE_UNLIKELY = 0.25;
+
 export function shouldConveneCouncil(
   ctx: RoutingContext,
   result: DecisionResult | null,
@@ -204,19 +228,33 @@ export function shouldConveneCouncil(
 
   const route = result.answers.route as ChoiceAnswer | undefined;
   const stakes = result.answers.stakes as ScoreAnswer | undefined;
-
-  const routeSays = isActionable(route) ? route!.choice : null;
   // Top level of a three-level scale, and only when the model is sure of it.
   const highStakes = isActionable(stakes) && stakes!.score >= 1.5;
 
+  // The council decision is binary, so read the one probability that answers
+  // it directly rather than asking which of three options happened to win.
+  const pSingle = probabilityOf(route, "single");
+  if (pSingle !== null) {
+    if (pSingle <= P_SINGLE_UNLIKELY && highStakes) {
+      return { convene: true, reason: "one model is unlikely to be enough and the stakes are high", decisionAssisted: !currently };
+    }
+    if (pSingle >= P_SINGLE_SUFFICIENT) {
+      return { convene: false, reason: "one model is enough here", decisionAssisted: currently };
+    }
+    // Genuinely in between. Convening is the expensive branch, so ambiguity
+    // keeps whatever Prevail was going to do.
+    return { convene: currently, reason: "signal not decisive; unchanged", decisionAssisted: false };
+  }
+
+  // No distribution to read. Fall back to the winning option, and only when
+  // the model was confident enough in it to be worth acting on.
+  const routeSays = isActionable(route) ? route!.choice : null;
   if (routeSays === "council" && highStakes) {
     return { convene: true, reason: "contested and high stakes", decisionAssisted: !currently };
   }
   if (routeSays === "single" && !highStakes) {
     return { convene: false, reason: "one model is enough here", decisionAssisted: currently };
   }
-  // A council recommendation on ordinary stakes is not enough on its own:
-  // convening is the expensive branch, so ambiguity keeps the status quo.
   return { convene: currently, reason: "signal not decisive; unchanged", decisionAssisted: false };
 }
 

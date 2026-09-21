@@ -722,7 +722,7 @@ USAGE
                                                      --auto --framework --lens
   prevail privacy get|set --json [--bunker on|off] [--vault-lock on|off]
                               read/set Bunker Mode (global local-only switch)
-  prevail decision-layer status|report|set [--json] [--since 7d]
+  prevail decision-layer status|check|report|set [--json] [--since 7d]
                               fast decision layer in front of council/model
                               calls; report compares what it WOULD have
                               chosen against what actually happened
@@ -1308,7 +1308,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
 async function decisionCommand(args: string[], vaultOverride: string | null): Promise<void> {
   const { readConfig: rc } = await import("./config.ts");
   const { setDecisionLayer, readDecisionProvider, readDecisionMode, readDecisionPrivacy } = await import("./config.ts");
-  const { resolveDecisionLayer, decisionApiKey } = await import("./decision-config.ts");
+  const { resolveDecisionLayer, decisionApiKey, warmDecisionKey, KEY_SOURCES } = await import("./decision-config.ts");
   const { readDecisionShadow, summarizeDecisionShadow, decisionShadowFile } = await import("./decision-shadow.ts");
   const cfg = rc();
   const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
@@ -1350,6 +1350,9 @@ async function decisionCommand(args: string[], vaultOverride: string | null): Pr
   }
 
   if (sub === "status") {
+    // A status line should be definite, so unlike a chat turn this one waits
+    // for a 1Password lookup rather than reporting "missing" while it warms.
+    await warmDecisionKey();
     const l = resolveDecisionLayer();
     const json = args.includes("--json");
     const out = {
@@ -1365,9 +1368,64 @@ async function decisionCommand(args: string[], vaultOverride: string | null): Pr
     console.log(`provider  ${out.provider}`);
     console.log(`mode      ${out.mode}${out.mode === "shadow" ? " (records only, changes nothing)" : " (signals can change routing)"}`);
     console.log(`privacy   ${out.privacy}`);
-    console.log(`api key   ${out.key_present ? "present" : "missing (set PREVAIL_TYPESAFE_KEY)"}`);
+    console.log(`api key   ${out.key_present ? "present" : "missing"}`);
+    if (!out.key_present) {
+      // The key belongs to whoever runs Prevail. Nothing ships with one, so
+      // say plainly where to put yours rather than just reporting "missing".
+      console.log("          bring your own key, from any of:");
+      for (const src of KEY_SOURCES) console.log(`            ${src}`);
+    }
     console.log(`active    ${out.active ? "yes" : `no - ${out.reason}`}`);
     console.log(`ledger    ${out.ledger}`);
+    return;
+  }
+
+  if (sub === "check") {
+    // One real call, so a user who has just put their own key in can see
+    // whether it works, what it costs and how fast it is. The state below is
+    // invented on purpose: verifying a key must not ship anything real.
+    await warmDecisionKey();
+    const l = resolveDecisionLayer();
+    if (!l.provider) {
+      console.error(`decision layer is not active: ${l.reason}`);
+      if (!decisionApiKey()) {
+        console.error("bring your own key, from any of:");
+        for (const src of KEY_SOURCES) console.error(`  ${src}`);
+      }
+      process.exit(1);
+    }
+    const { buildRoutingQuestions, buildRoutingState, planRoute } = await import("./decision-routing.ts");
+    const { evaluateDecision } = await import("./decision.ts");
+    const probe = {
+      prompt: "Should I take the promotion that pays more but removes my equity, or stay put another year?",
+      domain: null,
+      availableModels: 4,
+      councilPossible: true,
+      agentPossible: false,
+      currentPlan: "single" as const,
+    };
+    const t0 = Date.now();
+    const res = await evaluateDecision(
+      l.provider,
+      buildRoutingState(probe, { privacy: l.privacy }),
+      buildRoutingQuestions(probe),
+    );
+    const ms = Date.now() - t0;
+    if (!res) {
+      console.error(`no answer after ${ms}ms: ${l.provider.unavailableReason() ?? "the provider returned nothing"}`);
+      process.exit(1);
+    }
+    const { proposed, effective } = planRoute(probe, res, { shadow: !l.live });
+    const route = res.answers.route;
+    console.log(`model      ${res.model}`);
+    console.log(`round trip ${ms}ms`);
+    console.log(`cost       $${res.costUsd.toFixed(8)} for this one call`);
+    if (route && route.type === "choice") {
+      console.log(`route      ${route.choice} (confidence ${route.confidence.toFixed(2)})`);
+      console.log(`           ${JSON.stringify(route.probabilities)}`);
+    }
+    console.log(`proposed   ${proposed.mode} - ${proposed.reason}`);
+    console.log(`effective  ${effective.mode}${l.live ? " (live: this would change routing)" : " (shadow: nothing changes)"}`);
     return;
   }
 
@@ -1408,7 +1466,7 @@ async function decisionCommand(args: string[], vaultOverride: string | null): Pr
     return;
   }
 
-  console.error(`unknown subcommand "${sub}" (expected status, report or set)`);
+  console.error(`unknown subcommand "${sub}" (expected status, check, report or set)`);
   process.exit(1);
 }
 

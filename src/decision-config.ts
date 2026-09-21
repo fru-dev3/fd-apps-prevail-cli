@@ -20,9 +20,90 @@ const KEY_ENV = "PREVAIL_TYPESAFE_KEY";
 /** What the vendor's own SDK reads, accepted as a fallback. */
 const KEY_ENV_ALT = "TYPESAFE_API_KEY";
 
+/** Where a user can put a key, in the order we look. For status output. */
+export const KEY_SOURCES = [
+  `${KEY_ENV} (preferred)`,
+  KEY_ENV_ALT,
+  `either of those holding a 1Password reference, e.g. ${KEY_ENV}='op://Vault/Item/field'`,
+];
+
+/**
+ * Whoever runs Prevail brings their own key.
+ *
+ * There is deliberately no bundled default and no fallback key anywhere in
+ * this repository. With none of the sources below set, the layer reports
+ * itself off and Prevail routes exactly as it did before it existed. Nothing
+ * here writes a key to disk or logs one.
+ *
+ * A value beginning `op://` is treated as a 1Password reference and resolved
+ * through the `op` CLI, so the secret never has to sit in a shell profile or
+ * a process listing. That resolution is opt-in (the user writes the
+ * reference), memoized for the life of the process, and a failure is
+ * remembered so a locked vault does not re-prompt on every request.
+ */
 export function decisionApiKey(): string | null {
-  const k = process.env[KEY_ENV] || process.env[KEY_ENV_ALT] || "";
-  return k.trim() ? k.trim() : null;
+  const raw = (process.env[KEY_ENV] || process.env[KEY_ENV_ALT] || "").trim();
+  if (!raw) return null;
+  if (!raw.startsWith("op://")) return raw;
+  return resolveOpReference(raw);
+}
+
+/**
+ * Measured on a warm machine, `op read` takes anywhere from 1.2s to 7.5s. That
+ * is far too slow and far too variable to sit on a request path, so it never
+ * does: the first call that needs it starts the lookup in the BACKGROUND and
+ * reports no key, which simply leaves the layer off for that one turn. Every
+ * later call gets the cached value. Nothing waits, ever.
+ */
+const OP_TIMEOUT_MS = 20_000;
+
+const opCache = new Map<string, string | null>();
+const opInFlight = new Map<string, Promise<void>>();
+
+function resolveOpReference(ref: string): string | null {
+  if (opCache.has(ref)) return opCache.get(ref) ?? null;
+  void warmOpReference(ref);
+  return null;
+}
+
+function warmOpReference(ref: string): Promise<void> {
+  const existing = opInFlight.get(ref);
+  if (existing) return existing;
+  const p = new Promise<void>((resolve) => {
+    try {
+      const { execFile } = require("node:child_process") as typeof import("node:child_process");
+      // stdin is closed so `op` fails fast rather than waiting to prompt.
+      execFile("op", ["read", ref], { timeout: OP_TIMEOUT_MS, encoding: "utf8" }, (err, stdout) => {
+        opCache.set(ref, err ? null : (String(stdout).trim() || null));
+        opInFlight.delete(ref);
+        resolve();
+      }).stdin?.end();
+    } catch {
+      opCache.set(ref, null);
+      opInFlight.delete(ref);
+      resolve();
+    }
+  });
+  opInFlight.set(ref, p);
+  return p;
+}
+
+/**
+ * Wait for a pending 1Password lookup. For commands that want a definite
+ * answer (status, report) rather than a fast one. Never used on a turn.
+ */
+export async function warmDecisionKey(): Promise<string | null> {
+  const raw = (process.env[KEY_ENV] || process.env[KEY_ENV_ALT] || "").trim();
+  if (!raw) return null;
+  if (!raw.startsWith("op://")) return raw;
+  if (!opCache.has(raw)) await warmOpReference(raw);
+  return opCache.get(raw) ?? null;
+}
+
+/** Test seam, and a way to retry after unlocking 1Password. */
+export function resetDecisionKeyCache(): void {
+  opCache.clear();
+  opInFlight.clear();
 }
 
 /**
