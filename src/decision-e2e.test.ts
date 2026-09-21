@@ -51,7 +51,7 @@ describe("auto-council with a decision layer behind it", () => {
     process.env.PREVAIL_TYPESAFE_KEY = "e2e-key";
     process.env.PREVAIL_TYPESAFE_URL = `http://127.0.0.1:${server!.port}/v1/systemone`;
     delete process.env.PREVAIL_BUNKER;
-    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ vaultPath: vault, decisionProvider: "jev" }));
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ vaultPath: vault, decisionProvider: "typesafe" }));
     seen = null;
     reply = {
       status: 200,
@@ -102,7 +102,7 @@ describe("auto-council with a decision layer behind it", () => {
     expect(r.actual).toBe("single");
     expect(r.proposed).toBe("council");
     expect(r.agreed).toBe(false);
-    expect(r.provider).toBe("jev");
+    expect(r.provider).toBe("typesafe");
     expect(r.model).toBe("jev-1.13.0");
     expect(r.confidence).toBeCloseTo(0.93, 4);
     expect(r.decision_ms).toBeGreaterThanOrEqual(0);
@@ -159,7 +159,7 @@ describe("auto-council with a decision layer behind it", () => {
   test("live mode is what lets the signal actually route", async () => {
     writeFileSync(
       join(cfgDir, "config.json"),
-      JSON.stringify({ vaultPath: vault, decisionProvider: "jev", decisionMode: "live" }),
+      JSON.stringify({ vaultPath: vault, decisionProvider: "typesafe", decisionMode: "live" }),
     );
     resetDecisionLayerCache();
     const verdict = await classify();

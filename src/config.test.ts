@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configFile, readAppMode, readConfig, setAppMode, writeConfig } from "./config.ts";
+import { configFile, readAppMode, readConfig, readDecisionProvider, setAppMode, writeConfig } from "./config.ts";
 
 // config.ts honors PREVAIL_CONFIG_DIR as its test seam (os.homedir() is cached
 // at process start, so mutating HOME mid-process can't reroute configDir()).
@@ -83,5 +83,23 @@ describe("app mode", () => {
     expect(readAppMode()).toBe("demo");
     setAppMode("production");
     expect(readAppMode()).toBe("production");
+  });
+});
+
+describe("decision provider id", () => {
+  test("defaults to off with no config", () => {
+    expect(readDecisionProvider()).toBe("off");
+  });
+
+  test('reads the legacy model-named "jev" as the vendor id', () => {
+    // Configs written before the provider was renamed after the vendor must
+    // keep working: the layer stays on, it does not silently turn itself off.
+    writeConfig({ vaultPath: tmpDir, decisionProvider: "jev" } as never);
+    expect(readDecisionProvider()).toBe("typesafe");
+  });
+
+  test("an unknown provider id reads as off, not as a provider", () => {
+    writeConfig({ vaultPath: tmpDir, decisionProvider: "gpt-9" } as never);
+    expect(readDecisionProvider()).toBe("off");
   });
 });

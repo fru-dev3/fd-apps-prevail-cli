@@ -1301,7 +1301,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
 //
 //   status                     is it on, in what mode, and why not
 //   report [--since 7d] [--json]  what it WOULD have decided vs what happened
-//   set --provider jev|off --mode shadow|live --privacy signals|redacted|full
+//   set --provider typesafe|off --mode shadow|live --privacy signals|redacted|full
 //
 // The report is the point of shadow mode: it is how you find out whether the
 // cheap path agrees often enough to be worth switching on.
@@ -1319,11 +1319,14 @@ async function decisionCommand(args: string[], vaultOverride: string | null): Pr
       const i = args.indexOf(flag);
       return i >= 0 ? args[i + 1] : undefined;
     };
-    const provider = val("--provider");
+    // "jev" is accepted as a legacy spelling: the provider is named after the
+    // vendor, not the model, so a newer TypeSafe model needs no rename here.
+    const providerRaw = val("--provider");
+    const provider = providerRaw === "jev" ? "typesafe" : providerRaw;
     const mode = val("--mode");
     const privacy = val("--privacy");
-    if (provider && provider !== "jev" && provider !== "off") {
-      console.error(`unknown provider "${provider}" (expected jev or off)`);
+    if (provider && provider !== "typesafe" && provider !== "off") {
+      console.error(`unknown provider "${provider}" (expected typesafe or off)`);
       process.exit(1);
     }
     if (mode && mode !== "shadow" && mode !== "live") {
@@ -1335,7 +1338,7 @@ async function decisionCommand(args: string[], vaultOverride: string | null): Pr
       process.exit(1);
     }
     setDecisionLayer({
-      provider: provider as "jev" | "off" | undefined,
+      provider: provider as "typesafe" | "off" | undefined,
       mode: mode as "shadow" | "live" | undefined,
       privacy: privacy as "signals" | "redacted" | "full" | undefined,
     });
@@ -1378,7 +1381,7 @@ async function decisionCommand(args: string[], vaultOverride: string | null): Pr
 
     if (rows.length === 0) {
       console.log("no shadow rows yet.");
-      console.log("turn the layer on with: prevail decision-layer set --provider jev");
+      console.log("turn the layer on with: prevail decision-layer set --provider typesafe");
       return;
     }
     const pctS = (n: number | null) => (n === null ? "-" : `${Math.round(n * 100)}%`);

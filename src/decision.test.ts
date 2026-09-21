@@ -7,7 +7,7 @@ import {
   sanitizeAnswers,
   type DecisionQuestion,
 } from "./decision.ts";
-import { JevProvider } from "./decision-jev.ts";
+import { TypeSafeProvider } from "./decision-typesafe.ts";
 
 const questions: Record<string, DecisionQuestion> = {
   needsCouncil: { type: "noul", instructions: "Does this need several models?" },
@@ -84,7 +84,7 @@ describe("isActionable", () => {
   });
 });
 
-// ── JevProvider ────────────────────────────────────────────────────────
+// ── TypeSafeProvider ────────────────────────────────────────────────────────
 
 const okBody = {
   model: "jev-1.13.0",
@@ -98,16 +98,16 @@ const okBody = {
 const respond = (status: number, body: unknown) =>
   (async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
 
-describe("JevProvider", () => {
+describe("TypeSafeProvider", () => {
   test("is unavailable, and silent, without an API key", async () => {
-    const p = new JevProvider({ apiKey: () => null });
+    const p = new TypeSafeProvider({ apiKey: () => null });
     expect(p.available()).toBe(false);
     expect(p.unavailableReason()).toMatch(/no TypeSafe API key/);
     expect(await p.evaluate("x", questions)).toBeNull();
   });
 
   test("translates the vendor's yes/no field into a plain probability", async () => {
-    const p = new JevProvider({ apiKey: () => "k", fetchImpl: respond(200, okBody) });
+    const p = new TypeSafeProvider({ apiKey: () => "k", fetchImpl: respond(200, okBody) });
     const r = await p.evaluate("state", questions);
     // Jev calls it `noul` on the wire. Nothing downstream should ever see that.
     expect(r?.answers.needsCouncil).toEqual({ type: "noul", probability: 0.88 });
@@ -115,7 +115,7 @@ describe("JevProvider", () => {
   });
 
   test("prices the call from input tokens only", async () => {
-    const p = new JevProvider({ apiKey: () => "k", fetchImpl: respond(200, okBody) });
+    const p = new TypeSafeProvider({ apiKey: () => "k", fetchImpl: respond(200, okBody) });
     const r = await p.evaluate("state", questions);
     // 1M input tokens at $0.042/Mtok, output free.
     expect(r?.costUsd).toBeCloseTo(0.042, 6);
@@ -124,7 +124,7 @@ describe("JevProvider", () => {
   test("sends the documented endpoint, auth header and body shape", async () => {
     let seenUrl = "";
     let seenInit: RequestInit | undefined;
-    const p = new JevProvider({
+    const p = new TypeSafeProvider({
       apiKey: () => "secret-key",
       fetchImpl: (async (url: string, init: RequestInit) => {
         seenUrl = url;
@@ -146,7 +146,7 @@ describe("JevProvider", () => {
 
   test("a rate limit opens a breaker so the hot path stops waiting on it", async () => {
     let calls = 0;
-    const p = new JevProvider({
+    const p = new TypeSafeProvider({
       apiKey: () => "k",
       fetchImpl: (async () => {
         calls++;
@@ -162,13 +162,13 @@ describe("JevProvider", () => {
   });
 
   test("a bad key backs off hard instead of hammering", async () => {
-    const p = new JevProvider({ apiKey: () => "bad", fetchImpl: respond(401, {}) });
+    const p = new TypeSafeProvider({ apiKey: () => "bad", fetchImpl: respond(401, {}) });
     await p.evaluate("s", questions);
     expect(p.unavailableReason()).toMatch(/401/);
   });
 
   test("a timeout is a null, not an exception", async () => {
-    const p = new JevProvider({
+    const p = new TypeSafeProvider({
       apiKey: () => "k",
       fetchImpl: ((_u: string, init: RequestInit) =>
         new Promise((_res, rej) => {
@@ -186,7 +186,7 @@ describe("JevProvider", () => {
       JSON.stringify({}),
     ];
     for (const b of bodies) {
-      const p = new JevProvider({
+      const p = new TypeSafeProvider({
         apiKey: () => "k",
         fetchImpl: (async () => new Response(b, { status: 200 })) as unknown as typeof fetch,
       });
@@ -195,7 +195,7 @@ describe("JevProvider", () => {
   });
 
   test("a network explosion yields null", async () => {
-    const p = new JevProvider({
+    const p = new TypeSafeProvider({
       apiKey: () => "k",
       fetchImpl: (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch,
     });
@@ -204,7 +204,7 @@ describe("JevProvider", () => {
 
   test("an oversized string state is truncated rather than sent whole", async () => {
     let sentLen = 0;
-    const p = new JevProvider({
+    const p = new TypeSafeProvider({
       apiKey: () => "k",
       fetchImpl: (async (_u: string, init: RequestInit) => {
         sentLen = JSON.parse(String(init.body)).state.length;

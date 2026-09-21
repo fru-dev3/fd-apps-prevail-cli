@@ -132,7 +132,10 @@ export interface UserConfig {
   // Shadow is the default whenever a provider is configured, so turning a
   // provider on can never change what the app does until that is asked for
   // separately.
-  decisionProvider?: "off" | "jev";
+  // Named after the vendor, not the model: a newer model from the same
+  // vendor must not require a config migration. "jev" is still read as
+  // "typesafe" for configs written before the rename.
+  decisionProvider?: "off" | "typesafe" | "jev";
   decisionMode?: "shadow" | "live";
   // How much of a request may be shown to the decision model. "signals" sends
   // derived features only (length, domain, whether it asks a question);
@@ -606,12 +609,15 @@ export function setAutoCouncil(mode: AutoCouncilMode, domainKey?: string): void 
 // Decision layer resolution. Every default here is the inert one: no
 // provider, and shadow mode even once a provider exists. Turning the layer on
 // is two deliberate steps, and the first one cannot change behaviour.
-export type DecisionProviderId = "off" | "jev";
+export type DecisionProviderId = "off" | "typesafe";
 export type DecisionMode = "shadow" | "live";
 export type DecisionPrivacy = "signals" | "redacted" | "full";
 
 export function readDecisionProvider(): DecisionProviderId {
-  return readConfig()?.decisionProvider ?? "off";
+  const id = readConfig()?.decisionProvider ?? "off";
+  // Legacy spelling: the provider used to be named after the model.
+  if (id === "jev") return "typesafe";
+  return id === "typesafe" ? "typesafe" : "off";
 }
 
 export function readDecisionMode(): DecisionMode {

@@ -8,7 +8,7 @@
 // That split is deliberate: a decision model is a hint generator, and hints
 // must not be able to route a request past a gate on their own.
 //
-// The first implementation is JevProvider (decision-jev.ts). Swapping in a
+// The first implementation is TypeSafeProvider (decision-typesafe.ts). Swapping in a
 // different decision model should mean writing one new file and changing one
 // config value.
 
@@ -98,7 +98,7 @@ export interface EvaluateOptions {
  * caller carry on with whatever it would have done anyway.
  */
 export interface DecisionProvider {
-  /** Stable id for logs and config, e.g. "jev". */
+  /** Stable id for logs and config, e.g. "typesafe". */
   readonly id: string;
   /** Configured and usable right now. Cheap, no network. */
   available(): boolean;

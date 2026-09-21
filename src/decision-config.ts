@@ -7,7 +7,7 @@
 
 import { readDecisionMode, readDecisionPrivacy, readDecisionProvider } from "./config.ts";
 import type { DecisionProvider } from "./decision.ts";
-import { JevProvider } from "./decision-jev.ts";
+import { TypeSafeProvider } from "./decision-typesafe.ts";
 import type { StatePrivacy } from "./decision-routing.ts";
 
 /**
@@ -65,9 +65,9 @@ export function resolveDecisionLayer(opts: { egressAllowed?: boolean } = {}): Re
   const key = decisionApiKey();
   if (!key) return off(`no API key (set ${KEY_ENV})`);
 
-  if (id === "jev") {
+  if (id === "typesafe") {
     return {
-      provider: new JevProvider({
+      provider: new TypeSafeProvider({
         apiKey: () => key,
         // Override for a self-hosted gateway, an enterprise proxy, or a stub
         // in tests. Unset in normal use, where the vendor's own URL applies.

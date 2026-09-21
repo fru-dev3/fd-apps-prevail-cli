@@ -31,7 +31,7 @@ export interface DecisionShadowEntry {
   day: string;
   surface: ShadowSurface;
   domain: string | null;
-  /** Decision provider id, e.g. "jev". Null when it was skipped. */
+  /** Decision provider id, e.g. "typesafe". Null when it was skipped. */
   provider: string | null;
   /** Concrete model that answered, when one did. */
   model: string | null;

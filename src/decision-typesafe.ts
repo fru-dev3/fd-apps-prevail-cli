@@ -1,4 +1,4 @@
-// JevProvider: the one file that knows anything about TypeSafe AI.
+// TypeSafeProvider: the one file that knows anything about TypeSafe AI.
 //
 // Everything vendor-specific lives here - the URL, the auth header, the wire
 // vocabulary, the price list. The rest of Prevail talks to the DecisionProvider
@@ -40,15 +40,15 @@ const MAX_STATE_CHARS = 8_000;
 
 // ── Wire types ─────────────────────────────────────────────────────────
 
-interface JevUsage {
+interface TypeSafeUsage {
   input_tokens?: number;
   output_tokens?: number;
 }
 
-interface JevResponse {
+interface TypeSafeResponse {
   model?: string;
   answers?: Record<string, Record<string, unknown>>;
-  usage?: JevUsage;
+  usage?: TypeSafeUsage;
 }
 
 // ── Circuit breaker ────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ class Breaker {
   }
 }
 
-export interface JevProviderOptions {
+export interface TypeSafeProviderOptions {
   /**
    * How to find the API key. Injected so this module never reaches into
    * Prevail's config or the Keychain itself, and so tests can supply one.
@@ -90,15 +90,15 @@ export interface JevProviderOptions {
   fetchImpl?: typeof fetch;
 }
 
-export class JevProvider implements DecisionProvider {
-  readonly id = "jev";
+export class TypeSafeProvider implements DecisionProvider {
+  readonly id = "typesafe";
   private readonly getKey: () => string | null | undefined;
   private readonly model: string;
   private readonly endpoint: string;
   private readonly doFetch: typeof fetch;
   private readonly breaker = new Breaker();
 
-  constructor(opts: JevProviderOptions = {}) {
+  constructor(opts: TypeSafeProviderOptions = {}) {
     // PREVAIL_TYPESAFE_KEY is the house convention (and survives the env
     // scrubber); TYPESAFE_API_KEY is what the vendor's own SDK reads.
     this.getKey = opts.apiKey ?? (() => process.env.PREVAIL_TYPESAFE_KEY || process.env.TYPESAFE_API_KEY);
@@ -168,7 +168,7 @@ export class JevProvider implements DecisionProvider {
         return null;
       }
 
-      const json = (await res.json()) as JevResponse;
+      const json = (await res.json()) as TypeSafeResponse;
       const latencyMs = Date.now() - started;
       const answers = sanitizeAnswers(questions, normalizeAnswers(json.answers ?? {}));
       // Answers that all failed validation is a wire-shape problem, not a

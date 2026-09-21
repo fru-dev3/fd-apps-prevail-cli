@@ -154,7 +154,7 @@ describe("the gate", () => {
   });
 
   test("Bunker Mode disables the layer outright", () => {
-    writeCfg({ decisionProvider: "jev", decisionMode: "live" });
+    writeCfg({ decisionProvider: "typesafe", decisionMode: "live" });
     process.env.PREVAIL_BUNKER = "1";
     expect(decisionEgressAllowed()).toBe(false);
     const l = resolveDecisionLayer();
@@ -164,7 +164,7 @@ describe("the gate", () => {
   });
 
   test("a configured provider with no key stays off and says why", () => {
-    writeCfg({ decisionProvider: "jev" });
+    writeCfg({ decisionProvider: "typesafe" });
     delete process.env.PREVAIL_TYPESAFE_KEY;
     const l = resolveDecisionLayer();
     expect(l.provider).toBeNull();
@@ -172,7 +172,7 @@ describe("the gate", () => {
   });
 
   test("turning the provider on gives shadow mode, not live", () => {
-    writeCfg({ decisionProvider: "jev" });
+    writeCfg({ decisionProvider: "typesafe" });
     const l = resolveDecisionLayer();
     expect(l.provider).not.toBeNull();
     expect(l.live).toBe(false);
@@ -180,12 +180,12 @@ describe("the gate", () => {
   });
 
   test("live requires saying live", () => {
-    writeCfg({ decisionProvider: "jev", decisionMode: "live" });
+    writeCfg({ decisionProvider: "typesafe", decisionMode: "live" });
     expect(resolveDecisionLayer().live).toBe(true);
   });
 
   test("a garbled mode falls back to shadow rather than live", () => {
-    writeCfg({ decisionProvider: "jev", decisionMode: "LIVE!" });
+    writeCfg({ decisionProvider: "typesafe", decisionMode: "LIVE!" });
     expect(resolveDecisionLayer().live).toBe(false);
   });
 });
@@ -201,7 +201,7 @@ describe("the shadow ledger", () => {
   const row = (over: Partial<DecisionShadowEntry> = {}) => ({
     surface: "auto-council" as const,
     domain: "real-estate",
-    provider: "jev",
+    provider: "typesafe",
     model: "jev-1.13.0",
     actual: "council",
     proposed: "council",

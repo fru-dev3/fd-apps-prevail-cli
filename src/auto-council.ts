@@ -195,7 +195,7 @@ function record(
     recordDecisionShadow(args.vault, {
       surface: "auto-council",
       domain: args.domain ?? null,
-      provider: result ? "jev" : null,
+      provider: result ? "typesafe" : null,
       model: result?.model ?? null,
       actual: actual ? "council" : "single",
       proposed: result ? (proposedMode ?? null) : null,
