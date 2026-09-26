@@ -7,6 +7,13 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.30] - 2026-09-26 · One "what to do next" feed and General-first routing
+
+### Changed
+- **One ranked recommendations feed**: rules, projects, apps, people, models and context land in a single ranked list, so the app shows one "what to do next" page.
+- **General is home**: conversations started in General are routed to the right domains by the decision layer (a small fallback model when the decision provider is unavailable). Corrections you make to the routing are fed back.
+- **Quieter logs**: intent log lines name the error class and never carry model output.
+
 ## [1.9.29] - 2026-09-26 · Entities: a page for every entity
 
 ### Changed
