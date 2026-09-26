@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isAgentWritten, isInternalPrompt, loadCorpus, projectKeyOf, userTextOf } from "./prompt-corpus.ts";
-import { buildProjects, isAmbiguousKey, parseJsonAnswer, periodOf, readProjectsIndex, replayPrompt, splitBrief, timeline, type ModelRunner } from "./prompt-projects.ts";
+import { briefIsFresh, buildProjects, isAmbiguousKey, parseJsonAnswer, periodOf, readProjectsIndex, replayPrompt, splitBrief, timeline, type ModelRunner } from "./prompt-projects.ts";
 
 const HOME = "/Users/someone";
 
@@ -36,6 +36,21 @@ describe("prompt corpus", () => {
     expect(userTextOf(history)).toBe("and the rates?");
     const job = "# THE USER'S IDEAL STATE: x\n\n---\n\nYou are a self-learning assistant that distills";
     expect(userTextOf(job)).toBeNull();
+  });
+});
+
+describe("briefIsFresh", () => {
+  const now = Date.parse("2026-09-25T00:00:00Z");
+  const packed = { hash: "h1", model: "m", prompts: 200, ts: now - 864e5 };
+  test("rewrites only on real growth, age or a model change", () => {
+    expect(briefIsFresh(packed, "h1", 200, "m", true, now)).toBe(true);
+    expect(briefIsFresh(packed, "h2", 210, "m", true, now)).toBe(true); // 10 new: under 15% of 200
+    expect(briefIsFresh(packed, "h2", 230, "m", true, now)).toBe(false); // 30 new = 15%
+    expect(briefIsFresh({ ...packed, ts: now - 8 * 864e5 }, "h2", 201, "m", true, now)).toBe(false); // a week old
+    expect(briefIsFresh(packed, "h1", 200, "other", true, now)).toBe(false);
+    expect(briefIsFresh(packed, "h1", 200, "m", false, now)).toBe(false);
+    expect(briefIsFresh(undefined, "h1", 200, "m", true, now)).toBe(false);
+    expect(briefIsFresh({ ...packed, prompts: 20 }, "h2", 34, "m", true, now)).toBe(true); // small projects need 15
   });
 });
 
@@ -134,11 +149,12 @@ describe("buildProjects end to end (fake model)", () => {
     // The raw capture stream is read, never written.
     expect(readFileSync(join(vault, "build", "_meta", "prompts", "claude.mbp.jsonl"), "utf8")).toBe(rawBefore);
 
-    // A second run with nothing new makes no model calls except recommendations,
-    // and a rebrief keeps the earlier brief in history/.
+    // A second run with nothing new makes no model calls at all (the daemon
+    // runs this often), and a rebrief keeps the earlier brief in history/ and
+    // refreshes the recommendations.
     calls.length = 0;
     await buildProjects({ vault, run, minPrompts: 2, concurrency: 1 });
-    expect(calls).toEqual(["recommend"]);
+    expect(calls).toEqual([]);
     calls.length = 0;
     await buildProjects({ vault, run, minPrompts: 2, concurrency: 1, rebrief: true, only: ["fru-dev-site"] });
     expect(calls).toEqual(["brief", "recommend"]);

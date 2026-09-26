@@ -53,7 +53,7 @@ export interface ProjectDef {
   keys: string[]; // folder keys (prompt-corpus projectKeyOf) that belong to it
 }
 
-interface PackState {
+export interface PackState {
   hash: string;
   model: string;
   prompts: number;
@@ -415,6 +415,21 @@ export interface BuildOptions {
   log?: (msg: string) => void;
 }
 
+const DAY_MS = 864e5;
+
+// A brief is rewritten when its project has grown enough to change it (15
+// prompts or 15%, whichever is more), when it is a week old and anything new
+// arrived, or when a different model is asked for. Without this, the
+// background daemon would re-run the most capable model over an active
+// project's whole history every half hour.
+export function briefIsFresh(packed: PackState | undefined, hash: string, prompts: number, model: string, briefExists: boolean, now = Date.now()): boolean {
+  if (!packed || !briefExists || packed.model !== model) return false;
+  if (packed.hash === hash) return true;
+  const grew = prompts - packed.prompts;
+  if (grew >= Math.max(15, Math.ceil(packed.prompts * 0.15))) return false;
+  return now - packed.ts < 7 * DAY_MS;
+}
+
 const CHUNK_CHARS = 240_000; // one map call's worth of prompt log (~60k tokens)
 const PROMPT_CAP = 4_000; // a pasted log beyond this adds little to the brief
 
@@ -548,8 +563,7 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
     const hash = hashPrompts(ps);
     const packed = state.packs[def.slug];
     const want = ps.length >= minPrompts && (!opts.only || opts.only.includes(def.slug));
-    const fresh = packed && packed.hash === hash && packed.model === model.model && existsSync(join(dir, "brief.md"));
-    if (!want || (fresh && !opts.rebrief)) return base;
+    if (!want || (!opts.rebrief && briefIsFresh(packed, hash, ps.length, model.model, existsSync(join(dir, "brief.md"))))) return base;
 
     try {
       const full = renderPromptLog(ps, PROMPT_CAP);
@@ -599,11 +613,13 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
   });
   entries.sort((a, b) => b.last_ts - a.last_ts);
 
-  // 5. recommend
+  // 5. recommend: when a brief changed, or once a day, not on every small run
   let recs = prev?.recommendations ?? [];
   let recModel = prev?.recommendations_model ?? "";
   const briefed = entries.filter((e) => e.brief_model);
-  if (briefed.length) {
+  const anyNewBrief = entries.some((e) => e.brief_ts > (prev?.generated_ts ?? 0));
+  const recsStale = !prev || recs.length === 0 || recModel !== model.model || Date.now() - prev.generated_ts > DAY_MS;
+  if (briefed.length && (anyNewBrief || recsStale)) {
     try {
       const ctx = { domains, skills: listSkills(vault), apps: listApps(vault) };
       recs = parseJsonAnswer<Recommendation[]>(await run(buildRecommendPrompt(entries.filter((e) => e.prompt_count >= minPrompts), ctx), model))
