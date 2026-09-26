@@ -7,6 +7,23 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.24] - 2026-09-26 · Intent: what your own prompts say about you
+
+### Added
+- **Intent findings**: `prevail intent findings|refresh` reads every prompt and reports a few plain, checkable findings, each with receipts (the prompts behind it): instructions you keep restating, the share of sittings that went into tools and setup, projects that went quiet mid-stream, late-night correction rate, and life areas that never came up. Deterministic and cheap; only new weeks cost model calls.
+- **Verdicts and standing rules**: `prevail intent verdict <id> true|not_really|later|resume|let_go`. A confirmed repeated instruction is appended to `build/ideal-state.md` under "Standing rules" (deduplicated); "not really" suppresses a finding, "later" snoozes it for a week, and "let go" marks an open project done without deleting anything.
+- **History**: `prevail intent history` returns every prompt as typed, grouped into sittings and weeks, newest first, with search, tool and project filters and `--before` paging.
+- **Weekly lines and letter**: each week gets one plain sentence about what you were really after, and the last complete week gets a short letter.
+- **Restart briefs**: `prevail projects restart <slug>` returns a project's goal, requirements, rules, decisions, dead ends and open questions as JSON, or as text in `handoff`, `intent` or `raw` format, with `--exclude` and `--with-prompts`.
+- **Rebuild check**: `prevail projects diff <slug> --against <folder>` compares a rebuild against the restart requirements (met, missed, unclear). Read-only on the folder.
+- **MCP**: `intent_findings` and `project_restart` tools.
+
+### Changed
+- `prevail mirror` still works as an alias for `prevail intent`.
+
+### Fixed
+- Prevail's own Projects and Intent model jobs no longer land in the prompt history when a model CLI records them as typed prompts.
+
 ## [1.9.23] - 2026-09-26 · Projects, replay briefs, and the September 2026 models
 
 ### Added
