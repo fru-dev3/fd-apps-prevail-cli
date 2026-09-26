@@ -117,6 +117,19 @@ export interface ProjectsIndex {
   recommendations_model: string;
 }
 
+// What an Intent log line may say about a failure: the error class and the
+// first line of its message up to the first colon. Anything after a colon, and
+// every later line, can carry model output or prompt text, so it never reaches
+// the log. A parse failure is named without its message, which quotes the
+// unparseable answer.
+export function errSummary(e: unknown): string {
+  if (!(e instanceof Error)) return "unknown error";
+  const name = e.name || "Error";
+  if (name === "SyntaxError") return "SyntaxError: unparseable model answer";
+  const head = ((e.message || "").split("\n")[0] ?? "").split(":")[0].trim().slice(0, 80);
+  return head ? `${name}: ${head}` : name;
+}
+
 // ---------------------------------------------------------------------------
 // model runner
 
@@ -143,7 +156,9 @@ export const runModelOnce: ModelRunner = (prompt, choice) =>
     child.on("close", (code) => {
       clearTimeout(timer);
       rmSync(cwd, { recursive: true, force: true });
-      if (code !== 0 && !out.trim()) reject(new Error(`${choice.cli} exited ${code}: ${err.trim().slice(-400)}`));
+      // The error names the exit only. stderr can echo the prompt or the
+      // model's partial answer, and this message ends up in the Intent log.
+      if (code !== 0 && !out.trim()) reject(new Error(`${choice.cli} exited ${code}${err.trim() ? " (stderr withheld)" : ""}`));
       else resolveP(choice.cli === "codex" ? codexAnswer(out) : out);
     });
     child.stdin.end(prompt);
@@ -533,7 +548,7 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
         });
         log(`assign: batch ${bi + 1}/${batches.length} done`);
       } catch (e) {
-        log(`assign: batch ${bi + 1} failed (${(e as Error).message}); those sessions stay unassigned and retry next run`);
+        log(`assign: batch ${bi + 1} failed (${errSummary(e)}); those sessions stay unassigned and retry next run`);
       }
     });
   }
@@ -629,7 +644,7 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
         takeaways: take.takeaways ?? [], ideas: take.ideas ?? [], open_questions: take.open_questions ?? [],
       };
     } catch (e) {
-      log(`${def.slug}: brief failed (${(e as Error).message}); keeping the previous one`);
+      log(`${def.slug}: brief failed (${errSummary(e)}); keeping the previous one`);
       return base;
     }
   });
@@ -663,7 +678,7 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
       const byTitle = new Map(entries.map((e) => [e.title.toLowerCase(), e.slug]));
       for (const r of recs) r.project_slug = byTitle.get((r.project ?? "").toLowerCase()) ?? "";
       recModel = model.model;
-    } catch (e) { log(`recommendations failed (${(e as Error).message}); keeping the previous set`); }
+    } catch (e) { log(`recommendations failed (${errSummary(e)}); keeping the previous set`); }
   }
 
   const months: Record<string, number> = {};

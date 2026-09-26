@@ -21,7 +21,7 @@ import { sanitizeEmDashes } from "./cli-bridge.ts";
 import { runtimePath } from "./path-safety.ts";
 import type { PromptRec } from "./prompt-corpus.ts";
 import {
-  assignedPrompts, displayLine, parseJsonAnswer, periodOf, readProjectsIndex, runModelOnce, SYNTH_DEFAULTS,
+  assignedPrompts, displayLine, errSummary, parseJsonAnswer, periodOf, readProjectsIndex, runModelOnce, SYNTH_DEFAULTS,
   type ModelChoice, type ModelRunner, type ProjectDef, type ProjectsIndex,
 } from "./prompt-projects.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
@@ -309,7 +309,7 @@ async function projectKinds(ctx: MirrorContext, slugs: string[], m: ModelOpts): 
       for (const s of missing) if (ans[s] === "tooling" || ans[s] === "outcome") cache.kinds[s] = ans[s] as "tooling" | "outcome";
       cache.model = m.model.model;
       writeJson(path, cache);
-    } catch (e) { m.log(`project kinds failed (${(e as Error).message}); retry next refresh`); }
+    } catch (e) { m.log(`project kinds failed (${errSummary(e)}); retry next refresh`); }
   }
   return cache.kinds;
 }
@@ -504,7 +504,7 @@ export async function repeatedRules(ctx: MirrorContext, m: ModelOpts): Promise<F
         items.sort((a, b) => (b.count ?? 0) - (a.count ?? 0));
         writeJson(cachePath, { hash: key, model: m.model.model, items, receipts, clusters: from } satisfies RulesCache);
         done = true;
-      } catch (e) { m.log(`repeated rules: model pass failed (${(e as Error).message}); showing raw repeats`); }
+      } catch (e) { m.log(`repeated rules: model pass failed (${errSummary(e)}); showing raw repeats`); }
     }
     if (!done) {
       items = clusters.map((c) => rawRuleItem(ctx, c));
@@ -661,7 +661,7 @@ async function refreshWeekLines(ctx: MirrorContext, m: ModelOpts): Promise<numbe
         if (line) { lines[w.week] = { line, hash: w.hash, model: m.model.model, ts: ctx.now }; written++; }
       }
       writeJson(mpath(ctx.vault, "weeks.json"), lines);
-    } catch (e) { m.log(`week lines: batch failed (${(e as Error).message}); retry next refresh`); }
+    } catch (e) { m.log(`week lines: batch failed (${errSummary(e)}); retry next refresh`); }
   }
   return written;
 }
@@ -699,7 +699,7 @@ async function weeklyLetter(ctx: MirrorContext, m: ModelOpts, findings: Finding[
   const loop = findings.find((f) => f.kind === "open_loops")?.items[0] ?? null;
   let md = "";
   if (m.run) {
-    try { md = sanitizeEmDashes((await m.run(buildLetterPrompt({ label, projects }, finding, loop), m.model)).trim().replace(/^```(?:markdown)?\n|\n```$/g, "")); } catch (e) { m.log(`letter failed (${(e as Error).message})`); }
+    try { md = sanitizeEmDashes((await m.run(buildLetterPrompt({ label, projects }, finding, loop), m.model)).trim().replace(/^```(?:markdown)?\n|\n```$/g, "")); } catch (e) { m.log(`letter failed (${errSummary(e)})`); }
   }
   if (!md) return null;
   mkdirSync(letterDir(ctx.vault), { recursive: true });
@@ -1206,7 +1206,7 @@ export async function generatePeriod(ctx: MirrorContext, week: string, o: Period
       const ans = parseJsonAnswer<Record<string, string>>(await m.run(buildWeeksPrompt([{ week: wk, label, projects: wdigest }]), m.model));
       const line = typeof ans[wk] === "string" ? sanitizeEmDashes(ans[wk].trim()) : "";
       if (line) { lines[wk] = { line, hash: wh, model: m.model.model, ts: ctx.now }; writeJson(mpath(ctx.vault, "weeks.json"), lines); res.written.push("week_line"); }
-    } catch (e) { m.log(`week line failed (${(e as Error).message})`); }
+    } catch (e) { m.log(`week line failed (${errSummary(e)})`); }
   }
   res.week_line = lines[wk]?.line ?? null;
 
@@ -1229,7 +1229,7 @@ export async function generatePeriod(ctx: MirrorContext, week: string, o: Period
         if (line) { dlines[t.day] = { line, hash: t.hash, model: m.model.model, ts: ctx.now }; res.written.push(`day:${t.day}`); }
       }
       writeJson(mpath(ctx.vault, "days.json"), dlines);
-    } catch (e) { m.log(`day lines failed (${(e as Error).message})`); }
+    } catch (e) { m.log(`day lines failed (${errSummary(e)})`); }
   }
   for (const d of byDay.keys()) if (dlines[d]) res.day_lines[d] = dlines[d].line;
 

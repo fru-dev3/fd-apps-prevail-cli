@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isAgentWritten, isInternalPrompt, loadCorpus, projectKeyOf, userTextOf } from "./prompt-corpus.ts";
-import { briefIsFresh, buildProjects, displayLine, renameProject, isAmbiguousKey, parseJsonAnswer, periodOf, readProjectsIndex, replayPrompt, splitBrief, timeline, type ModelRunner } from "./prompt-projects.ts";
+import { briefIsFresh, buildProjects, displayLine, errSummary, renameProject, isAmbiguousKey, parseJsonAnswer, periodOf, readProjectsIndex, replayPrompt, splitBrief, timeline, type ModelRunner } from "./prompt-projects.ts";
 
 const HOME = "/Users/someone";
 
@@ -203,5 +203,13 @@ describe("buildProjects end to end (fake model)", () => {
     expect(tl.periods[0].total).toBe(7);
     expect(tl.periods[0].byProject.map((x) => [x.slug, x.count])).toEqual([["fru-dev-site", 5], ["roof-hail-claim", 2]]);
     expect(tl.periods[0].byDomain[0]).toEqual({ domain: "dev", count: 5 });
+  });
+});
+
+describe("errSummary", () => {
+  test("keeps the error class and the head of the first line only", () => {
+    expect(errSummary(new Error("claude exited 1: my secret prompt text\nmore"))).toBe("Error: claude exited 1");
+    expect(errSummary(new SyntaxError('Unexpected token "private answer"'))).toBe("SyntaxError: unparseable model answer");
+    expect(errSummary("a string")).toBe("unknown error");
   });
 });
