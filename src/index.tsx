@@ -2363,8 +2363,14 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       if (!id) { fail("usage: prevail entities show <kind/slug|name> [--json]"); return; }
       const idx = en.readIndex(vault).generated_ts ? en.readIndex(vault) : en.buildIndex(vault);
       const d = en.entityDetail(vault, idx, id);
-      if (!d) { fail(`no entity "${id}"`); return; }
-      if (json) { out(d); return; }
+      if (!d) {
+        // Not an error for a chip the index has not seen yet: the card shows
+        // the bare name with a Save action.
+        if (json) { out({ found: false, query: id }); return; }
+        fail(`no entity "${id}"`);
+        return;
+      }
+      if (json) { out({ found: true, ...d }); return; }
       console.log(en.entityContextText(d, 30));
       return;
     }
@@ -2378,7 +2384,8 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
     }
     if (sub === "note") {
       const id = pos[1];
-      const text = get("--text");
+      let text = get("--text");
+      if (text === "-") text = await Bun.stdin.text();
       if (!id || text === null) { fail("usage: prevail entities note <kind/slug> --text \"...\""); return; }
       const d = en.setNotes(vault, id, text, { name: get("--name") ?? undefined, kind: get("--kind") ?? undefined });
       if (json) { out(d); return; }

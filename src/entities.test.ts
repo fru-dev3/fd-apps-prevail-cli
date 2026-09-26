@@ -131,6 +131,9 @@ describe("pages", () => {
     const again = parsePage(renderPage(d), { kind: "person", slug: "sam-rivera" });
     expect(again.notes).toBe(d.notes);
     expect(again.extra.mood).toBe("calm");
+    const blank = parsePage(renderPage({ ...d, discussed: "", conversations: "" }), { kind: "person", slug: "sam-rivera" });
+    expect(blank.discussed).toBe("");
+    expect(blank.conversations).toBe("");
   });
 
   test("auto page at 3 conversations, digest only when mentions change, notes untouched", async () => {

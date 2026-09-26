@@ -426,6 +426,8 @@ export interface PageDoc {
 const H_DISCUSSED = "What you've discussed";
 const H_NOTES = "Your notes";
 const H_CONVOS = "Conversations";
+const EMPTY_DISCUSSED = "_Nothing summarized yet._";
+const EMPTY_CONVOS = "_No conversations yet._";
 
 export function pagePath(vault: string, kind: EntityKind, slug: string): string {
   return join(entitiesContainer(vault), KIND_DIR[kind], `${slug}.md`);
@@ -483,9 +485,9 @@ export function parsePage(md: string, fallback: { kind: EntityKind; slug: string
   doc.preamble = (cuts.length ? body.slice(0, cuts[0].start) : body).trim();
   for (let i = 0; i < cuts.length; i++) {
     const text = body.slice(cuts[i].end, i + 1 < cuts.length ? cuts[i + 1].start : body.length).replace(/^\n+|\s+$/g, "");
-    if (cuts[i].h === H_DISCUSSED) doc.discussed = text;
+    if (cuts[i].h === H_DISCUSSED) doc.discussed = text === EMPTY_DISCUSSED ? "" : text;
     else if (cuts[i].h === H_NOTES) doc.notes = text;
-    else doc.conversations = text;
+    else doc.conversations = text === EMPTY_CONVOS ? "" : text;
   }
   return doc;
 }
@@ -510,9 +512,9 @@ export function renderPage(d: PageDoc): string {
   return [
     ...fm,
     ...(d.preamble ? [d.preamble, ""] : []),
-    `## ${H_DISCUSSED}`, "", d.discussed || "_Nothing summarized yet._", "",
+    `## ${H_DISCUSSED}`, "", d.discussed || EMPTY_DISCUSSED, "",
     `## ${H_NOTES}`, "", d.notes, ...(d.notes ? [""] : []),
-    `## ${H_CONVOS}`, "", d.conversations || "_No conversations yet._", "",
+    `## ${H_CONVOS}`, "", d.conversations || EMPTY_CONVOS, "",
   ].join("\n");
 }
 
