@@ -93,7 +93,8 @@ interface VerdictRec { status: FindingStatus; ts: number; snoozed_until?: number
 interface Verdicts { findings: Record<string, VerdictRec>; items: Record<string, VerdictRec> }
 interface WeekLine { line: string; hash: string; model: string; ts: number }
 interface RulesCache { hash: string; model: string; items: FindingItem[]; receipts: Receipt[] }
-interface KindsCache { model: string; kinds: Record<string, "tooling" | "outcome"> }
+interface KindsCache { version?: number; model: string; kinds: Record<string, "tooling" | "outcome"> }
+const KINDS_VERSION = 2; // bump when the classification prompt changes
 
 const DAY = 864e5;
 const WEEK = 7 * DAY;
@@ -260,9 +261,8 @@ export function goalsDrift(ctx: MirrorContext): Finding | null {
 
 export function buildKindsPrompt(projects: { slug: string; title: string; kind: string; summary: string }[]): string {
   return `Classify each project one person worked on with AI tools as either:
-- "tooling": building or configuring tools for their own work: AI agents, harnesses, dev environment, CLI config, prompt setups, automation plumbing, internal dashboards about their own workflow.
-- "outcome": building the thing itself: a product or site for others, content, a video, a trip, a purchase, a claim, a job search, a life or money decision.
-When a project is a product sold or shipped to other people, it is "outcome" even if it is a developer tool.
+- "tooling": the project's purpose is tools, agents or config: AI harnesses and agents, agent orchestration, CLIs and dev tooling, dev environment and machine setup, prompt and model configuration, automation plumbing, dashboards about their own workflow. This holds even when the tool is published or sold.
+- "outcome": the project's purpose is the end result itself: a website with content, a consumer product that is not about AI tooling, a video or channel, property, money, health, travel, a purchase, a claim, a job search, a life decision.
 
 Return ONLY a JSON object mapping slug to "tooling" or "outcome". No prose.
 
@@ -272,7 +272,8 @@ ${projects.map((p) => `- ${p.slug}: ${p.title} (${p.kind}). ${p.summary}`).join(
 
 async function projectKinds(ctx: MirrorContext, slugs: string[], m: ModelOpts): Promise<Record<string, "tooling" | "outcome">> {
   const path = mpath(ctx.vault, "project_kinds.json");
-  const cache = readJson<KindsCache>(path, { model: "", kinds: {} });
+  let cache = readJson<KindsCache>(path, { version: KINDS_VERSION, model: "", kinds: {} });
+  if (cache.version !== KINDS_VERSION) cache = { version: KINDS_VERSION, model: "", kinds: {} };
   const missing = slugs.filter((s) => s && !(s in cache.kinds));
   if (missing.length && m.run) {
     const info = missing.map((slug) => {
@@ -693,7 +694,12 @@ export async function refreshMirror(opts: RefreshOptions): Promise<FindingsDoc> 
     lateNight(ctx),
     goalsDrift(ctx),
   ];
-  const findings = all.filter((f): f is Finding => !!f).map((f) => ({ ...f, headline: sanitizeEmDashes(f.headline), detail: sanitizeEmDashes(f.detail) }));
+  const clean = sanitizeEmDashes;
+  const findings = all.filter((f): f is Finding => !!f).map((f) => ({
+    ...f, headline: clean(f.headline), detail: clean(f.detail),
+    receipts: f.receipts.map((r) => ({ ...r, text: clean(r.text) })),
+    items: f.items.map((i) => ({ ...i, label: clean(i.label), ...(i.detail ? { detail: clean(i.detail) } : {}), ...(i.rule_text ? { rule_text: clean(i.rule_text) } : {}) })),
+  }));
   await refreshWeekLines(ctx, m);
   const letter = await weeklyLetter(ctx, m, applyVerdicts(findings, verdicts, ctx.now));
   const doc: FindingsDoc = { generated_ts: ctx.now, letter, findings };
