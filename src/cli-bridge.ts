@@ -310,6 +310,13 @@ export function scrubbedEnv(): NodeJS.ProcessEnv {
     if (SECRET_ENV_SUBSTRINGS.some((s) => k.includes(s))) continue;
     out[k] = v;
   }
+  // Every CLI the engine spawns is Prevail talking to a model, not the user
+  // typing. The spawned harness's own prompt-capture hook inherits this and
+  // skips the prompt (capture.ts ingest), which is what kept 13k benchmark
+  // scoring prompts and the demo persona's questions out of the user's
+  // history once the desktop set it for its own spawns. What the user types
+  // in Prevail is still recorded: the desktop logs it to the domain ledger.
+  out.PREVAIL_INTERNAL = "1";
   return out;
 }
 

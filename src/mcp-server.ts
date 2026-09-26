@@ -222,6 +222,23 @@ export async function runMcpServer(
       },
     },
     {
+      name: "list_projects",
+      description: "The user's projects: everything they have been building or working on, distilled from their full prompt history across every AI tool, with prompt counts, dates, status, takeaways and open questions, plus cross-project recommendations (tasks, skills, apps, habits, automations).",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "read_project",
+      description: "A project's REPLAY BRIEF: one prompt, distilled by the most capable model from every prompt the user typed about the project (requirements, their corrections and taste rules, decisions, pitfalls), written so a model can rebuild the project from scratch. with_prompts=true appends the full verbatim prompt history.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          slug: { type: "string", description: "Project slug from list_projects." },
+          with_prompts: { type: "boolean", description: "Append every original prompt, in order (large)." },
+        },
+        required: ["slug"],
+      },
+    },
+    {
       name: "read_recommendations",
       description: "Prevail's proactive recommendations across the whole vault - gaps to close, models to switch, apps to connect, context to improve. Returns a prioritized list.",
       inputSchema: { type: "object", properties: {} },
@@ -581,6 +598,18 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(tReadIntents(args, vaultPath));
     case "read_decisions":
       return wrapText(tReadDecisions(args, vaultPath));
+    case "list_projects": {
+      const { readProjectsIndex } = await import("./prompt-projects.ts");
+      const idx = readProjectsIndex(vaultPath);
+      if (!idx) return wrapText("No projects yet. Run `prevail projects build`.");
+      const projects = idx.projects.map(({ keys: _k, tools: _t, monthly: _m, ...p }) => p);
+      return wrapText(JSON.stringify({ generated_ts: idx.generated_ts, model: idx.model, projects, recommendations: idx.recommendations }, null, 2));
+    }
+    case "read_project": {
+      const { replayPrompt } = await import("./prompt-projects.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      try { return wrapText(replayPrompt(vaultPath, slug, args.with_prompts === true)); } catch (e) { return wrapText((e as Error).message); }
+    }
     case "read_recommendations":
       return wrapText(tReadRecommendations(vaultPath));
     case "read_surface":

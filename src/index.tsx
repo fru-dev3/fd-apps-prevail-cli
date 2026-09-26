@@ -36,6 +36,8 @@ interface Args {
   calendarArgs: string[];
   recommendations: boolean;
   recommendationsArgs: string[];
+  projects: boolean;
+  projectsArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
   skillDraft: boolean;
@@ -155,6 +157,8 @@ function parseArgs(argv: string[]): Args {
   let calendarArgs: string[] = [];
   let recommendations = false;
   let recommendationsArgs: string[] = [];
+  let projects = false;
+  let projectsArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
   let skillDraft = false;
@@ -281,6 +285,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "calendar") {
       calendar = true;
       calendarArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "projects") {
+      projects = true;
+      projectsArgs = argv.slice(i + 1);
       break;
     } else if (a === "recommendations" || a === "recommend") {
       recommendations = true;
@@ -541,6 +549,8 @@ function parseArgs(argv: string[]): Args {
     calendarArgs,
     recommendations,
     recommendationsArgs,
+    projects,
+    projectsArgs,
     suggestApps,
     suggestAppsArgs,
     skillDraft,
@@ -5490,6 +5500,73 @@ async function main() {
   }
   if (args.playbook) {
     await playbookCommand(args.playbookArgs);
+    return;
+  }
+  if (args.projects) {
+    // prevail projects [list|build|show <slug>|replay <slug>] — the user's prompt
+    // history grouped by project, each with a replay brief a future model can
+    // rebuild it from. See prompt-projects.ts.
+    const a = args.projectsArgs;
+    const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
+    const { readConfig: rc } = await import("./config.ts");
+    const { resolveDefaultVaultPath } = await import("./vault.ts");
+    const vault = get("--vault") ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const json = a.includes("--json");
+    const sub = a[0] && !a[0].startsWith("--") ? a[0] : "list";
+    const pp = await import("./prompt-projects.ts");
+    if (sub === "build") {
+      const cli = (get("--cli") ?? "claude") as "claude" | "codex";
+      if (cli !== "claude" && cli !== "codex") { console.error("--cli must be claude or codex"); process.exit(2); }
+      const model = { cli, model: get("--model") ?? pp.SYNTH_DEFAULTS[cli] };
+      const only = get("--only")?.split(",").map((x) => x.trim()).filter(Boolean);
+      const idx = await pp.buildProjects({
+        vault, model, only,
+        regroup: a.includes("--regroup"), rebrief: a.includes("--rebrief"),
+        minPrompts: Number(get("--min-prompts") ?? 5),
+        log: (m) => { if (!json) console.error(`[projects] ${m}`); },
+      });
+      if (json) { process.stdout.write(`${JSON.stringify(idx)}\n`); return; }
+      console.log(`${idx.projects.length} projects from ${idx.stats.kept} prompts; ${idx.projects.filter((p) => p.brief_model).length} replay briefs; ${idx.recommendations.length} recommendations.`);
+      return;
+    }
+    if (sub === "rename") {
+      const [from, to] = [a[1], a[2]];
+      if (!from || !to || to.startsWith("--")) { console.error("usage: prevail projects rename <slug> <new-slug> [--title \"New title\"]"); process.exit(2); }
+      try {
+        const d = pp.renameProject(vault, from, to, get("--title") ?? undefined);
+        if (json) { process.stdout.write(`${JSON.stringify(d)}\n`); return; }
+        console.log(`renamed ${from} -> ${d.slug} (${d.title})`);
+      } catch (e) { console.error((e as Error).message); process.exit(1); }
+      return;
+    }
+    if (sub === "timeline") {
+      const v = (get("--vantage") ?? "month") as "day" | "week" | "month" | "year";
+      const tl = pp.timeline(vault, ["day", "week", "month", "year"].includes(v) ? v : "month", Number(get("--tz") ?? 0));
+      if (json) { process.stdout.write(`${JSON.stringify(tl)}\n`); return; }
+      for (const per of tl.periods) console.log(`${per.label.padEnd(22)} ${String(per.total).padStart(5)}  ${per.byProject.slice(0, 3).map((x) => `${x.title} ${x.count}`).join(", ")}`);
+      return;
+    }
+    const idx = pp.readProjectsIndex(vault);
+    if (sub === "replay") {
+      const slug = a[1];
+      if (!slug) { console.error("usage: prevail projects replay <slug> [--with-prompts]"); process.exit(2); }
+      try { process.stdout.write(`${pp.replayPrompt(vault, slug, a.includes("--with-prompts"))}\n`); } catch (e) { console.error((e as Error).message); process.exit(1); }
+      return;
+    }
+    if (!idx) {
+      if (json) { process.stdout.write(`${JSON.stringify({ generated_ts: 0, projects: [], recommendations: [] })}\n`); return; }
+      console.log("no projects yet: run `prevail projects build`");
+      return;
+    }
+    if (sub === "show") {
+      const p = idx.projects.find((x) => x.slug === a[1]);
+      if (!p) { console.error(`no project "${a[1]}"`); process.exit(1); }
+      if (json) { process.stdout.write(`${JSON.stringify(p)}\n`); return; }
+      console.log(`${p.title} [${p.domain}] ${p.prompt_count} prompts, ${new Date(p.first_ts).toISOString().slice(0, 10)} to ${new Date(p.last_ts).toISOString().slice(0, 10)}\n${p.summary}\npack: ${p.pack_dir}`);
+      return;
+    }
+    if (json) { process.stdout.write(`${JSON.stringify(idx)}\n`); return; }
+    for (const p of idx.projects) console.log(`${String(p.prompt_count).padStart(5)}  ${p.slug.padEnd(28)} ${p.status.padEnd(8)} ${new Date(p.last_ts).toISOString().slice(0, 10)}  ${p.title}`);
     return;
   }
   if (args.recommendations) {
