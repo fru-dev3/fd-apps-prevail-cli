@@ -38,6 +38,8 @@ interface Args {
   recommendationsArgs: string[];
   projects: boolean;
   projectsArgs: string[];
+  mirror: boolean;
+  mirrorArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
   skillDraft: boolean;
@@ -159,6 +161,8 @@ function parseArgs(argv: string[]): Args {
   let recommendationsArgs: string[] = [];
   let projects = false;
   let projectsArgs: string[] = [];
+  let mirror = false;
+  let mirrorArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
   let skillDraft = false;
@@ -289,6 +293,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "projects") {
       projects = true;
       projectsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "mirror") {
+      mirror = true;
+      mirrorArgs = argv.slice(i + 1);
       break;
     } else if (a === "recommendations" || a === "recommend") {
       recommendations = true;
@@ -551,6 +559,8 @@ function parseArgs(argv: string[]): Args {
     recommendationsArgs,
     projects,
     projectsArgs,
+    mirror,
+    mirrorArgs,
     suggestApps,
     suggestAppsArgs,
     skillDraft,
@@ -2249,6 +2259,53 @@ async function vaultFlagOrDefault(argv: string[], fallback?: string | null): Pro
   const vflag = argv.indexOf("--vault");
   const { resolveDefaultVaultPath } = await import("./vault.ts");
   return (vflag >= 0 ? argv[vflag + 1] : undefined) ?? fallback ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
+}
+
+// prevail mirror [findings|verdict|history|refresh]: what the person's own
+// prompts say about them. See mirror.ts.
+async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<void> {
+  const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
+  const vault = await vaultFlagOrDefault(a, vaultPath);
+  const json = a.includes("--json");
+  const sub = a[0] && !a[0].startsWith("--") ? a[0] : "findings";
+  const mr = await import("./mirror.ts");
+  const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
+  if (sub === "findings") {
+    const doc = mr.readFindings(vault);
+    if (json) { out(doc); return; }
+    console.log(mr.findingsText(doc));
+    return;
+  }
+  if (sub === "refresh") {
+    const doc = await mr.refreshMirror({ vault, model: mr.modelChoice(get("--model"), get("--cli")), log: (m) => { if (!json) console.error(`[mirror] ${m}`); } });
+    if (json) { out(doc); return; }
+    console.log(mr.findingsText(doc));
+    return;
+  }
+  if (sub === "verdict") {
+    const [id, verdict] = [a[1], a[2]];
+    const ok = ["true", "not_really", "later", "resume", "let_go"];
+    if (!id || !verdict || !ok.includes(verdict)) { console.error("usage: prevail mirror verdict <finding_id> <true|not_really|later|resume|let_go> [--item <item_id>] [--rule \"text\"] [--action resume|let_go]"); process.exit(2); }
+    try {
+      const res = mr.setVerdict(vault, id, verdict as "true", { item: get("--item") ?? undefined, rule: get("--rule") ?? undefined, action: get("--action") ?? undefined });
+      if (json) { out(res); return; }
+      console.log(`${id}${res.item_id ? `/${res.item_id}` : ""}: ${res.status}${res.rule_path ? ` (rule ${res.rule_added ? "added to" : "already in"} ${res.rule_path})` : ""}`);
+    } catch (e) { console.error((e as Error).message); process.exit(1); }
+    return;
+  }
+  if (sub === "history") {
+    const ctx = mr.loadContext(vault);
+    const before = Number(get("--before") ?? 0) || undefined;
+    const doc = mr.mirrorHistory(ctx, { q: get("--q") ?? undefined, tool: get("--tool") ?? undefined, project: get("--project") ?? undefined, before, limit: Number(get("--limit") ?? 200) || 200 });
+    if (json) { out(doc); return; }
+    for (const w of doc.weeks) {
+      console.log(`${w.label}${w.intent_line ? `: ${w.intent_line}` : ""}`);
+      for (const s of w.sittings) console.log(`  ${new Date(s.start_ts).toISOString().slice(0, 16).replace("T", " ")} ${s.tool.padEnd(10)} ${s.project_title}: ${s.prompts.length} prompts`);
+    }
+    return;
+  }
+  console.error("usage: prevail mirror [findings|refresh|verdict|history] --vault <path> [--json]");
+  process.exit(2);
 }
 
 async function resolveVaultFromArgs(args: string[]): Promise<string> {
@@ -5542,6 +5599,39 @@ async function main() {
       for (const per of tl.periods) console.log(`${per.label.padEnd(22)} ${String(per.total).padStart(5)}  ${per.byProject.slice(0, 3).map((x) => `${x.title} ${x.count}`).join(", ")}`);
       return;
     }
+    if (sub === "restart") {
+      const slug = a[1];
+      if (!slug || slug.startsWith("--")) { console.error("usage: prevail projects restart <slug> [--json | --format handoff|intent|raw] [--exclude '<json array>'] [--with-prompts]"); process.exit(2); }
+      const pr = await import("./project-restart.ts");
+      let exclude: string[] = [];
+      const ex = get("--exclude");
+      if (ex) { try { const v = JSON.parse(ex); if (Array.isArray(v)) exclude = v.filter((x): x is string => typeof x === "string"); } catch { console.error("--exclude must be a JSON array of strings"); process.exit(2); } }
+      const format = get("--format");
+      try {
+        if (format) {
+          if (!["handoff", "intent", "raw"].includes(format)) { console.error("--format must be handoff, intent or raw"); process.exit(2); }
+          process.stdout.write(pr.restartText(vault, slug, format as "handoff" | "intent" | "raw", { exclude, withPrompts: a.includes("--with-prompts") }));
+          return;
+        }
+        const doc = pr.projectRestart(vault, slug, exclude);
+        if (json) { process.stdout.write(`${JSON.stringify(doc)}\n`); return; }
+        process.stdout.write(pr.restartText(vault, slug, "handoff", { exclude }));
+      } catch (e) { console.error((e as Error).message); process.exit(1); }
+      return;
+    }
+    if (sub === "diff") {
+      const slug = a[1];
+      const against = get("--against");
+      if (!slug || slug.startsWith("--") || !against) { console.error("usage: prevail projects diff <slug> --against <folder> [--model id] [--json]"); process.exit(2); }
+      const pr = await import("./project-restart.ts");
+      const { modelChoice } = await import("./mirror.ts");
+      try {
+        const res = await pr.projectDiff(vault, slug, against, { model: modelChoice(get("--model"), get("--cli")) });
+        if (json) { process.stdout.write(`${JSON.stringify(res)}\n`); return; }
+        for (const [k, xs] of Object.entries(res)) { console.log(`${k} (${xs.length})`); for (const x of xs) console.log(`  - ${x}`); }
+      } catch (e) { console.error((e as Error).message); process.exit(1); }
+      return;
+    }
     const idx = pp.readProjectsIndex(vault);
     if (sub === "replay") {
       const slug = a[1];
@@ -5563,6 +5653,10 @@ async function main() {
     }
     if (json) { process.stdout.write(`${JSON.stringify(idx)}\n`); return; }
     for (const p of idx.projects) console.log(`${String(p.prompt_count).padStart(5)}  ${p.slug.padEnd(28)} ${p.status.padEnd(8)} ${new Date(p.last_ts).toISOString().slice(0, 10)}  ${p.title}`);
+    return;
+  }
+  if (args.mirror) {
+    await mirrorCommand(args.mirrorArgs, args.vaultPath);
     return;
   }
   if (args.recommendations) {

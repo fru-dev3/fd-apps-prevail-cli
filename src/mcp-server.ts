@@ -239,6 +239,24 @@ export async function runMcpServer(
       },
     },
     {
+      name: "mirror_findings",
+      description: "Mirror: what the user's own prompts say about them. A few plain findings (instructions they keep restating, share of time on tools vs outcomes, projects that went quiet, late-night correction rate, life areas that never came up) plus the latest weekly letter. Read-only; computed by `prevail mirror refresh`.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "project_restart",
+      description: "Restart a project with a newer model: the replay brief rendered as a handoff prompt (goal, success criteria, rules the user already had to give, dead ends, open questions), a short intent brief, or the raw prompts. Read-only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          slug: { type: "string", description: "Project slug from list_projects." },
+          format: { type: "string", enum: ["handoff", "intent", "raw"], description: "Default handoff." },
+          with_prompts: { type: "boolean", description: "Append every original prompt to the handoff (large)." },
+        },
+        required: ["slug"],
+      },
+    },
+    {
       name: "read_recommendations",
       description: "Prevail's proactive recommendations across the whole vault - gaps to close, models to switch, apps to connect, context to improve. Returns a prioritized list.",
       inputSchema: { type: "object", properties: {} },
@@ -609,6 +627,16 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const { replayPrompt } = await import("./prompt-projects.ts");
       const slug = typeof args.slug === "string" ? args.slug : "";
       try { return wrapText(replayPrompt(vaultPath, slug, args.with_prompts === true)); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "mirror_findings": {
+      const { readFindings, findingsText } = await import("./mirror.ts");
+      return wrapText(findingsText(readFindings(vaultPath)));
+    }
+    case "project_restart": {
+      const { restartText } = await import("./project-restart.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      const format = args.format === "intent" || args.format === "raw" ? args.format : "handoff";
+      try { return wrapText(restartText(vaultPath, slug, format, { withPrompts: args.with_prompts === true })); } catch (e) { return wrapText((e as Error).message); }
     }
     case "read_recommendations":
       return wrapText(tReadRecommendations(vaultPath));
