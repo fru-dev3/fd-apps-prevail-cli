@@ -181,16 +181,6 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
   const setEmbeddedInputActive = (v: boolean) => {
     embeddedInputActiveRef.current = v;
   };
-  // When user clicks the "chat" tab in the global TabStrip, this flips to
-  // true so DomainDetail shows the embedded DomainChat instead of the
-  // view-specific markdown. Resets to false on any view-tab click and on
-  // sidebar nav. Without this, each tab clicked just changed viewIdx but
-  // the pane never actually rendered different content.
-  // Domains default to the chat tab; apps default to overview+chat. The
-  // user spends most of their time TALKING to a domain — that's the
-  // primary surface. State / quickstart / etc. are reference tabs you
-  // click when needed.
-  const [chatTabActive, setChatTabActive] = useState(true);
   // Tools & Integrations overlay — opened from the banner's 🔧 tools
   // link. Shows MCP wiring, Telegram setup, briefings, calibration,
   // bench, connector OAuth flows, and the vault/config file links
@@ -535,61 +525,6 @@ export function App({ vaultPath, vaultLabel }: AppProps) {
       hostDomain: d,
       seed: "tab",
       initialView: view,
-    });
-  }
-
-  function autoOpenDomainChat(d: Domain) {
-    if (clis.length === 0) return;
-    const key = d.name;
-    setActiveKey(key);
-    setMode("chat");
-    setChats((m) => {
-      if (m.has(key)) return m;
-      const cli = clis[0];
-      const session: ChatSession = {
-        key,
-        label: d.name,
-        hostDomain: d,
-        cli,
-        model: "",
-        seed: "tab",
-        initialView: view,
-        messages: makeInitialMessages(d.name, cli),
-        pending: false,
-        hasFirstTurn: false,
-        usage: { calls: 0, promptChars: 0, replyChars: 0 },
-        sessionId: makeSessionId(),
-      };
-      return new Map(m).set(key, session);
-    });
-  }
-
-  function autoOpenAppChat(a: AppSkill) {
-    if (clis.length === 0) return;
-    const host = domains.find((d) => d.name === a.domains[0]) ?? domains[0];
-    if (!host) return;
-    const key = `app:${a.id}`;
-    setActiveKey(key);
-    setMode("chat");
-    setChats((m) => {
-      if (m.has(key)) return m;
-      const cli = clis[0];
-      const label = `app: ${a.id}`;
-      const session: ChatSession = {
-        key,
-        label,
-        hostDomain: host,
-        cli,
-        model: "",
-        seed: { kind: "app", id: a.id, title: a.title, domains: a.domains },
-        initialView: view,
-        messages: makeInitialMessages(label, cli),
-        pending: false,
-        hasFirstTurn: false,
-        usage: { calls: 0, promptChars: 0, replyChars: 0 },
-        sessionId: makeSessionId(),
-      };
-      return new Map(m).set(key, session);
     });
   }
 

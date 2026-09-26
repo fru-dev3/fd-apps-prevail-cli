@@ -395,7 +395,6 @@ export async function runSkillBrowserAgent(
   const downloadsDir = join(skill.connectorDir, "data", "imports");
   // Machine-local profile (outside the vault), migrating any legacy in-vault one.
   const profileDir = browserProfileDir(skill.connectorId, join(skill.connectorDir, "auth", "profile"));
-  const statePath = join(skill.connectorDir, "auth", "state.json");
 
   const { BrowserDriverHost, makeHostDriver } = await import("./browser-driver.ts");
   const host = new BrowserDriverHost();

@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -534,30 +534,6 @@ export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
   ollama: OLLAMA_VERSIONS,
   openrouter: OPENROUTER_MODELS,
 };
-
-function looksLikeModel(kind: CliKind, t: string): boolean {
-  const low = t.toLowerCase();
-  if (kind === "claude") {
-    return (
-      low === "opus" ||
-      low === "sonnet" ||
-      low === "haiku" ||
-      low.startsWith("claude-")
-    );
-  }
-  if (kind === "codex") {
-    return /^(gpt|o\d|chatgpt)/.test(low);
-  }
-  if (kind === "antigravity") {
-    return low.startsWith("gemini") || low.startsWith("gemma");
-  }
-  if (kind === "ollama") {
-    // Ollama tags come from /api/tags at runtime — looksLikeModel is only
-    // used by the --help scraper which doesn't apply to ollama.
-    return true;
-  }
-  return false;
-}
 
 // Back-compat: callers that read MODEL_QUICKPICKS still work but only see
 // the fallback. App.tsx replaces this at runtime with the discovered list

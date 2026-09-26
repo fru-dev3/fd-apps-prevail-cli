@@ -14,7 +14,7 @@
 // home indicator and the weekly brief can read the latest delta.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { scanVault } from "./vault.ts";
 import { computeContextScore } from "./score.ts";

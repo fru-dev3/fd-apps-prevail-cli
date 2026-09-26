@@ -1,6 +1,6 @@
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, cpSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { APPS_DIR, DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-safety.ts";
+import { DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -1342,20 +1342,6 @@ function extractAppDomains(appPath: string): string[] {
 
 export function scanApps(vaultPath: string): AppSkill[] {
   return scanVaultApps(vaultPath);
-}
-
-function extractDescription(skillFile: string): string {
-  try {
-    const raw = vreadFile(skillFile);
-    const fm = raw.match(/^---\s*\n([\s\S]*?)\n---/);
-    if (!fm) return "";
-    const block = fm[1];
-    const m = block.match(/^description:\s*[>|]?\s*\n?([\s\S]*?)(?=^\w+:|$)/m);
-    if (!m) return "";
-    return m[1].trim().replace(/\s+/g, " ").slice(0, 240);
-  } catch {
-    return "";
-  }
 }
 
 export function formatRelativeTime(mtimeMs: number | null): string {

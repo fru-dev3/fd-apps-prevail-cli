@@ -4029,7 +4029,6 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   //   unlock:  return the DEK (base64) for the host to hold + pass to the engine
   //            via PREVAIL_VAULT_KEY on subsequent calls.
   if (sub === "encrypt" || sub === "decrypt" || sub === "unlock") {
-    const asJson = args.includes("--json");
     const readStdin = (): string => {
       try { return readFileSync(0, "utf8").replace(/\r?\n$/, ""); } catch { return ""; }
     };

@@ -29,32 +29,10 @@ const DOMAIN_ICON: Record<string, string> = {
   records: "▤",
 };
 
-// App icons — same constraint. Apps without a specific match use DEFAULT_ICON.
-const APP_ICON: Record<string, string> = {
-  plaid: "$",
-  "google-calendar": "▦",
-  "1password": "⊝",
-  notion: "▤",
-  mychart: "♥",
-  "stripe-dashboard": "$",
-  quickbooks: "⊟",
-  linkedin: "▶",
-  oura: "◉",
-  github: "⎈",
-  gmail: "✉",
-  appfolio: "⌂",
-  gusto: "✚",
-  turbotax: "§",
-};
-
 const DEFAULT_ICON = "·";
 
 function domainIcon(name: string): string {
   return DOMAIN_ICON[name] ?? DEFAULT_ICON;
-}
-
-function appIcon(id: string): string {
-  return APP_ICON[id] ?? DEFAULT_ICON;
 }
 
 export type SidebarFocus = "domains" | "apps";

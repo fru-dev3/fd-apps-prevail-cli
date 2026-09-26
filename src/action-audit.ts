@@ -10,7 +10,6 @@
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { vreadFile } from "./vault-session.ts";
 import { appendLedger, readLedgerAll } from "./ledger.ts";
 import { shardPathFor, shardPaths } from "./ledger-shard.ts";
 import { redact } from "./privacy.ts";

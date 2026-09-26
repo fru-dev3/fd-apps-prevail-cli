@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { writeSecretFile } from "./secret-file.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";

@@ -33,7 +33,6 @@ function isYmd(s: string): boolean {
   return s.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
-function todayYmd(): string { return new Date().toISOString().slice(0, 10); }
 
 // Short, stable, greppable id: base16 of wall-clock nanos (+ salt so a same-nanosecond
 // batch doesn't collide), last 7 chars. Mirrors mint_id() in tasks.rs.

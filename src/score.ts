@@ -39,7 +39,6 @@ import { resolveDomainDir } from "./path-safety.ts";
 import { v4DirPath } from "./vault-layout-v4.ts";
 
 import {
-  readManifest,
   writeManifest,
   ensureManifest,
   assertWritable,

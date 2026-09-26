@@ -9,7 +9,7 @@
 // (the desktop defers when the headless agent is installed), so they never
 // clobber each other.
 
-import { existsSync, readFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { v4ContentPath } from "./vault-layout-v4.ts";
 import { buildRoot, runtimePath } from "./path-safety.ts";
