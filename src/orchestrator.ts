@@ -240,6 +240,9 @@ function parsePlaybook(path: string): Playbook | null {
 }
 
 export function loadPlaybook(vault: string, id: string): Playbook | null {
+  // The id arrives from MCP run_playbook. `../../x` would load (and run) any
+  // JSON file on disk shaped like a playbook; ids are plain slugs.
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(id)) return null;
   const userP = join(vault, "_playbooks", `${id}.json`);
   if (existsSync(userP)) { const p = parsePlaybook(userP); if (p) return p; }
   for (const d of playbooksDirs()) {

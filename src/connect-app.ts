@@ -1,6 +1,6 @@
 import { detectClis, runChatTurn } from "./cli-bridge.ts";
 import { scanVault, scaffoldCommunityApp, scanApps, seedAppStarterSkills } from "./vault.ts";
-import { probeConnector, type AuthCheckSpec } from "./connector-probe.ts";
+import { probeConnector, sanitizeModelAuthCheck, type AuthCheckSpec } from "./connector-probe.ts";
 
 // The Connection Agent, extracted so BOTH the CLI (`prevail connectors connect`)
 // and the MCP server (`app_connect` tool) drive the exact same flow: research
@@ -75,8 +75,13 @@ export async function connectApp(a: ConnectAppArgs): Promise<ConnectAppResult> {
   if (reevaluate) return { ok: true, plan, reevaluated: true };
   const integ = (["api", "oauth", "browser", "mcp", "cli", "manual"].includes(plan.integration as string) ? plan.integration : "manual") as "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
   const planDomains = Array.isArray(plan.domains) ? (plan.domains as string[]).filter((d) => domainNames.includes(d)) : [];
-  const authCheck = (plan.auth_check && typeof plan.auth_check === "object" && (plan.auth_check as Record<string, unknown>).kind && (plan.auth_check as Record<string, unknown>).kind !== "none")
-    ? (plan.auth_check as Record<string, unknown>) : null;
+  // The plan is model output shaped by whatever web pages the agent read, so
+  // its auth_check is untrusted: it is persisted into the manifest and run by
+  // every scheduled probe. Keep only non-executable, non-leaking shapes.
+  const authCheck = sanitizeModelAuthCheck(
+    String(plan.app_id).trim().toLowerCase(),
+    (plan.auth_check && typeof plan.auth_check === "object") ? (plan.auth_check as Record<string, unknown>) : null,
+  );
   const refreshEvery = (plan.schedule && typeof plan.schedule === "object") ? ((plan.schedule as Record<string, unknown>).every as string | undefined) ?? null : null;
   const scaffold = scaffoldCommunityApp({ id: plan.app_id as string, title: (plan.title as string) || name, integration: integ, domains: planDomains, authCheck, refreshEvery, vaultRoot: a.vaultPath });
   // #8/#7: seed (or top up) the app's shipped starter skill pack on connect.

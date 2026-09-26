@@ -1,13 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { Domain, ViewKey } from "./vault.ts";
 import { readResponseFramework, readWebAccess, vaultLockActive } from "./config.ts";
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
-import { buildRoot } from "./path-safety.ts";
+import { buildRoot, vaultRootForCwd } from "./path-safety.ts";
 import { buildHarnessArgs } from "./harness-profiles.ts";
 import {
   type BudgetCaps,
@@ -988,6 +988,30 @@ export function sanitizeEmDashes(text: string): string {
   return segments.join("");
 }
 
+// A model id is spliced into the runtime CLI's argv right after its model flag
+// (`-m <id>`, `--model <id>`). The id reaches us from MCP `chat` arguments,
+// Telegram `/use`, and CLI flags. Parsers like yargs (gemini) do not consume a
+// dash-leading value for a string option, so `-m --yolo` turned into a bare
+// `--yolo` (auto-approve every tool) and the model flag stayed empty. Real ids
+// never start with "-" or carry control characters (spaces are legitimate:
+// Antigravity ids look like "Gemini 3.1 Pro (High)").
+export function assertSafeModelId(m: string): void {
+  if (!m) return;
+  if (m.startsWith("-") || /[\x00-\x1f\x7f]/.test(m)) {
+    throw new Error(`refusing model id ${JSON.stringify(m.slice(0, 60))}: a model id cannot start with "-" or contain control characters`);
+  }
+}
+
+// The extra writable dir for a confined codex act run: the cwd's parent (the
+// domains container), but never wider than the owning vault. For a cwd that IS
+// the vault (connect_app) the parent is the directory BESIDE the vault, so the
+// sandbox would have allowed writes to every sibling project; clamp to cwd.
+export function codexWritableRoot(cwd: string): string {
+  const parent = resolve(cwd, "..");
+  const root = vaultRootForCwd(cwd);
+  return parent === root || parent.startsWith(root + sep) ? parent : resolve(cwd);
+}
+
 export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
@@ -1063,6 +1087,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   }
 
   const m = model.trim();
+  assertSafeModelId(m);
   // Only claude gets the manual — it has a real --append-system-prompt
   // channel that the model treats as system context (not echoed in output).
   // codex and gemini have no system-prompt flag in their CLIs, so the manual
@@ -1254,7 +1279,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     if (toolsInjected || inheritUserMcp || act) {
       try {
         const { actGateSettingsPath } = await import("./act-gate.ts");
-        args.push("--settings", actGateSettingsPath(vaultPath, basename(cwd) || "general", vaultLockOn()));
+        args.push("--settings", actGateSettingsPath(vaultRootForCwd(cwd), basename(cwd) || "general", vaultLockOn()));
       } catch { /* the gws spine still holds for Google; never break the turn */ }
     }
     // Ground-truth tool capture: switch to structured stream-json so we can
@@ -1310,7 +1335,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // in `base`; -a on-failure keeps it non-interactive without disabling the box.
     const codexActArgs = act
       ? (vaultLockOn()
-          ? ["--sandbox", "workspace-write", "--add-dir", vaultPath]
+          ? ["--sandbox", "workspace-write", "--add-dir", codexWritableRoot(cwd)]
           : ["--dangerously-bypass-approvals-and-sandbox"])
       : [];
     const args = [...base, ...modelArgs, ...codexActArgs, codexPrompt];
@@ -1844,6 +1869,7 @@ export function buildCliArgs({
   manual: string | null;
 }): string[] {
   const m = model.trim();
+  assertSafeModelId(m);
   // A prompt that begins with "-" (e.g. an injected context block that leads with
   // "--- Label ---", or a pasted markdown list) is otherwise parsed by the CLI's
   // arg parser as an unknown OPTION ("error: unknown option '--- Profile ...'").
