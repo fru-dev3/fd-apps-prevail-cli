@@ -717,7 +717,7 @@ function listSkills(vault: string): string[] {
 }
 
 function listApps(vault: string): string[] {
-  try { return readdirSync(join(vault, "data", "apps"), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".")).map((d) => d.name); } catch { return []; }
+  try { return readdirSync(join(vault, "data", "apps"), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".") && !d.name.startsWith("_")).map((d) => d.name); } catch { return []; }
 }
 
 // The prompt a user hands a new model to rebuild a project: the brief, and

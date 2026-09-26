@@ -1049,6 +1049,8 @@ export function scanCommunityApps(vaultPath?: string): AppSkill[] {
     }
     for (const e of entries) {
       if (!e.isDirectory()) continue;
+      // "_" dirs (data/apps/_archive, ...) and dot dirs are never apps.
+      if (e.name.startsWith("_") || e.name.startsWith(".")) continue;
       if (seen.has(e.name)) continue;
       const root = join(dir, e.name);
       const manifestPath = join(root, "manifest.json");
@@ -1171,6 +1173,8 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    // "_" dirs (data/apps/_archive holds archived apps) and dot dirs are never apps.
+    if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
     const appPath = join(appsRoot, entry.name);
     // A per-app conversation scope (data/apps/<id>/_scope) can materialize the
     // app folder even when no real app is installed there yet. Such a shell
