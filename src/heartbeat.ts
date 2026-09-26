@@ -311,7 +311,7 @@ export function status(vaultPath: string): HeartbeatStatus {
 /** Best-effort resolution of the prevail binary the agent should invoke.
  *  Prefers the running executable (the compiled `prevail` binary); falls back
  *  to a bare `prevail` on PATH when running from source. */
-function prevailInvocation(): string[] {
+export function prevailInvocation(): string[] {
   const exec = process.execPath;
   // When running the compiled single-file binary, execPath IS prevail.
   // When running via bun from source, execPath is `bun` and argv[1] is the
@@ -323,7 +323,7 @@ function prevailInvocation(): string[] {
   return ["prevail"];
 }
 
-function escapeXml(s: string): string {
+export function escapeXml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

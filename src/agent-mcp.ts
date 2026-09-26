@@ -12,9 +12,9 @@
 // `--mcp-config` ONLY on the agentic `act` path, so a default chat turn is
 // byte-for-byte unchanged and a run with no key never gets the flag at all.
 
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { writeSecretFile } from "./secret-file.ts";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { scanCommunityApps } from "./vault.ts";
 import { resolveGwsBinary } from "./calendar-sync.ts";

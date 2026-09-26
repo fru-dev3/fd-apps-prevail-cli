@@ -2243,11 +2243,16 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
 }
 
 // Resolve the active vault from a command's args (--vault) with env/config fallback.
-async function resolveVaultFromArgs(args: string[]): Promise<string> {
-  const vflag = args.indexOf("--vault");
-  const { readConfig: rc } = await import("./config.ts");
+// `--vault <path>` from argv, else `fallback`, else the configured vault, else
+// the default vault. vault.ts is imported lazily to keep CLI startup light.
+async function vaultFlagOrDefault(argv: string[], fallback?: string | null): Promise<string> {
+  const vflag = argv.indexOf("--vault");
   const { resolveDefaultVaultPath } = await import("./vault.ts");
-  return (vflag >= 0 ? args[vflag + 1] : undefined) ?? process.env.PREVAIL_VAULT_ROOT ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+  return (vflag >= 0 ? argv[vflag + 1] : undefined) ?? fallback ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
+}
+
+async function resolveVaultFromArgs(args: string[]): Promise<string> {
+  return vaultFlagOrDefault(args, process.env.PREVAIL_VAULT_ROOT);
 }
 
 // prevail autonomy status|pause|resume|policy <class> <allow|ask|never>|cap <usd|off>
@@ -3581,10 +3586,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
   if (sub === "sync") {
     const id = args[1];
     if (!id) { console.error("usage: prevail connectors sync <id> [--vault <path>]"); process.exit(1); }
-    const vflag = args.indexOf("--vault");
-    const { readConfig } = await import("./config.ts");
-    const { resolveDefaultVaultPath } = await import("./vault.ts");
-    const vault = (vflag >= 0 ? args[vflag + 1] : undefined) ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
+    const vault = await vaultFlagOrDefault(args);
     const { syncApp } = await import("./daemon-sync.ts");
     const r = await syncApp({ vaultPath: vault!, tickSec: 60, maxRunsPerTick: 1 }, id);
     if (args.includes("--json")) {
@@ -3599,10 +3601,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // One pass over every DUE app (the in-app scheduler calls this on a tick;
     // the headless `daemon --sync` runs the same pass on a loop). Respects each
     // app's own schedule + the enabled flag; never stacks (per-app file lock).
-    const vflag = args.indexOf("--vault");
-    const { readConfig } = await import("./config.ts");
-    const { resolveDefaultVaultPath } = await import("./vault.ts");
-    const vault = (vflag >= 0 ? args[vflag + 1] : undefined) ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
+    const vault = await vaultFlagOrDefault(args);
     const max = (() => { const i = args.indexOf("--max"); return i >= 0 ? Math.max(1, parseInt(args[i + 1], 10) || 2) : 2; })();
     const { syncOnce } = await import("./daemon-sync.ts");
     const r = await syncOnce({ vaultPath: vault!, tickSec: 60, maxRunsPerTick: max });
@@ -4029,7 +4028,6 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
   //   unlock:  return the DEK (base64) for the host to hold + pass to the engine
   //            via PREVAIL_VAULT_KEY on subsequent calls.
   if (sub === "encrypt" || sub === "decrypt" || sub === "unlock") {
-    const asJson = args.includes("--json");
     const readStdin = (): string => {
       try { return readFileSync(0, "utf8").replace(/\r?\n$/, ""); } catch { return ""; }
     };
@@ -5508,9 +5506,7 @@ async function main() {
     // rebuild it from. See prompt-projects.ts.
     const a = args.projectsArgs;
     const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
-    const { readConfig: rc } = await import("./config.ts");
-    const { resolveDefaultVaultPath } = await import("./vault.ts");
-    const vault = get("--vault") ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const vault = await vaultFlagOrDefault(a, args.vaultPath);
     const json = a.includes("--json");
     const sub = a[0] && !a[0].startsWith("--") ? a[0] : "list";
     const pp = await import("./prompt-projects.ts");
@@ -5571,10 +5567,7 @@ async function main() {
   }
   if (args.recommendations) {
     // prevail recommendations --vault <path> [--json] — the proactive feed.
-    const vflag = args.recommendationsArgs.indexOf("--vault");
-    const { readConfig: rc } = await import("./config.ts");
-    const { resolveDefaultVaultPath } = await import("./vault.ts");
-    const vault = (vflag >= 0 ? args.recommendationsArgs[vflag + 1] : undefined) ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const vault = await vaultFlagOrDefault(args.recommendationsArgs);
     const { recommendationsJson, buildRecommendations } = await import("./recommendations.ts");
     if (args.recommendationsArgs.includes("--json")) { process.stdout.write(`${recommendationsJson(vault!)}\n`); return; }
     const recs = buildRecommendations(vault!);
@@ -5587,10 +5580,8 @@ async function main() {
     // prevail suggest-apps --domain <name|all> [--cli <kind>] [--model <id>] [--json]
     // Learns from a domain's signals and proposes real apps to connect.
     const a = args.suggestAppsArgs;
-    const vflag = a.indexOf("--vault");
-    const { readConfig: rc } = await import("./config.ts");
-    const { resolveDefaultVaultPath, scanVault, scanCommunityApps } = await import("./vault.ts");
-    const vault = (vflag >= 0 ? a[vflag + 1] : undefined) ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const { scanVault, scanCommunityApps } = await import("./vault.ts");
+    const vault = await vaultFlagOrDefault(a, args.vaultPath);
     const json = a.includes("--json");
     const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
     const domainArg = (get("--domain") ?? "all").toLowerCase();
@@ -5644,10 +5635,7 @@ async function main() {
       if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); }
       console.error(msg); process.exit(1);
     };
-    const { readConfig: rc } = await import("./config.ts");
-    const { resolveDefaultVaultPath } = await import("./vault.ts");
-    const vflag = a.indexOf("--vault");
-    const vault = (vflag >= 0 ? a[vflag + 1] : undefined) ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const vault = await vaultFlagOrDefault(a, args.vaultPath);
     const domain = (get("--domain") ?? "").trim();
     const name = (get("--name") ?? "").trim();
     const describe = (get("--describe") ?? "").trim();
@@ -5809,10 +5797,7 @@ async function main() {
     // Searches the web for AI models worth adding to the Arena benchmark
     // (open-weight + frontier) and writes build/_meta/model_suggestions.json.
     const a = args.scoutArgs;
-    const { readConfig: rc } = await import("./config.ts");
-    const { resolveDefaultVaultPath } = await import("./vault.ts");
-    const vflag = a.indexOf("--vault");
-    const vault = (vflag >= 0 ? a[vflag + 1] : undefined) ?? args.vaultPath ?? rc()?.vaultPath ?? resolveDefaultVaultPath();
+    const vault = await vaultFlagOrDefault(a, args.vaultPath);
     const json = a.includes("--json");
     const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
     const { readModelSuggestions, scoutModels } = await import("./model-scout.ts");

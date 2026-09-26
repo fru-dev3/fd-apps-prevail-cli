@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -262,11 +262,6 @@ function vaultLockOn(): boolean {
 // so existing `import { CliKind } from "./cli-bridge"` sites keep working.
 import type { CliKind, DirectProviderKind, ExtraCliKind } from "./config.ts";
 export type { CliKind };
-
-// Legacy CliKind values from earlier versions of prevAIl. Listed here as
-// a string union (NOT part of the live CliKind type) so config-migration
-// code can spell them without losing type-safety on the consumer side.
-export type LegacyCliKind = "gemini";
 
 // SECURITY: env vars that look like provider/operator secrets are stripped
 // when spawning subprocess CLIs. The CLIs read their own auth files
@@ -540,30 +535,6 @@ export const MODEL_QUICKPICKS_FALLBACK: Record<CliKind, string[]> = {
   openrouter: OPENROUTER_MODELS,
 };
 
-function looksLikeModel(kind: CliKind, t: string): boolean {
-  const low = t.toLowerCase();
-  if (kind === "claude") {
-    return (
-      low === "opus" ||
-      low === "sonnet" ||
-      low === "haiku" ||
-      low.startsWith("claude-")
-    );
-  }
-  if (kind === "codex") {
-    return /^(gpt|o\d|chatgpt)/.test(low);
-  }
-  if (kind === "antigravity") {
-    return low.startsWith("gemini") || low.startsWith("gemma");
-  }
-  if (kind === "ollama") {
-    // Ollama tags come from /api/tags at runtime — looksLikeModel is only
-    // used by the --help scraper which doesn't apply to ollama.
-    return true;
-  }
-  return false;
-}
-
 // Back-compat: callers that read MODEL_QUICKPICKS still work but only see
 // the fallback. App.tsx replaces this at runtime with the discovered list
 // once probes complete.
@@ -813,11 +784,6 @@ export async function detectClis(opts?: { force?: boolean }): Promise<AvailableC
   }
   _cliRoster = { at: Date.now(), clis: out };
   return out;
-}
-
-export interface SpawnResult {
-  ok: boolean;
-  message: string;
 }
 
 export function buildChatPrompt(domain: Domain, view: ViewKey): string {

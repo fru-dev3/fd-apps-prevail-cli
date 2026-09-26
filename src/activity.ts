@@ -10,7 +10,7 @@
 import { join } from "node:path";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { runtimePath } from "./path-safety.ts";
-import { vappendLine, vreadFile, vrotateLedgerPrefix } from "./vault-session.ts";
+import { vappendLine, vrotateLedgerPrefix } from "./vault-session.ts";
 
 // Retention: the activity ledger is append-only and, unlike _intents.jsonl, was
 // never rotated — so it grew unbounded and got slower to read as a vault aged.

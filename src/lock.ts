@@ -10,7 +10,7 @@
 // Verifier lives at ~/.prevail/lock.json, chmod 600, separate from config.json
 // so it's easy to reason about and back up independently.
 
-import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { writeSecretFile } from "./secret-file.ts";
 import { join } from "node:path";
 

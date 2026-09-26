@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runChatTurn, type AvailableCli } from "./cli-bridge.ts";
+import { slugify } from "./suggestions.ts";
 
 export interface LlmSuggestion {
   id: string;
@@ -211,14 +212,6 @@ export function parseLlmResponse(raw: string, domain: string): LlmSuggestion[] {
     });
   }
   return out;
-}
-
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
 }
 
 export interface PrecomputeArgs {

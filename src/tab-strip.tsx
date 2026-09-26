@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { theme } from "./theme.ts";
 import type { ViewKey } from "./vault.ts";
-import { MODEL_QUICKPICKS, type AvailableCli, type CliHealth, type CliKind } from "./cli-bridge.ts";
+import { type AvailableCli, type CliHealth, type CliKind } from "./cli-bridge.ts";
 
 interface TabDef {
   key: ViewKey | "chat";
@@ -148,83 +147,5 @@ function CliChips({
         );
       })}
     </>
-  );
-}
-
-// Dropdown — collapsed by default to one chip showing the active model.
-// Click the chip to expand the alternatives inline; pick one to apply + close.
-// Default selection always shows literal "default" so the user knows nothing is
-// overridden.
-function ModelChips({
-  currentCli,
-  model,
-  onPickModel,
-}: {
-  currentCli: CliKind;
-  model: string;
-  onPickModel: (model: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const picks = MODEL_QUICKPICKS[currentCli] ?? [];
-  const isDefault = !model.trim();
-  const currentLower = model.trim().toLowerCase();
-  // Aliases ("opus", "sonnet", "haiku") resolve to the latest model in their
-  // tier. Without the (latest) suffix users assume there's a missing version
-  // number — make the alias semantics visible.
-  const isAlias = (s: string) => !/-\d/.test(s) && s !== "default";
-  const decorate = (id: string) => (isAlias(id) ? `${id} (latest)` : id);
-  const currentLabel = isDefault ? "default" : decorate(model.trim());
-  // Build the list of alternatives the user hasn't currently selected.
-  const alts = ["default", ...picks].filter((id) => {
-    if (id === "default") return !isDefault;
-    return id !== currentLower && !currentLower.includes(id);
-  });
-  const pick = (id: string) => {
-    onPickModel(id);
-    setOpen(false);
-  };
-  return (
-    <>
-      <Chip
-        label={`${currentLabel} ${open ? "▴" : "▾"}`}
-        active
-        onClick={() => setOpen((v) => !v)}
-      />
-      {open &&
-        alts.map((id) => (
-          <Chip
-            key={id}
-            label={decorate(id)}
-            active={false}
-            onClick={() => pick(id)}
-          />
-        ))}
-    </>
-  );
-}
-
-function Chip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const fg = active ? theme.gold : theme.fgDim;
-  const bg = active ? theme.selBg : theme.bg;
-  return (
-    <box
-      flexDirection="row"
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={bg}
-      onMouseDown={onClick}
-    >
-      <text fg={fg} bg={bg} attributes={active ? 1 : 0}>
-        {active ? `▸${label}` : label}
-      </text>
-    </box>
   );
 }

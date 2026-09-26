@@ -27,9 +27,6 @@ const AGENTS: AgentDef[] = [
 function plistPathFor(label: string): string {
   return join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
 }
-function plistPath(): string {
-  return plistPathFor(LABEL);
-}
 
 // Resolve the absolute path to this engine binary so the agent can launch it
 // after the installing process exits. Prefer the running executable.

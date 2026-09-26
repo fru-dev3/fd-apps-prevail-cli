@@ -19,7 +19,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { hostname } from "node:os";
 
-import { vreadFile } from "./vault-session.ts";
 import { appendLedger, readLedgerAll } from "./ledger.ts";
 import { dirname, join, resolve } from "node:path";
 import { runtimePath } from "./path-safety.ts";

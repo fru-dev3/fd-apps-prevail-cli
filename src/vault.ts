@@ -1,6 +1,6 @@
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, cpSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { APPS_DIR, DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-safety.ts";
+import { DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -668,24 +668,6 @@ export interface AppRoute {
 // honest middle state between "not-configured" and a fetch-verified "connected";
 // surfaces render it as "authorized · verifying", never green.
 export type ConnectorStatus = "connected" | "configured" | "not-configured" | "expired" | "error";
-
-export interface CommunityAppManifest {
-  id: string;
-  name?: string;
-  description?: string;
-  domains?: string[];
-  version?: string;
-  homepage?: string;
-  // New: integration type metadata (optional). Older manifests without
-  // this field default to "manual" at scan time.
-  integration?: AppSkill["integration"];
-  // New: short description of how the connector connects. Inline
-  // alternative to a separate connection.md file.
-  connection?: string;
-  // Whether the sync daemon may autonomously refresh this connector.
-  // Absent / true = enabled; false = the daemon skips it.
-  enabled?: boolean;
-}
 
 function communityAppsDirs(vaultPath?: string): string[] {
   const dirs: string[] = [];
@@ -1360,33 +1342,6 @@ function extractAppDomains(appPath: string): string[] {
 
 export function scanApps(vaultPath: string): AppSkill[] {
   return scanVaultApps(vaultPath);
-}
-
-function extractDescription(skillFile: string): string {
-  try {
-    const raw = vreadFile(skillFile);
-    const fm = raw.match(/^---\s*\n([\s\S]*?)\n---/);
-    if (!fm) return "";
-    const block = fm[1];
-    const m = block.match(/^description:\s*[>|]?\s*\n?([\s\S]*?)(?=^\w+:|$)/m);
-    if (!m) return "";
-    return m[1].trim().replace(/\s+/g, " ").slice(0, 240);
-  } catch {
-    return "";
-  }
-}
-
-export function readAppSkill(app: AppSkill): string {
-  // Community apps have a SKILL.md at the plugin root.
-  const skillPath = join(app.path, "SKILL.md");
-  if (existsSync(skillPath)) {
-    try {
-      return vreadFile(skillPath);
-    } catch (err) {
-      return `*Failed to read ${skillPath}: ${(err as Error).message}*`;
-    }
-  }
-  return `*No SKILL.md for ${app.id}.*`;
 }
 
 export function formatRelativeTime(mtimeMs: number | null): string {

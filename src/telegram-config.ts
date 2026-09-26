@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeSecretFile } from "./secret-file.ts";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";

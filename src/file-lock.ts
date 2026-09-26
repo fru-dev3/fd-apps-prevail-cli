@@ -1,4 +1,4 @@
-import { openSync, closeSync, readFileSync, writeFileSync, unlinkSync, existsSync, statSync } from "node:fs";
+import { openSync, closeSync, readFileSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { hostname } from "node:os";
 
 // Atomic single-writer lock for cross-process serialization. Used by the

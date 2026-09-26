@@ -183,11 +183,6 @@ function dowLabel(dow: string): string {
   return dow;
 }
 
-export interface NextRunGuess {
-  cron: string;
-  nextMs: number | null;
-}
-
 // Approximate "next run" by walking forward minute-by-minute up to 7 days
 export function nextRunWithin(cron: string, daysAhead = 7, from: Date = new Date()): number | null {
   const limit = daysAhead * 24 * 60;
