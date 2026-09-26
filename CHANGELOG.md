@@ -7,6 +7,19 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.28] - 2026-09-26 · Intent: weeks and days, exact prompts, agent instructions
+
+### Added
+- **Periods**: `prevail intent periods` lists every week with prompts, newest first, each with its days, counts, whether a letter exists and its intent line.
+- **Findings per period**: `prevail intent findings --week <YYYY-MM-DD>` and `--day <YYYY-MM-DD>` compute the findings for that week or day from its own prompts (rules restated in it, its tooling split, loops that went quiet in it, and for a week the parts of life that never came up), cached per period under `build/_meta/mirror/periods/`. The week still going shows the standing findings. A "not really" on one period leaves the others alone; a kept rule or a project let go holds everywhere.
+- **Letters and lines on demand**: `prevail intent generate --week <date>` writes a week's intent line, one line per day and, once the week is over, its letter, each only once.
+- **History by period**: `prevail intent history --week|--day`.
+- **Agent instructions**: `prevail intent instruction <n> [--json]` turns a Projects recommendation into a ready-to-paste task for an agent: the task, why, the project and its restart brief's goal and rules. Deterministic; no model call.
+
+### Fixed
+- **History shows prompts exactly as typed**: no length cap and no trimming. A desktop chat still shows only what was typed, not its context wrapper.
+- **Only the person's own prompts**: sub-agent briefs (now marked `sidechain` at sync, and matched against local sub-agent transcripts for older records), harness image notices, Prevail's entity tagger and recipe designer, domain agent prompts and loop re-sends no longer count as prompts in Intent and Projects. The capture streams are untouched.
+
 ## [1.9.27] - 2026-09-26 · Entities: the people, places and things you talk about
 
 ### Added
