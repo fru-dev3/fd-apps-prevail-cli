@@ -17,10 +17,10 @@ describe("estimateCouncilCost", () => {
     expect(est.lensCount).toBe(1);
     expect(est.totalCalls).toBe(5);
     // Per call = model-pricing default tier × 1000 in / 500 out tokens:
-    // claude (Opus 5, $5/$25) 0.0175 + codex (Sol, $2/$10) 0.007
-    //   + gemini ($1.25/$5) 0.00375 + ollama 0 + chair 0.0175
-    expect(est.estCostUsd).toBeCloseTo(0.04575, 6);
-    expect(est.perCli.claude).toBeCloseTo(0.0175, 6);
+    // claude (Opus 5.5, $4/$20) 0.014 + codex (Sol, $2/$10) 0.007
+    //   + gemini ($1.25/$5) 0.00375 + ollama 0 + chair 0.014
+    expect(est.estCostUsd).toBeCloseTo(0.03875, 6);
+    expect(est.perCli.claude).toBeCloseTo(0.014, 6);
     expect(est.perCli.codex).toBeCloseTo(0.007, 6);
     expect(est.perCli.gemini).toBeCloseTo(0.00375, 6);
     expect(est.perCli.ollama).toBe(0);
@@ -40,9 +40,9 @@ describe("estimateCouncilCost", () => {
     expect(est.panelistCount).toBe(4);
     expect(est.lensCount).toBe(8);
     expect(est.totalCalls).toBe(33);
-    // (0.0175 + 0.007 + 0.00375 + 0) × 8 = 0.226; + chair 0.0175 = 0.2435
-    expect(est.estCostUsd).toBeCloseTo(0.2435, 6);
-    expect(est.perCli.claude).toBeCloseTo(0.14, 6);
+    // (0.014 + 0.007 + 0.00375 + 0) × 8 = 0.198; + chair 0.014 = 0.212
+    expect(est.estCostUsd).toBeCloseTo(0.212, 6);
+    expect(est.perCli.claude).toBeCloseTo(0.112, 6);
     expect(est.perCli.codex).toBeCloseTo(0.056, 6);
     expect(est.perCli.gemini).toBeCloseTo(0.03, 6);
     expect(est.perCli.ollama).toBe(0);
@@ -61,7 +61,7 @@ describe("estimateCouncilCost", () => {
     expect(est.totalCalls).toBe(4);
     // Ollama contributes 0, only the chair call costs anything.
     expect(est.perCli.ollama).toBe(0);
-    expect(est.estCostUsd).toBeCloseTo(0.0175, 6);
+    expect(est.estCostUsd).toBeCloseTo(0.014, 6);
   });
 
   test("mixed council with lens count 3: claude + codex + ollama", () => {
@@ -77,8 +77,8 @@ describe("estimateCouncilCost", () => {
     // 3 panelists × 3 lenses = 9 panel calls + chair = 10
     expect(est.totalCalls).toBe(10);
     // Priced on the named model: opus ($5/$25) 0.0175×3 + gpt-5.4 ($1.25/$10)
-    // 0.00625×3 + ollama 0×3 + chair 0.0175 = 0.0525 + 0.01875 + 0 + 0.0175
-    expect(est.estCostUsd).toBeCloseTo(0.08875, 6);
+    // 0.00625×3 + ollama 0×3 + chair 0.014 = 0.0525 + 0.01875 + 0 + 0.014
+    expect(est.estCostUsd).toBeCloseTo(0.08525, 6);
     expect(est.perCli.claude).toBeCloseTo(0.0525, 6);
     expect(est.perCli.codex).toBeCloseTo(0.01875, 6);
     expect(est.perCli.ollama).toBe(0);
@@ -93,10 +93,10 @@ describe("estimateCouncilCost", () => {
       lensCount: 1,
       promptChars: 50,
     });
-    // Both $10/$50: 0.01 + 0.025 = 0.035 per call; + chair 0.0175
+    // Both $10/$50: 0.01 + 0.025 = 0.035 per call; + chair 0.014
     expect(est.perCli.claude).toBeCloseTo(0.035, 6);
     expect(est.perCli.codex).toBeCloseTo(0.035, 6);
-    expect(est.estCostUsd).toBeCloseTo(0.0875, 6);
+    expect(est.estCostUsd).toBeCloseTo(0.084, 6);
   });
 
   test("unknown cli kind falls back to default per-call cost", () => {
@@ -105,8 +105,8 @@ describe("estimateCouncilCost", () => {
       lensCount: 1,
       promptChars: 50,
     });
-    // unknown ($5/$15 global default): 0.0125 + chair 0.0175 = 0.03
-    expect(est.estCostUsd).toBeCloseTo(0.03, 6);
+    // unknown ($5/$15 global default): 0.0125 + chair 0.014 = 0.0265
+    expect(est.estCostUsd).toBeCloseTo(0.0265, 6);
     expect(est.totalCalls).toBe(2);
   });
 

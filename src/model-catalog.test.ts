@@ -41,8 +41,8 @@ describe("model catalogs", () => {
   });
 
   test("the subscription CLIs default to a current model", () => {
-    expect(defaultModelFor("claude")).toBe("claude-opus-5");
-    expect(defaultModelFor("codex")).toBe("gpt-5.6-sol");
+    expect(defaultModelFor("claude")).toBe("claude-opus-5-5");
+    expect(defaultModelFor("codex")).toBe("gpt-6-sol");
     expect(defaultModelFor("antigravity")).toBe("Gemini 3.8 Flash (High)");
   });
 
@@ -52,8 +52,10 @@ describe("model catalogs", () => {
     expect(MODEL_QUICKPICKS_FALLBACK.claude).toContain("claude-sonnet-5");
   });
 
-  test("codex quickpicks carry GPT-6 Astra", () => {
-    expect(MODEL_QUICKPICKS_FALLBACK.codex).toContain("gpt-6-astra");
+  test("codex quickpicks carry the GPT-6 tiers", () => {
+    for (const id of ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]) {
+      expect(MODEL_QUICKPICKS_FALLBACK.codex).toContain(id);
+    }
   });
 
   test("openrouter ids keep the vendor/model shape", () => {
@@ -66,12 +68,17 @@ describe("pricing", () => {
   // fall through to a wrong rule (or to null).
   test("usage.ts prices the current models", () => {
     expect(rateFor("claude", "claude-fable-5-1")).toEqual({ inUsdPerMtok: 10, outUsdPerMtok: 50 });
+    expect(rateFor("claude", "claude-opus-5-5")).toEqual({ inUsdPerMtok: 4, outUsdPerMtok: 20 });
+    expect(rateFor("openrouter", "anthropic/claude-opus-5.5")).toEqual({ inUsdPerMtok: 4, outUsdPerMtok: 20 });
     expect(rateFor("claude", "claude-opus-5")).toEqual({ inUsdPerMtok: 5, outUsdPerMtok: 25 });
     expect(rateFor("claude", "claude-sonnet-5")).toEqual({ inUsdPerMtok: 2, outUsdPerMtok: 10 });
     expect(rateFor("claude", "claude-haiku-4-5")).toEqual({ inUsdPerMtok: 1, outUsdPerMtok: 5 });
     // "codex" is in the haystack for every Codex model, so model-specific rules
     // must win over the generic codex rule.
     expect(rateFor("codex", "gpt-6-astra")).toEqual({ inUsdPerMtok: 10, outUsdPerMtok: 50 });
+    expect(rateFor("codex", "gpt-6-sol")).toEqual({ inUsdPerMtok: 2, outUsdPerMtok: 10 });
+    expect(rateFor("codex", "gpt-6-luna@high")).toEqual({ inUsdPerMtok: 0.1, outUsdPerMtok: 0.5 });
+    expect(rateFor("xai", "grok-4.7")).toEqual({ inUsdPerMtok: 1.6, outUsdPerMtok: 4.8 });
     expect(rateFor("codex", "gpt-5.6-luna")).toEqual({ inUsdPerMtok: 0.2, outUsdPerMtok: 1.2 });
     expect(rateFor("antigravity", "Gemini 3.8 Flash (High)")).toEqual({ inUsdPerMtok: 0.75, outUsdPerMtok: 3.75 });
     expect(rateFor("ollama", "llama3.1")).toEqual({ inUsdPerMtok: 0, outUsdPerMtok: 0 });

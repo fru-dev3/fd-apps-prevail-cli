@@ -22,14 +22,14 @@ describe("usage — pricing", () => {
     expect(rateFor("codex", "gpt-5.5").inUsdPerMtok).toBe(1.25);
     expect(rateFor("ollama", "llama3.2")).toEqual({ inUsdPerMtok: 0, outUsdPerMtok: 0 });
     // unknown model on a known vendor → vendor default
-    expect(rateFor("claude", "mystery-model").outUsdPerMtok).toBe(25);
+    expect(rateFor("claude", "mystery-model").outUsdPerMtok).toBe(20);
   });
 
   test("estimateTokens ~ chars/4 and costUsd uses in/out split", () => {
     expect(estimateTokens("12345678")).toBe(2);
-    // opus: 1M in @ $5, 1M out @ $25 (Opus 5 pricing)
-    expect(costUsd("claude", "opus", 1_000_000, 0)).toBeCloseTo(5, 5);
-    expect(costUsd("claude", "opus", 0, 1_000_000)).toBeCloseTo(25, 5);
+    // opus alias runs Opus 5.5: 1M in @ $4, 1M out @ $20
+    expect(costUsd("claude", "opus", 1_000_000, 0)).toBeCloseTo(4, 5);
+    expect(costUsd("claude", "opus", 0, 1_000_000)).toBeCloseTo(20, 5);
     expect(costUsd("ollama", "llama3.2", 1_000_000, 1_000_000)).toBe(0);
   });
 

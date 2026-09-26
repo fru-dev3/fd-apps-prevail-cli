@@ -22,8 +22,8 @@ describe("pricing", () => {
     expect(costUsd("ollama", "llama3.1", 1_000_000, 1_000_000)).toBe(0);
   });
   it("costs input/output at their separate rates", () => {
-    // opus: 5 in / 25 out per Mtok → 1M in + 1M out = 30 (Opus 5 pricing)
-    expect(costUsd("claude", "opus", 1_000_000, 1_000_000)).toBe(30);
+    // opus alias runs Opus 5.5: 4 in / 20 out per Mtok → 1M in + 1M out = 24
+    expect(costUsd("claude", "opus", 1_000_000, 1_000_000)).toBe(24);
   });
 });
 

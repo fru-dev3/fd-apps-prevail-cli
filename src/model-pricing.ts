@@ -34,6 +34,9 @@ const RATES: Array<{ match: RegExp; inUsd: number; outUsd: number }> = [
   // Anthropic (refreshed 2026-09-11). Fable is the frontier tier; Opus 5 is
   // $5/$25, a third of the Opus 4.x price this table used to carry.
   { match: /fable|mythos/i, inUsd: 10, outUsd: 50 },
+  // Opus 5.5 (2026-09-22) is priced below Opus 5; must precede the generic rule.
+  // The bare "opus" alias runs the current release, so it takes the same rate.
+  { match: /opus-5[.-]5|^opus(@|$)/i, inUsd: 4, outUsd: 20 },
   { match: /opus/i, inUsd: 5, outUsd: 25 },
   { match: /sonnet/i, inUsd: 2, outUsd: 10 },
   { match: /haiku/i, inUsd: 1, outUsd: 5 },
@@ -43,7 +46,10 @@ const RATES: Array<{ match: RegExp; inUsd: number; outUsd: number }> = [
   { match: /\bo1\b|\bo3\b|\bo4\b/i, inUsd: 15, outUsd: 60 },
   { match: /gpt-4/i, inUsd: 10, outUsd: 30 },
   { match: /gpt-3\.5/i, inUsd: 0.5, outUsd: 1.5 },
-  // GPT-6 Astra, the flagship (GA 2026-09-03).
+  // GPT-6 tiers (OpenRouter rates, 2026-09-25). Sol and Luna must precede the
+  // Astra rule, which catches bare "gpt-6" (first match wins).
+  { match: /gpt-6-luna/i, inUsd: 0.1, outUsd: 0.5 },
+  { match: /gpt-6-sol/i, inUsd: 2, outUsd: 10 },
   { match: /gpt-6|astra/i, inUsd: 10, outUsd: 50 },
   // GPT-5.6 family (Sol flagship / Terra balanced / Luna fast). Tier-specific
   // rates must come BEFORE the generic gpt-5 rule below (first match wins). Bare
@@ -59,6 +65,7 @@ const RATES: Array<{ match: RegExp; inUsd: number; outUsd: number }> = [
   { match: /gemini.*pro|gemini-2|gemini-1\.5/i, inUsd: 1.25, outUsd: 5 },
   { match: /gemini/i, inUsd: 1.25, outUsd: 5 },
   // xAI
+  { match: /grok-4\.7/i, inUsd: 1.6, outUsd: 4.8 },
   { match: /grok/i, inUsd: 2, outUsd: 6 },
   // DeepSeek (hosted)
   { match: /deepseek/i, inUsd: 0.27, outUsd: 1.1 },
@@ -68,8 +75,10 @@ const RATES: Array<{ match: RegExp; inUsd: number; outUsd: number }> = [
   // Open / hosted-open families (common via OpenRouter and others). Approximate
   // published rates; matched on the family substring so the "vendor/" prefix in
   // an OpenRouter id (e.g. "z-ai/glm-5.2") doesn't matter.
+  { match: /glm-5\.3-prime/i, inUsd: 2.8, outUsd: 8.8 },
   { match: /\bglm\b|zhipu/i, inUsd: 0.6, outUsd: 2.2 },
   { match: /\bkimi\b|moonshot/i, inUsd: 0.6, outUsd: 2.5 },
+  { match: /qwen3\.8-max-prime/i, inUsd: 4, outUsd: 12 },
   { match: /qwen/i, inUsd: 0.4, outUsd: 1.2 },
   { match: /\byi-/i, inUsd: 0.3, outUsd: 0.3 },
   { match: /llama/i, inUsd: 0.2, outUsd: 0.6 },
@@ -96,14 +105,14 @@ export function priceFor(cli: string | undefined | null, model: string | undefin
 // (usage.ts) and the council / budget heuristics, which must always return a
 // number. Direct-provider kinds (anthropic, openai, ...) map to the same tiers.
 const VENDOR_DEFAULT: Record<string, { inUsd: number; outUsd: number }> = {
-  claude: { inUsd: 5, outUsd: 25 }, // Opus 5
-  anthropic: { inUsd: 5, outUsd: 25 },
-  codex: { inUsd: 2, outUsd: 10 }, // GPT-5.6 Sol, the Codex default
+  claude: { inUsd: 4, outUsd: 20 }, // Opus 5.5
+  anthropic: { inUsd: 4, outUsd: 20 },
+  codex: { inUsd: 2, outUsd: 10 }, // GPT-6 Sol, the Codex default
   openai: { inUsd: 2, outUsd: 10 },
   antigravity: { inUsd: 1.25, outUsd: 5 }, // Gemini Pro tier
   gemini: { inUsd: 1.25, outUsd: 5 },
   google: { inUsd: 1.25, outUsd: 5 },
-  xai: { inUsd: 2, outUsd: 6 },
+  xai: { inUsd: 1.6, outUsd: 4.8 }, // Grok 4.7
   kimi: { inUsd: 0.6, outUsd: 2.5 },
   deepseek: { inUsd: 0.27, outUsd: 1.1 },
 };
