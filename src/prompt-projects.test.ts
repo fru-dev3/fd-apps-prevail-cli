@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isAgentWritten, isInternalPrompt, loadCorpus, projectKeyOf, userTextOf } from "./prompt-corpus.ts";
-import { briefIsFresh, buildProjects, renameProject, isAmbiguousKey, parseJsonAnswer, periodOf, readProjectsIndex, replayPrompt, splitBrief, timeline, type ModelRunner } from "./prompt-projects.ts";
+import { briefIsFresh, buildProjects, displayLine, renameProject, isAmbiguousKey, parseJsonAnswer, periodOf, readProjectsIndex, replayPrompt, splitBrief, timeline, type ModelRunner } from "./prompt-projects.ts";
 
 const HOME = "/Users/someone";
 
@@ -56,6 +56,13 @@ describe("briefIsFresh", () => {
     expect(briefIsFresh(packed, "h1", 200, "m", false, now)).toBe(false);
     expect(briefIsFresh(undefined, "h1", 200, "m", true, now)).toBe(false);
     expect(briefIsFresh({ ...packed, prompts: 20 }, "h2", 34, "m", true, now)).toBe(true); // small projects need 15
+  });
+});
+
+describe("displayLine", () => {
+  test("drops paste wrappers and scratch paths, keeps the words", () => {
+    expect(displayLine('<pasted_content id="bd3b">Build more sites</pasted_content> see /private/tmp/claude-501/x/y.md now')).toBe("Build more sites see (a scratch file) now");
+    expect(displayLine("a".repeat(300)).length).toBe(240);
   });
 });
 
@@ -165,7 +172,11 @@ describe("buildProjects end to end (fake model)", () => {
     expect(calls).toEqual(["brief", "recommend"]);
     expect(existsSync(join(dir, "history"))).toBe(true);
 
-    // Curation: a rename moves the pack and keeps the brief.
+    expect(site.weekly).toEqual({ "2026-06-01": 5 });
+    // Curation: a rename moves the pack and keeps the brief, and the
+    // recommendations that named it by title follow.
+    renameProject(vault, "fru-dev-site", "fru-dev-site", "fru.dev site and trackers");
+    expect(readProjectsIndex(vault)!.recommendations[0].project).toBe("fru.dev site and trackers");
     const renamed = renameProject(vault, "maple-claim", "maple-hail-claim", "maple hail claim");
     expect(renamed.slug).toBe("maple-hail-claim");
     const moved = readProjectsIndex(vault)!.projects.find((p) => p.slug === "maple-hail-claim")!;

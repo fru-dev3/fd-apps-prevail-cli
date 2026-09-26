@@ -86,6 +86,7 @@ export interface ProjectEntry {
   first_ts: number;
   last_ts: number;
   monthly: Record<string, number>;
+  weekly: Record<string, number>; // Monday (YYYY-MM-DD) -> prompts, for short histories
   tools: Record<string, number>;
   keys: string[];
   pack_dir: string; // vault-relative
@@ -102,7 +103,8 @@ export interface Recommendation {
   title: string;
   why: string;
   domain?: string;
-  project?: string;
+  project?: string; // the title the model wrote
+  project_slug?: string; // the project it belongs to; titles change, slugs are the link
 }
 
 export interface ProjectsIndex {
@@ -195,6 +197,17 @@ export function isAmbiguousKey(key: string): boolean {
 
 export function slugify(s: string): string {
   return s.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "project";
+}
+
+// One readable line for a list: Claude Code's paste wrapper tags and the
+// session scratch paths are noise here (the prompt itself is untouched).
+export function displayLine(text: string, n = 240): string {
+  const s = text
+    .replace(/<\/?pasted_content[^>]*>/g, " ")
+    .replace(/\/private\/tmp\/claude-\d+\/\S+/g, "(a scratch file)")
+    .replace(/\s+/g, " ")
+    .trim();
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)} [...${s.length - n} more chars]` : s);
@@ -540,15 +553,21 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
   const entries = await pool(defs, conc, async (def): Promise<ProjectEntry> => {
     const ps = members.get(def.slug)!;
     const monthly: Record<string, number> = {};
+    const weekly: Record<string, number> = {};
     const tools: Record<string, number> = {};
-    for (const p of ps) { monthly[monthOf(p.ts)] = (monthly[monthOf(p.ts)] ?? 0) + 1; tools[p.tool] = (tools[p.tool] ?? 0) + 1; }
+    for (const p of ps) {
+      monthly[monthOf(p.ts)] = (monthly[monthOf(p.ts)] ?? 0) + 1;
+      const wk = periodOf(p.ts, "week").key.slice(0, 10);
+      weekly[wk] = (weekly[wk] ?? 0) + 1;
+      tools[p.tool] = (tools[p.tool] ?? 0) + 1;
+    }
     const dir = join(domainDir(vault, def.domain), "memory", "projects", def.slug);
     const rel = dir.startsWith(vault) ? dir.slice(vault.length + 1) : dir;
     const old = prevBy.get(def.slug);
     const base: ProjectEntry = {
       slug: def.slug, title: def.title, domain: def.domain, kind: def.kind, summary: def.summary,
       status: old?.status ?? (Date.now() - ps[ps.length - 1].ts < 30 * 864e5 ? "active" : "dormant"),
-      prompt_count: ps.length, first_ts: ps[0].ts, last_ts: ps[ps.length - 1].ts, monthly, tools, keys: def.keys,
+      prompt_count: ps.length, first_ts: ps[0].ts, last_ts: ps[ps.length - 1].ts, monthly, weekly, tools, keys: def.keys,
       pack_dir: rel, brief_model: old?.brief_model ?? "", brief_ts: old?.brief_ts ?? 0,
       intents: old?.intents ?? [], takeaways: old?.takeaways ?? [], ideas: old?.ideas ?? [], open_questions: old?.open_questions ?? [],
     };
@@ -639,6 +658,8 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
       recs = parseJsonAnswer<Recommendation[]>(await run(buildRecommendPrompt(entries.filter((e) => e.prompt_count >= minPrompts), ctx), model))
         .filter((r) => r && r.title)
         .map((r) => ({ ...r, title: sanitizeEmDashes(r.title), why: sanitizeEmDashes(r.why ?? "") }));
+      const byTitle = new Map(entries.map((e) => [e.title.toLowerCase(), e.slug]));
+      for (const r of recs) r.project_slug = byTitle.get((r.project ?? "").toLowerCase()) ?? "";
       recModel = model.model;
     } catch (e) { log(`recommendations failed (${(e as Error).message}); keeping the previous set`); }
   }
@@ -781,7 +802,7 @@ export function timeline(vault: string, vantage: Vantage, tzOffsetMinutes = 0, h
     b.proj.set(slug, (b.proj.get(slug) ?? 0) + 1);
     b.dom.set(domain, (b.dom.get(domain) ?? 0) + 1);
     const tk = sessionOf(p);
-    const t = b.threads.get(tk) ?? { domain, project: slug, message: oneLine(p.text).slice(0, 240), ts: p.ts, count: 0 };
+    const t = b.threads.get(tk) ?? { domain, project: slug, message: displayLine(p.text), ts: p.ts, count: 0 };
     t.count++;
     b.threads.set(tk, t);
   }
@@ -803,6 +824,7 @@ export function renameProject(vault: string, from: string, to: string, title?: s
   const state = readState(vault);
   const def = state.catalog.find((c) => c.slug === from);
   if (!def) throw new Error(`no project "${from}"`);
+  const oldTitle = readProjectsIndex(vault)?.projects.find((p) => p.slug === from)?.title ?? def.title;
   const slug = slugify(to);
   if (slug !== from && state.catalog.some((c) => c.slug === slug)) throw new Error(`"${slug}" already exists`);
   const oldDir = join(domainDir(vault, def.domain), "memory", "projects", from);
@@ -821,7 +843,10 @@ export function renameProject(vault: string, from: string, to: string, title?: s
       if (title) p.title = title;
       p.pack_dir = p.pack_dir.replace(/[^/]+$/, slug);
     }
-    for (const r of idx.recommendations) if (r.project && title && r.project === idx.projects.find((p) => p.slug === slug)?.title) r.project = title;
+    // Recommendations link by slug; older ones only carry the title.
+    for (const r of idx.recommendations) {
+      if (r.project_slug === from || (!r.project_slug && r.project === oldTitle)) { r.project_slug = slug; if (title) r.project = title; }
+    }
     writeJson(indexPath(vault), idx);
     writeIntentsDistilled(vault, idx);
   }
