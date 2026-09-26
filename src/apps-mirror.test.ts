@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   appIdFor, archiveApps, archiveCandidates, buildSyncArgs, classifyTool, claudeToolsForServer,
   extractJsonObject, findClaudeInit, isDue, listMirror, parseAgyMcpList, parseClaudeMcpList,
-  parseCodexMcpList, parseGeminiMcpList, readCheckpoint, refreshMirror, saveRecipe, scaffoldOnly,
+  isCodexInternalServer, parseCodexMcpList, parseGeminiMcpList, readCheckpoint, refreshMirror, saveRecipe, scaffoldOnly,
   syncDue, syncMirrorApp, syncedAppsContext, draftRecipe, type Exec, type ExecResult, type MirrorApp,
 } from "./apps-mirror.ts";
 
@@ -28,6 +28,19 @@ const CODEX_JSON = JSON.stringify([
   { name: "helper-one", enabled: true, disabled_reason: null, transport: { type: "stdio", command: "/opt/helper", args: ["serve", "mcp"] }, auth_status: "unsupported" },
   { name: "Remote Docs", enabled: true, transport: { type: "streamable_http", url: "https://docs.example/mcp" }, auth_status: "not_logged_in" },
   { name: "off-one", enabled: false, disabled_reason: "user disabled", transport: { type: "stdio", command: "x" }, auth_status: "unsupported" },
+  {
+    name: "event-stream", enabled: true, disabled_reason: null, auth_status: "unsupported",
+    transport: {
+      type: "stdio",
+      command: "./Codex Computer Use.app/Contents/SharedSupport/HelperClient.app/Contents/MacOS/HelperClient",
+      args: ["event-stream", "mcp"],
+      cwd: "/Users/foo/.codex/plugins/cache/openai-bundled/record-and-replay/1.0.0/.",
+    },
+  },
+  {
+    name: "node_repl", enabled: true, disabled_reason: null, auth_status: "unsupported",
+    transport: { type: "stdio", command: "/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl", args: [], cwd: null },
+  },
 ]);
 
 const AGY_LIST = [
@@ -121,6 +134,17 @@ describe("parsers", () => {
     expect(r[2]).toMatchObject({ name: "Remote Docs", url: "https://docs.example/mcp", status: "needs_auth" });
     expect(r[3]).toMatchObject({ status: "disabled", detail: "user disabled" });
     expect(parseCodexMcpList("not json")).toEqual([]);
+  });
+
+  test("codex helper servers are part of the runtime, not connectors", () => {
+    const names = parseCodexMcpList(CODEX_JSON).map((s) => s.name);
+    expect(names).not.toContain("event-stream");
+    expect(names).not.toContain("node_repl");
+    expect(isCodexInternalServer({ transport: { type: "stdio", command: "C:\\Program Files\\Codex.app\\Contents\\x.exe" } })).toBe(true);
+    expect(isCodexInternalServer({ transport: { type: "stdio", command: "/opt/tool", cwd: "/home/bar/.codex/plugins/cache/openai-bundled/x" } })).toBe(true);
+    // A user's own server that merely mentions codex stays listed.
+    expect(isCodexInternalServer({ transport: { type: "stdio", command: "/opt/codex-notes/bin/serve", cwd: "/home/bar/.codex/plugins/cache/community/x" } })).toBe(false);
+    expect(isCodexInternalServer({ transport: { type: "streamable_http", url: "https://docs.example/mcp" } })).toBe(false);
   });
 
   test("agy table with a spaced name", () => {

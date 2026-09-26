@@ -252,6 +252,20 @@ export function parseClaudeMcpList(text: string): RawServer[] {
   return out;
 }
 
+// Codex lists its own helper servers (the computer-use event stream, the
+// browser node_repl) next to the user's connectors. They are local stdio tools
+// shipped inside a Codex app bundle or its bundled-plugin cache, so they are
+// part of the runtime, not something the user connected.
+export function isCodexInternalServer(o: Record<string, unknown>): boolean {
+  const tr = (o.transport && typeof o.transport === "object" ? o.transport : {}) as Record<string, unknown>;
+  if (typeof tr.url === "string" && tr.url) return false;
+  const cmd = typeof tr.command === "string" ? tr.command : "";
+  const cwd = typeof tr.cwd === "string" ? tr.cwd : "";
+  if (/(^|[\\/])Codex[^\\/]*\.app[\\/]Contents[\\/]/i.test(cmd)) return true;
+  if (/[\\/]\.codex[\\/]plugins[\\/]cache[\\/]openai-bundled([\\/]|$)/i.test(cwd)) return true;
+  return false;
+}
+
 // `codex mcp list --json`.
 export function parseCodexMcpList(text: string): RawServer[] {
   let arr: unknown;
@@ -262,7 +276,7 @@ export function parseCodexMcpList(text: string): RawServer[] {
     if (!it || typeof it !== "object") continue;
     const o = it as Record<string, unknown>;
     const name = typeof o.name === "string" ? o.name : "";
-    if (!name) continue;
+    if (!name || isCodexInternalServer(o)) continue;
     const tr = (o.transport && typeof o.transport === "object" ? o.transport : {}) as Record<string, unknown>;
     const url = typeof tr.url === "string" ? tr.url : undefined;
     const cmd = typeof tr.command === "string" ? tr.command : undefined;
