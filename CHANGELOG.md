@@ -7,6 +7,20 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.22] - 2026-09-25 · Projects, replay briefs, and the September 2026 models
+
+### Added
+- **Projects and replay briefs**: `prevail projects build` reads every prompt the user typed in every harness, groups them by the project they were about, and writes each a replay brief (one prompt carrying every requirement, correction and decision, for a newer model to rebuild it from) plus every prompt as typed and an exact JSONL copy. `list`, `show`, `replay <slug> [--with-prompts]`, `rename`, `timeline`. MCP `list_projects` and `read_project`. Briefs default to the most capable model and keep every earlier version under `history/`.
+- **Models**: Claude Opus 5.5 (the `opus` alias), GPT-6 Sol (new Codex default) and GPT-6 Luna, Grok 4.7, Qwen3.8 Max Prime and GLM 5.3 Prime, with their prices.
+
+### Changed
+- `intents_distilled.json` now covers the whole prompt history (one intent per project) instead of the newest 200 prompts.
+- Captures record the harness entrypoint (typed vs launched by a program).
+
+### Fixed
+- Every CLI the engine spawns sets `PREVAIL_INTERNAL`, so Prevail's own benchmark, council and distiller calls stop landing in the user's prompt history. They had outnumbered the user's own prompts about seven to one, and the demo persona's facts surfaced in chats as the user's.
+- GPT-6 Sol and Luna were priced at Astra's rate.
+
 ## [1.9.19] - 2026-09-11 · Truth and safety: privacy guard, real fetchers, cleanup
 
 ### Added
