@@ -588,6 +588,8 @@ export function lateNight(ctx: MirrorContext, win: Window = lastWeek(ctx)): Find
   const lr = pct(lateHits.length, lateP.length);
   const dr = pct(dayHits.length, dayP.length);
   const ratio = dr ? Math.round((lr / dr) * 10) / 10 : 0;
+  // A past week or day only calls out late nights that went worse.
+  if (win.word !== "this week" && lr <= dr) return null;
   const headline = lr > dr && dr > 0 && ratio >= 1.2
     ? `Late-night prompts were corrections ${ratio}x as often as daytime ones`
     : lr > dr
@@ -1023,13 +1025,13 @@ export function periodsList(ctx: MirrorContext): PeriodsDoc {
     if (!pd) { pd = { day: d, label: dayLabel(d), prompts: 0, sittings: 0, intent_line: dlines[d]?.line ?? null }; days.set(d, pd); }
     return pd;
   };
+  // A sitting (and its prompts) belongs to the day it started, the same
+  // grouping History shows, so the counts always agree.
   for (const s of ctx.sittings) {
-    weekFor(weekOf(s.start_ts, ctx.tz)).sittings++;
-    dayFor(dayOf(s.start_ts, ctx.tz)).sittings++;
-  }
-  for (const p of ctx.prompts) {
-    weekFor(weekOf(p.ts, ctx.tz)).prompts++;
-    dayFor(dayOf(p.ts, ctx.tz)).prompts++;
+    const w = weekFor(weekOf(s.start_ts, ctx.tz));
+    const d = dayFor(dayOf(s.start_ts, ctx.tz));
+    w.sittings++; d.sittings++;
+    w.prompts += s.prompts.length; d.prompts += s.prompts.length;
   }
   for (const d of days.values()) weekFor(periodWindow("day", d.day, ctx.tz).week).days.push(d);
   let letters = new Set<string>();
@@ -1073,9 +1075,11 @@ export function periodRules(ctx: MirrorContext, win: Window, model: string): Fin
       return shared >= Math.min(3, t.size) && shared / t.size >= 0.5;
     });
   };
-  const usable = cache && cache.hash === key && cache.model === model;
-  const rows: { item: FindingItem; cs: RuleCluster[] }[] = usable
-    ? cache.items.map((item) => ({ item, cs: cache.clusters ? (cache.clusters[item.id] ?? []).map((i) => clusters[i]).filter(Boolean) : byWords(item) }))
+  // A cache from an older corpus still names the rules; its cluster indexes
+  // no longer line up, so those are matched by words too.
+  const exact = cache?.hash === key && !!cache?.clusters;
+  const rows: { item: FindingItem; cs: RuleCluster[] }[] = cache && cache.model === model && cache.items.length
+    ? cache.items.map((item) => ({ item, cs: exact ? (cache.clusters![item.id] ?? []).map((i) => clusters[i]).filter(Boolean) : byWords(item) }))
     : clusters.map((c) => ({ item: rawRuleItem(ctx, c), cs: [c] }));
   const items: FindingItem[] = [];
   const receipts: Receipt[] = [];
@@ -1120,7 +1124,7 @@ export async function periodFindings(ctx: MirrorContext, kind: "week" | "day", k
   const verdicts = readVerdicts(ctx.vault);
   const current = week === weekOf(ctx.now, ctx.tz);
   const ss = ctx.sittings.filter((s) => inWin(s.start_ts, win));
-  const nPrompts = ctx.prompts.filter((p) => inWin(p.ts, win)).length;
+  const nPrompts = ss.reduce((a, s) => a + s.prompts.length, 0);
   const label = kind === "week" ? weekLabel(pkey, ctx.tz) : dayLabel(pkey);
   const lines = kind === "week" ? readWeekLines(ctx.vault) : readDayLines(ctx.vault);
   const letter = kind === "week" ? readLetter(ctx.vault, pkey, label) : null;
