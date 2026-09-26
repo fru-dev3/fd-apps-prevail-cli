@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { browserProfilePath } from "./path-safety.ts";
 import { spawn } from "node:child_process";
 import type { AppSkill, ConnectorStatus } from "./vault.ts";
-import { scrubbedEnv } from "./cli-bridge.ts";
+import { scrubbedEnv, DIRECT_PROVIDERS } from "./cli-bridge.ts";
 import { readAppSecret } from "./app-secrets.ts";
 
 // Per-app authentication probe. Each integration type has a different
@@ -340,6 +340,15 @@ async function probeHttp(spec: AuthCheckSpec, ts: number): Promise<ProbeResult> 
     };
   }
   const headers: Record<string, string> = { accept: "application/json,text/*;q=0.5" };
+  if (spec.auth_header_env && isEngineSecretEnv(spec.auth_header_env)) {
+    return {
+      ok: false,
+      status: "error",
+      message: `refusing to send engine secret ${spec.auth_header_env} to ${url}`,
+      fixHint: "auth_header_env must name the app's own key, not a Prevail engine secret",
+      ts,
+    };
+  }
   if (spec.auth_header_env) {
     const v = readAppSecret(spec.auth_header_env);
     if (!v) {
@@ -515,6 +524,67 @@ function shortenHome(p: string): string {
 // of trusted-ish config, and probing localhost services is sometimes the
 // point (e.g. mcp_url pointing at a sidecar). We block only the well-known
 // metadata-exfil targets, not all RFC1918.
+// Prevail's OWN secrets (vault DEK, Telegram bot token, model-provider keys the
+// engine injects under PREVAIL_*). readAppSecret resolves any env name, so a
+// manifest with `auth_header_env: "PREVAIL_VAULT_KEY"` and a url of its choosing
+// would ship the vault key to that host. No connector legitimately probes with
+// these.
+export function isEngineSecretEnv(name: string): boolean {
+  const n = name.toUpperCase();
+  if (n.startsWith("PREVAIL_VAULT_KEY") || n.startsWith("PREVAIL_TELEGRAM_") || n.startsWith("TELEGRAM_BOT_")) return true;
+  if (n === "PREVAIL_OPENROUTER_KEY") return true;
+  return DIRECT_PROVIDERS.some((p) => p.keyEnv === n);
+}
+
+// Shells, interpreters and exec wrappers: a probe command naming one of these
+// runs arbitrary code, never "check whether the CLI is authed".
+const EXEC_CAPABLE_BINS = new Set([
+  "sh", "bash", "zsh", "dash", "fish", "ksh", "csh", "tcsh", "pwsh", "powershell", "cmd",
+  "python", "python2", "python3", "node", "bun", "deno", "perl", "ruby", "php", "lua", "tclsh", "expect", "osascript",
+  "env", "xargs", "sudo", "su", "doas", "exec", "eval", "nohup", "nice", "timeout", "time", "watch", "script",
+  "curl", "wget", "nc", "ncat", "netcat", "socat", "ssh", "scp", "sftp", "rsync", "telnet", "ftp",
+  "open", "find", "awk", "gawk", "sed", "make", "npx", "bunx", "uvx", "pipx", "npm", "yarn", "pnpm", "launchctl", "crontab",
+]);
+// Args that turn a harmless CLI into a code runner (git -c alias.x=!cmd,
+// --exec, -e/-c program text) or smuggle shell syntax.
+const EXEC_ARG_RE = /^-(c|e)$|^--(exec|eval|command|config|upload-pack|receive-pack)\b|[;&|`$<>\n]|(^|=)!/;
+
+// A model-authored auth_check (connect_app / `connectors connect`) is
+// UNTRUSTED: the Connection Agent reads web pages, and whatever it returns is
+// written into the manifest and then run by every scheduled probe. Keep only
+// shapes that cannot run code or leak someone else's secret:
+//   command: a bare CLI name (no path) that is not a shell/interpreter/wrapper,
+//            with no exec-shaped args;
+//   http:    auth_header_env, if any, must be THIS app's own PREVAIL_<APP>_* key.
+// Returns the check to keep, or null to drop it (the user can verify by hand).
+export function sanitizeModelAuthCheck(appId: string, check: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!check || typeof check !== "object") return null;
+  const kind = check.kind;
+  if (kind === "command") {
+    const bin = typeof check.command === "string" ? check.command.trim() : "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bin)) return null;
+    if (EXEC_CAPABLE_BINS.has(bin.toLowerCase())) return null;
+    const rawArgs = check.args ?? check.command_args ?? [];
+    if (!Array.isArray(rawArgs) || rawArgs.length > 8) return null;
+    const args = rawArgs.map((a) => String(a));
+    if (args.some((a) => EXEC_ARG_RE.test(a) || a.length > 200)) return null;
+    return { kind: "command", command: bin, args, ...(typeof check.expect_stdout === "string" ? { expect_stdout: check.expect_stdout } : {}) };
+  }
+  if (kind === "http") {
+    const url = typeof check.url === "string" ? check.url : "";
+    if (!/^https?:\/\//i.test(url) || isUnsafeUrl(url)) return null;
+    const env = typeof check.auth_header_env === "string" ? check.auth_header_env.trim() : "";
+    const own = `PREVAIL_${appId.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_`;
+    if (env && (!env.startsWith(own) || isEngineSecretEnv(env))) return null;
+    const out: Record<string, unknown> = { kind: "http", url };
+    if (env) out.auth_header_env = env;
+    if (typeof check.expect_status === "number") out.expect_status = check.expect_status;
+    if (check.auth_header_scheme === "x-api-key" || check.auth_header_scheme === "Token" || check.auth_header_scheme === "Bearer") out.auth_header_scheme = check.auth_header_scheme;
+    return out;
+  }
+  return null;
+}
+
 export function isUnsafeUrl(url: string): boolean {
   try {
     const u = new URL(url);

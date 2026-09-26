@@ -223,6 +223,26 @@ function withinVault(vault: string, target: string): boolean {
   } catch { return false; }
 }
 
+// Engine control state the model must never write: the act grants/pending
+// queue (<vault>/_meta), autonomy + action policy (build/_meta), and every
+// other `_meta` dir. These all sit INSIDE the confinement root, so without
+// this check a prompt-injected act run could Write a grant for its own
+// (tool, args) hash, or flip autonomy to "auto", and self-approve.
+function touchesControlState(vault: string, target: string): boolean {
+  const abs = pathResolve(vault, target);
+  return abs.split(/[\\/]+/).some((seg) => seg === "_meta");
+}
+const CONTROL_REF_RE = /(^|[^A-Za-z0-9_])_meta([^A-Za-z0-9_]|$)|act_grants|pending_acts/;
+// Absolute path tokens in a shell command, including quoted, redirected and
+// assigned ones ("/x", >/x, A=/x, a:/x) - a bare-whitespace-only scan missed
+// `cat "/Users/me/.ssh/id_rsa"`.
+const ABS_PATH_RE = /(?:^|[\s"'=<>:(;|&`])(\/[^\s"';|&<>)`]+)/g;
+// `cd` with no argument (or `cd ;`) lands in $HOME without ever naming it.
+const BARE_CD_RE = /(^|[;&|(\s])(cd|pushd)\s*($|[;&|)])/;
+// A `..` path component: relative climbs out of the domain dir (`cat
+// ../../../.ssh/id_rsa`) that the absolute-path scan never sees.
+const DOTDOT_RE = /(^|[\s"'=<>:\/(])\.\.($|[\s"'\/;|&)])/;
+
 function pathFromInput(input: unknown): string | null {
   if (input && typeof input === "object") {
     const o = input as Record<string, unknown>;
@@ -238,7 +258,9 @@ function pathFromInput(input: unknown): string | null {
 export function gateBuiltin(vault: string, vaultLockOn: boolean, toolName: string, toolInput: unknown): GateDecision | null {
   const name = toolName;
   const isFileWrite = name === "Write" || name === "Edit" || name === "NotebookEdit" || name === "MultiEdit";
-  const isFileRead = name === "Read";
+  // Grep/Glob/LS read file contents or listings just like Read does; leaving
+  // them ungated let a confined run Grep `/Users/me/.ssh` for key material.
+  const isFileRead = name === "Read" || name === "Grep" || name === "Glob" || name === "LS";
   const isBash = name === "Bash";
   const isWeb = name === "WebFetch" || name === "WebSearch";
   if (!isFileWrite && !isFileRead && !isBash && !isWeb) return null; // not a builtin we gate
@@ -248,6 +270,9 @@ export function gateBuiltin(vault: string, vaultLockOn: boolean, toolName: strin
     const target = pathFromInput(toolInput);
     if (target && !withinVault(vault, target)) {
       return { action: "deny", reason: `Vault Lock is on: ${name} may only touch files inside your vault. "${target}" is outside it and was blocked. Work within the vault, or the user can turn off Vault Lock in Privacy.` };
+    }
+    if (isFileWrite && target && touchesControlState(vault, target)) {
+      return { action: "deny", reason: `${name} to "${target}" was blocked: _meta holds Prevail's approval grants and autonomy policy, which only the user can change.` };
     }
     return { action: "allow" };
   }
@@ -265,10 +290,15 @@ export function gateBuiltin(vault: string, vaultLockOn: boolean, toolName: strin
     if (HOME_REF_RE.test(cmd)) {
       return { action: "deny", reason: `Vault Lock is on: that shell command references your home directory (~ or $HOME), which is outside the vault. Blocked. Work within the vault, or the user can turn off Vault Lock.` };
     }
+    if (CONTROL_REF_RE.test(cmd)) {
+      return { action: "deny", reason: `Vault Lock is on: that shell command touches Prevail's _meta control state (approval grants, autonomy policy), which only the user can change. Blocked.` };
+    }
+    if (BARE_CD_RE.test(cmd) || DOTDOT_RE.test(cmd)) {
+      return { action: "deny", reason: `Vault Lock is on: that shell command climbs out of the working directory (bare cd or a ".." path). Use absolute paths inside the vault instead, or the user can turn off Vault Lock.` };
+    }
     // Absolute paths clearly outside the vault in the command are also blocked.
-    const outsideAbs = cmd.match(/(^|\s)(\/[^\s"']+)/g) ?? [];
-    for (const m of outsideAbs) {
-      const p = m.trim();
+    const outsideAbs = [...cmd.matchAll(ABS_PATH_RE)].map((m) => m[1]!);
+    for (const p of outsideAbs) {
       if (p.startsWith("/") && !withinVault(vault, p) && !/^\/(usr|bin|opt|tmp|private\/tmp|var\/folders|dev\/null|System\/Library)/.test(p)) {
         return { action: "deny", reason: `Vault Lock is on: that shell command touches "${p}", outside your vault. Blocked. Work within the vault, or the user can turn off Vault Lock.` };
       }

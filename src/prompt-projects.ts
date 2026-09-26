@@ -28,7 +28,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scrubbedEnv, sanitizeEmDashes } from "./cli-bridge.ts";
+import { assertSafeModelId, scrubbedEnv, sanitizeEmDashes } from "./cli-bridge.ts";
 import { runtimePath } from "./path-safety.ts";
 import { loadCorpus, monthOf, type CorpusStats, type PromptRec } from "./prompt-corpus.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
@@ -128,6 +128,7 @@ export type ModelRunner = (prompt: string, choice: ModelChoice) => Promise<strin
 
 export const runModelOnce: ModelRunner = (prompt, choice) =>
   new Promise((resolveP, reject) => {
+    try { assertSafeModelId(choice.model); } catch (e) { reject(e); return; }
     const cwd = mkdtempSync(join(tmpdir(), "prevail-projects-"));
     const args = choice.cli === "claude"
       ? ["-p", "--model", choice.model, "--output-format", "text"]

@@ -142,6 +142,9 @@ export class Gateway {
         isFirst: true,
         bare: true,
         signal: this.abort.signal,
+        // Honor privacy.localOnly / Bunker (see telegram.ts): a guard-less turn
+        // sent a local-only domain to a cloud CLI.
+        guard: { localOnly: process.env.PREVAIL_BUNKER === "1" },
       });
       await adapter.send(msg.chatId, reply);
       // Self-curating vault: same auto-summary hook the daemon + TUI use.

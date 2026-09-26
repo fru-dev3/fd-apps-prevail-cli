@@ -305,3 +305,27 @@ export function appsContainer(vaultPath: string): string {
   if (existsSync(legacy)) return legacy;
   return v4; // default new writes to the v4 home
 }
+
+// The vault root that owns a working directory, for CONFINEMENT decisions (the
+// act-gate Vault Lock root, the codex sandbox --add-dir). runChatTurn derived
+// its root as `resolve(cwd, "..")`, which is only right for a legacy
+// <vault>/<domain> cwd: for a v4 domain (<vault>/data/domains/<d>) it confined
+// the run to data/domains while the user approves grants under <vault>/_meta,
+// and for a run whose cwd IS the vault (connect_app) it confined the run to the
+// vault's PARENT, i.e. everything beside the vault. Walk up to the nearest
+// directory that is recognizably a vault root; fall back to the legacy rule.
+export function vaultRootForCwd(cwd: string): string {
+  let dir = resolve(cwd);
+  for (let i = 0; i < 5; i++) {
+    const isRoot =
+      existsSync(join(dir, "VAULT.md")) ||
+      existsSync(join(dir, DATA_DIR, DOMAINS_DIR)) ||
+      existsSync(join(dir, DATA_DIR, APPS_DIR)) ||
+      existsSync(join(dir, BUILD_DIR, "_meta"));
+    if (isRoot) return dir;
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return resolve(cwd, "..");
+}

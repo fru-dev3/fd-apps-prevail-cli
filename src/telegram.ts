@@ -272,6 +272,10 @@ async function handleUpdate(
         isFirst: true,
         bare: true,
         signal,
+        // Honor the domain's privacy.localOnly and Bunker, like every other
+        // entry point (MCP, council, loops): without a guard a local-only
+        // domain was answered by a cloud CLI when asked over Telegram.
+        guard: { localOnly: process.env.PREVAIL_BUNKER === "1" },
       });
       await sendLongMessage(cfg.botToken, chatId, reply);
       writeTurnSummary({
