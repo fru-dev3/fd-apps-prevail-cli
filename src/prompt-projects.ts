@@ -25,7 +25,7 @@
 //   build/_meta/intents_distilled.json                         the older Intents view, fed from projects
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scrubbedEnv, sanitizeEmDashes } from "./cli-bridge.ts";
@@ -347,7 +347,7 @@ Write it in markdown with exactly these sections:
 Then, after the brief, output a line with exactly "===TAKEAWAYS===" followed by ONLY a JSON object:
 {"status":"active|dormant|done","intents":[{"title","goal","status"}],"takeaways":[short durable lessons],"ideas":[ideas the person raised but did not build],"open_questions":[...]}
 
-Write it for a model, not for the person: direct, complete, no preamble, no em dashes. Never invent requirements the ${isNotes ? "notes" : "prompts"} don't support.
+Write it for a model, not for the person: direct, complete, no preamble, no em dashes. Never invent requirements the ${isNotes ? "notes" : "prompts"} don't support. Never state a fact about the person (job title, employer, city, age, family, finances) unless the ${isNotes ? "notes" : "prompts"} state it in so many words; leave it out rather than guess. The brief is only as trustworthy as its least-supported line.
 
 ${isNotes ? "NOTES (extracted from the full prompt history, in order):" : "PROMPTS (complete, in order):"}
 ${material}
@@ -413,6 +413,7 @@ export interface BuildOptions {
   concurrency?: number;
   run?: ModelRunner;
   log?: (msg: string) => void;
+  home?: string; // whose harness transcripts to read (tests pass an empty one)
 }
 
 const DAY_MS = 864e5;
@@ -445,7 +446,7 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
   const state = readState(vault);
 
   // 1. corpus
-  const { prompts, stats } = loadCorpus(vault);
+  const { prompts, stats } = loadCorpus(vault, opts.home);
   log(`corpus: ${stats.records} records, ${stats.kept} real prompts (${stats.internal} internal removed)`);
   if (prompts.length === 0) throw new Error("no prompts captured yet");
 
@@ -613,11 +614,24 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
   });
   entries.sort((a, b) => b.last_ts - a.last_ts);
 
+  // A project that no longer has any prompts (a filter now recognizes them as
+  // Prevail's own, or they were reassigned) keeps its pack, moved aside
+  // rather than deleted.
+  for (const c of state.catalog) {
+    if (members.has(c.slug)) continue;
+    const dir = join(domainDir(vault, c.domain), "memory", "projects", c.slug);
+    if (!existsSync(dir)) continue;
+    const dest = join(domainDir(vault, c.domain), "memory", "projects", "_archived", `${c.slug}-${day(Date.now())}`);
+    try { mkdirSync(join(dest, ".."), { recursive: true }); renameSync(dir, dest); log(`${c.slug}: no prompts left; pack moved to ${dest.slice(vault.length + 1)}`); } catch { /* leave it */ }
+    delete state.packs[c.slug];
+  }
+  writeJson(statePath(vault), state);
+
   // 5. recommend: when a brief changed, or once a day, not on every small run
   let recs = prev?.recommendations ?? [];
   let recModel = prev?.recommendations_model ?? "";
   const briefed = entries.filter((e) => e.brief_model);
-  const anyNewBrief = entries.some((e) => e.brief_ts > (prev?.generated_ts ?? 0));
+  const anyNewBrief = entries.some((e) => e.brief_ts >= (prev?.generated_ts ?? 0) && e.brief_ts > 0 && e.brief_ts !== (prevBy.get(e.slug)?.brief_ts ?? 0));
   const recsStale = !prev || recs.length === 0 || recModel !== model.model || Date.now() - prev.generated_ts > DAY_MS;
   if (briefed.length && (anyNewBrief || recsStale)) {
     try {
@@ -742,17 +756,17 @@ export function periodOf(ts: number, vantage: Vantage, tzOffsetMinutes = 0): { k
 // Which project each prompt belongs to, from the saved catalog and session
 // assignments. Prompts from folders or sessions the last build hasn't seen
 // fall under "" until the next build.
-export function assignedPrompts(vault: string): { prompts: PromptRec[]; slugOf: (p: PromptRec) => string; catalog: ProjectDef[] } {
+export function assignedPrompts(vault: string, home?: string): { prompts: PromptRec[]; slugOf: (p: PromptRec) => string; catalog: ProjectDef[] } {
   const state = readState(vault);
-  const { prompts } = loadCorpus(vault);
+  const { prompts } = loadCorpus(vault, home);
   const keyToSlug = new Map<string, string>();
   for (const c of state.catalog) for (const k of c.keys) keyToSlug.set(k, c.slug);
   const slugOf = (p: PromptRec) => (!isAmbiguousKey(p.project) && keyToSlug.has(p.project) ? keyToSlug.get(p.project)! : state.sessions[sessionOf(p)] ?? "");
   return { prompts, slugOf, catalog: state.catalog };
 }
 
-export function timeline(vault: string, vantage: Vantage, tzOffsetMinutes = 0): { vantage: Vantage; periods: TimelinePeriod[]; built: boolean } {
-  const { prompts, slugOf, catalog } = assignedPrompts(vault);
+export function timeline(vault: string, vantage: Vantage, tzOffsetMinutes = 0, home?: string): { vantage: Vantage; periods: TimelinePeriod[]; built: boolean } {
+  const { prompts, slugOf, catalog } = assignedPrompts(vault, home);
   const bySlug = new Map(catalog.map((c) => [c.slug, c]));
   interface Acc { label: string; total: number; proj: Map<string, number>; dom: Map<string, number>; threads: Map<string, { domain: string; project: string; message: string; ts: number; count: number }> }
   const buckets = new Map<string, Acc>();
@@ -778,4 +792,38 @@ export function timeline(vault: string, vantage: Vantage, tzOffsetMinutes = 0): 
     threads: [...b.threads.values()].sort((x, y) => y.count - x.count || y.ts - x.ts).slice(0, 40),
   }));
   return { vantage, periods, built: catalog.length > 0 };
+}
+
+// ---------------------------------------------------------------------------
+// curation
+
+// Rename a project (its slug, and optionally its title). The slug names the
+// pack folder, so the folder moves with it; the brief is kept, not rewritten.
+export function renameProject(vault: string, from: string, to: string, title?: string): ProjectDef {
+  const state = readState(vault);
+  const def = state.catalog.find((c) => c.slug === from);
+  if (!def) throw new Error(`no project "${from}"`);
+  const slug = slugify(to);
+  if (slug !== from && state.catalog.some((c) => c.slug === slug)) throw new Error(`"${slug}" already exists`);
+  const oldDir = join(domainDir(vault, def.domain), "memory", "projects", from);
+  const newDir = join(domainDir(vault, def.domain), "memory", "projects", slug);
+  if (slug !== from && existsSync(oldDir)) renameSync(oldDir, newDir);
+  def.slug = slug;
+  if (title) def.title = title;
+  for (const [sid, s] of Object.entries(state.sessions)) if (s === from) state.sessions[sid] = slug;
+  if (state.packs[from]) { state.packs[slug] = state.packs[from]; if (slug !== from) delete state.packs[from]; }
+  writeJson(statePath(vault), state);
+  const idx = readProjectsIndex(vault);
+  if (idx) {
+    for (const p of idx.projects) {
+      if (p.slug !== from) continue;
+      p.slug = slug;
+      if (title) p.title = title;
+      p.pack_dir = p.pack_dir.replace(/[^/]+$/, slug);
+    }
+    for (const r of idx.recommendations) if (r.project && title && r.project === idx.projects.find((p) => p.slug === slug)?.title) r.project = title;
+    writeJson(indexPath(vault), idx);
+    writeIntentsDistilled(vault, idx);
+  }
+  return def;
 }

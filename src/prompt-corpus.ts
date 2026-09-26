@@ -102,7 +102,10 @@ const AGENT_WRITTEN = [
   /^A session-scoped Stop hook is now active/,
   /^Read (and follow )?(the brief at )?\/private\/tmp\//,
   /^Read and follow \/private\/tmp\//,
-  /^# FILESYSTEM SCOPE - VAULT LOCK IS ON/,
+  // The engine's preambles for non-Claude CLIs; the dash is an em dash in the
+  // real text, so match either.
+  /^# FILESYSTEM SCOPE [-\u2014] VAULT LOCK IS ON/,
+  /^# DOMAIN IDEAL STATE/,
   /^You are (preparing a weekly briefing|the steward of the|helping build a personal canonical benchmark|seeding a chat|an expert YouTube thumbnail)/,
   /^You maintain three derived artifacts/,
   /^Write (the spoken )?narration for/,
@@ -111,9 +114,15 @@ const AGENT_WRITTEN = [
 // Some harnesses store the prompt JSON-quoted; judge the text inside.
 const unquote = (text: string) => text.trimStart().replace(/^["'`]+/, "");
 
+// Prevail's benchmark and council persona ("Alex Rivera", a Senior SWE in
+// Austin at TechFlow going for Staff, partner Jordan, daughter Maya). Council
+// runs through opencode carried these facts with no folder or signature, and
+// a distiller that reads them thinks they are the user's own life.
+const DEMO_PERSONA = /\b(Alex Rivera|TechFlow)\b|\bAlex\b[^\n]{0,120}\b(Senior SWE|Staff promo|Austin|Jordan|Maya)\b|\bSenior (SWE|software engineer)\b[^\n]{0,80}\bAustin\b|\bAustin\b[^\n]{0,80}\bSenior (SWE|software engineer)\b/i;
+
 export function isAgentWritten(text: string): boolean {
   const t = unquote(text);
-  return AGENT_WRITTEN.some((re) => re.test(t));
+  return AGENT_WRITTEN.some((re) => re.test(t)) || DEMO_PERSONA.test(t.slice(0, 1500));
 }
 
 export function isInternalPrompt(text: string, cwd = ""): boolean {
@@ -216,8 +225,15 @@ export interface CorpusStats {
 // "cli" (a person at the prompt) or "sdk-cli" (headless, launched by a program
 // or agent). Only the head of each transcript is read. Covers the transcripts
 // still on disk, which Claude Code keeps for about a month.
+const entryCache = new Map<string, Map<string, string>>();
+
 export function claudeSessionEntries(home = homedir()): Map<string, string> {
+  // Thousands of transcripts: scan once per process (a build and a timeline
+  // in the same run share it).
+  const cached = entryCache.get(home);
+  if (cached) return cached;
   const out = new Map<string, string>();
+  entryCache.set(home, out);
   const root = join(home, ".claude", "projects");
   let dirs: string[] = [];
   try { dirs = readdirSync(root); } catch { return out; }
@@ -244,12 +260,15 @@ export function claudeSessionEntries(home = homedir()): Map<string, string> {
 // Every user prompt, oldest first. A prompt typed twice in the same session
 // (hook push + transcript sync) is one prompt; the same text in different
 // sessions is kept, since repeating an instruction is itself a signal.
-export function loadCorpus(vault: string, home = homedir()): { prompts: PromptRec[]; stats: CorpusStats } {
+export function loadCorpus(vault: string, home: string = homedir()): { prompts: PromptRec[]; stats: CorpusStats } {
   const stats: CorpusStats = { records: 0, internal: 0, program: 0, duplicates: 0, kept: 0 };
   const entries = claudeSessionEntries(home);
   const seen = new Set<string>();
   const prompts: PromptRec[] = [];
   const add = (r: Omit<PromptRec, "project" | "text" | "raw">, raw: string, entry = "") => {
+    // opencode records Prevail's own runs with the prompt as one JSON-quoted
+    // argument; none of the quoted ones in the live streams was typed.
+    if (r.tool === "opencode" && /^\s*"[\s\S]*"\s*$/.test(raw)) { stats.records++; stats.program++; return; }
     stats.records++;
     const text = userTextOf(raw, r.cwd);
     if (!text) { stats.internal++; return; }

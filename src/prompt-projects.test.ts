@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isAgentWritten, isInternalPrompt, loadCorpus, projectKeyOf, userTextOf } from "./prompt-corpus.ts";
-import { briefIsFresh, buildProjects, isAmbiguousKey, parseJsonAnswer, periodOf, readProjectsIndex, replayPrompt, splitBrief, timeline, type ModelRunner } from "./prompt-projects.ts";
+import { briefIsFresh, buildProjects, renameProject, isAmbiguousKey, parseJsonAnswer, periodOf, readProjectsIndex, replayPrompt, splitBrief, timeline, type ModelRunner } from "./prompt-projects.ts";
 
 const HOME = "/Users/someone";
 
@@ -27,6 +27,11 @@ describe("prompt corpus", () => {
     expect(isAgentWritten("Reply with the single word: ready")).toBe(true);
     expect(isAgentWritten("- You are agent 509f7935-0dbb-446f-bec1 working on")).toBe(true);
     expect(isAgentWritten("make the header green, never gold")).toBe(false);
+    expect(isAgentWritten('"Evaluate a high-stakes 2027 decision: Alex Rivera, Senior SWE')).toBe(true);
+    expect(isAgentWritten('"Current date 2026-07-02. Location Austin, Texas. Senior software engineer')).toBe(true);
+    expect(isAgentWritten("Alex from the lender called about the maple refinance")).toBe(false);
+    expect(isAgentWritten("# FILESYSTEM SCOPE \u2014 VAULT LOCK IS ON. HARD CONSTRAINT.")).toBe(true);
+    expect(isAgentWritten("# DOMAIN IDEAL STATE \u2014 your target")).toBe(true);
   });
 
   test("recovers the user's message from a wrapped desktop prompt", () => {
@@ -126,7 +131,7 @@ describe("buildProjects end to end (fake model)", () => {
       if (prompt.includes("Recommend what would")) { calls.push("recommend"); return '[{"kind":"skill","title":"Write a deploy skill","why":"repeated","domain":"dev","project":"fru.dev site"}]'; }
       throw new Error("unexpected prompt");
     };
-    const idx = await buildProjects({ vault, run, minPrompts: 2, concurrency: 1 });
+    const idx = await buildProjects({ vault, home: vault, run, minPrompts: 2, concurrency: 1 });
     expect(calls).toEqual(["catalog", "assign", "brief", "brief", "recommend"]);
     expect(idx.stats.kept).toBe(7);
     const site = idx.projects.find((p) => p.slug === "fru-dev-site")!;
@@ -153,19 +158,30 @@ describe("buildProjects end to end (fake model)", () => {
     // runs this often), and a rebrief keeps the earlier brief in history/ and
     // refreshes the recommendations.
     calls.length = 0;
-    await buildProjects({ vault, run, minPrompts: 2, concurrency: 1 });
+    await buildProjects({ vault, home: vault, run, minPrompts: 2, concurrency: 1 });
     expect(calls).toEqual([]);
     calls.length = 0;
-    await buildProjects({ vault, run, minPrompts: 2, concurrency: 1, rebrief: true, only: ["fru-dev-site"] });
+    await buildProjects({ vault, home: vault, run, minPrompts: 2, concurrency: 1, rebrief: true, only: ["fru-dev-site"] });
     expect(calls).toEqual(["brief", "recommend"]);
     expect(existsSync(join(dir, "history"))).toBe(true);
 
+    // Curation: a rename moves the pack and keeps the brief.
+    const renamed = renameProject(vault, "maple-claim", "maple-hail-claim", "maple hail claim");
+    expect(renamed.slug).toBe("maple-hail-claim");
+    const moved = readProjectsIndex(vault)!.projects.find((p) => p.slug === "maple-hail-claim")!;
+    expect(moved.title).toBe("maple hail claim");
+    expect(existsSync(join(vault, moved.pack_dir, "brief.md"))).toBe(true);
+    expect(existsSync(join(vault, "data/domains/insurance/memory/projects/maple-claim"))).toBe(false);
+    calls.length = 0;
+    await buildProjects({ vault, home: vault, run, minPrompts: 2, concurrency: 1 });
+    expect(calls).toEqual([]); // the renamed project is still fresh
+
     // Retrospect reads the same assignments, with no model call.
-    const tl = timeline(vault, "month");
+    const tl = timeline(vault, "month", 0, vault);
     expect(tl.built).toBe(true);
     expect(tl.periods).toHaveLength(1);
     expect(tl.periods[0].total).toBe(7);
-    expect(tl.periods[0].byProject.map((x) => [x.slug, x.count])).toEqual([["fru-dev-site", 5], ["maple-claim", 2]]);
+    expect(tl.periods[0].byProject.map((x) => [x.slug, x.count])).toEqual([["fru-dev-site", 5], ["maple-hail-claim", 2]]);
     expect(tl.periods[0].byDomain[0]).toEqual({ domain: "dev", count: 5 });
   });
 });

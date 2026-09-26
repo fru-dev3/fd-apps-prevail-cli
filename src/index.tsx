@@ -5529,6 +5529,16 @@ async function main() {
       console.log(`${idx.projects.length} projects from ${idx.stats.kept} prompts; ${idx.projects.filter((p) => p.brief_model).length} replay briefs; ${idx.recommendations.length} recommendations.`);
       return;
     }
+    if (sub === "rename") {
+      const [from, to] = [a[1], a[2]];
+      if (!from || !to || to.startsWith("--")) { console.error("usage: prevail projects rename <slug> <new-slug> [--title \"New title\"]"); process.exit(2); }
+      try {
+        const d = pp.renameProject(vault, from, to, get("--title") ?? undefined);
+        if (json) { process.stdout.write(`${JSON.stringify(d)}\n`); return; }
+        console.log(`renamed ${from} -> ${d.slug} (${d.title})`);
+      } catch (e) { console.error((e as Error).message); process.exit(1); }
+      return;
+    }
     if (sub === "timeline") {
       const v = (get("--vantage") ?? "month") as "day" | "week" | "month" | "year";
       const tl = pp.timeline(vault, ["day", "week", "month", "year"].includes(v) ? v : "month", Number(get("--tz") ?? 0));
