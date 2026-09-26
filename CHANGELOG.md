@@ -7,6 +7,16 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.29] - 2026-09-26 · Entities: a page for every entity
+
+### Changed
+- **Every entity gets a vault page**: `prevail entities refresh` (and the Intent refresh) writes `data/entities/<kind>/<slug>.md` for every indexed person, place, company or thing, with its frontmatter, an empty "Your notes" section and its Conversations list. New entities get pages on the next refresh. "Your notes" is never rewritten.
+- **Digests stay selective**: the "What you've discussed" summary is written only for saved entities and those in 3 or more conversations, and the section appears once there is one.
+
+### Fixed
+- **Aliases**: a page's alias no longer folds in a name that has a page of its own.
+- **Privacy**: entity log lines carry counts only, never an entity name, id, excerpt or model output (daemon logs live outside the vault).
+
 ## [1.9.28] - 2026-09-26 · Intent: weeks and days, exact prompts, agent instructions
 
 ### Added
