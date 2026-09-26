@@ -60,7 +60,7 @@ import {
 // docs/schemas/ChatEvent.json — kept as a local interface (rather than
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
-  type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route";
+  type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route" | "sources";
   thread: string;
   ts: number;
   domain?: string;
@@ -84,6 +84,9 @@ export interface ChatEvent {
     difficulty?: number;
     bias?: string;
   };
+  // Emitted once (type "sources") before the reply when retrieval attached
+  // excerpts from the user's sources: what the model was given to cite.
+  sources?: { tag: string; sourceName: string; kind: string; title: string; location: string; url?: string; group?: string }[];
   // A live execution step: one REAL tool call, streamed during the turn so the
   // desktop can render a checklist of what the model is actually doing (Reading
   // Gmail, Creating a Google Doc, Saving to Drive...) instead of an opaque
@@ -140,6 +143,9 @@ export interface ChatJsonOptions {
   // App-chat passthrough: let the turn also see the user's own Claude Code MCP
   // servers (their claude.ai connectors). Strict surface otherwise.
   inheritUserMcp?: boolean;
+  // Sources retrieval (sources.ts). Default on; false (--no-sources) when the
+  // caller already placed a sources block in the message (the desktop does).
+  sources?: boolean;
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
   write?: (line: string) => void;
@@ -398,6 +404,14 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // app and domain chats (both reach this same turn path). runChatTurn only
   // switches to the structured (stream-json) runner when tools are actually
   // injected, so a tool-less turn streams byte-for-byte as before.
+  // Sources the engine attached to this turn: announced once so a consumer can
+  // render the citations next to the reply.
+  let sourcesEmitted = false;
+  const onSources = (hits: import("./sources.ts").SourceHit[]) => {
+    if (sourcesEmitted || !hits.length) return;
+    sourcesEmitted = true;
+    emit({ type: "sources", thread, ts: Date.now(), sources: hits.map((h) => ({ tag: h.tag, sourceName: h.sourceName, kind: h.kind, title: h.title, location: h.location, ...(h.url ? { url: h.url } : {}), ...(h.group ? { group: h.group } : {}) })) });
+  };
   const stepLabels = new Map<string, string>();
   let stepSeq = 0;
   const onTool = (ev: ToolEvent) => {
@@ -447,6 +461,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       const cheapReply = await runChatTurn({
         prompt: message,
         cwd: domain.path,
+        sources: opts.sources,
+        onSources,
         cli,
         guard: turnGuard,
         model: cascadePlan.cheapModel,
@@ -477,6 +493,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         reply = await runChatTurn({
           prompt: message,
           cwd: domain.path,
+          sources: opts.sources,
+          onSources,
           cli,
           guard: turnGuard,
           model: ranModel,
@@ -500,6 +518,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       reply = await runChatTurn({
         prompt: message,
         cwd: domain.path,
+        sources: opts.sources,
+        onSources,
         cli,
         guard: turnGuard,
         model,
@@ -586,6 +606,7 @@ export async function chatJsonCommand(
   let routeCascade: boolean | undefined;
   let googleAccount: string | undefined;
   let inheritUserMcp = false;
+  let sources: boolean | undefined;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -610,6 +631,7 @@ export async function chatJsonCommand(
     else if (a === "--no-route-cascade") routeCascade = false;
     else if (a.startsWith("--route-cascade=")) { const v = a.slice("--route-cascade=".length).toLowerCase(); routeCascade = v === "1" || v === "true" || v === "on" || v === "yes"; }
     else if (a === "--inherit-user-mcp") inheritUserMcp = true;
+    else if (a === "--no-sources") sources = false;
     else if (a === "--google-account") { googleAccount = next; i++; }
     else if (a.startsWith("--google-account=")) googleAccount = a.slice("--google-account=".length);
     else if (a === "--vault") { vaultPath = resolve(process.cwd(), next ?? ""); i++; }
@@ -647,6 +669,7 @@ export async function chatJsonCommand(
     routeCascade,
     googleAccount,
     inheritUserMcp,
+    sources,
   });
 }
 

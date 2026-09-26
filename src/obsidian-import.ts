@@ -139,12 +139,18 @@ export function importObsidianVault(opts: {
   from: string;
   vault: string;
   domain: string;
+  // Optional folder under source/obsidian/ so several Obsidian vaults can land
+  // in one domain without overwriting each other (the Sources page gives each
+  // Obsidian source its own). Omitted = the original single-vault location.
+  subdir?: string;
 }): ImportResult {
-  const { from, vault, domain } = opts;
+  const { from, vault, domain, subdir } = opts;
   if (!existsSync(from) || !statSync(from).isDirectory()) {
     throw new Error(`Obsidian vault not found or not a folder: ${from}`);
   }
-  const destDir = join(vault, "data", "domains", domain, "source", "obsidian");
+  const base = join(vault, "data", "domains", domain, "source", "obsidian");
+  const safeSub = subdir ? subdir.replace(/[^a-z0-9._-]+/gi, "-").replace(/^[-.]+|-+$/g, "") : "";
+  const destDir = safeSub ? join(base, safeSub) : base;
   mkdirSync(destDir, { recursive: true });
 
   const notes = listObsidianNotes(from);

@@ -7,6 +7,16 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [Unreleased] · Sources: where chats get context
+
+### Added
+- **Sources** (`src/sources.ts`, `prevail sources list|add|remove|enable|disable|rename|refresh|search|context`): the places a chat pulls context from, as many of each as you like. The vault the app runs on is always the first one (domain ideals, state, memory, tasks, source files and entity pages; transcripts, skills and local-only domains are left out). Add more Prevail vaults (read only), Obsidian vaults (imported one way into `data/domains/<domain>/source/obsidian/<id>/`, exactly like `prevail obsidian import`), local folders (read in place) and websites. The list lives in `build/sources.json`; indexes are a per-Mac cache under `~/.prevail/sources/`, sealed with the vault key when the vault is encrypted.
+- **Websites** (`src/sources-web.ts`): point at a site and Prevail reads its machine-readable surface only: robots.txt (obeyed), `/api/health` (freshness), `/llms.txt`, `/llms-full.txt` (each line a table row, cited by the row's own page), `/openapi.json` (list endpoints read only when there is no llms-full table) and the sitemap (counted, never crawled). Every `<host>/llms.txt` the root links on the same domain is a child site, so fru.dev brings in all 47 trackers. Requests are conditional (ETag / Last-Modified), honor Cache-Control and Crawl-delay, and identify as PrevailBot. Each site is read again just after the `nextRunAt` its health reports, else a day after its last update; an unchanged `lastUpdated` skips its tables entirely. Websites pause in Bunker Mode.
+- **Cited retrieval in every chat turn**: `runChatTurn` places the best matching excerpts (keyword BM25 over every enabled source, no network, no model call) ahead of the message as a `# CONTEXT FROM YOUR SOURCES` block tagged `[S1]`.. for the reply to cite. Skipped for bare calls, when a block is already present, with `--no-sources` on `prevail chat`, or `PREVAIL_SOURCES=off`. `prevail chat --json` emits a `sources` event listing what was attached.
+- **MCP**: `search_sources` returns the same cited excerpts to any MCP client.
+- `importObsidianVault` takes an optional `subdir` so several Obsidian vaults can share a domain.
+- VAULT.md documents `build/sources.json` and the `prevail sources` commands.
+
 ## [1.9.29] - 2026-09-26 · Entities: a page for every entity
 
 ### Changed

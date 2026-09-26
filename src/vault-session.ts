@@ -132,6 +132,37 @@ export function vappendLine(path: string, line: string): void {
 }
 
 /**
+ * Write a cache file that holds vault-derived text OUTSIDE the vault (the
+ * Sources index under ~/.prevail). When the vault is encrypted the cache is
+ * sealed with the same key, so a derived copy never leaks what the vault keeps
+ * encrypted at rest. Plain write otherwise.
+ */
+export function vwriteSealed(path: string, content: string): void {
+  if (sessionEncrypted && sessionDek) {
+    writeFileSync(path, encryptText(sessionDek, content));
+    return;
+  }
+  writeFileSync(path, content);
+}
+
+/**
+ * Read a cache file written by vwriteSealed. Throws when the vault is encrypted
+ * but locked (no key), or when the file was sealed under a different mode, so a
+ * caller treats the cache as missing and rebuilds it.
+ */
+export function vreadSealed(path: string): string {
+  const raw = readFileSync(path, "utf8");
+  if (!sessionEncrypted) return raw;
+  if (!sessionDek) throw new Error("vault is locked");
+  return decryptText(sessionDek, raw);
+}
+
+/** True when the vault is encrypted and this process holds no key to read it. */
+export function isVaultLocked(): boolean {
+  return sessionEncrypted && !sessionDek;
+}
+
+/**
  * Read ONLY the bytes of an append-only ledger after `byteOffset`, without
  * loading the whole file — the memory-safe path for the distiller, which only
  * ever needs the new tail past its cursor. Under encryption the file is one

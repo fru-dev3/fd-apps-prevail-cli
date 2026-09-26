@@ -32,6 +32,8 @@ interface Args {
   connectorsArgs: string[];
   obsidian: boolean;
   obsidianArgs: string[];
+  sources: boolean;
+  sourcesArgs: string[];
   calendar: boolean;
   calendarArgs: string[];
   recommendations: boolean;
@@ -159,6 +161,8 @@ function parseArgs(argv: string[]): Args {
   let connectorsArgs: string[] = [];
   let obsidian = false;
   let obsidianArgs: string[] = [];
+  let sources = false;
+  let sourcesArgs: string[] = [];
   let calendar = false;
   let calendarArgs: string[] = [];
   let recommendations = false;
@@ -294,6 +298,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "obsidian") {
       obsidian = true;
       obsidianArgs = argv.slice(i + 1);
+    } else if (a === "sources" || a === "source") {
+      sources = true;
+      sourcesArgs = argv.slice(i + 1);
+      break;
     } else if (a === "calendar") {
       calendar = true;
       calendarArgs = argv.slice(i + 1);
@@ -569,6 +577,8 @@ function parseArgs(argv: string[]): Args {
     connectorsArgs,
     obsidian,
     obsidianArgs,
+    sources,
+    sourcesArgs,
     calendar,
     calendarArgs,
     recommendations,
@@ -717,6 +727,9 @@ USAGE
                               read/merge a domain's manifest (engine JSON API)
   prevail chat --domain <d> --json
                               stream one chat turn as NDJSON (engine JSON API)
+  prevail sources list|add|remove|enable|disable|refresh|search|context [--json]
+                              where chats get context: the vault, Obsidian vaults,
+                              folders and websites (llms.txt, OpenAPI), with citations
   prevail score <domain> [--audit] --json
                               compute a domain's context-readiness score
   prevail score --all --json  score every domain + life-readiness roll-up
@@ -2906,6 +2919,112 @@ async function obsidianCommand(args: string[]): Promise<void> {
     if (json) console.log(JSON.stringify({ ok: false, error: String(e instanceof Error ? e.message : e) }));
     else console.error(`obsidian import failed: ${e instanceof Error ? e.message : e}`);
     process.exitCode = 1;
+  }
+}
+
+// `prevail sources ...` - the context sources chats retrieve from (the vault,
+// Obsidian vaults, local folders, websites). See sources.ts / sources-web.ts.
+async function sourcesCommand(args: string[], vaultPath?: string | null): Promise<void> {
+  const sub = args[0] ?? "list";
+  const json = args.includes("--json");
+  const flag = (names: string[]): string | undefined => {
+    for (const n of names) { const i = args.indexOf(n); if (i >= 0 && args[i + 1] !== undefined) return args[i + 1]; }
+    return undefined;
+  };
+  const positionals = (): string[] => {
+    const out: string[] = [];
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i]!;
+      if (a.startsWith("--")) { if (!["--json", "--due", "--force", "--off", "--on"].includes(a)) i++; continue; }
+      out.push(a);
+    }
+    return out;
+  };
+  const vault = await vaultFlagOrDefault(args, vaultPath ?? process.env.PREVAIL_VAULT_ROOT);
+  const S = await import("./sources.ts");
+  const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
+  const fail = (msg: string) => {
+    if (json) out({ ok: false, error: msg });
+    else console.error(`sources: ${msg}`);
+    process.exitCode = 1;
+  };
+  const ago = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "never");
+  try {
+    if (sub === "list") {
+      const rows = S.listSourceRows(vault);
+      if (json) { out({ ok: true, vault, sources: rows }); return; }
+      for (const r of rows) {
+        console.log(`${r.enabled ? "on " : "off"} ${r.id.padEnd(28)} ${r.kind.padEnd(9)} ${r.status.state.padEnd(9)} ${String(r.status.items).padStart(7)} items  ${r.kind === "website" ? r.location : r.resolvedLocation}`);
+        console.log(`    last indexed ${ago(r.status.lastIndexed)}, next ${ago(r.status.nextRefresh)}${r.status.detail ? `, ${r.status.detail}` : ""}${r.status.error ? `, ${r.status.error}` : ""}`);
+      }
+      return;
+    }
+    if (sub === "add") {
+      const kind = (flag(["--type", "--kind"]) ?? positionals()[0] ?? "") as import("./sources.ts").SourceKind;
+      const location = flag(["--location", "--path", "--url"]) ?? positionals()[1] ?? "";
+      const entry = S.addSource(vault, { kind, location, name: flag(["--name"]), domain: flag(["--domain", "--into"]) });
+      if (json) out({ ok: true, source: entry });
+      else console.log(`Added ${entry.name} (${entry.id}). Run \`prevail sources refresh ${entry.id}\` to index it.`);
+      return;
+    }
+    if (sub === "remove" || sub === "rm") {
+      const id = positionals()[0];
+      if (!id) return fail("usage: prevail sources remove <id>");
+      const r = S.removeSource(vault, id);
+      if (json) out({ ok: true, ...r });
+      else console.log(`Removed ${r.removed.name}.${r.keptImport ? ` Imported notes stay in ${r.keptImport}.` : ""}`);
+      return;
+    }
+    if (sub === "enable" || sub === "disable") {
+      const id = positionals()[0];
+      if (!id) return fail(`usage: prevail sources ${sub} <id>`);
+      const on = sub === "enable" && !args.includes("--off");
+      const s = S.setSourceEnabled(vault, id, on);
+      if (json) out({ ok: true, source: s });
+      else console.log(`${s.name} is ${on ? "on" : "off"}.`);
+      return;
+    }
+    if (sub === "rename") {
+      const id = positionals()[0];
+      const name = flag(["--name"]) ?? positionals()[1];
+      if (!id || !name) return fail("usage: prevail sources rename <id> --name <name>");
+      const s = S.renameSource(vault, id, name);
+      if (json) out({ ok: true, source: s });
+      else console.log(`Renamed to ${s.name}.`);
+      return;
+    }
+    if (sub === "refresh") {
+      const ids = positionals();
+      const r = await S.refreshSources(vault, {
+        ...(ids.length ? { ids } : {}),
+        dueOnly: args.includes("--due"),
+        force: args.includes("--force"),
+        onProgress: json ? undefined : (id, msg) => console.error(`  ${id}: ${msg}`),
+      });
+      if (json) { out({ ok: true, ...r }); return; }
+      if (r.busy) { console.log("A refresh is already running."); return; }
+      console.log(r.refreshed.length ? `Refreshed ${r.refreshed.join(", ")}.` : "Nothing was due.");
+      return;
+    }
+    if (sub === "search" || sub === "context") {
+      const query = flag(["--query", "-q"]) ?? positionals().join(" ");
+      if (!query.trim()) return fail(`usage: prevail sources ${sub} --query <text>`);
+      const k = Number(flag(["--k", "--limit"]) ?? "8") || 8;
+      if (sub === "search") {
+        const hits = S.searchSources(vault, query, { k });
+        if (json) { out({ ok: true, hits }); return; }
+        if (!hits.length) { console.log("No matches in your sources."); return; }
+        for (const h of hits) console.log(`[${h.tag}] ${h.title}\n     ${h.sourceName}: ${h.url ?? h.location}\n     ${h.snippet.replace(/\s+/g, " ").slice(0, 200)}`);
+        return;
+      }
+      const r = S.sourcesContextFor(vault, query, { k });
+      if (json) out({ ok: true, ...r });
+      else process.stdout.write(r.context || "No matches in your sources.\n");
+      return;
+    }
+    fail("usage: prevail sources list|add|remove|enable|disable|rename|refresh|search|context [--json]");
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -5710,6 +5829,10 @@ async function main() {
   }
   if (args.obsidian) {
     await obsidianCommand(args.obsidianArgs);
+    return;
+  }
+  if (args.sources) {
+    await sourcesCommand(args.sourcesArgs, args.vaultPath);
     return;
   }
   if (args.calendar) {

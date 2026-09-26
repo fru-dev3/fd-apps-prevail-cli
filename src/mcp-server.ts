@@ -301,6 +301,18 @@ export async function runMcpServer(
       },
     },
     {
+      name: "search_sources",
+      description: "Search the user's context sources (their Prevail vault, Obsidian vaults, local folders, and websites such as the fru.dev trackers indexed through llms.txt and OpenAPI). Returns the best matching excerpts, each tagged [S1].. with its source and link so answers can cite them.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "What to look for, in plain words." },
+          limit: { type: "number", description: "How many excerpts (default 8, max 20)." },
+        },
+        required: ["query"],
+      },
+    },
+    {
       name: "list_tasks",
       description: "List the tasks for a domain with their status (todo | doing | review | blocked | done | icebox), due dates, and priority.",
       inputSchema: {
@@ -681,6 +693,14 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(await tReadSurface(args, vaultPath));
     case "read_memory":
       return wrapText(tReadMemory(args, vaultPath));
+    case "search_sources": {
+      const q = typeof args.query === "string" ? args.query : "";
+      if (!q.trim()) return wrapText("search_sources: pass a query");
+      const k = Math.min(20, Math.max(1, Number(args.limit) || 8));
+      const S = await import("./sources.ts");
+      const hits = S.searchSources(vaultPath, q, { k });
+      return wrapText(hits.length ? S.formatSourcesContext(hits, 12_000) : "No matches in your sources. Sources are set up on the Sources page (or `prevail sources add`).");
+    }
     case "list_tasks":
       return wrapText(tListTasks(args, vaultPath));
     case "add_task":

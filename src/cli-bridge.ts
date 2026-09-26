@@ -262,6 +262,7 @@ function vaultLockOn(): boolean {
 // CliKind is single-sourced in config.ts; imported for local use and re-exported
 // so existing `import { CliKind } from "./cli-bridge"` sites keep working.
 import type { CliKind, DirectProviderKind, ExtraCliKind } from "./config.ts";
+import type { SourceHit } from "./sources.ts";
 export type { CliKind };
 
 // SECURITY: env vars that look like provider/operator secrets are stripped
@@ -873,6 +874,13 @@ export interface ChatTurn {
   // the model invokes — the honest "tools used" signal, so we never rely on the
   // model's prose to know what actually ran. Untouched on normal chat turns.
   onTool?: (ev: ToolEvent) => void;
+  // Sources (sources.ts). On by default for real (non-bare) turns: the best
+  // excerpts from the user's enabled sources (vault, Obsidian, folders,
+  // websites) ride ahead of the message, tagged [S1].. so the reply can cite
+  // them. false skips retrieval (the desktop retrieves itself and passes
+  // --no-sources). onSources reports what was attached, for citation UI.
+  sources?: boolean;
+  onSources?: (hits: SourceHit[]) => void;
   // Truncate the cumulative reply at this many characters. When the
   // stream crosses the cap, the child process is SIGKILL'd (same
   // pgroup trick used by abort) and the reply returned to the caller
@@ -979,7 +987,7 @@ export function codexWritableRoot(cwd: string): string {
   return parent === root || parent.startsWith(root + sep) ? parent : resolve(cwd);
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp }: ChatTurn): Promise<string> {
+export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, sources, onSources }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1112,6 +1120,19 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   const syncedApps = !bare && resolve(cwd) !== resolve(vaultPath) ? syncedAppsContext(cwd) : "";
   const syncedAppsPreamble = syncedApps ? `${syncedApps}\n\n---\n\n` : null;
   const promptSyncedApps = syncedAppsPreamble && cli.kind !== "claude" ? syncedAppsPreamble : "";
+  // Sources: retrieved excerpts, cited as [S1].., placed right before the
+  // message for EVERY runtime (retrieved text belongs with the question, not in
+  // a system channel). Skipped for bare calls, when the caller opted out, and
+  // when the prompt already carries a block (the desktop assembled one).
+  let sourcesBlock = "";
+  if (!bare && sources !== false && !prompt.includes("# CONTEXT FROM YOUR SOURCES")) {
+    try {
+      const S = await import("./sources.ts");
+      const r = S.sourcesContextFor(vaultRootForCwd(cwd), S.queryFromPrompt(prompt));
+      sourcesBlock = r.context;
+      if (r.hits.length) onSources?.(r.hits);
+    } catch { /* retrieval never blocks a turn */ }
+  }
   // Vault Lock leads everything (a security guardrail outranks even the
   // constitution). Claude gets it via the system channel below; CLIs without a
   // system-prompt flag get it prepended to the prompt so it still governs.
@@ -1121,7 +1142,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   // channel (in claudeSystem below); CLIs without a system-prompt flag get it
   // prepended to the prompt so it still governs the turn.
   const promptNoEmDash = cli.kind !== "claude" ? buildNoEmDashPreamble() : "";
-  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + promptSyncedApps + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
+  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + promptSyncedApps + promptNoEmDash + buildFrameworkPreamble(framework) + sourcesBlock + prompt;
   // A prompt that begins with '-' makes the runtime CLI's option parser treat the
   // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
   // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
