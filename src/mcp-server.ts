@@ -22,6 +22,7 @@ import { appendTask, runOneLoop, executeAction, DEFAULT_LOOPS, type LoopsConfig 
 import { gateAction } from "./broker.ts";
 import { isAuto } from "./autonomy.ts";
 import { syncApp } from "./daemon-sync.ts";
+import { mergeApp, readMirrorCache, syncMirrorApp, type MirrorApp, type MirrorDoc } from "./apps-mirror.ts";
 import { connectApp } from "./connect-app.ts";
 import { vappendLine } from "./vault-session.ts";
 import { VERSION } from "./version.ts";
@@ -660,7 +661,7 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
     case "approve_loop_action":
       return wrapText(await tApproveLoopAction(args, vaultPath));
     case "list_apps":
-      return wrapText(tListApps(vaultPath));
+      return wrapText(tListApps(vaultPath) + tListMirrorApps(vaultPath));
     case "vault_status":
       return wrapText(tVaultStatus(vaultPath));
     case "sync_app":
@@ -1076,9 +1077,44 @@ function tVaultStatus(vaultPath: string): string {
   ].join("\n");
 }
 
+// Mirrored connectors (prevail apps): the cached mirror only, never the slow
+// runtime listing. Empty string when there is no mirror cache yet.
+export function tListMirrorApps(vaultPath: string): string {
+  let doc: MirrorDoc | null = null;
+  try { doc = readMirrorCache(vaultPath); } catch { doc = null; }
+  if (!doc?.apps.length) return "";
+  const lines = doc.apps.map((base) => {
+    const a = mergeApp(vaultPath, base);
+    const doms = a.domains.length ? `  ->  ${a.domains.join(", ")}` : "";
+    const recipe = a.recipe ? `recipe ${a.recipe.schedule}` : a.syncable ? "no recipe" : "mirror-only";
+    return `- (${a.id}) ${a.name} [${a.runtime}, ${a.status.replace("_", " ")}, ${recipe}]${doms}`;
+  });
+  return `\n\n# Mirrored connectors (${doc.apps.length})\n${lines.join("\n")}`;
+}
+
 async function tSyncApp(args: Record<string, unknown>, vaultPath: string): Promise<string> {
   const id = String(args.id ?? "").trim();
   if (!id) throw new Error("id is required (see list_apps)");
+  // A mirrored connector with a saved recipe syncs through its recipe; a
+  // mirrored id with no recipe falls through to the classic connector sync and
+  // reports the mirror's reason only when that has nothing to run either.
+  let mirror: MirrorApp | null = null;
+  try {
+    const base = readMirrorCache(vaultPath)?.apps.find((a) => a.id === id);
+    mirror = base ? mergeApp(vaultPath, base) : null;
+  } catch { mirror = null; }
+  const viaMirror = async () => {
+    const r = await syncMirrorApp(vaultPath, id);
+    if (r.ok) return `Synced ${id}: ${r.records} record(s) into ${r.files.length} domain file(s).`;
+    return `Sync of ${id} failed: ${r.error ?? "unknown error"}`;
+  };
+  if (mirror?.recipe) return viaMirror();
+  if (mirror) {
+    const classic = await syncApp({ vaultPath, tickSec: 60, maxRunsPerTick: 1 }, id);
+    if (classic.ok) return `Synced ${id}: ${classic.artifacts ?? 0} artifact(s) routed into the vault.`;
+    if (/^no app|has no refresh config/.test(classic.error ?? "")) return viaMirror();
+    return `Sync of ${id} failed: ${classic.error ?? "unknown error"}`;
+  }
   const r = await syncApp({ vaultPath, tickSec: 60, maxRunsPerTick: 1 }, id);
   if (r.ok) return `Synced ${id}: ${r.artifacts ?? 0} artifact(s) routed into the vault.`;
   return `Sync of ${id} failed: ${r.error ?? "unknown error"}`;

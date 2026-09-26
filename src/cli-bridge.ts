@@ -1,3 +1,4 @@
+import { syncedAppsContext } from "./apps-mirror.ts";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -1105,6 +1106,12 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   const domainIdeal = findDomainIdeal(cwd, vaultPath);
   const domainIdealPreamble = domainIdeal ? buildDomainIdealPreamble(domainIdeal) : null;
   const promptDomainIdeal = domainIdealPreamble && cli.kind !== "claude" ? domainIdealPreamble : "";
+  // Synced app data: the newest pull per mirrored connector recipe that feeds
+  // this domain (<domain>/source/apps/<id>/<date>.json), size-capped. Real turns
+  // only (not bare council/classifier calls), and never for General (vault root).
+  const syncedApps = !bare && resolve(cwd) !== resolve(vaultPath) ? syncedAppsContext(cwd) : "";
+  const syncedAppsPreamble = syncedApps ? `${syncedApps}\n\n---\n\n` : null;
+  const promptSyncedApps = syncedAppsPreamble && cli.kind !== "claude" ? syncedAppsPreamble : "";
   // Vault Lock leads everything (a security guardrail outranks even the
   // constitution). Claude gets it via the system channel below; CLIs without a
   // system-prompt flag get it prepended to the prompt so it still governs.
@@ -1114,7 +1121,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
   // channel (in claudeSystem below); CLIs without a system-prompt flag get it
   // prepended to the prompt so it still governs the turn.
   const promptNoEmDash = cli.kind !== "claude" ? buildNoEmDashPreamble() : "";
-  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
+  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + promptSyncedApps + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
   // A prompt that begins with '-' makes the runtime CLI's option parser treat the
   // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
   // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
@@ -1168,7 +1175,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to

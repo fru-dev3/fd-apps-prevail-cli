@@ -873,16 +873,39 @@ export async function syncApp(cfg: SyncConfig, id: string): Promise<{ ok: boolea
   return { ok: false, error: state.last_error, artifacts: 0, needsRelearn: outcome.needsRelearn };
 }
 
+const MIRROR_PASS_MS = 10 * 60_000;
+
+// One guarded pass over due mirror recipes (apps-mirror.ts syncDue). Never throws.
+export async function runMirrorRecipesDue(vaultPath: string): Promise<{ ran: number; ok: number }> {
+  try {
+    const { syncDue } = await import("./apps-mirror.ts");
+    const { ran } = await syncDue(vaultPath);
+    const ok = ran.filter((r) => r.ok).length;
+    if (ran.length) console.log(`[sync] app recipes: ${ok}/${ran.length} ok`);
+    return { ran: ran.length, ok };
+  } catch (e) {
+    console.error(`[sync] app recipes pass error: ${e}`);
+    return { ran: 0, ok: 0 };
+  }
+}
+
 // The daemon loop. Runs alongside --learn/--brief in the same process.
 export async function runSyncDaemon(cfg: SyncConfig): Promise<void> {
   const tick = Math.max(30, cfg.tickSec) * 1000;
   console.log(`[sync] watching connectors for ${cfg.vaultPath} (tick ${Math.round(tick / 1000)}s, max ${cfg.maxRunsPerTick}/tick)`);
+  let lastMirrorPass = 0;
   while (true) {
     try {
       const { ran, ok, failed } = await syncOnce(cfg);
       if (ran > 0) console.log(`[sync] ran ${ran} connector${ran === 1 ? "" : "s"}: ${ok} ok, ${failed} failed`);
     } catch (e) {
       console.error(`[sync] pass error: ${e}`);
+    }
+    // Mirrored-connector recipes (prevail apps): run whatever is due, at most
+    // every 10 minutes. Fully guarded: a failure here never stops the daemon.
+    if (Date.now() - lastMirrorPass >= MIRROR_PASS_MS) {
+      lastMirrorPass = Date.now();
+      await runMirrorRecipesDue(cfg.vaultPath);
     }
     await new Promise((r) => setTimeout(r, tick));
   }

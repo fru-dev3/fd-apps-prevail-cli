@@ -10,6 +10,7 @@
 // Mirrors daemon-learn.ts: same config/lifecycle shape, same model bridge
 // (runChatTurn), same encryption-aware vault I/O (vread/vwrite). Idempotent and
 // best-effort: a failing loop records its error and never blocks the others.
+import { syncedAppsContext } from "./apps-mirror.ts";
 import { existsSync, mkdirSync } from "node:fs";
 import { v4ContentPath } from "./vault-layout-v4.ts";
 import { join, basename, resolve } from "node:path";
@@ -253,7 +254,7 @@ function guardrailRule(a: "suggest" | "tasks" | "ask" | "auto"): string {
   }
 }
 
-function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined, intents: string, autonomous = false, ideal = ""): string {
+function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: string, memory: string, entry: LoopRtEntry | undefined, intents: string, autonomous = false, ideal = "", syncedApps = ""): string {
   const desired = (doc.desiredState || "").trim() || ideal.trim();
   return [
     `You are the steward of the "${loop.name}" loop in the ${domainLabel} domain of a personal life-OS.`,
@@ -282,6 +283,7 @@ function buildPrompt(doc: LoopsDoc, loop: Loop, domainLabel: string, state: stri
     "",
     `LONG-TERM MEMORY (excerpt):\n${memory.slice(0, 2000) || "(none yet)"}`,
     "",
+    syncedApps ? `${syncedApps}\n` : "",
     intents
       ? `WHAT THE USER IS ACTUALLY TRYING TO DO (high-level intents distilled from their activity across sessions; this loop should ACTIVELY ADVANCE the ones it can):\n${intents}\n`
       : "",
@@ -520,7 +522,7 @@ export async function runOneLoop(
         }
       : undefined;
     const out = await runChatTurn({
-      prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous, ideal),
+      prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous, ideal, syncedAppsContext(domainDir, 4000)),
       cwd: domainDir, cli, model: runModel, isFirst: true, bare: !autonomous,
       guard: LOOP_GUARD,
       act: autonomous,
@@ -540,7 +542,7 @@ export async function runOneLoop(
     if (res && res.actions.length === 0 && !evidence) {
       onPhase("think", "Empty pass on a domain with no baseline - demanding real work");
       const corrective = [
-        buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous, ideal),
+        buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, autonomous, ideal, syncedAppsContext(domainDir, 4000)),
         "",
         `REJECTED: you returned zero actions, but this domain has NO recorded baseline or ideal state - there is no evidence the gap is handled, so "nothing to do" is not an acceptable conclusion. Do the FIRST RUN / MISSING BASELINE work now: ${autonomous ? "gather the data with your tools and write the baseline into the domain, reporting each completed step with \"did\": true" : "file 2-4 concrete baseline-building tasks (\"task\": true)"}. Respond with ONLY the JSON object.`,
       ].join("\n");
@@ -746,7 +748,7 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
         continue;
       }
       const out = await runChatTurn({
-        prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents),
+        prompt: buildPrompt(doc, loop, domainLabel, state, memory, entry, domainIntents, false, "", syncedAppsContext(domainDir, 4000)),
         cwd: domainDir,
         cli,
         model: cfg.model || "",
