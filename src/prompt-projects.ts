@@ -30,7 +30,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSafeModelId, scrubbedEnv, sanitizeEmDashes } from "./cli-bridge.ts";
 import { runtimePath } from "./path-safety.ts";
-import { loadCorpus, monthOf, type CorpusStats, type PromptRec } from "./prompt-corpus.ts";
+import { loadCorpus, monthOf, readCorpusConfig, type CorpusStats, type PromptRec } from "./prompt-corpus.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 
 // The most capable model on each runtime. Synthesis quality is the whole
@@ -191,9 +191,9 @@ export function parseJsonAnswer<T>(out: string): T {
 // Folder keys that say where a prompt was typed but not which project it was
 // about: the monorepo root, the vault root, config folders, no folder at all.
 // Their prompts are assigned per session by the model instead.
-export function isAmbiguousKey(key: string): boolean {
-  return key === "" || key === "fru" || key === "vault" || key === "tmp" || key === "domain:general"
-    || /^(fd|fw)-(apps|libs|channels|studio)$/.test(key) || key.startsWith("config:");
+export function isAmbiguousKey(key: string, roots: string[] = []): boolean {
+  return key === "" || key === "vault" || key === "tmp" || key === "domain:general" || roots.includes(key)
+    || /^[a-z0-9]+-(apps|libs|channels|studio)$/.test(key) || key.startsWith("config:");
 }
 
 export function slugify(s: string): string {
@@ -306,7 +306,7 @@ Rules:
 - Use a known project slug when the session is clearly about it.
 - If several sessions are about the same thing that is NOT in the list (a product, a trip, a claim, a purchase, a life decision), invent ONE new project for them: answer "new:<kebab-slug>|<Title>|<domain>" with the same slug each time. Domain must be one of: ${domains.join(", ")}.
 - A one-off question with no ongoing effort behind it: answer "".
-Return ONLY a JSON object mapping session label to answer, e.g. {"S1":"prevail","S2":"new:maple-claim|maple insurance claim|insurance","S3":""}. No prose.
+Return ONLY a JSON object mapping session label to answer, e.g. {"S1":"web-shop","S2":"new:roof-claim|Roof damage claim|insurance","S3":""}. No prose.
 
 ${ss}
 `;
@@ -461,12 +461,13 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
 
   // 1. corpus
   const { prompts, stats } = loadCorpus(vault, opts.home);
+  const { roots } = readCorpusConfig(vault);
   log(`corpus: ${stats.records} records, ${stats.kept} real prompts (${stats.internal} internal removed)`);
   if (prompts.length === 0) throw new Error("no prompts captured yet");
 
   // 2. catalog from the folder keys that do name a project
   const byKey = new Map<string, PromptRec[]>();
-  for (const p of prompts) if (!isAmbiguousKey(p.project)) (byKey.get(p.project) ?? byKey.set(p.project, []).get(p.project)!).push(p);
+  for (const p of prompts) if (!isAmbiguousKey(p.project, roots)) (byKey.get(p.project) ?? byKey.set(p.project, []).get(p.project)!).push(p);
   const known = new Set(state.catalog.flatMap((c) => c.keys));
   const newKeys = [...byKey.keys()].filter((k) => opts.regroup || !known.has(k));
   if (opts.regroup) state.catalog = [];
@@ -504,7 +505,7 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
 
   // 3. assign ambiguous sessions
   const bySession = new Map<string, PromptRec[]>();
-  for (const p of prompts) if (isAmbiguousKey(p.project) || !keyToSlug.has(p.project)) (bySession.get(sessionOf(p)) ?? bySession.set(sessionOf(p), []).get(sessionOf(p))!).push(p);
+  for (const p of prompts) if (isAmbiguousKey(p.project, roots) || !keyToSlug.has(p.project)) (bySession.get(sessionOf(p)) ?? bySession.set(sessionOf(p), []).get(sessionOf(p))!).push(p);
   const pending = [...bySession.entries()].filter(([id]) => !(id in state.sessions) || opts.regroup);
   if (pending.length) {
     log(`assign: ${pending.length} sessions with no project folder`);
@@ -542,7 +543,7 @@ export async function buildProjects(opts: BuildOptions): Promise<ProjectsIndex> 
   const members = new Map<string, PromptRec[]>();
   let unassigned = 0;
   for (const p of prompts) {
-    const slug = !isAmbiguousKey(p.project) && keyToSlug.has(p.project) ? keyToSlug.get(p.project)! : state.sessions[sessionOf(p)] ?? "";
+    const slug = !isAmbiguousKey(p.project, roots) && keyToSlug.has(p.project) ? keyToSlug.get(p.project)! : state.sessions[sessionOf(p)] ?? "";
     if (!slug) { unassigned++; continue; }
     (members.get(slug) ?? members.set(slug, []).get(slug)!).push(p);
   }
@@ -781,9 +782,10 @@ export function periodOf(ts: number, vantage: Vantage, tzOffsetMinutes = 0): { k
 export function assignedPrompts(vault: string, home?: string): { prompts: PromptRec[]; slugOf: (p: PromptRec) => string; catalog: ProjectDef[] } {
   const state = readState(vault);
   const { prompts } = loadCorpus(vault, home);
+  const { roots } = readCorpusConfig(vault);
   const keyToSlug = new Map<string, string>();
   for (const c of state.catalog) for (const k of c.keys) keyToSlug.set(k, c.slug);
-  const slugOf = (p: PromptRec) => (!isAmbiguousKey(p.project) && keyToSlug.has(p.project) ? keyToSlug.get(p.project)! : state.sessions[sessionOf(p)] ?? "");
+  const slugOf = (p: PromptRec) => (!isAmbiguousKey(p.project, roots) && keyToSlug.has(p.project) ? keyToSlug.get(p.project)! : state.sessions[sessionOf(p)] ?? "");
   return { prompts, slugOf, catalog: state.catalog };
 }
 

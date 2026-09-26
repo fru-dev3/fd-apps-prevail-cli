@@ -9,10 +9,14 @@ const HOME = "/Users/someone";
 
 describe("prompt corpus", () => {
   test("keys a prompt to the project folder it was typed in", () => {
-    expect(projectKeyOf(`${HOME}/Documents/fru/fd-apps/fd-apps-prevail-desktop/src-tauri`, HOME)).toBe("fd-apps-prevail-desktop");
-    expect(projectKeyOf(`${HOME}/.workmux/fd-apps-prevail-cli/entity-links`, HOME)).toBe("fd-apps-prevail-cli");
-    expect(projectKeyOf(`${HOME}/PrevailVault/data/domains/tax/memory`, HOME)).toBe("domain:tax");
-    expect(projectKeyOf(`${HOME}/Documents/fru`, HOME)).toBe("fru");
+    expect(projectKeyOf(`${HOME}/Documents/acme/web-apps/web-apps-shop/src-tauri`, HOME)).toBe("web-apps-shop");
+    expect(projectKeyOf(`${HOME}/.workmux/web-shop/feature-x`, HOME)).toBe("web-shop");
+    expect(projectKeyOf(`${HOME}/MyVault/data/domains/tax/memory`, HOME)).toBe("domain:tax");
+    expect(projectKeyOf(`${HOME}/Documents/acme`, HOME)).toBe("acme");
+    expect(projectKeyOf(`${HOME}/MyVault`, HOME)).toBe("vault");
+    // A monorepo root the user names in their vault config keys on its child.
+    expect(projectKeyOf(`${HOME}/Documents/acme/docs/notes`, HOME, ["acme"])).toBe("docs");
+    expect(projectKeyOf(`${HOME}/Documents/acme/docs/notes`, HOME)).toBe("acme");
     expect(projectKeyOf("/", HOME)).toBe("");
     expect(projectKeyOf("/private/tmp/claude-501/x", HOME)).toBe("");
   });
@@ -29,14 +33,14 @@ describe("prompt corpus", () => {
     expect(isAgentWritten("make the header green, never gold")).toBe(false);
     expect(isAgentWritten('"Evaluate a high-stakes 2027 decision: Alex Rivera, Senior SWE')).toBe(true);
     expect(isAgentWritten('"Current date 2026-07-02. Location Austin, Texas. Senior software engineer')).toBe(true);
-    expect(isAgentWritten("Alex from the lender called about the maple refinance")).toBe(false);
+    expect(isAgentWritten("Alex from the lender called about the Maple St refinance")).toBe(false);
     expect(isAgentWritten("# FILESYSTEM SCOPE \u2014 VAULT LOCK IS ON. HARD CONSTRAINT.")).toBe(true);
     expect(isAgentWritten("# DOMAIN IDEAL STATE \u2014 your target")).toBe(true);
   });
 
   test("recovers the user's message from a wrapped desktop prompt", () => {
-    const wrapped = "# THE USER'S IDEAL STATE: their constitution.\nbe kind\n\n---\n\n# WHO YOU'RE HELPING - profile\nFru\n\nshould I refinance the maple house?";
-    expect(userTextOf(wrapped)).toBe("should I refinance the maple house?");
+    const wrapped = "# THE USER'S IDEAL STATE: their constitution.\nbe kind\n\n---\n\n# WHO YOU'RE HELPING - profile\nSam\n\nshould I refinance the Maple St house?";
+    expect(userTextOf(wrapped)).toBe("should I refinance the Maple St house?");
     const history = "# THE USER'S IDEAL STATE: x\n\n---\n\nYou are mid-conversation.\n--- PRIOR TURNS ---\nUser: hi\n--- END PRIOR TURNS ---\n\nUser's next message: and the rates?";
     expect(userTextOf(history)).toBe("and the rates?");
     const job = "# THE USER'S IDEAL STATE: x\n\n---\n\nYou are a self-learning assistant that distills";
@@ -93,9 +97,11 @@ describe("model answers", () => {
     expect(take.ideas).toEqual(["i"]);
   });
   test("ambiguous folder keys", () => {
-    expect(isAmbiguousKey("fru")).toBe(true);
+    expect(isAmbiguousKey("acme")).toBe(false);
+    expect(isAmbiguousKey("acme", ["acme"])).toBe(true);
+    expect(isAmbiguousKey("web-apps")).toBe(true);
     expect(isAmbiguousKey("config:claude")).toBe(true);
-    expect(isAmbiguousKey("fd-apps-memosa")).toBe(false);
+    expect(isAmbiguousKey("web-apps-shop")).toBe(false);
   });
 });
 
@@ -109,7 +115,7 @@ describe("buildProjects end to end (fake model)", () => {
     vault = mkdtempSync(join(tmpdir(), "projects-test-"));
     for (const d of ["dev", "general", "insurance"]) mkdirSync(join(vault, "data", "domains", d), { recursive: true });
     mkdirSync(join(vault, "build", "_meta", "prompts"), { recursive: true });
-    const site = `${HOME}/Documents/fru/fd-apps/fd-apps-fru-site`;
+    const site = `${HOME}/Documents/acme/web-apps/web-apps-fru-site`;
     const lines = [
       rec(0, "build the fru.dev site as a desktop metaphor", site, "s1"),
       rec(1, "the brand color is office green #008000, never gold", site, "s1"),
@@ -117,8 +123,8 @@ describe("buildProjects end to end (fake model)", () => {
       rec(3, "add a projects window", site, "s1"),
       rec(4, "deploy it to vercel", site, "s1"),
       rec(5, "You are scoring a model's answer to a benchmark question", "/", "bench"),
-      rec(6, "draft the maple claim follow-up email", `${HOME}/Documents/fru`, "s2"),
-      rec(7, "what did the adjuster say last time?", `${HOME}/Documents/fru`, "s2"),
+      rec(6, "draft the roof claim follow-up email", "/", "s2"),
+      rec(7, "what did the adjuster say last time?", "/", "s2"),
     ];
     writeFileSync(join(vault, "build", "_meta", "prompts", "claude.mbp.jsonl"), lines.join("\n") + "\n");
   });
@@ -128,8 +134,8 @@ describe("buildProjects end to end (fake model)", () => {
     const rawBefore = readFileSync(join(vault, "build", "_meta", "prompts", "claude.mbp.jsonl"), "utf8");
     const calls: string[] = [];
     const run: ModelRunner = async (prompt) => {
-      if (prompt.includes("into PROJECTS")) { calls.push("catalog"); return JSON.stringify([{ slug: "fru-dev-site", title: "fru.dev site", domain: "dev", kind: "site", summary: "Personal site.", keys: ["fd-apps-fru-site"] }]); }
-      if (prompt.includes("Assign each session")) { calls.push("assign"); return '{"S1":"new:maple-claim|maple insurance claim|insurance"}'; }
+      if (prompt.includes("into PROJECTS")) { calls.push("catalog"); return JSON.stringify([{ slug: "fru-dev-site", title: "fru.dev site", domain: "dev", kind: "site", summary: "Personal site.", keys: ["web-apps-fru-site"] }]); }
+      if (prompt.includes("Assign each session")) { calls.push("assign"); return '{"S1":"new:roof-claim|Roof damage claim|insurance"}'; }
       if (prompt.includes("REPLAY BRIEF")) {
         calls.push("brief");
         expect(prompt).not.toContain("You are scoring");
@@ -144,7 +150,7 @@ describe("buildProjects end to end (fake model)", () => {
     const site = idx.projects.find((p) => p.slug === "fru-dev-site")!;
     expect(site.prompt_count).toBe(5);
     expect(site.takeaways).toEqual(["green not gold"]);
-    const claim = idx.projects.find((p) => p.slug === "maple-claim")!;
+    const claim = idx.projects.find((p) => p.slug === "roof-claim")!;
     expect(claim.domain).toBe("insurance");
     expect(claim.prompt_count).toBe(2);
     const dir = join(vault, site.pack_dir);
@@ -157,7 +163,7 @@ describe("buildProjects end to end (fake model)", () => {
     expect(readProjectsIndex(vault)!.recommendations[0].kind).toBe("skill");
     const distilled = JSON.parse(readFileSync(join(vault, "build", "_meta", "intents_distilled.json"), "utf8"));
     expect(distilled.source_count).toBe(7);
-    expect(distilled.intents.map((i: { project: string }) => i.project).sort()).toEqual(["fru-dev-site", "maple-claim"]);
+    expect(distilled.intents.map((i: { project: string }) => i.project).sort()).toEqual(["fru-dev-site", "roof-claim"]);
     // The raw capture stream is read, never written.
     expect(readFileSync(join(vault, "build", "_meta", "prompts", "claude.mbp.jsonl"), "utf8")).toBe(rawBefore);
 
@@ -177,12 +183,12 @@ describe("buildProjects end to end (fake model)", () => {
     // recommendations that named it by title follow.
     renameProject(vault, "fru-dev-site", "fru-dev-site", "fru.dev site and trackers");
     expect(readProjectsIndex(vault)!.recommendations[0].project).toBe("fru.dev site and trackers");
-    const renamed = renameProject(vault, "maple-claim", "maple-hail-claim", "maple hail claim");
-    expect(renamed.slug).toBe("maple-hail-claim");
-    const moved = readProjectsIndex(vault)!.projects.find((p) => p.slug === "maple-hail-claim")!;
-    expect(moved.title).toBe("maple hail claim");
+    const renamed = renameProject(vault, "roof-claim", "roof-hail-claim", "Roof hail claim");
+    expect(renamed.slug).toBe("roof-hail-claim");
+    const moved = readProjectsIndex(vault)!.projects.find((p) => p.slug === "roof-hail-claim")!;
+    expect(moved.title).toBe("Roof hail claim");
     expect(existsSync(join(vault, moved.pack_dir, "brief.md"))).toBe(true);
-    expect(existsSync(join(vault, "data/domains/insurance/memory/projects/maple-claim"))).toBe(false);
+    expect(existsSync(join(vault, "data/domains/insurance/memory/projects/roof-claim"))).toBe(false);
     calls.length = 0;
     await buildProjects({ vault, home: vault, run, minPrompts: 2, concurrency: 1 });
     expect(calls).toEqual([]); // the renamed project is still fresh
@@ -192,7 +198,7 @@ describe("buildProjects end to end (fake model)", () => {
     expect(tl.built).toBe(true);
     expect(tl.periods).toHaveLength(1);
     expect(tl.periods[0].total).toBe(7);
-    expect(tl.periods[0].byProject.map((x) => [x.slug, x.count])).toEqual([["fru-dev-site", 5], ["maple-hail-claim", 2]]);
+    expect(tl.periods[0].byProject.map((x) => [x.slug, x.count])).toEqual([["fru-dev-site", 5], ["roof-hail-claim", 2]]);
     expect(tl.periods[0].byDomain[0]).toEqual({ domain: "dev", count: 5 });
   });
 });

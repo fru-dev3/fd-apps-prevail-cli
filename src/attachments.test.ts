@@ -27,8 +27,8 @@ describe("attachment index + captioning", () => {
   afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
   test("parseCaptionReply: tolerant of prose, strict on shape", () => {
-    expect(parseCaptionReply("Lease agreement first page, maple Way | lease-maple-way")).toEqual({
-      caption: "Lease agreement first page, maple Way",
+    expect(parseCaptionReply("Lease agreement first page, Maple Way | lease-maple-way")).toEqual({
+      caption: "Lease agreement first page, Maple Way",
       slug: "lease-maple-way",
     });
     expect(parseCaptionReply("Sure! Here you go:\nA bar chart of Q3 spend | q3 Spend Chart!!")!.slug).toBe("q3-spend-chart");

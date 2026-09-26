@@ -163,36 +163,45 @@ export function userTextOf(raw: string, cwd = ""): string | null {
 
 // Where a prompt was typed says what it was about. Folders are normalized to a
 // project root so every worktree, branch and subfolder of one repo lands on
-// one key:
-//   ~/Documents/fru/fd-apps/fd-apps-prevail-desktop/src-tauri  -> fd-apps-prevail-desktop
-//   ~/.workmux/fd-apps-prevail-cli/entity-links                  -> fd-apps-prevail-cli
-//   <vault>/data/domains/tax/...                                  -> domain:tax
-export function projectKeyOf(cwd: string, home = homedir()): string {
+// one key. Machine-specific roots come from `roots` (the vault's projects config):
+//   <code dir>/<ns>/<ns>-<name>/src           -> <ns>-<name>   (namespaced project folders)
+//   ~/.workmux/<repo>/<branch>                 -> <repo>
+//   .../data/domains/<domain>/...              -> domain:<domain>
+//   a folder whose name ends in "vault"        -> vault
+export function projectKeyOf(cwd: string, home = homedir(), roots: string[] = []): string {
   if (!cwd) return "";
   let p = cwd.replace(/\/+$/, "");
   if (home && p.startsWith(home)) p = "~" + p.slice(home.length);
   p = p.replace(/^\/Users\/[^/]+/, "~");
   if (p === "~" || p === "/" || p === "") return "";
   if (/^(\/private)?\/(tmp|var)\//.test(p) || p.startsWith("~/Downloads")) return "";
-  const dom = p.match(/\/data\/domains\/([^/]+)/) ?? p.match(/(?:fru-vault|PrevailVault)\/([^/]+)/);
-  if (dom && !["build", "data"].includes(dom[1])) return `domain:${dom[1].toLowerCase()}`;
-  if (/(fru-vault|PrevailVault)$/.test(p)) return "vault";
+  const dom = p.match(/\/data\/domains\/([^/]+)/);
+  if (dom) return `domain:${dom[1].toLowerCase()}`;
+  const segsAll = p.split("/").filter(Boolean);
+  if (/vault$/i.test(segsAll[segsAll.length - 1] ?? "")) return "vault";
   const wm = p.match(/^~\/\.workmux\/([^/]+)/);
   if (wm) return wm[1].toLowerCase();
-  const fru = p.match(/^~\/Documents\/fru\/([^/]+)(?:\/([^/]+))?/);
-  if (fru) {
-    const [, ns, proj] = fru;
-    // A namespaced project folder (fd-apps/fd-apps-memosa); a loose top-level
-    // folder (vault/, docs) keys on itself.
-    if (proj && /^(fd|fw)-/.test(ns)) return proj.toLowerCase();
-    return ns.toLowerCase();
+  const code = p.match(/^~\/(?:Documents|Projects|code|src|dev)\/(.+)$/);
+  if (code) {
+    const segs = code[1].split("/").filter(Boolean).map((x) => x.toLowerCase());
+    // A namespaced child (web-apps/web-apps-shop) names the project.
+    for (let i = 0; i + 1 < segs.length; i++) if (segs[i + 1].startsWith(`${segs[i]}-`)) return segs[i + 1];
+    // Inside a monorepo root the user named, the next folder is the project.
+    if (roots.includes(segs[0]) && segs[1]) return segs[1];
+    return segs[0];
   }
-  const docs = p.match(/^~\/(?:Documents|Projects|code|src|dev)\/([^/]+)/);
-  if (docs) return docs[1].toLowerCase();
   const dot = p.match(/^~\/\.([^/]+)/);
   if (dot) return `config:${dot[1].toLowerCase()}`;
-  const seg = p.split("/").filter(Boolean);
-  return (seg[seg.length - 1] ?? "").toLowerCase();
+  return (segsAll[segsAll.length - 1] ?? "").toLowerCase();
+}
+
+// Per-user corpus settings, kept in the vault (never in shipped code):
+// <vault>/build/_meta/projects/config.json  {"roots": ["<monorepo folder>"]}
+export function readCorpusConfig(vault: string): { roots: string[] } {
+  try {
+    const c = JSON.parse(vreadFile(runtimePath(vault, join("_meta", "projects", "config.json")))) as { roots?: unknown };
+    return { roots: Array.isArray(c.roots) ? c.roots.filter((x): x is string => typeof x === "string").map((x) => x.toLowerCase()) : [] };
+  } catch { return { roots: [] }; }
 }
 
 function readJsonl(path: string): Record<string, unknown>[] {
@@ -263,6 +272,7 @@ export function claudeSessionEntries(home = homedir()): Map<string, string> {
 export function loadCorpus(vault: string, home: string = homedir()): { prompts: PromptRec[]; stats: CorpusStats } {
   const stats: CorpusStats = { records: 0, internal: 0, program: 0, duplicates: 0, kept: 0 };
   const entries = claudeSessionEntries(home);
+  const { roots } = readCorpusConfig(vault);
   const seen = new Set<string>();
   const prompts: PromptRec[] = [];
   const add = (r: Omit<PromptRec, "project" | "text" | "raw">, raw: string, entry = "") => {
@@ -277,7 +287,7 @@ export function loadCorpus(vault: string, home: string = homedir()): { prompts: 
     const key = `${r.tool}\u0001${r.session}\u0001${text}`;
     if (seen.has(key)) { stats.duplicates++; return; }
     seen.add(key);
-    prompts.push({ ...r, text, ...(text !== raw ? { raw } : {}), project: r.domain ? `domain:${r.domain}` : projectKeyOf(r.cwd, home) });
+    prompts.push({ ...r, text, ...(text !== raw ? { raw } : {}), project: r.domain ? `domain:${r.domain}` : projectKeyOf(r.cwd, home, roots) });
   };
 
   const dir = runtimePath(vault, join("_meta", "prompts"));
