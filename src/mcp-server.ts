@@ -280,7 +280,7 @@ export async function runMcpServer(
     },
     {
       name: "read_recommendations",
-      description: "Prevail's proactive recommendations across the whole vault - gaps to close, models to switch, apps to connect, context to improve. Returns a prioritized list.",
+      description: "Prevail's one ranked 'what to do next' list across the whole vault: instructions to save as rules, project next steps and stuck projects to restart, connectors to sign in or sync, recurring people and places to save, better model defaults, and context gaps. Deterministic, ranked by leverage.",
       inputSchema: { type: "object", properties: {} },
     },
     {
@@ -931,7 +931,7 @@ function tReadDecisions(args: Record<string, unknown>, vaultPath: string): strin
 function tReadRecommendations(vaultPath: string): string {
   const recs = buildRecommendations(vaultPath);
   if (!recs.length) return "(no recommendations right now)";
-  return ["# Recommendations", "", ...recs.map((r) => `## ${r.title}  [${r.category}]\n${r.detail}`)].join("\n");
+  return ["# Recommendations", "", ...recs.map((r) => `## ${r.title}  [${r.category}, ${r.metric.value} ${r.metric.unit}]\n${r.detail}${r.rows?.length ? `\n${r.rows.map((x) => `- ${x.domain}${x.suggested_label ? `: ${x.suggested_label}${x.score != null ? ` (${x.score}/10)` : ""}` : ""}`).join("\n")}` : ""}`)].join("\n");
 }
 
 async function tReadSurface(args: Record<string, unknown>, vaultPath: string): Promise<string> {
