@@ -198,7 +198,7 @@ export interface BackupResult {
 // agent-derived/underscore dirs, hidden dirs, or known non-domain dirs.
 // Mirrors the desktop scanner's NON_DOMAIN_DIRS so counts line up.
 const NON_DOMAIN_DIRS = new Set([
-  "benchmark", "apps", "node_modules", "_archive", "_scratch",
+  "benchmark", "apps", "entities", "node_modules", "_archive", "_scratch",
 ]);
 function listDomainDirs(vault: string): string[] {
   let names: string[];

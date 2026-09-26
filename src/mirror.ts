@@ -25,6 +25,7 @@ import {
   type ModelChoice, type ModelRunner, type ProjectDef, type ProjectsIndex,
 } from "./prompt-projects.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
+import { newSittings, refreshEntities, tagSittings, TAG_DEFAULT } from "./entities.ts";
 
 // ---------------------------------------------------------------------------
 // contract types
@@ -676,6 +677,12 @@ export interface RefreshOptions {
   tz?: number;
   home?: string;
   log?: (m: string) => void;
+  // Entity tagging of new sittings (cheap model) and page digests (the synth
+  // model). Defaults to the real runner only when `run` is the default too, so
+  // a test that injects `run` never pays for entity calls by accident.
+  entityRun?: ModelRunner | null;
+  entityModel?: ModelChoice;
+  entityLimit?: number;
 }
 
 export function modelChoice(model?: string | null, cli?: string | null): ModelChoice {
@@ -702,9 +709,25 @@ export async function refreshMirror(opts: RefreshOptions): Promise<FindingsDoc> 
   }));
   await refreshWeekLines(ctx, m);
   const letter = await weeklyLetter(ctx, m, applyVerdicts(findings, verdicts, ctx.now));
+  await refreshEntityLayer(ctx, m, opts);
   const doc: FindingsDoc = { generated_ts: ctx.now, letter, findings };
   writeJson(mpath(opts.vault, "findings.json"), doc);
   return { ...doc, findings: applyVerdicts(findings, verdicts, ctx.now) };
+}
+
+// Entities ride the Intent refresh: tag each new sitting once, then rebuild
+// the index, auto pages and any stale digests. Failures never block findings.
+async function refreshEntityLayer(ctx: MirrorContext, m: ModelOpts, opts: RefreshOptions) {
+  const run = opts.entityRun !== undefined ? opts.entityRun : (opts.run === undefined ? runModelOnce : null);
+  try {
+    if (run) {
+      const fresh = newSittings(ctx.vault, ctx.sittings, ctx.now).slice(0, opts.entityLimit ?? 30);
+      const t = await tagSittings(ctx.vault, fresh, { run, model: opts.entityModel ?? TAG_DEFAULT, domainOf: ctx.domainOf, log: m.log, now: ctx.now });
+      if (t.tagged) m.log(`entities: tagged ${t.tagged} new sittings`);
+    }
+    const r = await refreshEntities(ctx.vault, { run, digestModel: m.model, digestLimit: 5, log: m.log, now: ctx.now });
+    m.log(`entities: ${r.entities} known, ${r.pages_created} new pages, ${r.digests_written} digests`);
+  } catch (e) { m.log(`entities: refresh failed (${(e as Error).message})`); }
 }
 
 // Verdicts shape what the person sees: "not really" hides a finding or item

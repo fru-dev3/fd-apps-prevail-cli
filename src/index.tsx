@@ -40,6 +40,8 @@ interface Args {
   projectsArgs: string[];
   mirror: boolean;
   mirrorArgs: string[];
+  entities: boolean;
+  entitiesArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
   appsMirror: boolean;
@@ -165,6 +167,8 @@ function parseArgs(argv: string[]): Args {
   let projectsArgs: string[] = [];
   let mirror = false;
   let mirrorArgs: string[] = [];
+  let entities = false;
+  let entitiesArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
   let appsMirror = false;
@@ -301,6 +305,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "intent" || a === "mirror") {
       mirror = true;
       mirrorArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "entities" || a === "entity") {
+      entities = true;
+      entitiesArgs = argv.slice(i + 1);
       break;
     } else if (a === "recommendations" || a === "recommend") {
       recommendations = true;
@@ -569,6 +577,8 @@ function parseArgs(argv: string[]): Args {
     projectsArgs,
     mirror,
     mirrorArgs,
+    entities,
+    entitiesArgs,
     suggestApps,
     suggestAppsArgs,
     appsMirror,
@@ -2317,6 +2327,88 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
   }
   console.error("usage: prevail intent [findings|refresh|verdict|history] --vault <path> [--json]");
   process.exit(2);
+}
+
+// prevail entities [list|show|save|note|refresh|backfill]: the people, places,
+// orgs and things the owner talks about (entities.ts). With --json every
+// subcommand prints exactly one JSON line; errors land in `error`.
+async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<void> {
+  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests"]);
+  const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
+  const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(a[i - 1]!)));
+  const sub = pos[0] ?? "list";
+  const json = a.includes("--json");
+  const vault = await vaultFlagOrDefault(a, vaultPath);
+  const en = await import("./entities.ts");
+  const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
+  const fail = (msg: string) => {
+    if (json) out({ error: msg });
+    else console.error(`prevail entities: ${msg}`);
+    process.exitCode = 1;
+  };
+  const log = (m: string) => { if (!json) console.error(`[entities] ${m}`); };
+  const num = (flag: string, d: number) => { const n = Number(get(flag)); return Number.isFinite(n) && n > 0 ? Math.floor(n) : d; };
+  try {
+    if (sub === "list") {
+      // The cached index when fresh enough, else rebuild (no model, cheap).
+      let idx = en.readIndex(vault);
+      if (!idx.generated_ts || a.includes("--rebuild")) idx = en.buildIndex(vault);
+      const hits = en.searchEntities(idx, get("--q") ?? "", { kind: get("--kind") ?? undefined, limit: num("--limit", 2000), savedOnly: a.includes("--saved") });
+      if (json) { out({ generated_ts: idx.generated_ts, total: idx.entities.length, entities: hits.map(en.summarize) }); return; }
+      for (const e of hits) console.log(`${String(e.conversations).padStart(4)}  ${e.id.padEnd(36)} ${e.saved ? "saved " : e.page ? "page  " : "      "}${e.name}`);
+      return;
+    }
+    if (sub === "show") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities show <kind/slug|name> [--json]"); return; }
+      const idx = en.readIndex(vault).generated_ts ? en.readIndex(vault) : en.buildIndex(vault);
+      const d = en.entityDetail(vault, idx, id);
+      if (!d) { fail(`no entity "${id}"`); return; }
+      if (json) { out(d); return; }
+      console.log(en.entityContextText(d, 30));
+      return;
+    }
+    if (sub === "save") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities save <kind/slug> [--name \"Display name\"] [--kind person|place|org|thing]"); return; }
+      const d = en.saveEntity(vault, id, { name: get("--name") ?? undefined, kind: get("--kind") ?? undefined });
+      if (json) { out(d); return; }
+      console.log(`saved ${d.id} -> ${d.page_path}`);
+      return;
+    }
+    if (sub === "note") {
+      const id = pos[1];
+      const text = get("--text");
+      if (!id || text === null) { fail("usage: prevail entities note <kind/slug> --text \"...\""); return; }
+      const d = en.setNotes(vault, id, text, { name: get("--name") ?? undefined, kind: get("--kind") ?? undefined });
+      if (json) { out(d); return; }
+      console.log(`notes saved to ${d.page_path}`);
+      return;
+    }
+    if (sub === "refresh") {
+      const mr = await import("./mirror.ts");
+      const noDigest = a.includes("--no-digests");
+      const r = await en.refreshEntities(vault, { run: noDigest ? null : undefined, digestModel: mr.modelChoice(get("--model")), digestLimit: num("--digests", 10), log });
+      if (json) { out(r); return; }
+      console.log(`${r.entities} entities, ${r.pages_created} new pages, ${r.pages_updated} pages updated, ${r.digests_written} digests (${r.digests_pending} pending)`);
+      return;
+    }
+    if (sub === "backfill") {
+      const mr = await import("./mirror.ts");
+      const ctx = mr.loadContext(vault);
+      const todo = en.untaggedSittings(vault, ctx.sittings);
+      const limit = num("--limit", 100);
+      const pick = todo.slice(0, limit);
+      const tagModel = get("--tag-model") ? mr.modelChoice(get("--tag-model")) : en.TAG_DEFAULT;
+      const t = await en.tagSittings(vault, pick, { run: a.includes("--dry-run") ? null : (await import("./prompt-projects.ts")).runModelOnce, model: tagModel, batch: num("--batch", 10), domainOf: ctx.domainOf, log });
+      const r = await en.refreshEntities(vault, { run: a.includes("--with-digests") ? undefined : null, log });
+      const res = { sittings_total: ctx.sittings.length, untagged_before: todo.length, attempted: pick.length, tagged: t.tagged, failed: t.failed, calls: t.calls, entity_tags: t.entities, remaining: Math.max(0, todo.length - t.tagged), entities: r.entities, pages_created: r.pages_created, model: tagModel.model };
+      if (json) { out(res); return; }
+      console.log(`tagged ${t.tagged}/${pick.length} sittings in ${t.calls} calls (${t.entities} entity tags, ${res.remaining} still untagged); ${r.entities} entities, ${r.pages_created} new pages`);
+      return;
+    }
+    fail("usage: prevail entities [list|show <id>|save <id>|note <id> --text ...|refresh|backfill [--limit N]] --vault <path> [--json]");
+  } catch (e) { fail((e as Error).message); }
 }
 
 // prevail apps [list|refresh|tools|recipe|sync|archive]: the live mirror of the
@@ -5677,6 +5769,10 @@ async function main() {
   }
   if (args.mirror) {
     await mirrorCommand(args.mirrorArgs, args.vaultPath);
+    return;
+  }
+  if (args.entities) {
+    await entitiesCommand(args.entitiesArgs, args.vaultPath);
     return;
   }
   if (args.recommendations) {

@@ -211,6 +211,27 @@ export async function runMcpServer(
       },
     },
     {
+      name: "entities_search",
+      description: "Search the people, places, companies/products and things the user has talked about across their chats and prompts. Returns ids, names, kinds and how many conversations mention each. Use entity_context on an id for the details.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Name or part of a name; empty lists the most mentioned." },
+          kind: { type: "string", enum: ["person", "place", "org", "thing"] },
+          limit: { type: "number", description: "Max results (default 20)." },
+        },
+      },
+    },
+    {
+      name: "entity_context",
+      description: "Everything the vault knows about one person, place, company/product or thing: the digest of what the user has discussed about it, the user's own notes, recent mentions with dates and excerpts, and what it is often mentioned with.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Entity id (person/sam-rivera) or a name." } },
+        required: ["id"],
+      },
+    },
+    {
       name: "read_decisions",
       description: "Read the decision log for a domain - past decisions and council verdicts with their rationale, newest first. Use to avoid re-litigating settled questions and to stay consistent with prior reasoning.",
       inputSchema: {
@@ -617,6 +638,20 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(tReadIntents(args, vaultPath));
     case "read_decisions":
       return wrapText(tReadDecisions(args, vaultPath));
+    case "entities_search": {
+      const en = await import("./entities.ts");
+      const idx = en.readIndex(vaultPath).generated_ts ? en.readIndex(vaultPath) : en.buildIndex(vaultPath);
+      const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(200, Math.floor(args.limit)) : 20;
+      const hits = en.searchEntities(idx, typeof args.query === "string" ? args.query : "", { kind: typeof args.kind === "string" ? args.kind : undefined, limit });
+      if (!hits.length) return wrapText("No matching entities.");
+      return wrapText(hits.map((e) => `${e.id}  ${e.name} (${e.kind})  ${e.conversations} conversations${e.saved ? ", saved" : ""}`).join("\n"));
+    }
+    case "entity_context": {
+      const en = await import("./entities.ts");
+      const idx = en.readIndex(vaultPath).generated_ts ? en.readIndex(vaultPath) : en.buildIndex(vaultPath);
+      const d = en.entityDetail(vaultPath, idx, typeof args.id === "string" ? args.id : "");
+      return wrapText(d ? en.entityContextText(d) : `No entity "${String(args.id ?? "")}".`);
+    }
     case "list_projects": {
       const { readProjectsIndex } = await import("./prompt-projects.ts");
       const idx = readProjectsIndex(vaultPath);

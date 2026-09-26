@@ -44,10 +44,11 @@ describe("production transition", () => {
     expect(res.created).toBe(true);
     expect(existsSync(prod)).toBe(true);
     // A fresh production vault now starts in the canonical layout: the root
-    // holds exactly build/ + data/{apps,domains} (no flat/legacy root).
+    // holds exactly build/ + data/{apps,domains,entities} (no flat/legacy root).
     expect(readdirSync(prod).filter((n) => !n.startsWith(".")).sort()).toEqual(["build", "data"]);
     expect(existsSync(join(prod, "data", "domains"))).toBe(true);
     expect(existsSync(join(prod, "data", "apps"))).toBe(true);
+    expect(existsSync(join(prod, "data", "entities"))).toBe(true);
     expect(existsSync(join(prod, "build"))).toBe(true);
   });
 

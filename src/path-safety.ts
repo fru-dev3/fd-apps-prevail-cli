@@ -104,6 +104,8 @@ export function resolveSafeChild(vaultRoot: string, child: string): string | nul
 // migrate-vault-v3 tool moves legacy domains on the user's terms.
 export const DOMAINS_DIR = "domains";
 export const APPS_DIR = "apps";
+// People, places, orgs and things the owner talks about: data/entities/<kind>/<slug>.md.
+export const ENTITIES_DIR = "entities";
 
 // ── Vault layout (v4: the `data/` container) ──────────────────────────────────
 // W4 (Monday feedback): "Avoid loose files. Everything should be in a folder.
@@ -282,6 +284,11 @@ export function browserProfileDir(connectorId: string, legacyVaultProfileDir?: s
 }
 
 // The apps container inside the vault — under the effective content root.
+// Where entity pages live: <data root>/entities. Sits beside domains/ and apps/.
+export function entitiesContainer(vaultPath: string): string {
+  return join(dataRoot(vaultPath), ENTITIES_DIR);
+}
+
 export function appsContainer(vaultPath: string): string {
   const v4 = join(dataRoot(vaultPath), APPS_DIR);
   if (existsSync(v4)) return v4;
