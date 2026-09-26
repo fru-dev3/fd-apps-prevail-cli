@@ -361,14 +361,14 @@ const MUTATING = new Set([
   "unspam", "mark", "unmark", "pause", "unpause", "close", "respond", "merge", "copy", "import",
   "export", "generate", "spawn", "stop", "complete", "authenticate", "auth", "login", "logout",
   "convert", "duplicate", "apply", "approve", "reject", "submit", "run", "execute", "invite",
-  "comment", "message", "schedule", "start", "restart", "enable", "disable", "archive",
+  "schedule", "start", "restart", "enable", "disable", "archive",
   "unarchive", "restore", "save", "rename", "assign", "subscribe", "unsubscribe", "like",
   "follow", "unfollow", "play", "queue", "skip", "request", "confirm", "accept", "decline",
   "sign", "refund", "charge", "tip", "withdraw", "deposit", "attach", "detach", "link",
   "unlink", "connect", "disconnect", "reset", "clear", "toggle", "mute", "star", "pin",
   "resolve", "reopen", "lock", "unlock", "grant", "revoke", "invoke", "trigger", "sync",
   "push", "insert", "modify", "patch", "put", "replace", "change", "resize", "remix",
-  "donate", "buy", "sell", "reserve", "rsvp", "notify", "draft", "wait", "tag", "untag",
+  "donate", "buy", "sell", "reserve", "rsvp", "notify", "wait", "tag", "untag",
   "upsert", "claim", "redeem", "activate", "deactivate", "open", "install", "uninstall",
 ]);
 const MONEY = new Set([
@@ -385,13 +385,30 @@ const SEND = new Set([
 const CARD_SECRETS = new Set(["pan", "cvv", "cvc"]);
 const OTHER_SECRETS = new Set(["password", "passwords", "secret", "secrets", "credential", "credentials", "ssn", "token", "tokens", "apikey", "otp", "totp"]);
 
+// A verb that makes a tool act even when it follows a read verb
+// ("get_and_delete", "search-create-...").
+const STRONG = new Set([
+  "send", "delete", "remove", "pay", "transfer", "purchase", "book", "order", "checkout", "cancel",
+  "trash", "publish", "post", "reply", "forward", "share", "update", "create", "write", "upload",
+  "move", "set", "edit", "add", "buy", "refund", "charge", "invite", "close", "pause",
+]);
+
+// Read-shaped: the first action word is a read verb and no strong mutating
+// verb appears anywhere. "get_message" and "list_orders" are reads (nouns never
+// count), "update_message_labels" and "notion-send-message" are not.
+function isReadShaped(words: string[]): boolean {
+  const first = words.find((w) => READ_VERBS.has(w) || MUTATING.has(w));
+  if (!first || !READ_VERBS.has(first)) return false;
+  return !words.some((w) => STRONG.has(w));
+}
+
 export function classifyTool(bare: string): { kind: ToolKind; sync_allowed: boolean; chat_default: boolean } {
   const words = toolWords(bare);
   const has = (set: Set<string>) => words.some((w) => set.has(w));
   let kind: ToolKind;
   if (has(CARD_SECRETS)) kind = "money";
   else if (has(OTHER_SECRETS)) kind = "write";
-  else if (has(READ_VERBS) && !has(MUTATING)) kind = "read";
+  else if (isReadShaped(words)) kind = "read";
   else if (has(MONEY)) kind = "money";
   else if (has(SEND) || words[0] === "message" || words[0] === "comment"
     || (words.includes("comment") && words.some((w) => w === "create" || w === "add" || w === "post"))) kind = "send";
@@ -565,6 +582,19 @@ export async function discoverClaudeTools(vault: string, exec: Exec): Promise<Cl
   return findClaudeInit(r.stdout);
 }
 
+// `claude mcp list` checks that a connector answers; the headless session's
+// init line says whether its tools are actually usable (a connector can answer
+// yet still need sign-in for headless use). The init status wins when known.
+export function applyInitStatus(app: MirrorApp, initStatus: string | undefined): void {
+  if (!initStatus || /pending/i.test(initStatus)) return;
+  const st = normalizeStatus(initStatus);
+  if (st === app.status) return;
+  const listed = app.status_detail ?? app.status;
+  app.status = st;
+  app.status_detail = st === "connected" ? undefined : `${initStatus} in headless Claude Code (listed as ${listed})`;
+  if (app.status_detail === undefined) delete app.status_detail;
+}
+
 // ── Cache + manifest merge ────────────────────────────────────────────────────
 
 export function readMirrorCache(vault: string): MirrorDoc | null {
@@ -668,7 +698,10 @@ export async function refreshMirror(vault: string, opts: { tools?: boolean } & M
     scanRuntime("codex", exec, vault, ["mcp", "list", "--json"], parseCodexMcpList),
     scanRuntime("gemini", exec, vault, ["mcp", "list"], parseGeminiMcpList),
     scanRuntime("agy", exec, vault, ["mcp", "list"], parseAgyMcpList),
-    opts.tools ? discoverClaudeTools(vault, exec).catch(() => null) : Promise.resolve(null),
+    // The init line is cheap (no model call) and runs beside the slow listing,
+    // so every refresh gets headless connector status; --tools also stores the
+    // tool lists.
+    discoverClaudeTools(vault, exec).catch(() => null),
   ]);
   // If `claude mcp list` failed but the init line came back, fall back to its
   // server list (no URLs, but names + status).
@@ -682,10 +715,12 @@ export async function refreshMirror(vault: string, opts: { tools?: boolean } & M
   const ts = now();
   const prevById = new Map((prev?.apps ?? []).map((a) => [a.id, a]));
   const apps: MirrorApp[] = [];
+  const initStatus = new Map((init?.servers ?? []).map((sv) => [sv.name, sv.status]));
   for (const a of [...claude.apps, ...codex.apps, ...gemini.apps, ...agy.apps]) {
     const old = prevById.get(a.id);
     if (old?.tools) { a.tools = old.tools; if (old.tools_checked_at) a.tools_checked_at = old.tools_checked_at; }
-    if (init && a.runtime === "claude") {
+    if (a.runtime === "claude") applyInitStatus(a, initStatus.get(a.server));
+    if (init && opts.tools && a.runtime === "claude") {
       const tools = claudeToolsForServer(init.tools, a.server);
       if (tools.length) {
         a.tools = tools;
@@ -722,6 +757,7 @@ export async function appTools(vault: string, id: string, deps: MirrorDeps = {})
   const init = await discoverClaudeTools(vault, exec);
   if (!init) throw new Error("tool discovery failed: claude did not report its tool list");
   const tools = claudeToolsForServer(init.tools, app.server);
+  applyInitStatus(app, init.servers.find((sv) => sv.name === app.server)?.status);
   const ts = now();
   if (tools.length) {
     writeManifestPatch(vault, app, { tools, tools_checked_at: ts });

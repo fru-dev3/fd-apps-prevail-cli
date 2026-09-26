@@ -54,7 +54,7 @@ const INIT = JSON.stringify({
     "mcp__claude_ai_Baz_Mail__search_threads", "mcp__claude_ai_Baz_Mail__send_message", "mcp__claude_ai_Baz_Mail__create_draft",
     "mcp__prevail__chat",
   ],
-  mcp_servers: [{ name: "claude.ai Acme Notes", status: "connected" }],
+  mcp_servers: [{ name: "claude.ai Acme Notes", status: "connected" }, { name: "claude.ai Baz Mail", status: "connected" }, { name: "claude.ai Foo", status: "connected" }, { name: "local-thing", status: "pending" }],
 });
 
 function ok(stdout: string): ExecResult { return { code: 0, stdout, stderr: "", missing: false, timedOut: false }; }
@@ -139,6 +139,19 @@ describe("parsers", () => {
     ]);
   });
 
+  test("headless init status wins over the listing", async () => {
+    const { applyInitStatus } = await import("./apps-mirror.ts");
+    const a = { status: "connected" } as MirrorApp;
+    applyInitStatus(a, "needs-auth");
+    expect(a.status).toBe("needs_auth");
+    expect(a.status_detail).toContain("headless");
+    applyInitStatus(a, "pending");
+    expect(a.status).toBe("needs_auth");
+    applyInitStatus(a, "connected");
+    expect(a.status).toBe("connected");
+    expect(a.status_detail).toBeUndefined();
+  });
+
   test("stable ids", () => {
     expect(appIdFor("claude", "claude.ai Acme Notes")).toBe("acme-notes");
     expect(appIdFor("claude", "claude.ai Bar.io")).toBe("bar-io");
@@ -165,7 +178,8 @@ describe("classifyTool", () => {
   const k = (n: string) => classifyTool(n).kind;
   test("reads", () => {
     for (const n of ["list_cards", "get_card", "list_transactions", "search_threads", "get_thread", "notion-fetch", "notion-search",
-      "notion-query-data-sources", "download_file_content", "read_file_content", "list_orders", "get_booking", "listEvents", "plaid_get_usages"]) {
+      "notion-query-data-sources", "download_file_content", "read_file_content", "list_orders", "get_booking", "listEvents", "plaid_get_usages",
+      "get_message", "get_draft", "get-export-formats", "list_drafts"]) {
       expect([n, k(n)]).toEqual([n, "read"]);
       expect(classifyTool(n).sync_allowed).toBe(true);
       expect(classifyTool(n).chat_default).toBe(true);
@@ -173,7 +187,8 @@ describe("classifyTool", () => {
   });
   test("writes are chat-allowed but never synced", () => {
     for (const n of ["create_draft", "update_draft", "delete_draft", "create_event", "update_event", "trash_message", "label_thread",
-      "notion-create-pages", "notion-update-page", "notion-move-pages", "copy_file", "create_label", "notion-spawn-session", "complete_authentication", "authenticate"]) {
+      "notion-create-pages", "notion-update-page", "notion-move-pages", "copy_file", "create_label", "notion-spawn-session", "complete_authentication", "authenticate",
+      "update_message_labels", "get-create-design-async-job", "list_and_delete_items"]) {
       expect([n, k(n)]).toEqual([n, "write"]);
       expect(classifyTool(n)).toEqual({ kind: "write", sync_allowed: false, chat_default: true });
     }
