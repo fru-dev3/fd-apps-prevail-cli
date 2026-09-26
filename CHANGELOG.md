@@ -7,6 +7,11 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.26] - 2026-09-26 · Apps: Codex helpers stay out of the list
+
+### Fixed
+- **Apps mirror**: Codex's own helper servers (the computer-use event stream and the browser node_repl) no longer show up as connectors. Servers that run from a Codex app bundle or its bundled-plugin cache are treated as part of the runtime.
+
 ## [1.9.25] - 2026-09-26 · Apps: a live mirror of the connectors you already use
 
 ### Added
