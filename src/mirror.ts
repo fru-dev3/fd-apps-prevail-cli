@@ -335,46 +335,71 @@ export function ruleTokens(text: string): Set<string> {
 
 const DIRECTIVE = /\b(never|always|don'?t|do not|stop|must|make sure|remember|avoid|instead|no more|keep|should|shouldn'?t|every time|again)\b|^\s*(no|use|only)\b/i;
 
-export interface RuleCluster { members: PromptRec[]; sessions: number; days: number }
+export interface RuleCluster { members: PromptRec[]; samples: string[]; sessions: number; days: number }
 
-// Cheap candidate search: token-set overlap between directive-looking prompts
-// typed in different sessions on different days, joined into clusters.
+// A rule is usually one sentence inside a longer prompt ("...and no em
+// dashes."), so candidates are directive sentences, not whole prompts.
+export function directiveSentences(text: string): string[] {
+  if (text.length > 6000) return [];
+  return text
+    .replace(/<\/?pasted_content[^>]*>/g, " ")
+    .split(/(?<=[.!?;])\s+|\n+/)
+    .map((x) => x.replace(/\s+/g, " ").trim())
+    .filter((x) => x.length >= 8 && x.length <= 300 && DIRECTIVE.test(x) && !/[\/~][\w.-]+\/[\w.-]+\//.test(x));
+}
+
+// Cheap candidate search: token-set overlap between directive sentences typed
+// in different sessions on different days, joined into clusters.
 export function findRepeatedCandidates(prompts: PromptRec[], opts: { minJaccard?: number; minShared?: number; maxClusters?: number } = {}): RuleCluster[] {
   const minJ = opts.minJaccard ?? 0.5;
   const minShared = opts.minShared ?? 3;
-  const cand = prompts.filter((p) => p.text.length <= 600 && DIRECTIVE.test(p.text));
-  const toks = cand.map((p) => ruleTokens(p.text));
-  const keep = toks.map((t) => t.size >= 3 && t.size <= 40);
+  const units: { p: PromptRec; text: string }[] = [];
+  for (const p of prompts) for (const text of directiveSentences(p.text)) units.push({ p, text });
+  const toks = units.map((u) => ruleTokens(u.text));
+  const keep = toks.map((t) => t.size >= 2 && t.size <= 25);
   const df = new Map<string, number>();
   toks.forEach((t, i) => { if (keep[i]) for (const w of t) df.set(w, (df.get(w) ?? 0) + 1); });
-  const maxDf = Math.max(40, Math.ceil(cand.length * 0.04));
+  const maxDf = Math.max(40, Math.ceil(units.length * 0.04));
   const inv = new Map<string, number[]>();
   toks.forEach((t, i) => { if (keep[i]) for (const w of t) if ((df.get(w) ?? 0) <= maxDf) (inv.get(w) ?? inv.set(w, []).get(w)!).push(i); });
-  const parent = cand.map((_, i) => i);
+  const parent = units.map((_, i) => i);
   const find = (i: number): number => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
   const dayOf = (p: PromptRec) => new Date(p.ts).toISOString().slice(0, 10);
-  for (let i = 0; i < cand.length; i++) {
+  for (let i = 0; i < units.length; i++) {
     if (!keep[i]) continue;
     const shared = new Map<number, number>();
     for (const w of toks[i]) for (const j of inv.get(w) ?? []) if (j > i) shared.set(j, (shared.get(j) ?? 0) + 1);
     for (const [j, n] of shared) {
-      if (n < minShared) continue;
-      const jac = n / (toks[i].size + toks[j].size - n);
-      if (jac < minJ) continue;
-      if (sessionKey(cand[i]) === sessionKey(cand[j]) || dayOf(cand[i]) === dayOf(cand[j])) continue;
+      // Short rules ("no em dashes") share few words; long ones must share more.
+      const need = Math.min(toks[i].size, toks[j].size) <= 4 ? Math.min(2, minShared) : minShared;
+      if (n < need) continue;
+      if (n / (toks[i].size + toks[j].size - n) < minJ) continue;
+      if (sessionKey(units[i].p) === sessionKey(units[j].p) || dayOf(units[i].p) === dayOf(units[j].p)) continue;
       parent[find(i)] = find(j);
     }
   }
-  const groups = new Map<number, PromptRec[]>();
-  cand.forEach((p, i) => { if (keep[i]) { const r = find(i); (groups.get(r) ?? groups.set(r, []).get(r)!).push(p); } });
+  const groups = new Map<number, number[]>();
+  units.forEach((_, i) => { if (keep[i]) { const r = find(i); (groups.get(r) ?? groups.set(r, []).get(r)!).push(i); } });
   const out: RuleCluster[] = [];
-  for (const members of groups.values()) {
-    if (members.length < 2) continue;
+  for (const idxs of groups.values()) {
+    if (idxs.length < 2) continue;
+    const members = [...new Set(idxs.map((i) => units[i].p))].sort((a, b) => a.ts - b.ts);
     const sessions = new Set(members.map(sessionKey)).size;
     const days = new Set(members.map(dayOf)).size;
-    if (sessions >= 2 && days >= 2) out.push({ members: members.sort((a, b) => a.ts - b.ts), sessions, days });
+    if (sessions < 2 || days < 2) continue;
+    const samples = [...new Set(idxs.map((i) => units[i].text))];
+    out.push({ members, samples, sessions, days });
   }
-  return out.sort((a, b) => b.days - a.days || b.sessions - a.sessions).slice(0, opts.maxClusters ?? 40);
+  // One long prompt pasted into several sessions matches sentence by sentence;
+  // those clusters share the same prompts and are one candidate.
+  const bySet = new Map<string, RuleCluster>();
+  for (const c of out) {
+    const k = c.members.map((p) => `${p.ts}:${sessionKey(p)}`).join("|");
+    const hit = bySet.get(k);
+    if (hit) hit.samples = [...new Set([...hit.samples, ...c.samples])];
+    else bySet.set(k, c);
+  }
+  return [...bySet.values()].sort((a, b) => b.sessions - a.sessions || b.days - a.days).slice(0, opts.maxClusters ?? 40);
 }
 
 export function buildRulesPrompt(groups: { label: string; sessions: number; samples: string[] }[]): string {
@@ -399,7 +424,7 @@ export async function repeatedRules(ctx: MirrorContext, m: ModelOpts): Promise<F
   if (!clusters.length) return null;
   const groups = clusters.map((c, i) => ({
     label: `G${i + 1}`, sessions: c.sessions,
-    samples: [...new Set(c.members.map((p) => displayLine(p.text, 240)))].slice(0, 4),
+    samples: c.samples.map((x) => displayLine(x, 240)).slice(0, 4),
   }));
   const key = hash(JSON.stringify(groups));
   const cachePath = mpath(ctx.vault, "rules_cache.json");
@@ -407,8 +432,8 @@ export async function repeatedRules(ctx: MirrorContext, m: ModelOpts): Promise<F
   const already = new Set(standingRules(ctx.vault).map(normRule));
   const recFor = (c: RuleCluster) => {
     const p = c.members[c.members.length - 1];
-    const slug = ctx.slugOf(p);
-    return receipt(ctx, { tool: p.tool, project: slug }, p);
+    const said = directiveSentences(p.text).find((x) => c.samples.includes(x));
+    return receipt(ctx, { tool: p.tool, project: ctx.slugOf(p) }, { ts: p.ts, text: said ?? p.text });
   };
   const projectOf = (cs: RuleCluster[]) => {
     const votes = new Map<string, number>();
@@ -441,7 +466,7 @@ export async function repeatedRules(ctx: MirrorContext, m: ModelOpts): Promise<F
     if (!done) {
       // No model: each cluster stands for itself, in its shortest wording.
       items = clusters.map((c) => {
-        const text = displayLine([...c.members].sort((a, b) => a.text.length - b.text.length)[0].text, 200);
+        const text = displayLine([...c.samples].sort((a, b) => a.length - b.length)[0], 200);
         const project = projectOf([c]);
         return { id: hash(normRule(text)).slice(0, 12), label: text, rule_text: text, count: c.sessions, ...(project ? { project } : {}) };
       });
