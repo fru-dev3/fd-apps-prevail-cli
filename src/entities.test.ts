@@ -136,7 +136,7 @@ describe("pages", () => {
     expect(blank.conversations).toBe("");
   });
 
-  test("auto page at 3 conversations, digest only when mentions change, notes untouched", async () => {
+  test("every entity gets a page; digest only at 3+ conversations or saved, and when mentions change; notes untouched", async () => {
     for (const n of ["a", "b", "c"]) thread("home", n, `Chat ${n}`, `Talked to [Sam](prevail://person/Sam) about ${n}.`);
     thread("home", "d", "Chat d", "Visited [Maple St](prevail://place/Maple%20St).");
     let digestCalls = 0;
@@ -146,10 +146,16 @@ describe("pages", () => {
       return "You talked to Sam about a, b and c.";
     };
     const r = await refreshEntities(vault, { run, now: NOW });
-    expect(r.pages_created).toBe(1);
+    expect(r.pages_created).toBe(2);
     const p = pagePath(vault, "person", "sam");
     expect(existsSync(p)).toBe(true);
-    expect(existsSync(pagePath(vault, "place", "maple-st"))).toBe(false);
+    // One conversation: a page with its Conversations list, no digest section.
+    const maple = readFileSync(pagePath(vault, "place", "maple-st"), "utf8");
+    expect(maple).toContain("saved: false");
+    expect(maple).toContain("## Your notes");
+    expect(maple).toContain("## Conversations\n\n- 2026-09-18");
+    expect(maple).not.toContain("What you've discussed");
+    expect(digestCalls).toBe(1);
     let page = readFileSync(p, "utf8");
     expect(page).toContain("saved: false");
     expect(page).toContain("mention_count: 3");
@@ -183,6 +189,28 @@ describe("pages", () => {
     expect(text).toContain("# acme (Company or product, id org/acme)");
     expect(text).toContain("quoted the roof");
     expect(() => saveEntity(vault, "nobody-known", { now: NOW })).toThrow(/kind person, place, org or thing/);
+  });
+
+  test("saving a one-conversation entity makes it digest-worthy", async () => {
+    thread("home", "a", "Chat a", "Rode the [Blue kayak](prevail://thing/Blue%20kayak) out.");
+    let calls = 0;
+    const run: ModelRunner = async () => { calls++; return "You took the kayak out."; };
+    await refreshEntities(vault, { run, now: NOW });
+    expect(calls).toBe(0);
+    saveEntity(vault, "thing/blue-kayak", { now: NOW });
+    await refreshEntities(vault, { run, now: NOW });
+    expect(calls).toBe(1);
+    expect(readFileSync(pagePath(vault, "thing", "blue-kayak"), "utf8")).toContain("## What you've discussed\n\nYou took the kayak out.");
+  });
+
+  test("an alias never folds in a name that has its own page", async () => {
+    thread("home", "a", "Chat a", "[Sam](prevail://person/Sam%20Rivera) and later [Sam](prevail://person/Sam).");
+    thread("home", "b", "Chat b", "Only [Sam](prevail://person/Sam) here.");
+    const before = buildIndex(vault, { now: NOW }).entities.map((e) => e.id).sort();
+    await refreshEntities(vault, { run: null, now: NOW });
+    const after = buildIndex(vault, { now: NOW }).entities.map((e) => `${e.id}:${e.mention_count}`).sort();
+    expect(before).toEqual(["person/sam", "person/sam-rivera"]);
+    expect(after).toEqual(["person/sam-rivera:1", "person/sam:2"]);
   });
 
   test("a page alias folds other names into the page's entity", () => {

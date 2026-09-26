@@ -73,7 +73,9 @@ export interface EntitySummary {
 
 const META = (vault: string, name: string) => runtimePath(vault, join("_meta", "entities", name));
 const MAX_MENTIONS = 200;
-const AUTO_PAGE_AT = 3;
+// Every indexed entity gets a page; the "What you've discussed" digest is
+// written only for saved entities and those seen in DIGEST_AT+ conversations.
+const DIGEST_AT = 3;
 const hash = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 16);
 
 function readJson<T>(path: string, fallback: T): T {
@@ -360,9 +362,11 @@ export async function tagSittings(vault: string, sittings: SittingLike[], o: Tag
     let ans: Record<string, TagEntity[]>;
     try {
       ans = parseTagAnswer(await o.run(buildTagPrompt(batch.map((b) => ({ id: b.s.id, text: b.text }))), model), batch.map((b) => b.s.id));
-    } catch (e) {
+    } catch {
       res.failed += batch.length;
-      o.log?.(`entity tags: batch failed (${(e as Error).message}); retry next time`);
+      // Logs can land outside the vault (daemon logs), so they carry counts
+      // only: no entity names, ids, excerpts or model output.
+      o.log?.("entity tags: a batch failed; retry next time");
       continue;
     }
     const now = o.now ?? Date.now();
@@ -512,7 +516,8 @@ export function renderPage(d: PageDoc): string {
   return [
     ...fm,
     ...(d.preamble ? [d.preamble, ""] : []),
-    `## ${H_DISCUSSED}`, "", d.discussed || EMPTY_DISCUSSED, "",
+    // The digest section appears once there is a digest to show.
+    ...(d.discussed ? [`## ${H_DISCUSSED}`, "", d.discussed, ""] : []),
     `## ${H_NOTES}`, "", d.notes, ...(d.notes ? [""] : []),
     `## ${H_CONVOS}`, "", d.conversations || EMPTY_CONVOS, "",
   ].join("\n");
@@ -575,6 +580,8 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     pageBySlug.set(p.slug, p);
     for (const a of [p.doc.name, ...p.doc.aliases]) { const s = slugify(a); if (s && s !== p.slug) aliasToSlug.set(s, p.slug); }
   }
+  // An alias never swallows a name that has a page of its own.
+  for (const s of pageBySlug.keys()) aliasToSlug.delete(s);
   const acc = new Map<string, Acc>();
   const add = (rawName: string, kind: EntityKind, m: Mention, label?: string) => {
     let slug = slugify(rawName);
@@ -706,8 +713,8 @@ function newPage(r: { name: string; kind: EntityKind; aliases: string[] }, saved
   };
 }
 
-// Create auto pages for entities seen in AUTO_PAGE_AT+ conversations and keep
-// every page's count + Conversations list current. Never touches notes.
+// Give every indexed entity a page and keep every page's count +
+// Conversations list current. Never touches notes.
 export function syncPages(vault: string, idx: EntityIndex, now = Date.now()): { created: number; updated: number } {
   let created = 0;
   let updated = 0;
@@ -715,10 +722,7 @@ export function syncPages(vault: string, idx: EntityIndex, now = Date.now()): { 
     const slug = r.id.slice(r.id.indexOf("/") + 1);
     let doc = readPage(vault, r.kind, slug);
     const isNew = !doc;
-    if (!doc) {
-      if (r.conversations < AUTO_PAGE_AT) continue;
-      doc = newPage(r, false, now);
-    }
+    if (!doc) doc = newPage(r, false, now);
     const convos = conversationsSection(r);
     if (!isNew && doc.mention_count === r.mention_count && doc.conversations === convos) continue;
     doc.mention_count = r.mention_count;
@@ -751,7 +755,7 @@ export async function refreshDigests(vault: string, idx: EntityIndex, o: { run: 
   if (!o.run) return { written: 0, pending: 0 };
   const model = o.model ?? { cli: "claude", model: SYNTH_DEFAULTS.claude };
   const state = readJson<Record<string, DigestState>>(META(vault, "digests.json"), {});
-  const due = idx.entities.filter((r) => r.page && r.mentions.length && state[r.id]?.hash !== hash(r.mentions.map((m) => `${m.ref}|${m.snippet}`).join("\n")));
+  const due = idx.entities.filter((r) => r.page && r.mentions.length && (r.saved || r.conversations >= DIGEST_AT) && state[r.id]?.hash !== hash(r.mentions.map((m) => `${m.ref}|${m.snippet}`).join("\n")));
   due.sort((a, b) => Number(!!b.saved) - Number(!!a.saved) || b.last_ts - a.last_ts);
   const limit = o.limit ?? 5;
   let written = 0;
@@ -768,7 +772,7 @@ export async function refreshDigests(vault: string, idx: EntityIndex, o: { run: 
       state[r.id] = { hash: hash(r.mentions.map((m) => `${m.ref}|${m.snippet}`).join("\n")), model: model.model, ts: o.now ?? Date.now() };
       writeJson(META(vault, "digests.json"), state);
       written++;
-    } catch (e) { o.log?.(`digest ${r.id} failed (${(e as Error).message})`); }
+    } catch { o.log?.("entities: a digest failed; retry next refresh"); }
   }
   return { written, pending: Math.max(0, due.length - written) };
 }

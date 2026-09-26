@@ -78,7 +78,7 @@ describe("periods", () => {
     const ts = Date.parse("2026-09-24T23:30:00Z"); // a Thursday
     expect(periodOf(ts, "month")).toEqual({ key: "2026-09", label: "September 2026" });
     expect(periodOf(ts, "day").key).toBe("2026-09-24");
-    // Minneapolis (UTC-5, offset +300): still the 24th locally, at 18:30.
+    // Chicago (UTC-5, offset +300): still the 24th locally, at 18:30.
     expect(periodOf(ts, "day", 300).key).toBe("2026-09-24");
     // Tokyo (UTC+9, offset -540): already the 25th.
     expect(periodOf(ts, "day", -540).key).toBe("2026-09-25");

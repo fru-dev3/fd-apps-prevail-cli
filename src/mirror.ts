@@ -770,7 +770,7 @@ async function refreshEntityLayer(ctx: MirrorContext, m: ModelOpts, opts: Refres
     }
     const r = await refreshEntities(ctx.vault, { run, digestModel: m.model, digestLimit: 5, log: m.log, now: ctx.now });
     m.log(`entities: ${r.entities} known, ${r.pages_created} new pages, ${r.digests_written} digests`);
-  } catch (e) { m.log(`entities: refresh failed (${(e as Error).message})`); }
+  } catch { m.log("entities: refresh failed; retry next refresh"); } // no message: it can name an entity
 }
 
 // Verdicts shape what the person sees: "not really" hides a finding or item

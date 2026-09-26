@@ -2416,7 +2416,7 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       const idx = en.readIndex(vault).generated_ts ? en.readIndex(vault) : en.buildIndex(vault);
       const d = en.entityDetail(vault, idx, id);
       if (!d) {
-        // Not an error for a chip the index has not seen yet: the card shows
+        // Not an error for a chip the index has not seen yet: the Entities view shows
         // the bare name with a Save action.
         if (json) { out({ found: false, query: id }); return; }
         fail(`no entity "${id}"`);
