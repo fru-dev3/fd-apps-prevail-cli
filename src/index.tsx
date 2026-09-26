@@ -42,6 +42,8 @@ interface Args {
   mirrorArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
+  appsMirror: boolean;
+  appsMirrorArgs: string[];
   skillDraft: boolean;
   skillDraftArgs: string[];
   autonomy: boolean;
@@ -165,6 +167,8 @@ function parseArgs(argv: string[]): Args {
   let mirrorArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
+  let appsMirror = false;
+  let appsMirrorArgs: string[] = [];
   let skillDraft = false;
   let skillDraftArgs: string[] = [];
   let autonomy = false;
@@ -301,6 +305,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "recommendations" || a === "recommend") {
       recommendations = true;
       recommendationsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "apps") {
+      appsMirror = true;
+      appsMirrorArgs = argv.slice(i + 1);
       break;
     } else if (a === "suggest-apps") {
       suggestApps = true;
@@ -563,6 +571,8 @@ function parseArgs(argv: string[]): Args {
     mirrorArgs,
     suggestApps,
     suggestAppsArgs,
+    appsMirror,
+    appsMirrorArgs,
     skillDraft,
     skillDraftArgs,
     autonomy,
@@ -670,6 +680,7 @@ USAGE
   prevail telegram [...]      configure the Telegram bot bridge
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
+  prevail apps [...]          mirror of your AI runtimes' MCP connectors + read-only sync recipes
                               (connectors list --json for the machine list)
                               connectors scopes <id> — show what an OAuth grant requests
                               connectors disconnect <id> — revoke + delete a stored token
@@ -2306,6 +2317,105 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
   }
   console.error("usage: prevail intent [findings|refresh|verdict|history] --vault <path> [--json]");
   process.exit(2);
+}
+
+// prevail apps [list|refresh|tools|recipe|sync|archive]: the live mirror of the
+// MCP connectors the user signed into in Claude Code / Codex / Antigravity /
+// Gemini, plus read-only sync recipes. See apps-mirror.ts. With --json every
+// subcommand prints exactly one JSON line and exits 0 (errors in `error`).
+async function appsCommand(a: string[], vaultPath?: string | null): Promise<void> {
+  const get = (flag: string): string | undefined => {
+    const i = a.indexOf(flag);
+    if (i >= 0) return a[i + 1];
+    const eq = a.find((x) => x.startsWith(`${flag}=`));
+    return eq ? eq.slice(flag.length + 1) : undefined;
+  };
+  const list = (flag: string): string[] | undefined => {
+    const v = get(flag);
+    return v === undefined ? undefined : v.split(",").map((s) => s.trim()).filter(Boolean);
+  };
+  const json = a.includes("--json");
+  const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && a[i - 1]!.startsWith("--") && !["--json", "--tools", "--due", "--dry-run", "--apply", "--from-draft"].includes(a[i - 1]!)));
+  const sub = pos[0] ?? "list";
+  const vault = get("--vault") ?? vaultPath ?? process.env.PREVAIL_VAULT_ROOT ?? readConfig()?.vaultPath ?? (await import("./vault.ts")).resolveDefaultVaultPath();
+  const am = await import("./apps-mirror.ts");
+  const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
+  const fail = (msg: string, extra: Record<string, unknown> = {}) => {
+    if (json) { out({ ...extra, error: msg }); return; }
+    console.error(`prevail apps: ${msg}`);
+    process.exitCode = 1;
+  };
+  const showDoc = (doc: import("./apps-mirror.ts").MirrorDoc) => {
+    if (json) { out(doc); return; }
+    for (const r of doc.runtimes) console.log(`${r.runtime.padEnd(7)} ${r.installed ? `installed ${r.version ?? ""}`.trim() : "not installed"}  ${r.count} server(s)${r.error ? `  (${r.error})` : ""}`);
+    for (const ap of doc.apps) console.log(`  ${ap.id.padEnd(28)} ${ap.runtime.padEnd(7)} ${ap.status.padEnd(11)} ${ap.tools ? `${ap.tools.length} tools` : ""}${ap.recipe ? `  recipe:${ap.recipe.schedule}` : ""}`);
+  };
+  try {
+    if (sub === "list") { showDoc(await am.listMirror(vault)); return; }
+    if (sub === "refresh") { showDoc(await am.refreshMirror(vault, { tools: a.includes("--tools") })); return; }
+    if (sub === "tools") {
+      const id = pos[1];
+      if (!id) return fail("usage: prevail apps tools <id>");
+      const app = await am.appTools(vault, id);
+      if (json) { out({ app }); return; }
+      for (const t of app.tools ?? []) console.log(`${t.kind.padEnd(6)} ${t.sync_allowed ? "sync" : "    "} ${t.chat_default ? "chat" : "    "} ${t.name}`);
+      return;
+    }
+    if (sub === "recipe") {
+      const action = pos[1];
+      const id = pos[2];
+      if (!id || (action !== "draft" && action !== "save")) return fail("usage: prevail apps recipe <draft|save> <id> [...]");
+      if (action === "draft") {
+        const r = await am.draftRecipe(vault, id, { model: get("--model") });
+        if (json) { out(r); return; }
+        console.log(JSON.stringify(r, null, 2));
+        return;
+      }
+      const app = await am.saveRecipe(vault, id, {
+        fromDraft: a.includes("--from-draft"),
+        prompt: get("--prompt"),
+        domains: list("--domains"),
+        schedule: get("--schedule"),
+        readTools: list("--read-tools"),
+        model: get("--model"),
+      });
+      if (json) { out({ ok: true, app }); return; }
+      console.log(`saved recipe for ${app.id}: ${app.recipe?.schedule} into ${app.domains.join(", ")}`);
+      return;
+    }
+    if (sub === "sync") {
+      if (a.includes("--due")) {
+        const r = await am.syncDue(vault);
+        if (json) { out(r); return; }
+        for (const x of r.ran) console.log(`${x.id}: ${x.ok ? `${x.records} record(s)` : `failed: ${x.error}`}`);
+        if (!r.ran.length) console.log("nothing due");
+        return;
+      }
+      const id = pos[1];
+      if (!id) return fail("usage: prevail apps sync <id> | --due", { ok: false, records: 0, files: [] });
+      const r = await am.syncMirrorApp(vault, id);
+      if (json) { out(r); return; }
+      console.log(r.ok ? `${id}: ${r.records} record(s) into ${r.files.length} file(s)` : `${id}: failed: ${r.error}`);
+      if (!r.ok) process.exitCode = 1;
+      return;
+    }
+    if (sub === "archive") {
+      const apply = a.includes("--apply");
+      if (!apply && !a.includes("--dry-run")) return fail("usage: prevail apps archive --dry-run|--apply", { candidates: [], moved: [] });
+      const doc = await am.listMirror(vault);
+      const r = am.archiveApps(vault, am.mirroredIds(doc), apply);
+      if (json) { out(r); return; }
+      for (const c of r.candidates) console.log(`${apply ? "" : "would archive "}${c.id}: ${c.reason}`);
+      console.log(apply ? `moved ${r.moved.length} app folder(s) to data/apps/_archive/` : `${r.candidates.length} candidate(s); run with --apply to move them`);
+      return;
+    }
+    fail("usage: prevail apps [list|refresh [--tools]|tools <id>|recipe draft|save <id>|sync <id>|sync --due|archive --dry-run|--apply] [--vault <path>] [--json]");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (sub === "sync") return fail(msg, { ok: false, id: pos[1] ?? null, records: 0, files: [] });
+    if (sub === "recipe" && pos[1] === "save") return fail(msg, { ok: false });
+    fail(msg);
+  }
 }
 
 async function resolveVaultFromArgs(args: string[]): Promise<string> {
@@ -5653,6 +5763,10 @@ async function main() {
     }
     if (json) { process.stdout.write(`${JSON.stringify(idx)}\n`); return; }
     for (const p of idx.projects) console.log(`${String(p.prompt_count).padStart(5)}  ${p.slug.padEnd(28)} ${p.status.padEnd(8)} ${new Date(p.last_ts).toISOString().slice(0, 10)}  ${p.title}`);
+    return;
+  }
+  if (args.appsMirror) {
+    await appsCommand(args.appsMirrorArgs, args.vaultPath);
     return;
   }
   if (args.mirror) {
