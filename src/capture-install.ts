@@ -5,6 +5,9 @@ import { dirname, join } from "node:path";
 
 import { KNOWN_TOOLS, type KnownTool } from "./capture.ts";
 import { runtimePath, validateVaultPath } from "./path-safety.ts";
+// prevailInvocation: the prevail binary this process IS, so installed hooks and
+// agents re-invoke the same code.
+import { escapeXml, prevailInvocation } from "./heartbeat.ts";
 
 // =============================================================================
 // `prevail capture install` - wire prompt capture into every harness, in one
@@ -36,16 +39,6 @@ export function plistPath(): string {
   return join(homedir(), "Library", "LaunchAgents", `${CAPTURE_LABEL}.plist`);
 }
 
-/** Best-effort resolution of the prevail binary this process IS, so installed
- *  hooks/agents re-invoke the same code. Mirrors heartbeat.ts:prevailInvocation.
- *  Compiled binary → [execPath]; running from source via bun → [bun, script]. */
-function prevailInvocation(): string[] {
-  const exec = process.execPath;
-  if (process.argv[1] && /\b(bun|node)$/.test(exec)) return [exec, process.argv[1]];
-  if (exec && existsSync(exec)) return [exec];
-  return ["prevail"];
-}
-
 /** Shell-quote a single argument (single-quote wrap, escape embedded quotes). */
 function shQuote(s: string): string {
   if (/^[A-Za-z0-9_./-]+$/.test(s)) return s;
@@ -57,15 +50,6 @@ function shQuote(s: string): string {
  *  `capture --tool <slug>` marker we detect for idempotent re-wiring. */
 export function captureHookCommand(slug: string): string {
   return [...prevailInvocation(), "capture", "--tool", slug].map(shQuote).join(" ");
-}
-
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
 }
 
 // -----------------------------------------------------------------------------
