@@ -591,7 +591,8 @@ export function applyInitStatus(app: MirrorApp, initStatus: string | undefined):
   if (st === app.status) return;
   const listed = app.status_detail ?? app.status;
   app.status = st;
-  app.status_detail = st === "connected" ? undefined : `${initStatus} in headless Claude Code (listed as ${listed})`;
+  const why = st === "needs_auth" ? "needs a fresh sign-in" : st === "disabled" ? "is turned off" : `reports ${initStatus}`;
+  app.status_detail = st === "connected" ? undefined : `Listed as ${String(listed).replace(/_/g, " ")}, but it ${why} for background runs`;
   if (app.status_detail === undefined) delete app.status_detail;
 }
 

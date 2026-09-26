@@ -144,7 +144,7 @@ describe("parsers", () => {
     const a = { status: "connected" } as MirrorApp;
     applyInitStatus(a, "needs-auth");
     expect(a.status).toBe("needs_auth");
-    expect(a.status_detail).toContain("headless");
+    expect(a.status_detail).toContain("background runs");
     applyInitStatus(a, "pending");
     expect(a.status).toBe("needs_auth");
     applyInitStatus(a, "connected");
