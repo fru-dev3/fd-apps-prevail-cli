@@ -94,22 +94,6 @@ export function resolveSafeChild(vaultRoot: string, child: string): string | nul
   }
 }
 
-// Soft hint — does this look like a vault path the user actually meant?
-// Used by the wizard / scanner to surface a warning without rejecting.
-export function looksLikeMisconfiguredVault(path: string): boolean {
-  try {
-    const st = statSync(path);
-    if (!st.isDirectory()) return true;
-  } catch {
-    return true;
-  }
-  // If it's under /tmp it's almost certainly a test artifact.
-  if (path.startsWith("/tmp")) return true;
-  // If it's the user's home directory itself (not a subdir), that's wrong.
-  if (path === homedir()) return true;
-  return false;
-}
-
 // ── Vault layout (v3) ────────────────────────────────────────────────────────
 // The canonical layout nests domains under <vault>/domains/<domain> and apps
 // under <vault>/apps/<app>, so the vault root holds just those two containers

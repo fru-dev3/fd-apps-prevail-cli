@@ -263,11 +263,6 @@ function vaultLockOn(): boolean {
 import type { CliKind, DirectProviderKind, ExtraCliKind } from "./config.ts";
 export type { CliKind };
 
-// Legacy CliKind values from earlier versions of prevAIl. Listed here as
-// a string union (NOT part of the live CliKind type) so config-migration
-// code can spell them without losing type-safety on the consumer side.
-export type LegacyCliKind = "gemini";
-
 // SECURITY: env vars that look like provider/operator secrets are stripped
 // when spawning subprocess CLIs. The CLIs read their own auth files
 // (~/.claude/, ~/.codex/, ~/.config/gcloud/) so they don't NEED these in the
@@ -813,11 +808,6 @@ export async function detectClis(opts?: { force?: boolean }): Promise<AvailableC
   }
   _cliRoster = { at: Date.now(), clis: out };
   return out;
-}
-
-export interface SpawnResult {
-  ok: boolean;
-  message: string;
 }
 
 export function buildChatPrompt(domain: Domain, view: ViewKey): string {

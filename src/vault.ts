@@ -669,24 +669,6 @@ export interface AppRoute {
 // surfaces render it as "authorized · verifying", never green.
 export type ConnectorStatus = "connected" | "configured" | "not-configured" | "expired" | "error";
 
-export interface CommunityAppManifest {
-  id: string;
-  name?: string;
-  description?: string;
-  domains?: string[];
-  version?: string;
-  homepage?: string;
-  // New: integration type metadata (optional). Older manifests without
-  // this field default to "manual" at scan time.
-  integration?: AppSkill["integration"];
-  // New: short description of how the connector connects. Inline
-  // alternative to a separate connection.md file.
-  connection?: string;
-  // Whether the sync daemon may autonomously refresh this connector.
-  // Absent / true = enabled; false = the daemon skips it.
-  enabled?: boolean;
-}
-
 function communityAppsDirs(vaultPath?: string): string[] {
   const dirs: string[] = [];
   // The vault's data/apps is the SINGLE source of truth for the user's apps, so
@@ -1374,19 +1356,6 @@ function extractDescription(skillFile: string): string {
   } catch {
     return "";
   }
-}
-
-export function readAppSkill(app: AppSkill): string {
-  // Community apps have a SKILL.md at the plugin root.
-  const skillPath = join(app.path, "SKILL.md");
-  if (existsSync(skillPath)) {
-    try {
-      return vreadFile(skillPath);
-    } catch (err) {
-      return `*Failed to read ${skillPath}: ${(err as Error).message}*`;
-    }
-  }
-  return `*No SKILL.md for ${app.id}.*`;
 }
 
 export function formatRelativeTime(mtimeMs: number | null): string {
