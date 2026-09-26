@@ -7,6 +7,17 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.27] - 2026-09-26 · Entities: the people, places and things you talk about
+
+### Added
+- **Entities**: a new vault area, `data/entities/{people,places,orgs,things}/<slug>.md`, beside domains and apps. Each page has frontmatter (name, kind, aliases, saved, created, updated, mention_count) and three sections: What you've discussed (a model digest), Your notes (yours, never rewritten) and Conversations (dated links).
+- **Index without a database**: `build/_meta/entities/index.json` aggregates mentions from prevail:// entity links in chat threads and briefs across every domain, plus entity tags on prompt sittings, with excerpts and the entities most often mentioned together. Files are re-read only when they change.
+- **Prompt tagging**: the Intent refresh tags each new sitting with the entities it mentions using one cheap model call (claude-haiku-4-5), cached per sitting so old sittings never cost again. `prevail entities backfill [--limit N]` tags history in resumable batches.
+- **Pages**: created when you save an entity, or automatically once it comes up in 3 separate conversations. The digest is refreshed by the synthesis model only when the mentions changed, and states only what the conversations say.
+- **CLI**: `prevail entities list|show <id>|save <id>|note <id> --text ...|refresh|backfill`, all with `--json`.
+- **MCP**: `entities_search` and `entity_context`.
+- VAULT.md documents the entities area and its file format; the vault layout, domain scanners and fresh production vaults all know `data/entities`.
+
 ## [1.9.26] - 2026-09-26 · Apps: Codex helpers stay out of the list
 
 ### Fixed
