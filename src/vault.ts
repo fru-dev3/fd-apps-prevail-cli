@@ -622,21 +622,9 @@ export interface AppSkill {
   // (e.g. "npx -y @paypal/mcp"); `command` is the binary the runner spawns.
   // Surfaced so the desktop can render the MCP guided-setup card.
   mcpSetup?: { install?: string; command?: string };
-  // For gateway-fronted apps (connected via Composio or Nango). `provider` is
-  // the gateway; `toolkit` is the app's slug within that gateway (e.g. "notion").
-  // When present, the sync daemon runs the app through the gateway (one agent
-  // turn over the gateway's MCP) instead of a per-app skill, and `integration`
-  // stays "manual". See agent-mcp.ts + daemon-sync.ts.
-  gateway?: AppGateway;
   // Free-text user instruction for what this app should pull on each sync (e.g.
   // "my last-30-day channel views + 10 most recent uploads with view counts").
-  // Injected into the gateway sync prompt so the user controls what's fetched.
   pullInstructions?: string;
-}
-
-export interface AppGateway {
-  provider: "composio" | "nango";
-  toolkit: string;
 }
 
 // One entry in the `connections` priority list. The engine tries them
@@ -860,24 +848,10 @@ interface CoercedManifest {
   connections?: AppConnection[];
   authEnvVars: string[];
   mcpSetup?: { install?: string; command?: string };
-  gateway?: AppGateway;
   pullInstructions?: string;
 }
 
 const VALID_AUTONOMY = new Set(["read-only", "draft", "act"]);
-
-// The optional `gateway` block: a Composio/Nango-fronted app. provider must be a
-// known gateway; toolkit is the app slug, constrained to a safe slug class so it
-// can never escape a path join or smuggle shell-significant characters.
-function coerceGateway(v: unknown): AppGateway | undefined {
-  if (!v || typeof v !== "object") return undefined;
-  const o = v as Record<string, unknown>;
-  const provider = o.provider === "composio" || o.provider === "nango" ? o.provider : undefined;
-  const toolkit = typeof o.toolkit === "string" && /^[a-z0-9][a-z0-9_-]{0,48}$/i.test(o.toolkit.trim())
-    ? o.toolkit.trim().toLowerCase() : undefined;
-  if (!provider || !toolkit) return undefined;
-  return { provider, toolkit };
-}
 
 // An env-var name safe to surface as a credential field and inject as env.
 // Constrained so a hostile manifest can't smuggle shell-significant characters
@@ -1010,7 +984,6 @@ function coerceCommunityManifest(raw: unknown, fallbackId: string): CoercedManif
     connections: coerceConnections(o.connections),
     authEnvVars: coerceEnvVarNames(o.auth_env_vars),
     mcpSetup: coerceMcpSetup(o.mcp),
-    gateway: coerceGateway(o.gateway),
     pullInstructions: typeof o.pull_instructions === "string" ? o.pull_instructions : undefined,
   };
 }
@@ -1102,7 +1075,6 @@ export function scanCommunityApps(vaultPath?: string): AppSkill[] {
         connections: m.connections,
         authEnvVars: m.authEnvVars,
         mcpSetup: m.mcpSetup,
-        gateway: m.gateway,
         pullInstructions: m.pullInstructions,
       });
     }
@@ -1217,7 +1189,6 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
     let appAuthCheck: unknown;
     let appIntegration: string | undefined;
     let appRefresh: AppRefresh | undefined;
-    let appGateway: AppGateway | undefined;
     let appPullInstructions: string | undefined;
     let appEnabled: boolean | undefined;
     try {
@@ -1227,10 +1198,9 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
         if (m && typeof m === "object") {
           if (typeof m.auth_check === "object" && m.auth_check !== null) appAuthCheck = m.auth_check;
           if (typeof m.integration === "string") appIntegration = m.integration;
-          // refresh + gateway must round-trip off disk so the sync daemon can run
-          // a scaffolded vault app on its schedule (and tell gateway apps apart).
+          // refresh must round-trip off disk so the sync daemon can run a
+          // scaffolded vault app on its schedule.
           appRefresh = coerceRefresh(m.refresh);
-          appGateway = coerceGateway(m.gateway);
           if (typeof m.pull_instructions === "string") appPullInstructions = m.pull_instructions;
           // Only an explicit `false` disables; any other value leaves it on.
           if (m.enabled === false) appEnabled = false;
@@ -1253,7 +1223,6 @@ function scanVaultApps(vaultPath: string): AppSkill[] {
       integration: appIntegration as AppSkill["integration"],
       authCheck: appAuthCheck,
       refresh: appRefresh,
-      gateway: appGateway,
       pullInstructions: appPullInstructions,
       // A user override (always writable) wins over the manifest, so toggling a
       // vault app actually sticks for the sync daemon + loop runner + agent.
@@ -1395,60 +1364,6 @@ export function migrateLegacyAppsIntoVault(vaultPath: string): { moved: string[]
   return { moved };
 }
 
-// Build the SKILL.md body for a gateway-fronted app. When this app is attached
-// to a chat its SKILL.md becomes context, so it must tell the agent HOW to reach
-// the live connection (the Composio/Nango gateway tools) instead of guessing or
-// inventing data. Imperative + concise on purpose.
-function gatewaySkillBody(title: string, gateway: AppGateway): string {
-  const tk = gateway.toolkit;
-  if (gateway.provider === "composio") {
-    return [
-      `# ${title}`,
-      ``,
-      `${title} is connected through the Composio gateway, toolkit "${tk}".`,
-      ``,
-      `To answer questions about ${title} or fetch its latest data, use the Composio MCP tools that are available in this session: call COMPOSIO_SEARCH_TOOLS with a use_case describing what you need (mention the ${tk} toolkit), then run the returned tool(s) via COMPOSIO_MULTI_EXECUTE_TOOL. Do not invent data - if a tool returns nothing, say so. When asked to "refresh", fetch fresh data and summarize it.`,
-      ``,
-      `Pulled data lands in this app's own folder.`,
-      ``,
-    ].join("\n");
-  }
-  // nango
-  return [
-    `# ${title}`,
-    ``,
-    `${title} is connected through the Nango gateway (integration "${tk}").`,
-    ``,
-    `This app is connected via Nango (integration ${tk}). Use the NANGO_SECRET_KEY env var against https://api.nango.dev to read its synced records (e.g. GET /records with the right Provider-Config-Key / Connection-Id), or report that the data lives in this app's folder. Do not invent data.`,
-    ``,
-    `Pulled data lands in this app's own folder.`,
-    ``,
-  ].join("\n");
-}
-
-// Build the connection.md body for a gateway-fronted app - same guidance, framed
-// as connection notes.
-function gatewayConnectionBody(title: string, gateway: AppGateway): string {
-  if (gateway.provider === "composio") {
-    return [
-      `# Connecting ${title}`,
-      ``,
-      `Gateway: Composio | Toolkit: ${gateway.toolkit} | Integration: manual`,
-      ``,
-      `${title} is fronted by Composio. The agent reaches its live data through the Composio MCP tools in-session: COMPOSIO_SEARCH_TOOLS (use_case mentioning the ${gateway.toolkit} toolkit) to discover tools, then COMPOSIO_MULTI_EXECUTE_TOOL to run them. Pulled data lands in this app's folder. Do not invent data.`,
-      ``,
-    ].join("\n");
-  }
-  return [
-    `# Connecting ${title}`,
-    ``,
-    `Gateway: Nango | Integration: ${gateway.toolkit} | Integration kind: manual`,
-    ``,
-    `${title} is fronted by Nango (integration ${gateway.toolkit}). Read its synced records with the NANGO_SECRET_KEY env var against https://api.nango.dev (e.g. GET /records with the right Provider-Config-Key / Connection-Id). Pulled data lands in this app's folder. Do not invent data.`,
-    ``,
-  ].join("\n");
-}
-
 // Scaffold a new community app under <vault>/data/apps/<id>/ from a catalog
 // pick: a manifest.json + SKILL.md + connection.md. The app then shows up in
 // scanCommunityApps() and the desktop's Connected view, "not-configured" until
@@ -1508,12 +1423,6 @@ export function scaffoldCommunityApp(opts: {
   // manifest so probeConnector + the sync daemon can re-verify on a schedule.
   authCheck?: Record<string, unknown> | null;
   refreshEvery?: string | null;
-  // Gateway-fronted apps (Composio / Nango). When set, the manifest carries a
-  // `gateway` block and `integration` stays "manual"; the sync daemon then runs
-  // the app through the gateway instead of a per-app skill. Idempotent: when the
-  // app already exists, scaffolding merges the gateway block into its manifest
-  // (instead of erroring) so a re-add is a no-op.
-  gateway?: AppGateway | null;
   // For integration === "mcp": how to stand up the local MCP server. `command`
   // is the full stdio spawn command the agent runtime runs (e.g.
   // "npx -y @modelcontextprotocol/server-github"); `install` is an optional
@@ -1533,21 +1442,15 @@ export function scaffoldCommunityApp(opts: {
   const base = process.env.PREVAIL_APPS_DIR
     || (vaultRoot ? appsContainer(vaultRoot) : join(homedir(), ".prevail", "apps"));
   const root = join(base, id);
-  // Map a connector pattern to the manifest integration vocabulary. A gateway
-  // app's integration stays "manual" by contract (the gateway, not an auth
-  // integration, fronts it).
-  const integ = opts.gateway ? "manual" : (opts.integration === "cli" ? "manual" : opts.integration); // cli runs as a skill, not an auth integration
-  // Idempotent for gateway apps: if the folder already exists, merge the gateway
-  // block (and a default refresh) into the existing manifest instead of erroring,
-  // so `gateway-add` can be re-run safely. Non-gateway scaffolds keep the old
-  // "already exists" guard.
+  // Map a connector pattern to the manifest integration vocabulary.
+  const integ = opts.integration === "cli" ? "manual" : opts.integration; // cli runs as a skill, not an auth integration
   if (existsSync(root)) {
     // A folder that exists only to hold the app's conversation scope
     // (data/apps/<id>/_scope, created when you chat with the app) is not a real
     // app yet: it has no manifest.json. Refuse a re-add only when a real app is
     // already scaffolded here; a bare scope shell falls through to the scaffold
     // below so adding the connector is never blocked by an earlier chat.
-    if (!opts.gateway) {
+    {
       const manifestPath = join(root, "manifest.json");
       if (existsSync(manifestPath)) {
         // ADOPT, never refuse: the vault is the product, and users (and their
@@ -1582,26 +1485,6 @@ export function scaffoldCommunityApp(opts: {
           return { ok: false, error: `app "${id}" has an existing manifest.json that could not be adopted (${String(e).slice(0, 120)}). Fix or remove that file and retry.` };
         }
       }
-    } else try {
-      const manifestPath = join(root, "manifest.json");
-      const raw = existsSync(manifestPath) ? JSON.parse(vreadFile(manifestPath)) as Record<string, unknown> : {};
-      raw.gateway = { provider: opts.gateway.provider, toolkit: opts.gateway.toolkit };
-      if (typeof raw.integration !== "string") raw.integration = "manual";
-      if (!raw.refresh) raw.refresh = { every: opts.refreshEvery || "daily" };
-      writeFileSync(manifestPath, JSON.stringify(raw, null, 2));
-      // Refresh ONLY the top-level SKILL.md + connection.md with the gateway
-      // guidance so existing scaffolded gateway apps pick up the new instructions
-      // on the next gateway-add. Never touch the skills/ folder (may be
-      // user-edited).
-      writeFileSync(join(root, "SKILL.md"), gatewaySkillBody(opts.title, opts.gateway));
-      writeFileSync(join(root, "connection.md"), gatewayConnectionBody(opts.title, opts.gateway));
-      // Idempotently bring an existing gateway app up to domain parity too, so a
-      // re-add backfills the standing-context files for apps scaffolded before
-      // parity shipped.
-      seedAppParityFiles(root, opts.title);
-      return { ok: true, path: root };
-    } catch (e) {
-      return { ok: false, error: `gateway merge failed: ${e}` };
     }
   }
   const domains = (opts.domains ?? []).filter(Boolean);
@@ -1618,12 +1501,6 @@ export function scaffoldCommunityApp(opts: {
     // Autonomous connect: the research agent supplies a verifiable auth_check +
     // refresh cadence so the connection can be tested immediately and re-synced.
     if (opts.authCheck && Object.keys(opts.authCheck).length > 0) manifest.auth_check = opts.authCheck;
-    // Gateway apps carry the gateway block + a default refresh so the sync daemon
-    // picks them up on a schedule.
-    if (opts.gateway) {
-      manifest.gateway = { provider: opts.gateway.provider, toolkit: opts.gateway.toolkit };
-      if (!opts.refreshEvery) manifest.refresh = { every: "daily" };
-    }
     if (opts.refreshEvery) manifest.refresh = { every: opts.refreshEvery };
     // MCP-client apps: persist the stdio spawn command (and optional one-time
     // install command) under the manifest `mcp` key, the shape coerceMcpSetup
@@ -1635,13 +1512,7 @@ export function scaffoldCommunityApp(opts: {
       manifest.mcp = mcp;
     }
     writeFileSync(join(root, "manifest.json"), JSON.stringify(manifest, null, 2));
-    if (opts.gateway) {
-      // Gateway app: the SKILL.md must teach the agent to use the gateway tools
-      // (so the connection is actually used when this app is attached to a chat),
-      // not the generic "connect me" copy.
-      writeFileSync(join(root, "SKILL.md"), gatewaySkillBody(opts.title, opts.gateway));
-      writeFileSync(join(root, "connection.md"), gatewayConnectionBody(opts.title, opts.gateway));
-    } else {
+    {
       // Never clobber a user-authored SKILL.md (a manifest-less imported folder
       // may already carry one; adoption means keeping it).
       if (!existsSync(join(root, "SKILL.md"))) writeFileSync(join(root, "SKILL.md"), `# ${opts.title}\n\n${manifest.connection}\n`);
@@ -1900,8 +1771,7 @@ export function setCommunityAppSchedule(
 }
 
 // Set (or clear) the free-text "what to pull" instruction for an app. Persisted
-// to the manifest's `pull_instructions`; the gateway sync injects it so the user
-// controls exactly what each sync fetches. Empty string clears it.
+// to the manifest's `pull_instructions`. Empty string clears it.
 export function setCommunityAppPullInstructions(
   id: string,
   instructions: string,

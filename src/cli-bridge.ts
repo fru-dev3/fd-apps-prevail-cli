@@ -1188,18 +1188,15 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // not a request. WebSearch + WebFetch are the only built-ins that make
     // outbound requests. The WEB_DENY_NOTE in the system prompt is belt-and-braces.
     if (webMode === "deny") args.push("--disallowedTools", "WebSearch", "WebFetch");
-    // Agent-facing MCP servers. Two sources, different exposure rules:
-    //   - The Composio gateway (a hosted gateway behind the user's API key) is
-    //     injected ONLY on agentic act runs, where --dangerously-skip-permissions
-    //     already auto-allows MCP tools. This preserves the prior behavior.
-    //   - Connected stdio MCP servers (the user's own local MCP apps, integration
-    //     "mcp" with a mcpSetup.command) are injected on EVERY turn, chat included,
-    //     so the model can see their tools. We do NOT add --dangerously-skip-
-    //     permissions for chat, so on a non-act turn the tools are visible but
-    //     still subject to the normal permission model (safety unchanged).
+    // Agent-facing MCP servers: connected stdio MCP servers (the user's own
+    // local MCP apps, integration "mcp" with a mcpSetup.command) plus the gated
+    // google_workspace connector and prevail_acts, injected on EVERY turn so the
+    // model can see their tools. We do NOT add --dangerously-skip-permissions
+    // for chat, so on a non-act turn the tools are visible but still subject to
+    // the normal permission model (safety unchanged).
     // agentMcpConfigForClaude materializes ~/.prevail/agent-mcp.json and returns
-    // its path, or null when there is nothing to inject (no Composio key and no
-    // connected stdio servers), so this stays a byte-for-byte no-op otherwise.
+    // its path, or null when there is nothing to inject, so this stays a
+    // byte-for-byte no-op otherwise.
     // Whether any MCP tools were actually injected this turn. Gates the switch to
     // the structured (stream-json) runner below: a chat turn with tools streams
     // real step events for the checklist; a tool-less chat turn stays on the
@@ -1208,7 +1205,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     try {
       const { agentMcpConfigForClaude, agentMcpServerIds } = await import("./agent-mcp.ts");
       const gwsAccount = googleAccount?.trim() || undefined;
-      const mcpCfg = agentMcpConfigForClaude(vaultPath, { includeComposio: act, googleAccount: gwsAccount });
+      const mcpCfg = agentMcpConfigForClaude(vaultPath, { googleAccount: gwsAccount });
       if (mcpCfg) {
         toolsInjected = true;
         args.push("--mcp-config", mcpCfg);
@@ -1234,7 +1231,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
         // runs --dangerously-skip-permissions already allows everything, so we
         // only need this on chat turns.
         if (!act) {
-          const ids = agentMcpServerIds(vaultPath, { includeComposio: act, googleAccount: gwsAccount });
+          const ids = agentMcpServerIds(vaultPath, { googleAccount: gwsAccount });
           // Also allow TodoWrite: it is a local planning tool with no external
           // effect, and letting the model maintain a todo list is how we surface a
           // "Plan" header for a multi-step job (the engine turns each TodoWrite
@@ -1245,7 +1242,7 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     } catch { /* never let MCP wiring break a turn */ }
     // ACTION GATEWAY (G1): every claude turn that can see MCP tools carries the
     // PreToolUse act-gate hook, so connector writes (inherited claude.ai
-    // connectors, Composio, any user MCP server) queue for approval and pass
+    // connectors, any user MCP server) queue for approval and pass
     // the egress guard - the same spine gws writes already use. Verified to
     // fire even under --dangerously-skip-permissions. Engine-owned servers
     // (google_workspace, prevail) self-gate and pass through.

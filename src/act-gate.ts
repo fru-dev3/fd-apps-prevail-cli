@@ -1,7 +1,7 @@
 // The Action Gateway (G1, docs/sensitive-egress-guard.md sibling): closes the
 // guardrail side door. The gws spine governs Google writes, but app chats
-// inherit the user's claude.ai connectors (PayPal, Gmail, ...) and act runs
-// inject the Composio gateway - tools that ACT ON THE WORLD without passing
+// inherit the user's claude.ai connectors (PayPal, Gmail, ...) and any user
+// MCP server - tools that ACT ON THE WORLD without passing
 // the approval queue, the email policy, or the egress guard.
 //
 // Mechanism: every engine-spawned claude turn carries a PreToolUse hook

@@ -25,7 +25,7 @@ describe("classifyAct", () => {
     expect(classifyAct("mcp__claude_ai_PayPal__create_invoice")).toBe("gate");
     expect(classifyAct("mcp__claude_ai_Shopify__update-product")).toBe("gate");
     expect(classifyAct("mcp__claude_ai_Spotify__add_to_library")).toBe("gate");
-    expect(classifyAct("mcp__composio__GMAIL_SEND_EMAIL")).toBe("gate");
+    expect(classifyAct("mcp__foo_gateway__MAIL_SEND_EMAIL")).toBe("gate");
   });
   test("unknown verbs gate (paranoid default, same as the gws classifier)", () => {
     expect(classifyAct("mcp__somesrv__frobnicate_widget")).toBe("gate");

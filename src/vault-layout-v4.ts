@@ -527,7 +527,7 @@ export function vaultMap(): string {
     "  guard - outbound content to another party carrying PII, money figures,",
     "  health/legal/salary/strategy details, or verbatim quotes is HELD until",
     "  the user releases that exact action. (3) action gateway - connector",
-    "  writes (claude.ai connectors, Composio, any MCP server) are held by a",
+    "  writes (claude.ai connectors, any MCP server) are held by a",
     "  tool hook and queue for approval the same way; an approved act is a",
     "  single-use grant consumed by retrying the exact same tool call. Do not",
     "  attempt workarounds; tell the user what approval is needed instead.",

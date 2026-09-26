@@ -2815,12 +2815,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
             status: a.status,
             configured: a.configured,
             domains: a.domains ?? [],
-            // The gateway block (Composio / Nango) when this app is fronted by a
-            // managed gateway. null for a Direct app. The desktop uses it to keep
-            // each connection mode's list separate (a Nango app must not appear
-            // under Direct) and to label the connection method in the sidebar.
-            gateway: a.gateway ?? null,
-            // The user's "what to pull" instruction (drives the gateway sync).
+            // The user's "what to pull" instruction.
             pullInstructions: a.pullInstructions ?? null,
             lastSuccessTs: a.lastSuccessTs ?? null,
             lastError: a.lastError ?? null,
@@ -2899,8 +2894,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // truth), the legacy ~/.prevail/apps, or the dev override - any of those is
     // the user's own and is removable. The ONLY thing we refuse is a connector
     // that ships read-only inside the app bundle (apps/community), which isn't
-    // in any of these roots. (Gateway apps - Composio/Nango - are scaffolded
-    // into the vault's data/apps too, so they delete like any other.)
+    // in any of these roots.
     const userRoots = [resolve(appsContainer(connectorsVault)), resolve(homedir(), ".prevail", "apps")];
     if (process.env.PREVAIL_APPS_DIR) userRoots.push(resolve(process.env.PREVAIL_APPS_DIR));
     const resolved = resolve(app.path);
@@ -3068,22 +3062,6 @@ async function connectorsCommand(args: string[]): Promise<void> {
     if (!draft) failDraft("the model returned an empty draft");
     if (wantJson) { process.stdout.write(`${JSON.stringify({ ok: true, draft })}\n`); return; }
     console.log(draft);
-    return;
-  }
-  if (sub === "gateway-capabilities") {
-    // Discover what data a gateway app CAN provide (one agent turn over the
-    // gateway). On-demand (the desktop's "Discover" button), not the sync.
-    const id = args[1];
-    if (!id) { console.error("usage: prevail connectors gateway-capabilities <id>"); process.exit(1); }
-    const app = pickConnector(id);
-    const failJson = (msg: string) => { if (args.includes("--json")) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(0); } console.error(msg); process.exit(1); };
-    if (!app) return failJson(connectorNotFound(id));
-    if (!app.gateway) return failJson(`"${id}" is not a gateway app`);
-    const { discoverGatewayCapabilities } = await import("./daemon-sync.ts");
-    const r = await discoverGatewayCapabilities(app);
-    if (args.includes("--json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(0); }
-    if (r.ok) console.log(r.markdown);
-    else { console.error(r.error); process.exit(1); }
     return;
   }
   if (sub === "skill-files") {
@@ -3462,7 +3440,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
   if (sub === "connect") {
     // prevail connectors connect --name <app> --goal <what to pull> --vault <path> [--cli] [--model] [--json]
     // The Connection Agent: research the best way to connect this app RIGHT NOW
-    // (MCP > API/CLI > Composio > browser), scaffold the app, and return a plan
+    // (MCP > API/CLI > browser), scaffold the app, and return a plan
     // with the ONE auth step the user must do. Describe-the-goal, not forms.
     const flag = (name: string): string | undefined => {
       const i = args.indexOf(name);
@@ -3490,78 +3468,6 @@ async function connectorsCommand(args: string[]): Promise<void> {
     // locked vault / write failure surfaces instead of a silent exit.
     if (!result.ok && result.error) console.error(`connect failed: ${result.error}`);
     process.exit(0);
-  }
-  if (sub === "composio") {
-    // prevail connectors composio [--status] [--json]
-    //   (default)   materialize the machine-local agent MCP config from the
-    //               COMPOSIO_API_KEY env var (~/.prevail/agent-mcp.json) + scaffold
-    //               a "composio" app so it shows in the connectors list.
-    //   --status    report { configured, authorized } (configured = a key is set).
-    const { writeAgentMcpConfig, composioStatus, composioApiKey, agentMcpConfigPath } = await import("./agent-mcp.ts");
-    const vault = connectorsVault;
-    if (args.includes("--status")) {
-      process.stdout.write(`${JSON.stringify({ ok: true, ...composioStatus() })}\n`);
-      process.exit(0);
-    }
-    if (!composioApiKey()) {
-      process.stdout.write(`${JSON.stringify({ ok: false, configured: false, error: `set ${"COMPOSIO_API_KEY"} (a ck_... value) to enable the Composio gateway` })}\n`);
-      process.exit(1);
-    }
-    const mcpConfig = writeAgentMcpConfig() ?? agentMcpConfigPath();
-    const { scaffoldCommunityApp } = await import("./vault.ts");
-    const scaffold = scaffoldCommunityApp({
-      id: "composio",
-      title: "Composio",
-      integration: "mcp",
-      domains: [],
-      vaultRoot: vault,
-      connection: "Composio managed gateway: one API key fronts 1000+ apps as tools for the agent. The agent can act through any app you connect in Composio.",
-    });
-    process.stdout.write(`${JSON.stringify({ ok: true, mcpConfig, appPath: scaffold.path })}\n`);
-    process.exit(0);
-  }
-  if (sub === "gateway-add") {
-    // prevail connectors gateway-add --provider <composio|nango> --toolkit <slug>
-    //   --id <id> --title <title> [--json]
-    //   Scaffolds a gateway-fronted app into the vault: manifest gets a
-    //   gateway:{provider,toolkit} block, integration stays "manual". Idempotent —
-    //   re-running merges the gateway block into an existing app, never errors.
-    const flag = (name: string): string | undefined => {
-      const i = args.indexOf(name);
-      return i >= 0 ? args[i + 1] : undefined;
-    };
-    const provider = (flag("--provider") ?? "").trim().toLowerCase();
-    const toolkit = (flag("--toolkit") ?? "").trim();
-    const id = (flag("--id") ?? "").trim();
-    const title = flag("--title") ?? id;
-    const asJson = args.includes("--json");
-    if (provider !== "composio" && provider !== "nango") {
-      const msg = "usage: prevail connectors gateway-add --provider <composio|nango> --toolkit <slug> --id <id> --title <title>";
-      if (asJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(1); }
-      console.error(msg); process.exit(1);
-    }
-    if (!toolkit || !id) {
-      const msg = "gateway-add requires --toolkit and --id";
-      if (asJson) { process.stdout.write(`${JSON.stringify({ ok: false, error: msg })}\n`); process.exit(1); }
-      console.error(msg); process.exit(1);
-    }
-    const { scaffoldCommunityApp } = await import("./vault.ts");
-    const r = scaffoldCommunityApp({
-      id,
-      title: title!,
-      integration: "manual",
-      domains: [],
-      vaultRoot: connectorsVault,
-      gateway: { provider: provider as "composio" | "nango", toolkit },
-      connection: `${title} via the ${provider} gateway (toolkit: ${toolkit}). The agent acts through ${provider}; sync pulls a summary into the app's data folder.`,
-    });
-    if (asJson) {
-      process.stdout.write(`${JSON.stringify({ ok: r.ok, id, path: r.path, error: r.error })}\n`);
-      process.exit(r.ok ? 0 : 1);
-    }
-    if (r.ok) console.log(`added gateway connector "${id}" (${provider}/${toolkit}) at ${r.path}`);
-    else { console.error(r.error); process.exit(1); }
-    return;
   }
   if (sub === "add") {
     // prevail connectors add --id <id> --title <t> --integration <api|oauth|browser|mcp|cli|manual> --domains a,b [--json]

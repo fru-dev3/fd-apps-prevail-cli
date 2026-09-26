@@ -41,8 +41,8 @@ describe("agent MCP injection excludes disabled apps (#31)", () => {
   });
 
   test("an enabled MCP app is injected; a disabled one is not", () => {
-    // No vaultPath, no COMPOSIO_API_KEY => only the connected stdio MCP apps.
-    const ids = agentMcpServerIds(undefined, { includeComposio: false });
+    // No vaultPath => only the connected stdio MCP apps.
+    const ids = agentMcpServerIds(undefined, {});
     expect(ids).toContain("mcp-on");
     expect(ids).not.toContain("mcp-off");
   });
@@ -74,7 +74,7 @@ describe("gws-mcp launch honors the picked Google account (Fix 1)", () => {
   });
 
   function gwsArgs(googleAccount?: string): string[] {
-    const p = writeAgentMcpConfig(VAULT, { includeComposio: false, googleAccount });
+    const p = writeAgentMcpConfig(VAULT, { googleAccount });
     expect(p).not.toBeNull();
     const cfg = JSON.parse(readFileSync(p!, "utf8")) as {
       mcpServers: Record<string, { args?: string[] }>;

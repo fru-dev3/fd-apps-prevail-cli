@@ -68,7 +68,7 @@ describe("isSafeEntryName", () => {
 describe("appScopeId — _app-<id> scope keys", () => {
   test("strips the _app- prefix to the app id", () => {
     expect(appScopeId("_app-google")).toBe("google");
-    expect(appScopeId("_app-composio-notion")).toBe("composio-notion");
+    expect(appScopeId("_app-foo-notes")).toBe("foo-notes");
     expect(appScopeId("_app-my_app")).toBe("my_app");
   });
 
@@ -117,9 +117,9 @@ describe("resolveDomainDir / newDomainDir — app-scope rerouting", () => {
 
   test("app-scope thread dir lives inside the app, never among domains", () => {
     const vault = mkV4Vault();
-    const threadsDir = join(resolveDomainDir(vault, "_app-composio-notion"), "_threads");
+    const threadsDir = join(resolveDomainDir(vault, "_app-foo-notes"), "_threads");
     expect(threadsDir).toBe(
-      join(vault, "data", "apps", "composio-notion", "_scope", "_threads"),
+      join(vault, "data", "apps", "foo-notes", "_scope", "_threads"),
     );
     expect(threadsDir).not.toContain(join("data", "domains"));
   });

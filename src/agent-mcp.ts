@@ -1,32 +1,17 @@
 // Agent-facing MCP servers - the MCP servers Prevail's AI agent (the claude CLI)
-// is allowed to use on agentic runs. This is distinct from the ingestion MCP
-// registry: these are tools the AGENT calls live (e.g. the Composio gateway,
-// which fronts 1000+ apps over one OAuth connection).
-//
-// The Composio gateway is keyed: the desktop hands the engine a Composio API
-// key via the COMPOSIO_API_KEY env var (a "ck_..." value). When that key is
-// present we materialize a machine-local Claude-Code-compatible agent MCP
-// config at ~/.prevail/agent-mcp.json (NOT in the vault - it carries a secret),
-// pointing at the hosted Composio Streamable-HTTP MCP endpoint with the key in
-// the X-CONSUMER-API-KEY header. cli-bridge passes that file to claude via
-// `--mcp-config` ONLY on the agentic `act` path, so a default chat turn is
-// byte-for-byte unchanged and a run with no key never gets the flag at all.
+// is given on engine turns: the user's connected stdio MCP apps, the gated
+// google_workspace connector, and Prevail's own action primitives. The config
+// is materialized machine-locally at ~/.prevail/agent-mcp-<hash>.json (NOT in
+// the vault) and cli-bridge passes it to claude via `--mcp-config`.
 
-import { existsSync } from "node:fs";
 import { writeSecretFile } from "./secret-file.ts";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { scanCommunityApps } from "./vault.ts";
 import { resolveGwsBinary } from "./calendar-sync.ts";
 
-// The hosted Composio gateway. HTTP / Streamable-HTTP transport, authenticated
-// with the consumer's Composio API key in the X-CONSUMER-API-KEY header. This is
-// the shared contract the desktop relies on; do not change the URL or header.
-export const COMPOSIO_URL = "https://connect.composio.dev/mcp";
-export const COMPOSIO_KEY_ENV = "COMPOSIO_API_KEY";
-
 // The machine-local agent MCP config. Lives under ~/.prevail (always writable,
-// machine-scoped) NOT the vault, because it embeds the Composio API key and the
+// machine-scoped) NOT the vault, because it names machine-local binaries and the
 // vault is backed up / synced across machines.
 // A short, stable, filesystem-safe hash of a string (djb2 in hex). Used to give
 // each vault its OWN agent-mcp config file.
@@ -42,25 +27,11 @@ function shortHash(s: string): string {
 // config and hand a spawned MCP server the WRONG vault (which previously caused
 // tools to write to the wrong place - even to `/`). Same-vault runs share the
 // file but write identical content, so that's safe. Absent vaultPath keeps the
-// legacy shared name (used only by the composio-status check).
+// legacy shared name.
 export function agentMcpConfigPath(vaultPath?: string): string {
   const base = process.env.PREVAIL_HOME || join(homedir(), ".prevail");
   const suffix = vaultPath && vaultPath.trim() ? `-${shortHash(vaultPath.trim())}` : "";
   return join(base, `agent-mcp${suffix}.json`);
-}
-
-export function composioApiKey(): string | null {
-  const k = process.env[COMPOSIO_KEY_ENV];
-  return k && k.trim() ? k.trim() : null;
-}
-
-// The Composio gateway entry for the Claude-Code-compatible .mcp.json shape.
-function composioServerEntry(key: string): Record<string, unknown> {
-  return {
-    type: "http",
-    url: COMPOSIO_URL,
-    headers: { "X-CONSUMER-API-KEY": key },
-  };
 }
 
 // Build the stdio mcpServers entries for the vault's connected MCP apps. Scans
@@ -95,28 +66,16 @@ function buildConnectedMcpServers(vaultPath?: string): Record<string, unknown> {
   return servers;
 }
 
-// Materialize ~/.prevail/agent-mcp.json and return its path, or null when there
-// is nothing to inject. The config merges two sources into one mcpServers map:
-//   1. the Composio HTTP gateway, when COMPOSIO_API_KEY is set AND
-//      opts.includeComposio is true (it carries the user's hosted-gateway key,
-//      so it is only injected on agentic act runs), and
-//   2. every connected stdio MCP app in the vault (integration "mcp" with a
-//      mcpSetup.command) - these are the user's own local servers, made
-//      available on every turn.
-// Idempotent: re-running rewrites the file with the current state. chmod 0600
-// because the file may carry the Composio key. includeComposio defaults to true
-// so existing callers keep emitting the gateway.
-// Build the full mcpServers map that will be injected, keyed by server id. This
-// is the single source of truth for BOTH the written config and the list of
-// server ids the caller allow-lists, so the two can never drift apart.
+// Build the full mcpServers map that will be injected, keyed by server id: every
+// connected stdio MCP app in the vault (integration "mcp" with a
+// mcpSetup.command), plus google_workspace and prevail_acts when the vault is
+// known. This is the single source of truth for BOTH the written config and the
+// list of server ids the caller allow-lists, so the two can never drift apart.
 function buildAgentMcpServers(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean; domain?: string; googleAccount?: string },
+  opts?: { domain?: string; googleAccount?: string },
 ): Record<string, unknown> {
-  const includeComposio = opts?.includeComposio !== false;
-  const key = composioApiKey();
   const mcpServers: Record<string, unknown> = { ...buildConnectedMcpServers(vaultPath) };
-  if (includeComposio && key) mcpServers.composio = composioServerEntry(key);
   // The gated Google Workspace tool: only wired in when (a) we know the vault to
   // queue approvals into and (b) the user has an authenticated gws CLI on this
   // machine. The agent reaches it as a stdio MCP server launched from THIS
@@ -165,7 +124,7 @@ function buildAgentMcpServers(
 
 export function writeAgentMcpConfig(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean; domain?: string; googleAccount?: string },
+  opts?: { domain?: string; googleAccount?: string },
 ): string | null {
   const mcpServers = buildAgentMcpServers(vaultPath, opts);
   if (Object.keys(mcpServers).length === 0) return null;
@@ -179,12 +138,11 @@ export function writeAgentMcpConfig(
 }
 
 // The `--mcp-config` path to hand claude, or null when there is nothing to
-// inject. Returns a path when (opts.includeComposio && COMPOSIO_API_KEY) OR the
-// vault has at least one connected stdio MCP app; null otherwise so the caller
-// adds no flag and the turn is unchanged.
+// inject (no server to wire); the caller then adds no flag and the turn is
+// unchanged.
 export function agentMcpConfigForClaude(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean; domain?: string; googleAccount?: string },
+  opts?: { domain?: string; googleAccount?: string },
 ): string | null {
   return writeAgentMcpConfig(vaultPath, opts);
 }
@@ -197,14 +155,7 @@ export function agentMcpConfigForClaude(
 // written.
 export function agentMcpServerIds(
   vaultPath?: string,
-  opts?: { includeComposio?: boolean; domain?: string; googleAccount?: string },
+  opts?: { domain?: string; googleAccount?: string },
 ): string[] {
   return Object.keys(buildAgentMcpServers(vaultPath, opts));
-}
-
-// Status for the UI: is the Composio gateway configured (a key is present) and
-// is its machine-local config materialized on disk.
-export function composioStatus(): { configured: boolean; authorized: boolean } {
-  const configured = !!composioApiKey();
-  return { configured, authorized: configured && existsSync(agentMcpConfigPath()) };
 }

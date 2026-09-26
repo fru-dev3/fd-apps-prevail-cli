@@ -47,12 +47,12 @@ export async function connectApp(a: ConnectAppArgs): Promise<ConnectAppResult> {
     `THE USER'S DOMAINS: ${domainNames.join(", ") || "(none yet)"}`,
     reevaluate && current ? `\nThis app is ALREADY connected via "${current}". Re-check whether a BETTER method exists now; if "${current}" is still best, return it.` : "",
     "",
-    `Determine the BEST available way to connect this app RIGHT NOW. Prefer headless, in this order: an MCP server > an official API/SDK or an already-installed CLI (e.g. gcloud, gh) > the Composio gateway > browser automation (a one-time login is acceptable). Use web search to check what actually exists today for this specific app.`,
+    `Determine the BEST available way to connect this app RIGHT NOW. Prefer headless, in this order: an MCP server > an official API/SDK or an already-installed CLI (e.g. gcloud, gh) > browser automation (a one-time login is acceptable). Use web search to check what actually exists today for this specific app.`,
     "",
     `Also provide an auth_check: a CONCRETE test Prevail can run to VERIFY the connection works, so the user doesn't have to. For an installed CLI use {"kind":"command","command":"gh","args":["auth","status"]} (exits 0 iff authed). For an HTTP API use {"kind":"http","url":"<a lightweight authed GET endpoint>","auth_header_env":"PREVAIL_<APP>_KEY","expect_status":200}. If nothing can be tested without a secret the user hasn't provided yet, omit it (kind "none").`,
     "",
     `Return ONLY a JSON object (no prose, no fences):`,
-    `{"app_id":"kebab-case-id","title":"display name","integration":"mcp|api|cli|composio|browser","why":"one line: why this is the best method now","auth_step":{"kind":"none|oauth-cli|api-key|browser-login|manual","instruction":"the ONE thing the user must do to authorize, or empty if none"},"auth_check":{"kind":"command|http|none","command":"","args":[],"url":"","auth_header_env":"","expect_status":200},"schedule":{"every":"1d"},"domains":["which of the user's domains this should feed"],"data":"one line: what it will pull in"}`,
+    `{"app_id":"kebab-case-id","title":"display name","integration":"mcp|api|cli|browser","why":"one line: why this is the best method now","auth_step":{"kind":"none|oauth-cli|api-key|browser-login|manual","instruction":"the ONE thing the user must do to authorize, or empty if none"},"auth_check":{"kind":"command|http|none","command":"","args":[],"url":"","auth_header_env":"","expect_status":200},"schedule":{"every":"1d"},"domains":["which of the user's domains this should feed"],"data":"one line: what it will pull in"}`,
   ].join("\n");
   let out: string;
   try {
