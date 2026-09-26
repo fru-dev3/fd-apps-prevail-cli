@@ -7,7 +7,7 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
-## [1.9.22] - 2026-09-25 · Projects, replay briefs, and the September 2026 models
+## [1.9.23] - 2026-09-26 · Projects, replay briefs, and the September 2026 models
 
 ### Added
 - **Projects and replay briefs**: `prevail projects build` reads every prompt the user typed in every harness, groups them by the project they were about, and writes each a replay brief (one prompt carrying every requirement, correction and decision, for a newer model to rebuild it from) plus every prompt as typed and an exact JSONL copy. `list`, `show`, `replay <slug> [--with-prompts]`, `rename`, `timeline`. MCP `list_projects` and `read_project`. Briefs default to the most capable model and keep every earlier version under `history/`.
@@ -20,6 +20,14 @@ The release page on GitHub mirrors the same notes for each tag:
 ### Fixed
 - Every CLI the engine spawns sets `PREVAIL_INTERNAL`, so Prevail's own benchmark, council and distiller calls stop landing in the user's prompt history. They had outnumbered the user's own prompts about seven to one, and the demo persona's facts surfaced in chats as the user's.
 - GPT-6 Sol and Luna were priced at Astra's rate.
+
+### Security
+- Vault Lock: action runs can no longer write their own approval grants or autonomy setting, and Grep/Glob/LS, quoted paths, redirects and `..` can no longer reach outside the vault. The confinement boundary is the real vault root.
+- Connection tests written by the connect agent are limited to plain commands and the app's own keys.
+- Model ids starting with "-" are refused; playbook ids must be plain slugs; Telegram and the gateway apply the privacy guard like every other entry point.
+
+### Removed
+- About 1,000 lines of unreferenced code; the capture hook's duplicate check reads only the end of the stream.
 
 ## [1.9.19] - 2026-09-11 · Truth and safety: privacy guard, real fetchers, cleanup
 
