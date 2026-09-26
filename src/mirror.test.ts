@@ -190,6 +190,23 @@ describe("mirror refresh", () => {
     expect(readFindings(vault, NOW).findings).toHaveLength(5);
   });
 
+  test("tags new sittings with entities once, through the injected entity runner", async () => {
+    const tagCalls: string[] = [];
+    const entityRun: ModelRunner = async (prompt) => {
+      tagCalls.push(prompt);
+      const ids = [...prompt.matchAll(/## Sitting (\S+)/g)].map((m) => m[1]);
+      return JSON.stringify(Object.fromEntries(ids.map((id) => [id, [{ name: "Sam", kind: "person" }]])));
+    };
+    await refreshMirror({ vault, run: null, entityRun, now: NOW, tz: 0, home: vault });
+    const tagged = tagCalls.length;
+    expect(tagged).toBeGreaterThan(0);
+    expect(tagCalls[0]).toContain("Extract the specific named entities");
+    await refreshMirror({ vault, run: null, entityRun, now: NOW, tz: 0, home: vault });
+    expect(tagCalls.length).toBe(tagged);
+    const idx = JSON.parse(readFileSync(join(vault, "build", "_meta", "entities", "index.json"), "utf8"));
+    expect(idx.entities.map((e: { id: string }) => e.id)).toContain("person/sam");
+  });
+
   test("works with no model at all", async () => {
     const doc = await refreshMirror({ vault, run: null, now: NOW, tz: 0, home: vault });
     expect(byKind(doc.findings, "repeated_rules")!.items[0].count).toBe(3);
