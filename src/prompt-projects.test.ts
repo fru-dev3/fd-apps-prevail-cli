@@ -23,6 +23,9 @@ describe("prompt corpus", () => {
 
   test("drops Prevail's own traffic and keeps what the user typed", () => {
     expect(isInternalPrompt("You are scoring a model's answer to a benchmark question.")).toBe(true);
+    expect(isInternalPrompt("Below is what one person worked on with AI tools, week by week: the projects they had sittings on.")).toBe(true);
+    expect(isInternalPrompt("You are reading part 2 of 5 of the complete prompt history one person typed")).toBe(true);
+    expect(isInternalPrompt("Below is the diff Sam sent for the Maple St repo")).toBe(false);
     expect(isInternalPrompt("Context:\nAlex and Jordan have family out of state.")).toBe(true);
     expect(isInternalPrompt("fix the header on the fru.dev site", `${HOME}/.prevail/demo-vault/wealth`)).toBe(true);
     expect(isInternalPrompt("/rename fooo1")).toBe(true);

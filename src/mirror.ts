@@ -1,4 +1,4 @@
-// Mirror: what a person's own prompts say about them. The same corpus the
+// Intent (module name mirror.ts): what a person's own prompts say about them. The same corpus the
 // Projects feature groups by project (prompt-corpus.ts, prompt-projects.ts),
 // read back as a few plain findings, one intent line per week and a short
 // weekly letter.
@@ -740,8 +740,8 @@ export function readFindings(vault: string, now = Date.now()): FindingsDoc {
 }
 
 export function findingsText(doc: FindingsDoc): string {
-  if (!doc.generated_ts) return "No mirror yet. Run `prevail mirror refresh`.";
-  const lines = [`Mirror, ${new Date(doc.generated_ts).toISOString().slice(0, 10)}`, ""];
+  if (!doc.generated_ts) return "Nothing noticed yet. Run `prevail intent refresh`.";
+  const lines = [`Intent, ${new Date(doc.generated_ts).toISOString().slice(0, 10)}`, ""];
   for (const f of doc.findings) {
     lines.push(`## ${f.headline}${f.status !== "new" ? ` [${f.status}]` : ""}`, f.detail);
     for (const i of f.items.slice(0, 8)) lines.push(`- ${i.rule_text ?? i.label}${i.count !== undefined ? ` (${i.count})` : ""}${i.detail && f.kind === "goals_drift" ? `: ${i.detail}` : ""}`);

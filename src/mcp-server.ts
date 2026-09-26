@@ -239,8 +239,8 @@ export async function runMcpServer(
       },
     },
     {
-      name: "mirror_findings",
-      description: "Mirror: what the user's own prompts say about them. A few plain findings (instructions they keep restating, share of time on tools vs outcomes, projects that went quiet, late-night correction rate, life areas that never came up) plus the latest weekly letter. Read-only; computed by `prevail mirror refresh`.",
+      name: "intent_findings",
+      description: "Intent: what the user's own prompts say about them. A few plain findings (instructions they keep restating, share of time on tools vs outcomes, projects that went quiet, late-night correction rate, life areas that never came up) plus the latest weekly letter. Read-only; computed by `prevail intent refresh`.",
       inputSchema: { type: "object", properties: {} },
     },
     {
@@ -628,6 +628,7 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const slug = typeof args.slug === "string" ? args.slug : "";
       try { return wrapText(replayPrompt(vaultPath, slug, args.with_prompts === true)); } catch (e) { return wrapText((e as Error).message); }
     }
+    case "intent_findings":
     case "mirror_findings": {
       const { readFindings, findingsText } = await import("./mirror.ts");
       return wrapText(findingsText(readFindings(vaultPath)));

@@ -294,7 +294,7 @@ function parseArgs(argv: string[]): Args {
       projects = true;
       projectsArgs = argv.slice(i + 1);
       break;
-    } else if (a === "mirror") {
+    } else if (a === "intent" || a === "mirror") {
       mirror = true;
       mirrorArgs = argv.slice(i + 1);
       break;
@@ -2261,8 +2261,8 @@ async function vaultFlagOrDefault(argv: string[], fallback?: string | null): Pro
   return (vflag >= 0 ? argv[vflag + 1] : undefined) ?? fallback ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
 }
 
-// prevail mirror [findings|verdict|history|refresh]: what the person's own
-// prompts say about them. See mirror.ts.
+// prevail intent [findings|verdict|history|refresh]: what the person's own
+// prompts say about them. `prevail mirror` is an alias. See mirror.ts.
 async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<void> {
   const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
   const vault = await vaultFlagOrDefault(a, vaultPath);
@@ -2277,7 +2277,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
     return;
   }
   if (sub === "refresh") {
-    const doc = await mr.refreshMirror({ vault, model: mr.modelChoice(get("--model"), get("--cli")), log: (m) => { if (!json) console.error(`[mirror] ${m}`); } });
+    const doc = await mr.refreshMirror({ vault, model: mr.modelChoice(get("--model"), get("--cli")), log: (m) => { if (!json) console.error(`[intent] ${m}`); } });
     if (json) { out(doc); return; }
     console.log(mr.findingsText(doc));
     return;
@@ -2285,7 +2285,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
   if (sub === "verdict") {
     const [id, verdict] = [a[1], a[2]];
     const ok = ["true", "not_really", "later", "resume", "let_go"];
-    if (!id || !verdict || !ok.includes(verdict)) { console.error("usage: prevail mirror verdict <finding_id> <true|not_really|later|resume|let_go> [--item <item_id>] [--rule \"text\"] [--action resume|let_go]"); process.exit(2); }
+    if (!id || !verdict || !ok.includes(verdict)) { console.error("usage: prevail intent verdict <finding_id> <true|not_really|later|resume|let_go> [--item <item_id>] [--rule \"text\"] [--action resume|let_go]"); process.exit(2); }
     try {
       const res = mr.setVerdict(vault, id, verdict as "true", { item: get("--item") ?? undefined, rule: get("--rule") ?? undefined, action: get("--action") ?? undefined });
       if (json) { out(res); return; }
@@ -2304,7 +2304,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
     }
     return;
   }
-  console.error("usage: prevail mirror [findings|refresh|verdict|history] --vault <path> [--json]");
+  console.error("usage: prevail intent [findings|refresh|verdict|history] --vault <path> [--json]");
   process.exit(2);
 }
 
