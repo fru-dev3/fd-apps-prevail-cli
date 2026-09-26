@@ -7,6 +7,18 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.25] - 2026-09-26 · Apps: a live mirror of the connectors you already use
+
+### Added
+- **Apps mirror**: `prevail apps list|refresh [--tools]` reads the connectors you already signed into in Claude, Codex, Gemini and Antigravity and caches them in the vault. Prevail holds no credentials of its own for them.
+- **Tool safety classes**: every connector tool is classed read, write, send or money. Only read tools may feed a sync; write tools stay chat-only; send and money tools are blocked from sync, and mail stays draft-only.
+- **Sync recipes**: `prevail apps recipe draft|save` has a model draft what to pull, which domains it feeds and how often. `prevail apps sync <id>` runs a recipe through its runtime with read tools only and files records under `data/domains/<d>/source/apps/<id>/`, which domain chats and loops now read.
+- **Sync daemon**: due recipes run on their daily or weekly schedule; MCP `list_apps` and `sync_app` cover mirrored connectors.
+- **Archive**: `prevail apps archive --dry-run|--apply` moves app folders that never synced and hold no data or code into `data/apps/_archive/`. Nothing is deleted.
+
+### Removed
+- The Composio and Nango gateway connectors and their key handling.
+
 ## [1.9.24] - 2026-09-26 · Intent: what your own prompts say about you
 
 ### Added
