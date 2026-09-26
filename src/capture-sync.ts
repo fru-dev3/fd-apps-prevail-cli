@@ -197,6 +197,7 @@ function scanClaude(cp: CaptureCheckpoint): ScanResult {
         session: typeof r.sessionId === "string" ? r.sessionId : undefined,
         cwd: typeof r.cwd === "string" ? r.cwd : undefined,
         epochMs: typeof r.timestamp === "string" ? Date.parse(r.timestamp) || undefined : undefined,
+        entry: typeof r.entrypoint === "string" ? r.entrypoint : undefined,
       });
     }
   }
