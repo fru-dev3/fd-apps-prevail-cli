@@ -2,6 +2,7 @@
 // parsed into structured parts, rendered as a handoff prompt, a short intent
 // brief or the raw prompts; and a read-only check of an existing folder
 // against those requirements.
+import { createHash } from "node:crypto";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { sanitizeEmDashes } from "./cli-bridge.ts";
@@ -125,6 +126,54 @@ export function restartText(vault: string, slug: string, format: RestartFormat, 
     if (raw) text += `\n---\n\n# Appendix: my original prompts\nThe summary above is distilled from these. Where they disagree, the later prompt wins.\n\n${raw}`;
   }
   return text;
+}
+
+// ---------------------------------------------------------------------------
+// instruction: one recommendation from "What would move you forward", written
+// as a ready-to-paste task for an agent. Deterministic: the recommendation,
+// why, and the project's goal and rules from its restart brief. No model.
+
+export interface Instruction { id: string; index: number; title: string; project: string; text: string }
+
+export const recommendationId = (r: { kind: string; title: string }) => createHash("sha256").update(`${r.kind}\u0001${r.title}`).digest("hex").slice(0, 12);
+
+const VERB = /^(add|build|write|create|make|set|wire|move|put|run|ship|fix|connect|capture|turn|schedule|automate|record|draft|replace|split|merge|rename|remove|delete|drop|keep|stop|start|use|print|check|review|finish|resume|document|track|log|pin|batch|cut|plan|pick|decide|ask|send|file|close|open|extract|port|migrate|test|verify|audit|clean|reuse|share|save|sync|install)\b/i;
+
+export function imperative(kind: string, title: string): string {
+  const t = title.trim().replace(/[.\s]+$/, "");
+  if (VERB.test(t)) return `${t.charAt(0).toUpperCase()}${t.slice(1)}.`;
+  const lead: Record<string, string> = { skill: "Write a reusable skill for", app: "Connect", habit: "Set up a habit:", automation: "Set up an automation for", project: "Start a project:", task: "Do this:" };
+  return `${lead[kind] ?? "Do this:"} ${t}.`;
+}
+
+export function recommendationInstruction(vault: string, ref: string): Instruction {
+  const idx = readProjectsIndex(vault);
+  const recs = idx?.recommendations ?? [];
+  let index = /^\d+$/.test(ref) ? Number(ref) : recs.findIndex((r) => recommendationId(r) === ref);
+  if (index < 0 || index >= recs.length) throw new Error(`no recommendation "${ref}" (there are ${recs.length})`);
+  const r = recs[index];
+  const p = idx?.projects.find((x) => x.slug === r.project_slug) ?? idx?.projects.find((x) => x.title === r.project);
+  const lines = [imperative(r.kind, r.title), ""];
+  if (r.why) lines.push(`Why: ${r.why.trim()}`, "");
+  let goal = "";
+  let rules: string[] = [];
+  if (p) {
+    try { const b = projectRestart(vault, p.slug); goal = b.goal; rules = b.rules; } catch { /* no brief yet */ }
+    lines.push(`Project: ${p.title}${p.domain ? ` (${p.domain})` : ""}`);
+    const g = (goal || p.intents[0]?.goal || p.summary || "").trim();
+    if (g) lines.push(`Project goal: ${g}`);
+    lines.push("");
+    if (rules.length) {
+      lines.push("Rules already given for this project (follow them; do not make me repeat them):", ...rules.slice(0, 12).map((x) => `- ${x}`));
+      if (rules.length > 12) lines.push(`- (${rules.length - 12} more in the project's restart brief)`);
+      lines.push("");
+    }
+  } else if (r.project) {
+    lines.push(`Project: ${r.project}`, "");
+  }
+  if (!p && r.domain) lines.push(`Area: ${r.domain}`, "");
+  lines.push("When it is done, say what changed and how you checked it.");
+  return { id: recommendationId(r), index, title: r.title, project: p?.title ?? r.project ?? "", text: sanitizeEmDashes(`${lines.join("\n").replace(/\n{3,}/g, "\n\n").trim()}\n`) };
 }
 
 // ---------------------------------------------------------------------------

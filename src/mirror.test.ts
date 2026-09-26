@@ -3,11 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  appendStandingRule, applyVerdicts, findRepeatedCandidates, loadContext, mirrorHistory, readFindings, refreshMirror, setVerdict,
-  standingRules, type Finding,
+  appendStandingRule, applyVerdicts, findRepeatedCandidates, generatePeriod, loadContext, mirrorHistory, periodFindings, periodsList,
+  periodWindow, readFindings, refreshMirror, setVerdict, standingRules, type Finding,
 } from "./mirror.ts";
-import { folderSnapshot, parseBrief, projectDiff, projectRestart, restartText } from "./project-restart.ts";
-import type { PromptRec } from "./prompt-corpus.ts";
+import {
+  folderSnapshot, imperative, parseBrief, projectDiff, projectRestart, recommendationId, recommendationInstruction, restartText,
+} from "./project-restart.ts";
+import { loadCorpus, type PromptRec } from "./prompt-corpus.ts";
 import type { ModelRunner } from "./prompt-projects.ts";
 
 const HOME = "/Users/someone";
@@ -62,6 +64,11 @@ const run: ModelRunner = async (prompt) => {
     calls.push("weeks");
     const weeks = [...prompt.matchAll(/^### (\d{4}-\d{2}-\d{2}) /gm)].map((m) => m[1]);
     return JSON.stringify(Object.fromEntries(weeks.map((w) => [w, `You mostly worked on the shop in the week of ${w}.`])));
+  }
+  if (prompt.includes("For EACH day write")) {
+    calls.push("days");
+    const days = [...prompt.matchAll(/^### (\d{4}-\d{2}-\d{2}) /gm)].map((m) => m[1]);
+    return JSON.stringify(Object.fromEntries(days.map((d) => [d, `You mostly chased the shop on ${d}.`])));
   }
   if (prompt.includes("weekly letter")) { calls.push("letter"); return "You mostly worked on Acme Shop this week.\n\nOne rule kept coming back."; }
   if (prompt.includes("checking an existing codebase")) { calls.push("diff"); return JSON.stringify({ met: ["Products list with photos and prices."], missed: ["Never use gold anywhere."], unclear: [] }); }
@@ -355,5 +362,220 @@ describe("restart", () => {
       const res = await projectDiff(vault, "acme-shop", dir, { run });
       expect(res).toEqual({ met: ["Products list with photos and prices."], missed: ["Never use gold anywhere."], unclear: [] });
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("periods", () => {
+  const noModel: ModelRunner = async () => { throw new Error("no model call expected"); };
+  const ctxAt = () => loadContext(vault, { now: NOW, tz: 0, home: vault });
+
+  test("weeks newest first, each with its days, counts, letter and line", async () => {
+    await refresh();
+    const doc = periodsList(ctxAt());
+    const weeks = doc.weeks.map((w) => w.week);
+    expect(weeks[0]).toBe("2026-09-21");
+    expect([...weeks].sort().reverse()).toEqual(weeks);
+    const cur = doc.weeks[0];
+    expect(cur.current).toBe(true);
+    expect(cur.label).toBe("Sep 21 to 27");
+    expect(cur.has_letter).toBe(false);
+    const last = doc.weeks.find((w) => w.week === "2026-09-14")!;
+    expect(last.current).toBe(false);
+    expect(last.has_letter).toBe(true);
+    expect(last.intent_line).toContain("2026-09-14");
+    expect(last.days.map((d) => d.day)).toEqual(["2026-09-20", "2026-09-19", "2026-09-14"]);
+    expect(last.days[0].label).toBe("Sun, Sep 20");
+    expect(last.days.reduce((a, d) => a + d.prompts, 0)).toBe(last.prompts);
+    expect(doc.weeks.reduce((a, w) => a + w.prompts, 0)).toBe(ctxAt().prompts.length);
+  });
+
+  test("a date inside a week opens that week", () => {
+    expect(periodWindow("week", "2026-09-17", 0).key).toBe("2026-09-14");
+    expect(periodWindow("day", "2026-09-17", 0).week).toBe("2026-09-14");
+    expect(() => periodWindow("day", "Sep 17", 0)).toThrow();
+  });
+
+  test("a past week's findings come from that week only, cached per period", async () => {
+    await refresh();
+    const doc = await periodFindings(ctxAt(), "week", "2026-09-14", { run: noModel });
+    expect(doc.period).toEqual({ kind: "week", key: "2026-09-14", week: "2026-09-14", label: "Sep 14 to 20" });
+    expect(doc.current).toBe(false);
+    expect(doc.letter_status).toBe("ready");
+    expect(doc.letter?.markdown).toContain("Acme Shop");
+    expect(doc.totals).toEqual({ prompts: 4, sittings: 3 });
+    expect(doc.projects.map((p) => [p.slug, p.sittings])).toEqual([["agent-kit", 2], ["acme-shop", 1]]);
+    const kinds = doc.findings.map((f) => f.kind);
+    expect(kinds).toEqual(["repeated_rules", "tooling_share", "goals_drift"]);
+    for (const f of doc.findings) expect(f.id).toBe(`${f.kind}@week-2026-09-14`);
+    const rules = doc.findings[0];
+    expect(rules.items[0].rule_text).toBe("Never use gold; the brand color is office green #008000.");
+    expect(rules.receipts[0].text).toContain("never use gold");
+    expect(doc.findings[1].metric).toEqual({ value: 67, unit: "%" });
+    expect(doc.findings[1].headline).toBe("67% of that week's sittings went into tools and setup");
+    expect(doc.findings[2].headline).toBe("2 of 3 parts of your life did not come up that week");
+    expect(existsSync(join(vault, "build", "_meta", "mirror", "periods", "week-2026-09-14.json"))).toBe(true);
+    // A second open reads the cache: same answer, nothing recomputed.
+    const again = await periodFindings(ctxAt(), "week", "2026-09-14", { run: noModel });
+    expect(again.generated_ts).toBe(doc.generated_ts);
+    expect(again.findings.map((f) => f.id)).toEqual(doc.findings.map((f) => f.id));
+  });
+
+  test("a day shows its line, its projects and the findings that apply", async () => {
+    await refresh();
+    await generatePeriod(ctxAt(), "2026-09-14", { run });
+    const doc = await periodFindings(ctxAt(), "day", "2026-09-14", { run: noModel });
+    expect(doc.period.label).toBe("Mon, Sep 14");
+    expect(doc.period.week).toBe("2026-09-14");
+    expect(doc.letter_status).toBe("none");
+    expect(doc.intent_line).toBe("You mostly chased the shop on 2026-09-14.");
+    expect(doc.projects).toEqual([{ slug: "acme-shop", title: "Acme Shop", domain: "dev", sittings: 1, prompts: 1, minutes: 1 }]);
+    expect(doc.findings.map((f) => f.id)).toEqual(["repeated_rules@day-2026-09-14"]);
+    expect(doc.findings[0].headline).toBe("1 standing instruction you restated that day");
+    const quiet = await periodFindings(ctxAt(), "day", "2026-09-16", { run: noModel });
+    expect(quiet.totals).toEqual({ prompts: 0, sittings: 0 });
+    expect(quiet.findings).toEqual([]);
+  });
+
+  test("the week still going shows the standing findings", async () => {
+    await refresh();
+    const doc = await periodFindings(ctxAt(), "week", "2026-09-21", { run: noModel });
+    expect(doc.current).toBe(true);
+    expect(doc.letter_status).toBe("not_yet");
+    expect(doc.findings.map((f) => f.id)).toEqual(readFindings(vault, NOW).findings.map((f) => f.id));
+  });
+
+  test("verdicts: not really on one week leaves the others; a kept rule leaves every period", async () => {
+    await refresh();
+    setVerdict(vault, "tooling_share@week-2026-09-14", "not_really", { now: NOW });
+    const wk = await periodFindings(ctxAt(), "week", "2026-09-14", { run: noModel });
+    expect(wk.findings.map((f) => f.kind)).not.toContain("tooling_share");
+    expect(readFindings(vault, NOW).findings.map((f) => f.kind)).toContain("tooling_share");
+    const item = wk.findings.find((f) => f.kind === "repeated_rules")!.items[0];
+    const r = setVerdict(vault, "repeated_rules@week-2026-09-14", "true", { item: item.id, now: NOW });
+    expect(r.rule_added).toBe(true);
+    const day = await periodFindings(ctxAt(), "day", "2026-09-14", { run: noModel });
+    expect(day.findings.map((f) => f.kind)).not.toContain("repeated_rules");
+  });
+
+  test("a past week's letter and day lines are written once, when it is first opened", async () => {
+    await refreshMirror({ vault, run: null, now: NOW, tz: 0, home: vault });
+    calls = [];
+    const before = await periodFindings(ctxAt(), "week", "2026-09-07", { run: noModel });
+    expect(before.letter_status).toBe("missing");
+    const res = await generatePeriod(ctxAt(), "2026-09-07", { run });
+    expect(calls.sort()).toEqual(["days", "letter", "weeks"]);
+    expect(res.letter?.week).toBe("2026-09-07");
+    expect(Object.keys(res.day_lines).sort()).toEqual(["2026-09-08", "2026-09-13"]);
+    expect(existsSync(join(vault, "build", "_meta", "mirror", "letters", "2026-09-07.md"))).toBe(true);
+    calls = [];
+    await generatePeriod(ctxAt(), "2026-09-07", { run });
+    expect(calls).toEqual([]);
+    const after = await periodFindings(ctxAt(), "week", "2026-09-07", { run: noModel });
+    expect(after.letter_status).toBe("ready");
+    expect(after.intent_line).toContain("2026-09-07");
+    // The week still going gets day lines but never a letter.
+    const cur = await generatePeriod(ctxAt(), "2026-09-21", { run });
+    expect(cur.letter).toBeNull();
+    expect(existsSync(join(vault, "build", "_meta", "mirror", "letters", "2026-09-21.md"))).toBe(false);
+  });
+});
+
+describe("history, exactly as typed", () => {
+  test("a period's sittings, with the captured text untouched", () => {
+    const typed = "  first line\n\n    indented **not bold**\n- a dash list\ttab\n\n";
+    const long = `${"x".repeat(9000)}\nend`;
+    const extra = [
+      rec(NOW - 4 * H, typed, SHOP, "v1"),
+      rec(NOW - 3 * H, long, SHOP, "v1"),
+    ];
+    writeFileSync(join(vault, "build", "_meta", "prompts", "claude.mbp.jsonl"), `${readFileSync(join(vault, "build", "_meta", "prompts", "claude.mbp.jsonl"), "utf8")}${extra.join("\n")}\n`);
+    const ctx = loadContext(vault, { now: NOW, tz: 0, home: vault });
+    const day = mirrorHistory(ctx, { win: periodWindow("day", "2026-09-23", 0).win });
+    const texts = day.weeks.flatMap((w) => w.sittings.flatMap((s) => s.prompts.map((p) => p.text)));
+    expect(texts).toEqual([typed, long]);
+    const week = mirrorHistory(ctx, { win: periodWindow("week", "2026-09-14", 0).win });
+    expect(week.weeks.map((w) => w.week)).toEqual(["2026-09-14"]);
+    expect(week.total).toBe(3);
+  });
+
+  test("a desktop chat shows only what the person typed, not its context wrapper", () => {
+    const wrapped = "# THE USER'S IDEAL STATE: their constitution.\nBe kind.\n---\n--- PRIOR TURNS ---\nold\n--- END PRIOR TURNS ---\n\nUser's next message: plan the  garden\n  beds";
+    writeFileSync(join(vault, "build", "_meta", "prompts", "prevail.mbp.jsonl"), `${JSON.stringify({ ts: new Date(NOW - H).toISOString(), epoch_ms: NOW - H, tool: "prevail", session: "p1", cwd: "", prompt: wrapped })}\n`);
+    const ctx = loadContext(vault, { now: NOW, tz: 0, home: vault });
+    const h = mirrorHistory(ctx, { tool: "prevail" });
+    expect(h.weeks[0].sittings[0].prompts[0].text).toBe("plan the  garden\n  beds");
+  });
+
+  test("prompts a harness or another agent wrote never appear", () => {
+    const home = mkdtempSync(join(tmpdir(), "mirror-home-"));
+    const brief = "Investigate the flaky checkout test in the acme shop and report back with the cause.";
+    const sub = join(home, ".claude", "projects", "-work-acme", "s9", "subagents");
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, "agent-a1.jsonl"), `${JSON.stringify({ isSidechain: true, sessionId: "s9", type: "user", message: { role: "user", content: brief } })}\n`);
+    const agentBrief = `You are researching pottery suppliers for a small shop. ${"Check each one carefully. ".repeat(20)}`;
+    const lines = [
+      rec(NOW - 5 * H, "[Image: original 1440x2400, displayed at 1200x2000. Multiply coordinates by 1.20 to map to original image.]", SHOP, "s8"),
+      rec(NOW - 5 * H + 1, agentBrief, SHOP, "s8"),
+      rec(NOW - 5 * H + 2, "You are deploying these on the new host, right?", SHOP, "s8"),
+      rec(NOW - 5 * H + 3, brief, SHOP, "s9"),
+      JSON.stringify({ ts: new Date(NOW - H).toISOString(), epoch_ms: NOW - H, tool: "claude", session: "s10", cwd: SHOP, prompt: "Summarize the open pull requests for the shop repository", entry: "sidechain" }),
+      rec(NOW - H, "Extract the specific named entities a person mentions in their own prompts to AI tools.\n\nKinds: ...", SHOP, "s11"),
+      rec(NOW - H, "# Pantry Agent\n\n## Role\nYou are the Pantry Domain Director.", SHOP, "s12"),
+    ];
+    writeFileSync(join(vault, "build", "_meta", "prompts", "claude.work.jsonl"), `${lines.join("\n")}\n`);
+    const { prompts } = loadCorpus(vault, home);
+    const texts = prompts.map((p) => p.text);
+    expect(texts).toContain("You are deploying these on the new host, right?");
+    for (const bad of [brief, agentBrief, "Summarize the open pull requests for the shop repository"]) expect(texts).not.toContain(bad);
+    expect(texts.some((t) => t.startsWith("[Image: original") || t.startsWith("Extract the specific") || t.startsWith("# Pantry Agent"))).toBe(false);
+    rmSync(home, { recursive: true, force: true });
+  });
+});
+
+describe("recommendation instruction", () => {
+  const withRecs = () => {
+    const path = join(vault, "build", "_meta", "projects.json");
+    const idx = JSON.parse(readFileSync(path, "utf8"));
+    idx.recommendations = [
+      { kind: "task", title: "Add a shipping rate table to the shop", why: "Two sittings asked how shipping is priced.", domain: "dev", project: "Acme Shop", project_slug: "acme-shop" },
+      { kind: "skill", title: "Pottery photo checklist", why: "Photos were redone three times.", domain: "dev" },
+    ];
+    writeFileSync(path, JSON.stringify(idx));
+  };
+
+  test("the recommendation, why, the project and its brief's goal and rules", () => {
+    withRecs();
+    const ins = recommendationInstruction(vault, "0");
+    expect(ins.index).toBe(0);
+    expect(ins.project).toBe("Acme Shop");
+    expect(ins.text).toBe([
+      "Add a shipping rate table to the shop.",
+      "",
+      "Why: Two sittings asked how shipping is priced.",
+      "",
+      "Project: Acme Shop (dev)",
+      "Project goal: A small web shop for Sam's pottery, with a cart and checkout. Done means Sam can sell a mug.",
+      "",
+      "Rules already given for this project (follow them; do not make me repeat them):",
+      "- Never use gold anywhere.",
+      "- \"No em dashes in any copy.\"",
+      "",
+      "When it is done, say what changed and how you checked it.",
+      "",
+    ].join("\n"));
+    // Same text every time, found by index or by id.
+    expect(recommendationInstruction(vault, ins.id).text).toBe(ins.text);
+    expect(ins.id).toBe(recommendationId({ kind: "task", title: "Add a shipping rate table to the shop" }));
+  });
+
+  test("no project: the area stands in; bad refs fail plainly", () => {
+    withRecs();
+    const ins = recommendationInstruction(vault, "1");
+    expect(ins.text.split("\n")[0]).toBe("Write a reusable skill for Pottery photo checklist.");
+    expect(ins.text).toContain("Area: dev");
+    expect(ins.text).not.toContain("Project:");
+    expect(() => recommendationInstruction(vault, "7")).toThrow(/no recommendation "7"/);
+    expect(imperative("app", "Connect the pottery supplier API")).toBe("Connect the pottery supplier API.");
+    expect(imperative("habit", "Weekly photo review")).toBe("Set up a habit: Weekly photo review.");
   });
 });

@@ -197,7 +197,10 @@ function scanClaude(cp: CaptureCheckpoint): ScanResult {
         session: typeof r.sessionId === "string" ? r.sessionId : undefined,
         cwd: typeof r.cwd === "string" ? r.cwd : undefined,
         epochMs: typeof r.timestamp === "string" ? Date.parse(r.timestamp) || undefined : undefined,
-        entry: typeof r.entrypoint === "string" ? r.entrypoint : undefined,
+        // A sub-agent's transcript (<session>/subagents/) holds the brief its
+        // parent agent wrote, as a "user" message. Kept, but marked, so readers
+        // never take it for something the person typed.
+        entry: r.isSidechain === true ? "sidechain" : typeof r.entrypoint === "string" ? r.entrypoint : undefined,
       });
     }
   }

@@ -2282,7 +2282,7 @@ async function vaultFlagOrDefault(argv: string[], fallback?: string | null): Pro
   return (vflag >= 0 ? argv[vflag + 1] : undefined) ?? fallback ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
 }
 
-// prevail intent [findings|verdict|history|refresh]: what the person's own
+// prevail intent [findings|periods|generate|verdict|history|refresh|instruction]: what the person's own
 // prompts say about them. `prevail mirror` is an alias. See mirror.ts.
 async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<void> {
   const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
@@ -2291,6 +2291,56 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
   const sub = a[0] && !a[0].startsWith("--") ? a[0] : "findings";
   const mr = await import("./mirror.ts");
   const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
+  const tzArg = get("--tz");
+  const tz = tzArg !== null && Number.isFinite(Number(tzArg)) ? Number(tzArg) : undefined;
+  const log = (m: string) => { if (!json) console.error(`[intent] ${m}`); };
+  const periodArg = (): { kind: "week" | "day"; key: string } | null => {
+    const w = get("--week"); const d = get("--day");
+    const key = w ?? d;
+    if (key === null) return null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) { console.error(`--${w !== null ? "week" : "day"} takes a date like 2026-09-14`); process.exit(2); }
+    return { kind: w !== null ? "week" : "day", key };
+  };
+  if (sub === "periods") {
+    const doc = mr.periodsList(mr.loadContext(vault, { tz }));
+    if (json) { out(doc); return; }
+    for (const w of doc.weeks) {
+      console.log(`${w.label} (${w.week})${w.current ? " this week" : ""}: ${w.prompts} prompts, ${w.sittings} sittings${w.has_letter ? ", letter" : ""}`);
+      for (const d of w.days) console.log(`  ${d.label} (${d.day}): ${d.prompts} prompts, ${d.sittings} sittings`);
+    }
+    return;
+  }
+  if (sub === "generate") {
+    const per = periodArg();
+    if (!per || per.kind !== "week") { console.error("usage: prevail intent generate --week <YYYY-MM-DD> [--model <id>] [--json]"); process.exit(2); }
+    const ctx = mr.loadContext(vault, { tz });
+    const res = await mr.generatePeriod(ctx, per.key, { model: mr.modelChoice(get("--model"), get("--cli")), log, fresh: a.includes("--fresh") });
+    if (json) { out(res); return; }
+    console.log(`${res.week}: ${res.written.length ? `wrote ${res.written.join(", ")}` : "nothing new to write"}`);
+    return;
+  }
+  if (sub === "instruction") {
+    const ref = a[1];
+    if (!ref || ref.startsWith("--")) { console.error("usage: prevail intent instruction <recommendation index or id> [--text | --json]"); process.exit(2); }
+    const { recommendationInstruction } = await import("./project-restart.ts");
+    try {
+      const ins = recommendationInstruction(vault, ref);
+      if (json) { out(ins); return; }
+      process.stdout.write(ins.text);
+    } catch (e) { console.error((e as Error).message); process.exit(1); }
+    return;
+  }
+  if (sub === "findings" && periodArg()) {
+    const per = periodArg()!;
+    const ctx = mr.loadContext(vault, { tz });
+    const doc = await mr.periodFindings(ctx, per.kind, per.key, { model: mr.modelChoice(get("--model"), get("--cli")), log, fresh: a.includes("--fresh") });
+    if (json) { out(doc); return; }
+    console.log(`${doc.period.label}${doc.intent_line ? `: ${doc.intent_line}` : ""}`);
+    for (const p of doc.projects) console.log(`  ${p.title}: ${p.prompts} prompts in ${p.sittings} sittings`);
+    console.log("");
+    console.log(mr.findingsText({ generated_ts: doc.generated_ts || Date.now(), letter: doc.letter, findings: doc.findings }));
+    return;
+  }
   if (sub === "findings") {
     const doc = mr.readFindings(vault);
     if (json) { out(doc); return; }
@@ -2315,9 +2365,11 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
     return;
   }
   if (sub === "history") {
-    const ctx = mr.loadContext(vault);
+    const ctx = mr.loadContext(vault, { tz });
     const before = Number(get("--before") ?? 0) || undefined;
-    const doc = mr.mirrorHistory(ctx, { q: get("--q") ?? undefined, tool: get("--tool") ?? undefined, project: get("--project") ?? undefined, before, limit: Number(get("--limit") ?? 200) || 200 });
+    const per = periodArg();
+    const win = per ? mr.periodWindow(per.kind, per.key, ctx.tz).win : undefined;
+    const doc = mr.mirrorHistory(ctx, { q: get("--q") ?? undefined, tool: get("--tool") ?? undefined, project: get("--project") ?? undefined, before, limit: Number(get("--limit") ?? 200) || 200, win });
     if (json) { out(doc); return; }
     for (const w of doc.weeks) {
       console.log(`${w.label}${w.intent_line ? `: ${w.intent_line}` : ""}`);
@@ -2325,7 +2377,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
     }
     return;
   }
-  console.error("usage: prevail intent [findings|refresh|verdict|history] --vault <path> [--json]");
+  console.error("usage: prevail intent [findings [--week|--day <YYYY-MM-DD>]|periods|generate --week <YYYY-MM-DD>|refresh|verdict|history [--week|--day <YYYY-MM-DD>]|instruction <n>] --vault <path> [--tz <minutes>] [--json]");
   process.exit(2);
 }
 

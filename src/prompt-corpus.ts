@@ -38,6 +38,10 @@ export interface PromptRec {
 // in the live capture streams, most by the thousand: benchmark scoring and
 // benchmark questions, the council, the distillers, harness notices.
 const INTERNAL_STARTS = [
+  // Prevail's entity tagger and its app sync-recipe designer (entities.ts,
+  // apps-mirror.ts), seen in the streams when a run missed PREVAIL_INTERNAL.
+  "Extract the specific named entities a person mentions",
+  "You design a data sync recipe for the",
   "You are scoring a model's answer",
   "You are the chair of an AI council",
   "You are Prevail's",
@@ -71,7 +75,7 @@ const INTERNAL_STARTS = [
 ];
 const CORPUS_PART = /^You are reading part \d+ of \d+ of the complete prompt history/;
 
-const IDEAL_PREAMBLE = /^# THE USER'S IDEAL STATE/;
+const IDEAL_PREAMBLE = /^# (THE USER'S IDEAL STATE|WHO YOU'RE HELPING)/;
 
 // A cwd inside a demo vault means the prompt came from Prevail's benchmark or
 // demo persona ("Alex", a senior engineer weighing a Staff promotion), not the
@@ -121,6 +125,22 @@ const AGENT_WRITTEN = [
   /^You are (preparing a weekly briefing|the steward of the|helping build a personal canonical benchmark|seeding a chat|an expert YouTube thumbnail)/,
   /^You maintain three derived artifacts/,
   /^Write (the spoken )?narration for/,
+  // Briefs an orchestrating agent hands a sub-agent: long, second person, and
+  // about a job ("You are researching...", "You are the fact-checker for...").
+  /^You are (?:[a-z]+ing|a|an|the)\b[\s\S]{380,}/,
+  /^PARTNUM=\d+\./,
+  // Prevail's own domain agents and preambles, sent through other CLIs.
+  /^# [\w &]+ Agent\s*\n+## (Role|\d+\.)/,
+  /^(\(This is a general advisory question[^)]*\)\s*)?# OUTPUT STYLE \(HARD RULE\)/,
+  // A scheduled loop re-sending its instructions on a timer.
+  /^AUTONOMOUS [\w-]+ (overnight )?loop\b/i,
+  /^# Autonomous loop (tick|check)\b/,
+  /^[\w.-]+ continuous work check-in\./,
+  /^Goal check-in: \u00ab/,
+  // Research sub-agents: their briefs, and a synthesis handed back in.
+  /^Read-only (architecture )?(survey|research|audit)\b/i,
+  /^## Synthesis: research report/,
+  /^(Build a cited fact sheet|Deep-history fact research) for\b/,
 ];
 
 // Some harnesses store the prompt JSON-quoted; judge the text inside.
@@ -137,12 +157,16 @@ export function isAgentWritten(text: string): boolean {
   return AGENT_WRITTEN.some((re) => re.test(t)) || DEMO_PERSONA.test(t.slice(0, 1500));
 }
 
+const HARNESS_NOTICE = /^(\[Image: original \d+x\d+, displayed at \d+x\d+\.[^\]]*\]|<task-notification\b[\s\S]*)$/;
+
 export function isInternalPrompt(text: string, cwd = ""): boolean {
   const t = unquote(text);
   if (!t) return true;
   if (cwd && DEMO_CWD.test(cwd)) return true;
   if (BENCH_CONTEXT.test(t) || COACH_REVIEW.test(t) || HARNESS_COMMAND.test(t.trimEnd())) return true;
   if (CORPUS_PART.test(t)) return true;
+  // Harness notices written into the transcript as if the user sent them.
+  if (HARNESS_NOTICE.test(t.trim())) return true;
   return INTERNAL_STARTS.some((s) => t.startsWith(s));
 }
 
@@ -279,12 +303,56 @@ export function claudeSessionEntries(home = homedir()): Map<string, string> {
   return out;
 }
 
+// Briefs one agent handed a sub-agent. Claude Code keeps each sub-agent's
+// transcript under <session>/subagents/, its first "user" message being the
+// brief. Records synced before sync marked them ("sidechain") are recognized
+// here by session and opening text, for the transcripts still on disk.
+const sidechainCache = new Map<string, Set<string>>();
+export const sidechainKey = (session: string, text: string) => `${session}\u0001${text.trim().slice(0, 200)}`;
+
+export function claudeSidechainBriefs(home = homedir()): Set<string> {
+  const cached = sidechainCache.get(home);
+  if (cached) return cached;
+  const out = new Set<string>();
+  sidechainCache.set(home, out);
+  const root = join(home, ".claude", "projects");
+  let dirs: string[] = [];
+  try { dirs = readdirSync(root); } catch { return out; }
+  const buf = Buffer.alloc(8192);
+  for (const d of dirs) {
+    let sessions: string[] = [];
+    try { sessions = readdirSync(join(root, d), { withFileTypes: true }).filter((x) => x.isDirectory()).map((x) => x.name); } catch { continue; }
+    for (const s of sessions) {
+      let files: string[] = [];
+      try { files = readdirSync(join(root, d, s, "subagents")).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
+      for (const f of files) {
+        let fd = -1;
+        try {
+          fd = openSync(join(root, d, s, "subagents", f), "r");
+          const n = readSync(fd, buf, 0, buf.length, 0);
+          const head = buf.subarray(0, n).toString("utf8");
+          const sid = head.match(/"sessionId":"([^"]+)"/)?.[1] ?? s;
+          // The brief's opening, decoded from the JSON string (it may be cut
+          // off by the head buffer, so no full JSON parse).
+          const m = head.match(/"content":"((?:[^"\\]|\\.){1,1200})/);
+          if (!m) continue;
+          let text = "";
+          try { text = JSON.parse(`"${m[1].replace(/\\$/, "")}"`); } catch { continue; }
+          if (text.trim()) out.add(sidechainKey(sid, text));
+        } catch { /* unreadable transcript */ } finally { if (fd >= 0) closeSync(fd); }
+      }
+    }
+  }
+  return out;
+}
+
 // Every user prompt, oldest first. A prompt typed twice in the same session
 // (hook push + transcript sync) is one prompt; the same text in different
 // sessions is kept, since repeating an instruction is itself a signal.
 export function loadCorpus(vault: string, home: string = homedir()): { prompts: PromptRec[]; stats: CorpusStats } {
   const stats: CorpusStats = { records: 0, internal: 0, program: 0, duplicates: 0, kept: 0 };
   const entries = claudeSessionEntries(home);
+  const briefs = claudeSidechainBriefs(home);
   const { roots } = readCorpusConfig(vault);
   const seen = new Set<string>();
   const prompts: PromptRec[] = [];
@@ -296,7 +364,8 @@ export function loadCorpus(vault: string, home: string = homedir()): { prompts: 
     const text = userTextOf(raw, r.cwd);
     if (!text) { stats.internal++; return; }
     const how = entry || (r.tool === "claude" ? entries.get(r.session) ?? "" : "");
-    if (how === "sdk-cli" || isAgentWritten(text)) { stats.program++; return; }
+    if (how === "sdk-cli" || how === "sidechain" || isAgentWritten(text)) { stats.program++; return; }
+    if (r.tool === "claude" && briefs.has(sidechainKey(r.session, text))) { stats.program++; return; }
     const key = `${r.tool}\u0001${r.session}\u0001${text}`;
     if (seen.has(key)) { stats.duplicates++; return; }
     seen.add(key);
