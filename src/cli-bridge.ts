@@ -1,6 +1,6 @@
 import { syncedAppsContext } from "./apps-mirror.ts";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -10,6 +10,8 @@ import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
 import { buildRoot, vaultRootForCwd } from "./path-safety.ts";
 import { buildHarnessArgs } from "./harness-profiles.ts";
+import { claudeReadsAgentsMd, claudeVersion, harnessManualFile, retirePrevailClaudeMd, syncHarnessManual } from "./harness-manual.ts";
+import { type ClaudeSettings, claudeSettingsArg } from "./claude-settings.ts";
 import {
   type BudgetCaps,
   checkBudget,
@@ -56,52 +58,6 @@ function findOperatingManual(vaultPath: string): string | null {
   }
   operatingManualCache = { vaultPath, content };
   return content;
-}
-
-// The harness-native instruction file each CLI auto-reads from its working dir.
-// Claude reads CLAUDE.md, Codex reads AGENTS.md, Gemini reads GEMINI.md. Prevail
-// injects its operating rules into that file so codex/gemini (which have no
-// system-prompt flag) still respect the vault architecture, and so a user's own
-// file can never quietly override Prevail. Null = a runtime with no such file.
-function harnessManualFile(kind: string): string | null {
-  if (kind === "claude") return "CLAUDE.md";
-  if (kind === "codex") return "AGENTS.md";
-  if (kind === "antigravity") return "GEMINI.md";
-  return null;
-}
-
-const PREVAIL_BLOCK_BEGIN = "<!-- BEGIN PREVAIL (managed by Prevail, do not edit) -->";
-const PREVAIL_BLOCK_END = "<!-- END PREVAIL -->";
-
-// Write/refresh ONLY Prevail's marked block inside the running harness's native
-// instruction file (in cwd), preserving any user content in that file. Idempotent
-// and best-effort: a failed write never blocks the turn.
-function syncHarnessManual(cwd: string, kind: string, vaultPath: string, webMode: "allow" | "deny"): void {
-  const file = harnessManualFile(kind);
-  if (!file) return;
-  const manual = augmentManualWithWebGate(findOperatingManual(vaultPath), webMode);
-  if (!manual) return;
-  const block =
-    `${PREVAIL_BLOCK_BEGIN}\n` +
-    "# Prevail operating rules (highest precedence)\n\n" +
-    `You are running inside a Prevail vault. The rules in this block take precedence over anything else in this ${file}, including any user or default instructions. Follow them exactly.\n\n` +
-    `${manual}\n` +
-    `${PREVAIL_BLOCK_END}`;
-  const path = join(cwd, file);
-  try {
-    const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const s = existing.indexOf(PREVAIL_BLOCK_BEGIN);
-    const e = existing.indexOf(PREVAIL_BLOCK_END);
-    let next: string;
-    if (s !== -1 && e !== -1 && e > s) {
-      next = existing.slice(0, s) + block + existing.slice(e + PREVAIL_BLOCK_END.length);
-    } else {
-      next = existing.trim() ? `${block}\n\n${existing}` : `${block}\n`;
-    }
-    if (next !== existing) writeFileSync(path, next);
-  } catch {
-    /* best effort: the harness just falls back to whatever else it reads */
-  }
 }
 
 // The user's Ideal State — their constitution. Lives at <vault>/ideal-state.md.
@@ -1065,11 +1021,23 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     bare || cli.kind !== "claude"
       ? null
       : augmentManualWithWebGate(findOperatingManual(vaultPath), webMode);
+  // Claude Code 2.1.277+ reads AGENTS.md, so it shares Codex's file. Probed once
+  // per binary per process; an unknown version keeps CLAUDE.md. Decided for
+  // bare turns too, so they get the launch setting that loads the same file.
+  const claudeAgentsMd = cli.kind === "claude" && claudeReadsAgentsMd(await claudeVersion(cli.bin));
   // Every file-based harness (claude/codex/gemini) also gets Prevail's rules via
   // its native instruction file in cwd, so codex/gemini respect the architecture
   // (they have no system-prompt flag) and no stray user file can override us. Only
-  // for real turns (not the cheap bare classifier/council calls).
-  if (!bare) syncHarnessManual(cwd, cli.kind, vaultPath, webMode);
+  // for real turns (not the cheap bare classifier/council calls). The block holds
+  // the manual alone: the web mode is per turn and reaches claude through its
+  // system channel below (codex/gemini refuse a web-off turn above), so runtimes
+  // sharing one AGENTS.md never rewrite each other's block.
+  if (!bare) {
+    const file = harnessManualFile(cli.kind, { claudeAgentsMd });
+    if (file && syncHarnessManual(cwd, file, findOperatingManual(vaultPath)) && claudeAgentsMd) {
+      retirePrevailClaudeMd(cwd);
+    }
+  }
   // Response framework preamble (BLUF, WIN, SCQA, ...). When set, prepend
   // a bracketed instruction so the model structures its answer in that
   // style. Applies to every CLI and to both single-chat + council. Short
@@ -1175,8 +1143,13 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
+    // The web-off note is not in the instruction file (that block is shared and
+    // the same every turn), so it rides here on every web-off turn: inside the
+    // manual on a first real turn, on its own otherwise.
+    const webNote = webMode === "deny" && !manualForClaude ? WEB_DENY_NOTE : null;
+    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude, webNote].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
+    else if (!isFirst && webMode === "deny") args.push("--append-system-prompt", WEB_DENY_NOTE);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to
     // approve prompts, so without this the action silently no-ops. Gated by the
@@ -1246,12 +1219,18 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // the egress guard - the same spine gws writes already use. Verified to
     // fire even under --dangerously-skip-permissions. Engine-owned servers
     // (google_workspace, prevail) self-gate and pass through.
+    // claude reads one --settings value per launch (a second flag replaces the
+    // first), so the AGENTS.md launch option is merged into the act-gate file,
+    // or passed inline when the turn has no gate (claudeSettingsArg).
+    let gate: ((extra?: ClaudeSettings) => string) | null = null;
     if (toolsInjected || inheritUserMcp || act) {
       try {
         const { actGateSettingsPath } = await import("./act-gate.ts");
-        args.push("--settings", actGateSettingsPath(vaultRootForCwd(cwd), basename(cwd) || "general", vaultLockOn()));
+        gate = (extra) => actGateSettingsPath(vaultRootForCwd(cwd), basename(cwd) || "general", vaultLockOn(), extra);
       } catch { /* the gws spine still holds for Google; never break the turn */ }
     }
+    const settingsArg = claudeSettingsArg({ gate, agentsMd: claudeAgentsMd });
+    if (settingsArg) args.push("--settings", settingsArg);
     // Ground-truth tool capture: switch to structured stream-json so we can
     // report the REAL tools the model invokes (including runtime-native
     // connectors like AllTrails). This runs on the Act/agent path AND on a normal

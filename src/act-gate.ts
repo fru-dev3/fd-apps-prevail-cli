@@ -26,6 +26,7 @@ import { dirname, join, resolve as pathResolve } from "node:path";
 import { tryAcquireLock } from "./file-lock.ts";
 import { scanSensitive, findingCategories, readEgressGuard } from "./egress-guard.ts";
 import { auditAction } from "./action-audit.ts";
+import { type ClaudeSettings, mergeClaudeSettings } from "./claude-settings.ts";
 
 export interface PendingAct {
   id: string;
@@ -356,10 +357,14 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
 // gate needs no environment plumbing. Stable path -> written once, reused.
 // Dev caveat (same as gws-mcp): under `bun run` process.execPath is bun, so
 // the hook only binds in compiled builds - matching the rest of the MCP stack.
-export function actGateSettingsPath(vault: string, domain: string, vaultLockOn = true): string {
+// `extra` is merged in (claude-settings.ts): claude takes one --settings value
+// per launch, so anything else the turn needs rides in this same file. The
+// file name covers `extra` too; with none, path and body are as before.
+export function actGateSettingsPath(vault: string, domain: string, vaultLockOn = true, extra?: ClaudeSettings): string {
   const dir = join(homedirSafe(), ".prevail", "act-gate");
   mkdirSync(dir, { recursive: true });
-  const key = createHash("sha256").update(`${vault}\n${domain}\n${vaultLockOn}`).digest("hex").slice(0, 12);
+  const keyInput = `${vault}\n${domain}\n${vaultLockOn}${extra ? `\n${JSON.stringify(extra)}` : ""}`;
+  const key = createHash("sha256").update(keyInput).digest("hex").slice(0, 12);
   const path = join(dir, `${key}.json`);
   const q = (v: string) => `"${v.replace(/(["\\$`])/g, "\\$1")}"`;
   const lock = vaultLockOn ? " --vault-lock" : "";
@@ -368,7 +373,7 @@ export function actGateSettingsPath(vault: string, domain: string, vaultLockOn =
   // WebFetch/WebSearch), not just mcp__* connectors, or the model's own shell
   // escapes every guardrail on an act run. gateBuiltin enforces the Vault Lock
   // boundary technically; non-builtins fall through to the connector classifier.
-  const settings = { hooks: { PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", command }] }] } };
+  const settings = mergeClaudeSettings({ hooks: { PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", command }] }] } }, extra);
   const body = JSON.stringify(settings);
   try { if (existsSync(path) && readFileSync(path, "utf8") === body) return path; } catch { /* rewrite */ }
   writeFileSync(path, body);

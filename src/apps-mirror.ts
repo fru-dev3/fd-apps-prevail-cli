@@ -523,7 +523,9 @@ export interface MirrorDeps {
 const LIST_TIMEOUT = 90_000;
 const VERSION_TIMEOUT = 15_000;
 
-async function version(exec: Exec, bin: string): Promise<{ installed: boolean; version?: string; error?: string }> {
+// `<bin> --version`, first line. Also the engine's Claude Code version gate
+// (harness-manual.ts), so both read a runtime's version the same way.
+export async function runtimeVersion(exec: Exec, bin: string): Promise<{ installed: boolean; version?: string; error?: string }> {
   const r = await exec(bin, ["--version"], { timeoutMs: VERSION_TIMEOUT });
   if (r.missing) return { installed: false };
   const v = (r.stdout || r.stderr).trim().split("\n")[0]?.trim();
@@ -560,7 +562,7 @@ async function scanRuntime(
 ): Promise<RuntimeScan> {
   const bin = runtime;
   const info: RuntimeInfo = { runtime, installed: false, syncable: runtime === "claude", signin_hint: runtimeSigninHint(runtime), count: 0 };
-  const v = await version(exec, bin);
+  const v = await runtimeVersion(exec, bin);
   info.installed = v.installed;
   if (v.version) info.version = v.version;
   if (!v.installed) return { info, apps: [] };
