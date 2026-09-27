@@ -7,6 +7,17 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.9.31] - 2026-09-27 · Approvals in the conversation, waiting feed, conversation schedules
+
+### Added
+- **Deny that sticks**: `prevail acts deny` refuses a held action and tells the agent it was declined; a retry of the same call within 30 minutes is refused without queueing it again.
+- **Always allow, per tool per domain**: `acts approve --always` saves a rule, listed by `acts rules` and removed by `acts rules-revoke`. Rules cover only calls that read as edits, drafts, saves or reads and carry nothing sensitive; payments, sends, deletes, credentials and any tool the classifier cannot place always ask.
+- **Waiting feed**: `prevail waiting` lists everything blocked on you (held actions, Google writes, automation actions, tasks awaiting you).
+- **Conversation schedules**: `schedule add-thread` runs a prompt in a conversation on a schedule and adds the reply to it; `schedule enable`, `disable` and `run` join `list` and `remove`. Only the hub fires them.
+
+### Changed
+- Held actions carry a stable marker and, when known, the conversation they came from (`prevail chat --thread`).
+
 ## [1.9.30] - 2026-09-26 · One "what to do next" feed and General-first routing
 
 ### Changed
