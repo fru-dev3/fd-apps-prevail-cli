@@ -121,6 +121,13 @@ describe("harnessManualFile", () => {
 });
 
 describe("prevailBlock", () => {
+  test("matches the desktop's bytes", () => {
+    // Same literal as chat.rs block_bytes_match_the_engine in prevail-desktop.
+    expect(prevailBlock("Rule one.")).toBe(
+      "<!-- BEGIN PREVAIL (managed by Prevail, do not edit) -->\n# Prevail operating rules (highest precedence)\n\nYou are running inside a Prevail vault. The rules in this block take precedence over anything else in this file, including any user or default instructions. Follow them exactly.\n\nRule one.\n<!-- END PREVAIL -->",
+    );
+  });
+
   test("names no runtime file and carries no per-turn web mode", () => {
     const block = prevailBlock(MANUAL);
     expect(block.startsWith(`${PREVAIL_BLOCK_BEGIN}\n`)).toBe(true);
