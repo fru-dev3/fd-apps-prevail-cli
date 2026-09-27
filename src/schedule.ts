@@ -12,6 +12,16 @@ export interface ScheduleEntry {
   enabled: boolean;
   last_run: number | null;
   created_at: number;
+  // Conversation schedule (thread-schedule.ts): when set, the entry is NOT a
+  // shell command. When due, `prompt` runs as a new turn in this chat thread
+  // on the hub, and `command` is left empty.
+  thread?: { domain: string; session: string };
+  prompt?: string;
+}
+
+/** A conversation schedule: runs a prompt in a chat thread, never a shell. */
+export function isThreadSchedule(e: ScheduleEntry): boolean {
+  return !!e.thread && typeof e.prompt === "string";
 }
 
 export interface ScheduleFile {
@@ -107,6 +117,8 @@ function vaultShellAllowed(): boolean {
 export function runSchedule(entry: ScheduleEntry, vaultPath: string): Promise<RunResult> {
   return new Promise((resolve) => {
     const ts = Date.now();
+    // A conversation schedule is a chat turn (thread-schedule.ts), never shell.
+    if (isThreadSchedule(entry)) { resolve({ id: entry.id, ts, exit: null, ok: false }); return; }
     if (!vaultShellAllowed()) {
       // Refuse — log the attempt loudly but don't execute. Honoring this
       // refusal is the difference between "schedule didn't fire" (annoying)
@@ -150,6 +162,8 @@ export function tickAndRunDue(vaultPath: string, now: Date = new Date()): Schedu
     let mutated = false;
     for (const s of schedules) {
       if (!s.enabled) continue;
+      // Conversation schedules are fired by the hub daemon (thread-schedule.ts).
+      if (isThreadSchedule(s)) continue;
       const minuteStart = Math.floor(now.getTime() / 60000) * 60000;
       if (s.last_run && s.last_run >= minuteStart) continue;
       if (!isCronDue(s.cron, now)) continue;

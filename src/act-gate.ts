@@ -26,6 +26,7 @@ import { dirname, join, resolve as pathResolve } from "node:path";
 import { tryAcquireLock } from "./file-lock.ts";
 import { scanSensitive, findingCategories, readEgressGuard } from "./egress-guard.ts";
 import { auditAction } from "./action-audit.ts";
+import { classifyAction, type ActionClass } from "./action-policy.ts";
 
 export interface PendingAct {
   id: string;
@@ -38,6 +39,30 @@ export interface PendingAct {
   /** Egress-guard category labels found in the arguments (honest, no values). */
   categories: string[];
   ts: number;
+  /** The Prevail thread (chat session) whose turn hit the gate, when known
+   *  (PREVAIL_THREAD_ID on the spawned turn). Absent on paths with no thread. */
+  thread?: string;
+}
+
+/** What `acts pending-list` prints: the stored act plus its risk class and
+ *  whether an "Always allow" rule may be offered for it. Derived on read, so
+ *  acts queued by an older build get them too. */
+export interface PendingActView extends PendingAct {
+  actionClass: ActionClass;
+  alwaysEligible: boolean;
+}
+
+/** An "Always allow" rule: this tool, in this domain, runs without asking,
+ *  as long as the call is not consequential and carries nothing sensitive. */
+export interface ActRule {
+  tool: string;
+  domain: string;
+  ts: number;
+}
+
+interface ActDenial {
+  hash: string;
+  ts: number;
 }
 
 interface ActGrant {
@@ -47,9 +72,20 @@ interface ActGrant {
 }
 
 const GRANT_TTL_MS = 10 * 60 * 1000; // approval is good for one retry within 10 minutes
+export const DENIAL_TTL_MS = 30 * 60 * 1000; // a declined (tool, args) stays declined for 30 minutes
+
+/** Machine marker appended to every queue-deny reason. The desktop finds it in
+ *  a tool result and renders the approval card in the chat flow. Stable. */
+export const actMarker = (id: string) => `[prevail-act:${id}]`;
+
+/** What the model is told when it retries something the user declined. */
+export const DECLINED_REASON =
+  "The user declined this action. It was not run. Do not retry it or try another route; tell the user it was not done.";
 
 const pendingPath = (vault: string) => join(vault, "_meta", "pending_acts.json");
 const grantsPath = (vault: string) => join(vault, "_meta", "act_grants.json");
+const denialsPath = (vault: string) => join(vault, "_meta", "act_denials.json");
+const rulesPath = (vault: string) => join(vault, "_meta", "act_rules.json");
 
 function readJson<T>(path: string, fallback: T): T {
   try { return JSON.parse(readFileSync(path, "utf8")) as T; } catch { return fallback; }
@@ -104,9 +140,36 @@ export function actSummary(toolName: string): string {
   return `${server}: ${parts[2] ?? parts[1] ?? toolName}`;
 }
 
+/** Risk class of a connector call. classifyAction matches whole words, and a
+ *  tool leaf like "create_invoice" is one word to \b, so split on the
+ *  separators (and camelCase) first: "PayPal: create invoice" -> financial. */
+export function actClass(toolName: string): ActionClass {
+  const words = actSummary(toolName).replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[-_]+/g, " ");
+  return classifyAction(words);
+}
+
+/** An act may carry an "Always allow" rule only when its name reads as a
+ *  known low-risk write (edit, draft, save) or a read, and the egress scan
+ *  found nothing. An allowlist, not "not consequential": the classifier is
+ *  keyword-based, so a tool it cannot place ("make_payment", "submit_order",
+ *  "execute_trade" all come back "unknown") must never earn a standing rule. */
+const ALWAYS_CLASSES: ReadonlySet<ActionClass> = new Set<ActionClass>(["reversible", "read"]);
+export function isAlwaysEligible(toolName: string, categories: readonly string[]): boolean {
+  return ALWAYS_CLASSES.has(actClass(toolName)) && categories.length === 0;
+}
+
 // ── Queue + grants (file-locked; lock the .lock sibling, never the data) ─────
 export function readPendingActs(vault: string): PendingAct[] {
   return readJson<PendingAct[]>(pendingPath(vault), []);
+}
+
+/** The pending queue as `acts pending-list` prints it. */
+export function readPendingActsView(vault: string): PendingActView[] {
+  return readPendingActs(vault).map((a) => ({
+    ...a,
+    actionClass: actClass(a.tool),
+    alwaysEligible: isAlwaysEligible(a.tool, a.categories ?? []),
+  }));
 }
 
 // Sync critical section: acquire the .lock sibling (NEVER the data file - the
@@ -130,7 +193,12 @@ function addPendingAct(vault: string, act: Omit<PendingAct, "id" | "ts">): Pendi
     // Same (tool,args) already queued -> reuse it instead of stacking dupes
     // when the model retries before approval.
     const dupe = items.find((a) => a.tool === rec.tool && a.argsJson === rec.argsJson);
-    if (dupe) { rec.id = dupe.id; rec.ts = dupe.ts; return; }
+    if (dupe) {
+      rec.id = dupe.id; rec.ts = dupe.ts;
+      // A retry from a known thread fills in a thread the first attempt lacked.
+      if (rec.thread && !dupe.thread) { dupe.thread = rec.thread; writeJson(pendingPath(vault), items); }
+      return;
+    }
     items.push(rec);
     writeJson(pendingPath(vault), items);
   });
@@ -138,10 +206,16 @@ function addPendingAct(vault: string, act: Omit<PendingAct, "id" | "ts">): Pendi
 }
 
 /** Approve one pending act: mint the single-use grant its retry will consume.
- *  `allowSensitive` is the explicit second tap when categories were found. */
-export function approvePendingAct(vault: string, id: string, allowSensitive = false): { ok: boolean; error?: string } {
+ *  `allowSensitive` is the explicit second tap when categories were found.
+ *  `always` also saves a (tool, domain) rule so later non-consequential,
+ *  non-sensitive calls of that tool run without asking; an ineligible act is
+ *  refused outright and nothing is approved. */
+export function approvePendingAct(vault: string, id: string, allowSensitive = false, always = false): { ok: boolean; error?: string } {
   const act = readPendingActs(vault).find((a) => a.id === id);
   if (!act) return { ok: false, error: "no such pending act" };
+  if (always && !isAlwaysEligible(act.tool, act.categories ?? [])) {
+    return { ok: false, error: "not eligible for always-allow" };
+  }
   if (act.categories.length > 0 && !allowSensitive) {
     return { ok: false, error: `this action carries ${act.categories.join("; ")} - approve it with sensitive info explicitly allowed` };
   }
@@ -151,11 +225,65 @@ export function approvePendingAct(vault: string, id: string, allowSensitive = fa
     writeJson(grantsPath(vault), grants);
   });
   removePendingAct(vault, id);
+  if (always) saveActRule(vault, act.tool, act.domain);
   auditAction(vault, {
     ts: Date.now(), domain: act.domain, action: act.summary,
-    outcome: "proposed", report: `user approved connector act ${act.tool} (grant minted${allowSensitive ? ", sensitive released" : ""})`,
+    outcome: "proposed", report: `user approved connector act ${act.tool} (grant minted${allowSensitive ? ", sensitive released" : ""}${always ? ", always-allow rule saved" : ""})`,
   });
   return { ok: true };
+}
+
+/** Decline one pending act: drop it and remember its (tool, args) hash for
+ *  DENIAL_TTL_MS, so the model's retry is refused at once instead of queueing
+ *  the same thing again. (`acts dismiss` only clears; the agent is not told.) */
+export function denyPendingAct(vault: string, id: string): { ok: boolean; error?: string } {
+  const act = readPendingActs(vault).find((a) => a.id === id);
+  if (!act) return { ok: false, error: "no such pending act" };
+  const now = Date.now();
+  locked(denialsPath(vault), () => {
+    const denials = readJson<ActDenial[]>(denialsPath(vault), []).filter((d) => now - d.ts < DENIAL_TTL_MS);
+    denials.push({ hash: actHash(act.tool, act.argsJson), ts: now });
+    writeJson(denialsPath(vault), denials);
+  });
+  removePendingAct(vault, id);
+  auditAction(vault, {
+    ts: now, domain: act.domain, action: act.summary,
+    outcome: "denied", report: `user declined connector act ${act.tool}; it was not run`,
+  });
+  return { ok: true };
+}
+
+function isDenied(vault: string, hash: string): boolean {
+  const now = Date.now();
+  return readJson<ActDenial[]>(denialsPath(vault), []).some((d) => d.hash === hash && now - d.ts < DENIAL_TTL_MS);
+}
+
+// ── Always-allow rules (per tool, per domain) ────────────────────────────────
+export function readActRules(vault: string): ActRule[] {
+  const rules = readJson<ActRule[]>(rulesPath(vault), []);
+  return Array.isArray(rules) ? rules.filter((r) => r && typeof r.tool === "string" && typeof r.domain === "string") : [];
+}
+
+function saveActRule(vault: string, tool: string, domain: string): void {
+  locked(rulesPath(vault), () => {
+    const rules = readActRules(vault).filter((r) => !(r.tool === tool && r.domain === domain));
+    rules.push({ tool, domain, ts: Date.now() });
+    writeJson(rulesPath(vault), rules);
+  });
+}
+
+/** Remove one rule. Idempotent: revoking a rule that is not there is fine. */
+export function revokeActRule(vault: string, tool: string, domain: string): { ok: boolean } {
+  locked(rulesPath(vault), () => {
+    const rules = readActRules(vault);
+    const next = rules.filter((r) => !(r.tool === tool && r.domain === domain));
+    if (next.length !== rules.length) writeJson(rulesPath(vault), next);
+  });
+  return { ok: true };
+}
+
+function hasActRule(vault: string, tool: string, domain: string): boolean {
+  return readActRules(vault).some((r) => r.tool === tool && r.domain === domain);
 }
 
 /** Consume a grant if one matches. Single-use: a matching grant is removed. */
@@ -314,7 +442,7 @@ export interface GateDecision {
   reason?: string;
 }
 
-export function gateToolCall(vault: string, domain: string, toolName: string, toolInput: unknown, vaultLockOn = true): GateDecision {
+export function gateToolCall(vault: string, domain: string, toolName: string, toolInput: unknown, vaultLockOn = true, opts: { thread?: string } = {}): GateDecision {
   // C1: builtins first - the technical Vault Lock boundary.
   const builtin = gateBuiltin(vault, vaultLockOn, toolName, toolInput);
   if (builtin) {
@@ -326,9 +454,22 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
   if (classifyAct(toolName) === "allow") return { action: "allow" };
   const argsJson = JSON.stringify(toolInput ?? {});
   const hash = actHash(toolName, argsJson);
+  // The user already said no to this exact call: refuse without re-queueing,
+  // so a retry loop cannot put the same card back in front of them.
+  if (isDenied(vault, hash)) return { action: "deny", reason: DECLINED_REASON };
   // Egress scan on everything the tool would carry out of the system.
   const findings = readEgressGuard() === "on" ? scanSensitive(argsJson) : [];
   const categories = findingCategories(findings);
+  // An "Always allow" rule covers only the harmless shape: never a
+  // consequential call and never one carrying sensitive data. Those fall
+  // through to the grant check and the queue like any other.
+  if (hasActRule(vault, toolName, domain) && isAlwaysEligible(toolName, categories)) {
+    auditAction(vault, {
+      ts: Date.now(), domain, action: actSummary(toolName),
+      outcome: "executed", report: `ran under always-allow rule (${toolName})`,
+    });
+    return { action: "allow" };
+  }
   const grant = consumeGrant(vault, hash);
   if (grant && (categories.length === 0 || grant.allowSensitive)) {
     auditAction(vault, {
@@ -337,7 +478,7 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
     });
     return { action: "allow" };
   }
-  const rec = addPendingAct(vault, { domain, summary: actSummary(toolName), tool: toolName, argsJson, categories });
+  const rec = addPendingAct(vault, { domain, summary: actSummary(toolName), tool: toolName, argsJson, categories, ...(opts.thread ? { thread: opts.thread } : {}) });
   auditAction(vault, {
     ts: Date.now(), domain, action: rec.summary,
     outcome: "proposed", report: `connector act queued for approval (${toolName})${categories.length ? ` - carries ${categories.join("; ")}` : ""}`,
@@ -347,7 +488,7 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
     action: "deny",
     reason:
       `This action was NOT run. Prevail queued it for the user's approval under Needs You (id ${rec.id}).${sens} ` +
-      `Tell the user what you are trying to do and that it awaits their approval; after they approve, call this exact tool with the exact same arguments to run it. Do not attempt another route.`,
+      `Tell the user what you are trying to do and that it awaits their approval; after they approve, call this exact tool with the exact same arguments to run it. Do not attempt another route. ${actMarker(rec.id)}`,
   };
 }
 
@@ -379,6 +520,14 @@ function homedirSafe(): string {
   try { return require("node:os").homedir(); } catch { return "/tmp"; }
 }
 
+/** The Prevail thread of the turn that spawned this hook: the engine sets
+ *  PREVAIL_THREAD_ID on the turns it runs and Claude Code passes its env to
+ *  hooks. Only a plain id is trusted (it lands in JSON the desktop routes on). */
+export function threadIdFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const t = (env.PREVAIL_THREAD_ID ?? "").trim();
+  return /^[A-Za-z0-9_-]{1,128}$/.test(t) ? t : undefined;
+}
+
 /** The hook entrypoint: read the Claude Code PreToolUse JSON from stdin, gate,
  *  and print the decision in the hook protocol. Never throws (a gate crash
  *  must fail CLOSED for gated tools, so unparseable input denies). */
@@ -395,7 +544,7 @@ export async function runActGateHook(vault: string, domain: string, vaultLockOn 
   if (!toolName) { process.stdout.write("{}\n"); return; }
   let decision: GateDecision;
   try {
-    decision = gateToolCall(vault, domain, toolName, toolInput, vaultLockOn);
+    decision = gateToolCall(vault, domain, toolName, toolInput, vaultLockOn, { thread: threadIdFromEnv() });
   } catch (e) {
     // Fail closed for gated shapes, open for builtins.
     decision = classifyAct(toolName) === "allow"

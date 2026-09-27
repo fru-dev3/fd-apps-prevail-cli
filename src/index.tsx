@@ -96,6 +96,8 @@ interface Args {
   actGateArgs: string[];
   actsCmd: boolean;
   actsArgs: string[];
+  waitingCmd: boolean;
+  waitingArgs: string[];
   agentRun: boolean;
   agentRunArgs: string[];
   score: boolean;
@@ -227,6 +229,8 @@ function parseArgs(argv: string[]): Args {
   let actGateArgs: string[] = [];
   let actsCmd = false;
   let actsArgs: string[] = [];
+  let waitingCmd = false;
+  let waitingArgs: string[] = [];
   let agentRun = false;
   let agentRunArgs: string[] = [];
   let score = false;
@@ -436,6 +440,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "acts") {
       actsCmd = true;
       actsArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "waiting") {
+      waitingCmd = true;
+      waitingArgs = argv.slice(i + 1);
       break;
     } else if (a === "chat") {
       chat = true;
@@ -648,6 +656,8 @@ function parseArgs(argv: string[]): Args {
     actGateArgs,
     actsCmd,
     actsArgs,
+    waitingCmd,
+    waitingArgs,
     chatArgs,
     agentRun,
     agentRunArgs,
@@ -822,17 +832,35 @@ CHAT (right pane, always live)
 }
 
 async function scheduleCommand(args: string[], vaultOverride: string | null) {
-  const { loadSchedules, saveSchedules, makeScheduleId, isValidCron, isCronDue, runSchedule, describeCron, nextRunWithin } = await import("./schedule.ts");
+  const { loadSchedules, saveSchedules, makeScheduleId, isValidCron, isCronDue, runSchedule, describeCron, nextRunWithin, isThreadSchedule } = await import("./schedule.ts");
+  const ts = await import("./thread-schedule.ts");
+  // `schedule` stops the global parser, so --vault / --json after the
+  // subcommand are read here (the desktop passes `schedule <sub> ... --vault V`).
+  const flag = (name: string) => {
+    const i = args.indexOf(`--${name}`);
+    return i >= 0 ? (args[i + 1] ?? "") : "";
+  };
+  const json = args.includes("--json");
   const cfg = readConfig();
-  const vault = vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
-  if (!existsSync(vault)) {
-    console.error(`vault path not found: ${vault}`);
+  const vaultFlag = flag("vault");
+  const vault = (vaultFlag ? resolve(process.cwd(), vaultFlag) : null) ?? vaultOverride ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+  const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
+  const failJson = (error: string): never => {
+    if (json) out({ ok: false, error });
+    else console.error(error);
     process.exit(1);
-  }
+  };
+  if (!existsSync(vault)) failJson(`vault path not found: ${vault}`);
+  // An id is the first positional after the subcommand, or --id.
+  const idArg = () => flag("id") || (args[1] && !args[1].startsWith("--") ? args[1] : "");
 
   const sub = args[0];
   if (!sub || sub === "list" || sub === "ls") {
     const schedules = loadSchedules(vault);
+    if (json) {
+      out(schedules.map((s) => ({ ...s, next_run: nextRunWithin(s.cron) })));
+      return;
+    }
     if (schedules.length === 0) {
       console.log(`no schedules in ${vault}/.schedule.json`);
       console.log(`add one with: prevail schedule add "<cron>" "<command>" [--name <name>]`);
@@ -846,7 +874,12 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
       console.log(`  ${status} ${s.id}`);
       console.log(`    name:     ${s.name}`);
       console.log(`    cron:     ${s.cron}  (${describeCron(s.cron)})`);
-      console.log(`    command:  ${s.command}`);
+      if (isThreadSchedule(s)) {
+        console.log(`    thread:   ${s.thread!.domain}/${s.thread!.session}`);
+        console.log(`    prompt:   ${s.prompt}`);
+      } else {
+        console.log(`    command:  ${s.command}`);
+      }
       console.log(`    last_run: ${s.last_run ? new Date(s.last_run).toLocaleString() : "(never)"}`);
       console.log(`    next:     ${nextLabel}\n`);
     }
@@ -889,35 +922,66 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
     return;
   }
 
-  if (sub === "remove" || sub === "rm") {
-    const id = args[1];
-    if (!id) {
-      console.error("usage: prevail schedule remove <id>");
+  if (sub === "add-thread") {
+    // A conversation schedule: run --prompt as a new turn in chat thread
+    // --session of --domain on --cron. Prints the created entry as JSON.
+    const r = ts.addThreadSchedule(vault, {
+      domain: flag("domain"),
+      session: flag("session"),
+      prompt: flag("prompt"),
+      cron: flag("cron"),
+      name: flag("name"),
+    });
+    if (!r.ok) {
+      out({ ok: false, error: r.error });
       process.exit(1);
     }
+    out(r.entry);
+    return;
+  }
+
+  if (sub === "enable" || sub === "disable") {
+    const id = idArg();
+    if (!id) failJson(`usage: prevail schedule ${sub} <id> [--json]`);
+    const schedules = loadSchedules(vault);
+    const entry = schedules.find((s) => s.id === id);
+    if (!entry) failJson(`no schedule with id ${id}`);
+    entry!.enabled = sub === "enable";
+    saveSchedules(vault, schedules);
+    if (json) out({ ok: true, entry });
+    else console.log(`✓ ${sub}d ${id}`);
+    return;
+  }
+
+  if (sub === "remove" || sub === "rm") {
+    const id = idArg();
+    if (!id) failJson("usage: prevail schedule remove <id> [--json]");
     const before = loadSchedules(vault);
     const after = before.filter((s) => s.id !== id);
-    if (after.length === before.length) {
-      console.error(`no schedule with id ${id}`);
-      process.exit(1);
-    }
+    if (after.length === before.length) failJson(`no schedule with id ${id}`);
     saveSchedules(vault, after);
-    console.log(`✓ removed ${id}`);
+    if (json) out({ ok: true });
+    else console.log(`✓ removed ${id}`);
     return;
   }
 
   if (sub === "run") {
-    const id = args[1];
-    if (!id) {
-      console.error("usage: prevail schedule run <id>");
-      process.exit(1);
-    }
+    const id = idArg();
+    if (!id) failJson("usage: prevail schedule run <id> [--json]");
     const schedules = loadSchedules(vault);
     const entry = schedules.find((s) => s.id === id);
-    if (!entry) {
-      console.error(`no schedule with id ${id}`);
-      process.exit(1);
+    if (!entry) failJson(`no schedule with id ${id}`);
+    if (isThreadSchedule(entry!)) {
+      // Run the conversation turn now (user-initiated, so any machine may).
+      entry!.last_run = Date.now();
+      saveSchedules(vault, schedules);
+      const r = await ts.runThreadEntry(vault, entry!, ts.runScheduledThreadTurn);
+      if (json) out(r);
+      else console.log(r.ok ? `✓ ran ${entry!.id} in ${entry!.thread!.domain}/${entry!.thread!.session}` : `✗ ${r.error}`);
+      if (!r.ok) process.exit(1);
+      return;
     }
+    if (!entry) return;
     console.log(`running ${entry.id}: ${entry.command}`);
     const result = await runSchedule(entry, vault);
     entry.last_run = result.ts;
@@ -931,10 +995,16 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
     // a processing entry point, so they run only on the hub.
     const { guardHubOnly } = await import("./machine-role.ts");
     if (guardHubOnly()) process.exit(1);
+    // Conversation schedules first (they take the schedule lock themselves and
+    // stamp last_run), then the shell schedules.
+    const threads = ts.tickThreadSchedules(vault, ts.runScheduledThreadTurn);
+    for (const s of threads.fired) console.log(`firing ${s.id}: turn in ${s.thread!.domain}/${s.thread!.session}`);
+    await threads.done;
     const schedules = loadSchedules(vault);
-    let fired = 0;
+    let fired = threads.fired.length;
     for (const s of schedules) {
       if (!s.enabled) continue;
+      if (isThreadSchedule(s)) continue;
       if (!isCronDue(s.cron, new Date())) continue;
       console.log(`firing ${s.id}: ${s.command}`);
       await runSchedule(s, vault);
@@ -950,8 +1020,10 @@ async function scheduleCommand(args: string[], vaultOverride: string | null) {
   console.error("usage:");
   console.error("  prevail schedule list");
   console.error('  prevail schedule add "<cron>" "<command>" [--name <name>]');
-  console.error("  prevail schedule remove <id>");
-  console.error("  prevail schedule run <id>");
+  console.error("  prevail schedule add-thread --domain <d> --session <s> --prompt <p> --cron <c> [--name <n>]");
+  console.error("  prevail schedule enable|disable <id> [--json]");
+  console.error("  prevail schedule remove <id> [--json]");
+  console.error("  prevail schedule run <id> [--json]");
   process.exit(1);
 }
 
@@ -6455,32 +6527,62 @@ async function main() {
   if (args.actsCmd) {
     // The connector-act approval queue (Action Gateway).
     //   prevail acts pending-list [--vault V] [--json]
-    //   prevail acts approve --id <id> [--allow-sensitive] [--vault V]
-    //   prevail acts dismiss --id <id> [--vault V]
+    //   prevail acts approve --id <id> [--allow-sensitive] [--always] [--vault V]
+    //   prevail acts deny --id <id> [--vault V]       decline; the retry is refused
+    //   prevail acts dismiss --id <id> [--vault V]    clear without telling the agent
+    //   prevail acts rules [--vault V]                always-allow rules
+    //   prevail acts rules-revoke --tool <t> --domain <d> [--vault V]
     const sub = args.actsArgs[0];
     const flag = (name: string) => {
       const i = args.actsArgs.indexOf(`--${name}`);
       return i >= 0 ? (args.actsArgs[i + 1] ?? "") : "";
     };
     const ag = await import("./act-gate.ts");
-    const vault = flag("vault") || readConfig()?.vaultPath || "";
+    const vault = flag("vault") || args.vaultPath || readConfig()?.vaultPath || "";
+    const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
     if (sub === "pending-list") {
-      process.stdout.write(`${JSON.stringify(ag.readPendingActs(vault))}\n`);
+      out(ag.readPendingActsView(vault));
       return;
     }
     if (sub === "approve") {
-      const r = ag.approvePendingAct(vault, flag("id"), args.actsArgs.includes("--allow-sensitive"));
-      process.stdout.write(`${JSON.stringify(r)}\n`);
+      const r = ag.approvePendingAct(vault, flag("id"), args.actsArgs.includes("--allow-sensitive"), args.actsArgs.includes("--always"));
+      out(r);
+      if (!r.ok) process.exit(1);
+      return;
+    }
+    if (sub === "deny") {
+      const r = ag.denyPendingAct(vault, flag("id"));
+      out(r);
       if (!r.ok) process.exit(1);
       return;
     }
     if (sub === "dismiss") {
       ag.removePendingAct(vault, flag("id"));
-      process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
+      out({ ok: true });
       return;
     }
-    console.error("usage: prevail acts pending-list|approve --id <id> [--allow-sensitive]|dismiss --id <id>");
+    if (sub === "rules") {
+      out(ag.readActRules(vault));
+      return;
+    }
+    if (sub === "rules-revoke") {
+      const tool = flag("tool");
+      const domain = flag("domain");
+      if (!tool || !domain) { out({ ok: false, error: "rules-revoke needs --tool and --domain" }); process.exit(1); }
+      out(ag.revokeActRule(vault, tool, domain));
+      return;
+    }
+    console.error("usage: prevail acts pending-list|approve --id <id> [--allow-sensitive] [--always]|deny --id <id>|dismiss --id <id>|rules|rules-revoke --tool <t> --domain <d>");
     process.exit(1);
+  }
+  if (args.waitingCmd) {
+    // Everything held for the user (acts, gws writes, loop approvals, blocked
+    // and review tasks). Always JSON: { total, items }.
+    const i = args.waitingArgs.indexOf("--vault");
+    const vault = (i >= 0 ? args.waitingArgs[i + 1] : "") || args.vaultPath || readConfig()?.vaultPath || "";
+    const { collectWaiting } = await import("./waiting.ts");
+    process.stdout.write(`${JSON.stringify(collectWaiting(vault))}\n`);
+    return;
   }
   if (args.egressGuardCmd) {
     // The sensitive-information egress guardrail (docs/sensitive-egress-guard.md).

@@ -23,6 +23,9 @@ export interface PendingGws {
   // through the approval spine so the approved write runs against the same
   // account the read/queue was scoped to. Undefined = the default profile.
   account?: string;
+  // The Prevail thread whose turn queued this write, when known (best effort,
+  // from PREVAIL_THREAD_ID). Lets "Waiting for you" point at the conversation.
+  thread?: string;
 }
 
 export interface GwsResult {
@@ -274,7 +277,7 @@ function shortId(): string {
 
 export function addPendingGws(
   vaultRoot: string,
-  entry: { domain: string; summary: string; args: string[]; account?: string },
+  entry: { domain: string; summary: string; args: string[]; account?: string; thread?: string },
 ): PendingGws {
   const items = readPendingGws(vaultRoot);
   const rec: PendingGws = {
@@ -284,6 +287,7 @@ export function addPendingGws(
     args: entry.args,
     ts: Date.now(),
     ...(entry.account && entry.account.trim() ? { account: entry.account.trim() } : {}),
+    ...(entry.thread ? { thread: entry.thread } : {}),
   };
   items.push(rec);
   writePending(vaultRoot, items);

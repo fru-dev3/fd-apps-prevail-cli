@@ -140,6 +140,17 @@ export interface ChatJsonOptions {
   // App-chat passthrough: let the turn also see the user's own Claude Code MCP
   // servers (their claude.ai connectors). Strict surface otherwise.
   inheritUserMcp?: boolean;
+  // The Prevail thread this turn belongs to, for approval linkage: exported to
+  // the model CLI as PREVAIL_THREAD_ID so a held act records its conversation.
+  // Defaults to an explicit sessionId; a freshly minted session carries none
+  // (nothing outside this process could map it back to a conversation).
+  threadId?: string;
+  // Context sent to the model ahead of the message but NOT persisted as part
+  // of the user turn (a scheduled turn passes the thread's recent history).
+  preamble?: string;
+  // Start a fresh model session even when resuming a thread (a scheduled turn
+  // supplies its context through `preamble` instead).
+  fresh?: boolean;
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
   write?: (line: string) => void;
@@ -352,6 +363,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   }
   const engine = engineLabel(cli, model);
   const startTs = Date.now();
+  const threadId = (opts.threadId ?? "").trim() || (rawSession || undefined);
+  const modelPrompt = opts.preamble?.trim() ? `${opts.preamble.trim()}\n\n${message}` : message;
 
   // Pi-style branchable nodes: the user turn roots off the last node already
   // in the thread (null if this is a brand-new thread); the assistant turn
@@ -445,12 +458,13 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       // 1) Cheap pass, BUFFERED (no deltas) so it can be discarded silently if we
       //    escalate - the consumer never sees a throwaway partial answer.
       const cheapReply = await runChatTurn({
-        prompt: message,
+        prompt: modelPrompt,
+        threadId,
         cwd: domain.path,
         cli,
         guard: turnGuard,
         model: cascadePlan.cheapModel,
-        isFirst: !opts.sessionId,
+        isFirst: opts.fresh === true || !opts.sessionId,
         webAccess: opts.webAccess,
         googleAccount: opts.googleAccount,
         inheritUserMcp: opts.inheritUserMcp,
@@ -475,12 +489,13 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
           },
         });
         reply = await runChatTurn({
-          prompt: message,
+          prompt: modelPrompt,
+          threadId,
           cwd: domain.path,
           cli,
           guard: turnGuard,
           model: ranModel,
-          isFirst: !opts.sessionId,
+          isFirst: opts.fresh === true || !opts.sessionId,
           webAccess: opts.webAccess,
           googleAccount: opts.googleAccount,
           onTool,
@@ -498,12 +513,13 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       }
     } else {
       reply = await runChatTurn({
-        prompt: message,
+        prompt: modelPrompt,
+        threadId,
         cwd: domain.path,
         cli,
         guard: turnGuard,
         model,
-        isFirst: !opts.sessionId, // resume → not first (claude uses --continue)
+        isFirst: opts.fresh === true || !opts.sessionId, // resume → not first (claude uses --continue)
         webAccess: opts.webAccess,
         googleAccount: opts.googleAccount,
         inheritUserMcp: opts.inheritUserMcp,
@@ -586,6 +602,7 @@ export async function chatJsonCommand(
   let routeCascade: boolean | undefined;
   let googleAccount: string | undefined;
   let inheritUserMcp = false;
+  let threadId: string | undefined;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -601,6 +618,10 @@ export async function chatJsonCommand(
     else if (a.startsWith("--model=")) model = a.slice("--model=".length);
     else if (a === "--session") { sessionId = next; i++; }
     else if (a.startsWith("--session=")) sessionId = a.slice("--session=".length);
+    // --thread: link held approvals to a desktop conversation without changing
+    // which engine session the turn resumes or persists to.
+    else if (a === "--thread") { threadId = next; i++; }
+    else if (a.startsWith("--thread=")) threadId = a.slice("--thread=".length);
     else if (a === "--local-only") localOnly = true;
     else if (a === "--web") { const v = (next ?? "").toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; i++; }
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
@@ -647,6 +668,7 @@ export async function chatJsonCommand(
     routeCascade,
     googleAccount,
     inheritUserMcp,
+    threadId,
   });
 }
 

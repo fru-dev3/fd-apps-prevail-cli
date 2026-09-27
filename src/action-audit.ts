@@ -15,7 +15,8 @@ import { shardPathFor, shardPaths } from "./ledger-shard.ts";
 import { redact } from "./privacy.ts";
 import { classifyAction, type ActionClass } from "./action-policy.ts";
 
-export type ActionOutcome = "executed" | "no_connector" | "error" | "proposed" | "blocked_by_email_policy" | "blocked_by_egress_guard";
+// "denied": the user declined a held action (acts deny); it was never run.
+export type ActionOutcome = "executed" | "no_connector" | "error" | "proposed" | "denied" | "blocked_by_email_policy" | "blocked_by_egress_guard";
 
 export interface ActionAuditEntry {
   ts: number;

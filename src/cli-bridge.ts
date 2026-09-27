@@ -1,5 +1,6 @@
 import { syncedAppsContext } from "./apps-mirror.ts";
 import { spawn } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -313,8 +314,17 @@ export function scrubbedEnv(): NodeJS.ProcessEnv {
   // history once the desktop set it for its own spawns. What the user types
   // in Prevail is still recorded: the desktop logs it to the domain ledger.
   out.PREVAIL_INTERNAL = "1";
+  // Thread linkage: a turn that knows its Prevail thread runs inside
+  // turnThread, so every CLI it spawns (and that CLI's act-gate hook) sees
+  // PREVAIL_THREAD_ID and a held act can be tied back to its conversation.
+  const thread = turnThread.getStore();
+  if (thread) out.PREVAIL_THREAD_ID = thread;
   return out;
 }
+
+// The Prevail thread id of the turn currently running, carried through the
+// async call tree (a per-turn env would race in a daemon running several).
+const turnThread = new AsyncLocalStorage<string>();
 
 export interface AvailableCli {
   kind: CliKind;
@@ -856,6 +866,10 @@ export interface ChatTurn {
   // is allowed; the connector uses the first entry as its default. Omitted =>
   // today's behavior (the connector's own "default" account).
   googleAccount?: string;
+  // The Prevail thread (chat session id) this turn belongs to. Exported to the
+  // spawned CLI as PREVAIL_THREAD_ID so the act-gate hook can record which
+  // conversation a held action came from. Omitted => no thread linkage.
+  threadId?: string;
   // Optional cancellation. Aborting the signal SIGTERMs the child process so
   // Escape in the cockpit can drop an in-flight prompt without waiting for
   // the model to finish. runCapture resolves with "(cancelled)" on abort.
@@ -979,7 +993,13 @@ export function codexWritableRoot(cwd: string): string {
   return parent === root || parent.startsWith(root + sep) ? parent : resolve(cwd);
 }
 
-export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp }: ChatTurn): Promise<string> {
+export function runChatTurn(turn: ChatTurn): Promise<string> {
+  const t = turn.threadId?.trim();
+  if (t && /^[A-Za-z0-9_-]{1,128}$/.test(t)) return turnThread.run(t, () => runChatTurnInner(turn));
+  return runChatTurnInner(turn);
+}
+
+async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1258,7 +1278,10 @@ export async function runChatTurn({ prompt, cwd, cli, model, isFirst, bare, act,
     // chat turn that injected tools (so the desktop can render a live step
     // checklist). A tool-less chat turn keeps the plain-text runCapture stream
     // byte-for-byte unchanged.
-    if (onTool && (act || toolsInjected)) {
+    // An app chat that inherits the user's connectors has tools too (the ones
+    // the act gate holds), so it streams steps as well: that is how a held
+    // act's [prevail-act:<id>] marker reaches the desktop's approval card.
+    if (onTool && (act || toolsInjected || inheritUserMcp)) {
       args.push("--output-format", "stream-json", "--verbose");
       args.push(...head);
       return runClaudeStream(cli.bin, args, cwd, signal, onChunk, onTool, maxOutputChars);
@@ -2083,7 +2106,14 @@ export function runClaudeStream(
                 const parts = Array.isArray(b.content) ? b.content : [];
                 const txt = parts.map((p: { type?: string; text?: string }) => (p && p.type === "text" && typeof p.text === "string" ? p.text : "")).join(" ").trim()
                   || (typeof b.content === "string" ? b.content : "");
-                if (txt) resultText = txt.slice(0, 200);
+                if (txt) {
+                  // The act gate's machine marker sits at the end of a long
+                  // deny reason; keep it through the cut so the desktop can
+                  // still render the in-chat approval card.
+                  const snippet = txt.slice(0, 200);
+                  const marker = txt.match(/\[prevail-act:[A-Za-z0-9_-]+\]/);
+                  resultText = marker && !snippet.includes(marker[0]) ? `${snippet} ${marker[0]}` : snippet;
+                }
               } catch { /* display only */ }
             }
             try { onTool({ name: nm, phase: "result", ok: b.is_error !== true, id: b.tool_use_id ? String(b.tool_use_id) : undefined, resultText }); } catch { /* noop */ }

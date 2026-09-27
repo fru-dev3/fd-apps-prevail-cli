@@ -49,4 +49,18 @@ describe("claude stream narration formatting", () => {
     const final = await runClaudeStream(bin, [], process.cwd(), undefined, undefined, () => {}, undefined);
     expect(final).toBe("Done with step one.\nStep two.");
   });
+
+  test("a held act's marker survives the failure-snippet cut", async () => {
+    const reason = `This action was NOT run. ${"x".repeat(300)} [prevail-act:act_foo123]`;
+    const bin = fakeClaude([
+      call("a"),
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "a", is_error: true, content: [{ type: "text", text: reason }] }] } },
+      t("It awaits your approval."),
+    ]);
+    const results: (string | undefined)[] = [];
+    await runClaudeStream(bin, [], process.cwd(), undefined, undefined, (ev) => { if (ev.phase === "result") results.push(ev.resultText); }, undefined);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.length).toBeLessThan(reason.length);
+    expect(results[0]!.endsWith("[prevail-act:act_foo123]")).toBe(true);
+  });
 });

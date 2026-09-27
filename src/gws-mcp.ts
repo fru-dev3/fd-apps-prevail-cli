@@ -16,6 +16,7 @@ import { classifyGwsCommand, runGwsRead, addPendingGws } from "./gws-gateway.ts"
 import { resolveGwsAccounts } from "./calendar-sync.ts";
 import { boundGoogleAccountLabel } from "./vault.ts";
 import { runGwsDoctor } from "./gws-doctor.ts";
+import { threadIdFromEnv } from "./act-gate.ts";
 
 // Default app-binding lookup (separated so tests can inject a stub).
 function defaultBoundLookup(vault: string): string | undefined {
@@ -191,7 +192,7 @@ export function callGoogleWorkspace(
     return wrapText(`Error: ${r.error ?? "gws read failed"} (To diagnose all accounts/services at once, call the google_workspace_doctor tool.)`);
   }
   // Write: queue it (with its target account). NEVER execute here.
-  const rec = addPendingGws(vaultPath, { domain, summary, args, account });
+  const rec = addPendingGws(vaultPath, { domain, summary, args, account, thread: threadIdFromEnv() });
   // Transparency: if the global email guardrail will refuse or draft this at
   // execution, say so NOW so the model can tell the user honestly.
   let guardNote = "";

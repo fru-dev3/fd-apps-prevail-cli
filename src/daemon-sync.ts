@@ -700,7 +700,13 @@ export async function runSyncDaemon(cfg: SyncConfig): Promise<void> {
   const tick = Math.max(30, cfg.tickSec) * 1000;
   console.log(`[sync] watching connectors for ${cfg.vaultPath} (tick ${Math.round(tick / 1000)}s, max ${cfg.maxRunsPerTick}/tick)`);
   let lastMirrorPass = 0;
+  const { runThreadSchedulesDue } = await import("./thread-schedule.ts");
   while (true) {
+    // Conversation schedules (thread-schedule.ts). This daemon is the hub's
+    // always-on process (daemonCommand refuses --sync on a client, and the
+    // tick re-checks the role), so it is where they fire. Turns run in the
+    // background; a late tick catches a missed minute up.
+    runThreadSchedulesDue(cfg.vaultPath);
     try {
       const { ran, ok, failed } = await syncOnce(cfg);
       if (ran > 0) console.log(`[sync] ran ${ran} connector${ran === 1 ? "" : "s"}: ${ok} ok, ${failed} failed`);
