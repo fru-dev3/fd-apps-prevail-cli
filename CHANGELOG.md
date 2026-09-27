@@ -7,6 +7,17 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.10.0] - 2026-09-27 · Chat with an entity
+
+### Added
+- **Entity chat**: `prevail chat --entity <kind/slug>` puts the entity's page (what you've discussed, your notes, aliases, recent conversations) in front of every turn, rebuilt fresh each time and never saved into the transcript. The act gate and egress guard apply as in any chat.
+- **Entity conversations**: a thread whose frontmatter carries `entity: <kind>/<slug>` counts as a conversation about that entity; `entities refresh` lists it on the entity page and feeds it into the summary. `prevail entities threads <id>` lists them newest first.
+- **Notes from chat**: `prevail entities note <id> --append --text <t>` adds a dated line to the entity's Your notes.
+
+### Changed
+- **Alignment**: a domain outside the built-in pillar list is now its own pillar instead of one "other" bucket; internal folders are skipped; state is read from memory/state.md first; "open loop" is singular or plural.
+- **Vault map**: documents `source/goals.md` (one goal per list item with inline fields) and `build/ideal-state.versions/` (saved mission versions).
+
 ## [1.9.31] - 2026-09-27 · Approvals in the conversation, waiting feed, conversation schedules
 
 ### Added
