@@ -45,6 +45,7 @@ import {
 } from "./model-routing.ts";
 import { readRouteOverrides, type RouteOverride } from "./route-learning.ts";
 import { generalDir } from "./decisions.ts";
+import { entityChatBlock } from "./entities.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
 import {
@@ -151,6 +152,17 @@ export interface ChatJsonOptions {
   // Start a fresh model session even when resuming a thread (a scheduled turn
   // supplies its context through `preamble` instead).
   fresh?: boolean;
+  // Entity chat: an entity id (person/foo). Every turn gets the entity's
+  // context block (entities.ts entityChatBlock) ahead of the message, rebuilt
+  // from the page each turn and never persisted with the user turn.
+  entity?: string;
+  // Test seams: stand-ins for engine detection, the model turn and the
+  // ~/.prevail message log. Production never sets these.
+  deps?: {
+    detectClis?: typeof detectClis;
+    runChatTurn?: typeof runChatTurn;
+    persistMessage?: typeof persistMessage;
+  };
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
   write?: (line: string) => void;
@@ -263,7 +275,9 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     return fail(`unknown cli: ${opts.cli}`);
   }
 
-  const available = await detectClis();
+  const runTurn = opts.deps?.runChatTurn ?? runChatTurn;
+  const persist = opts.deps?.persistMessage ?? persistMessage;
+  const available = await (opts.deps?.detectClis ?? detectClis)();
   const cli = pickCli(available, wantedCli, opts.localOnly ?? false);
   // Privacy + cost guard for every turn on this path. runChatTurn's guard was
   // opt-in and NO caller passed it, so a domain whose manifest says
@@ -364,7 +378,14 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const engine = engineLabel(cli, model);
   const startTs = Date.now();
   const threadId = (opts.threadId ?? "").trim() || (rawSession || undefined);
-  const modelPrompt = opts.preamble?.trim() ? `${opts.preamble.trim()}\n\n${message}` : message;
+  // Entity block first (what the conversation is about), then any preamble.
+  // A broken entity lookup never blocks the turn; it just runs unscoped.
+  let entityBlock = "";
+  if (opts.entity?.trim()) {
+    try { entityBlock = entityChatBlock(vaultPath, opts.entity.trim()); } catch { entityBlock = ""; }
+  }
+  const lead = [entityBlock, opts.preamble?.trim() ?? ""].filter(Boolean).join("\n\n---\n\n");
+  const modelPrompt = lead ? `${lead}\n\n---\n\n${message}` : message;
 
   // Pi-style branchable nodes: the user turn roots off the last node already
   // in the thread (null if this is a brand-new thread); the assistant turn
@@ -394,7 +415,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // Persist the user turn before the model call so a crash mid-stream still
   // leaves the prompt on disk (JSONL source of truth + rebuildable index).
   writeThreadTurn(vaultPath, opts.domain, sessionId, userTurn);
-  persistMessage({
+  persist({
     domain: opts.domain,
     session_id: sessionId,
     role: "user",
@@ -457,7 +478,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     if (cascadePlan) {
       // 1) Cheap pass, BUFFERED (no deltas) so it can be discarded silently if we
       //    escalate - the consumer never sees a throwaway partial answer.
-      const cheapReply = await runChatTurn({
+      const cheapReply = await runTurn({
         prompt: modelPrompt,
         threadId,
         cwd: domain.path,
@@ -488,7 +509,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
             bias: cascadePlan.bias,
           },
         });
-        reply = await runChatTurn({
+        reply = await runTurn({
           prompt: modelPrompt,
           threadId,
           cwd: domain.path,
@@ -512,7 +533,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         if (reply) emit({ type: "delta", thread, ts: Date.now(), text: reply });
       }
     } else {
-      reply = await runChatTurn({
+      reply = await runTurn({
         prompt: modelPrompt,
         threadId,
         cwd: domain.path,
@@ -568,7 +589,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     ts: doneTs,
   };
   writeThreadTurn(vaultPath, opts.domain, sessionId, assistantTurn);
-  persistMessage({
+  persist({
     domain: opts.domain,
     session_id: sessionId,
     role: "assistant",
@@ -603,6 +624,7 @@ export async function chatJsonCommand(
   let googleAccount: string | undefined;
   let inheritUserMcp = false;
   let threadId: string | undefined;
+  let entity: string | undefined;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -622,6 +644,10 @@ export async function chatJsonCommand(
     // which engine session the turn resumes or persists to.
     else if (a === "--thread") { threadId = next; i++; }
     else if (a.startsWith("--thread=")) threadId = a.slice("--thread=".length);
+    // --entity: scope the conversation to an entity (person/foo); see
+    // ChatJsonOptions.entity.
+    else if (a === "--entity") { entity = next; i++; }
+    else if (a.startsWith("--entity=")) entity = a.slice("--entity=".length);
     else if (a === "--local-only") localOnly = true;
     else if (a === "--web") { const v = (next ?? "").toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; i++; }
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
@@ -669,6 +695,7 @@ export async function chatJsonCommand(
     googleAccount,
     inheritUserMcp,
     threadId,
+    entity,
   });
 }
 

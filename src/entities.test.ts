@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildIndex, buildTagPrompt, entityContextText, entityDetail, extractLinks, newSittings, pagePath, parseEntityId, parsePage,
+  appendNote, buildIndex, buildTagPrompt, entityChatBlock, entityContextText, entityDetail, entityThreads, extractLinks, newSittings, pagePath, parseEntityId, parsePage,
   readIndex, readTags, refreshEntities, renderPage, saveEntity, searchEntities, setNotes, slugify, tagSittings, untaggedSittings,
   type SittingLike,
 } from "./entities.ts";
@@ -220,5 +220,110 @@ describe("pages", () => {
     const idx = buildIndex(vault, { now: NOW });
     expect(idx.entities.map((e) => e.id)).toEqual(["person/sam-rivera"]);
     expect(idx.entities[0].mention_count).toBe(1);
+  });
+});
+
+function entityChat(domain: string, name: string, entity: string, title: string, updated: string, turns: string[]) {
+  const dir = join(vault, "data", "domains", domain, "memory", "threads");
+  mkdirSync(dir, { recursive: true });
+  const body = turns.map((t, i) => `## ${i % 2 ? "claude · m1" : "You"}\n\n${t}\n`).join("\n");
+  writeFileSync(join(dir, `${name}.md`), `---\ntitle: ${title}\nentity: ${entity}\ncreated: ${updated}\nupdated: ${updated}\n---\n\n${body}`);
+}
+
+describe("entity chats", () => {
+  test("a thread tagged entity: counts as a conversation, is listed on the page and feeds the digest", async () => {
+    entityChat("general", "c1", "person/foo", "Foo plans", "2026-09-19T10:00:00Z", ["When does Foo move?", "In May.", "And the lease?", "Ends in June."]);
+    thread("home", "t1", "Other", "Met [Foo](prevail://person/foo) today.");
+    const prompts: string[] = [];
+    const run: ModelRunner = async (p) => { prompts.push(p); return "You asked when Foo moves."; };
+    saveEntity(vault, "person/foo", { now: NOW });
+    await refreshEntities(vault, { run, now: NOW });
+    const rec = readIndex(vault).entities.find((e) => e.id === "person/foo")!;
+    expect(rec.conversations).toBe(2);
+    expect(rec.mentions[0].snippet).toBe("When does Foo move? / And the lease?");
+    const page = readFileSync(pagePath(vault, "person", "foo"), "utf8");
+    expect(page).toContain("- 2026-09-19 · Chat in general: [Foo plans](prevail://file/data/domains/general/memory/threads/c1.md)");
+    expect(prompts[0]).toContain("When does Foo move?");
+  });
+
+  test("a tag and a link to the same entity in one thread count once", () => {
+    entityChat("general", "c1", "person/foo", "Foo", "2026-09-19T10:00:00Z", ["hi", "Ask [Foo](prevail://person/foo)."]);
+    expect(buildIndex(vault, { now: NOW }).entities.find((e) => e.id === "person/foo")!.mention_count).toBe(1);
+  });
+
+  test("threads lists an entity's chats newest first with turn counts", () => {
+    entityChat("general", "old", "person/foo", "Older", "2026-09-10T10:00:00Z", ["a", "b"]);
+    entityChat("home", "new", "person/foo", "Newer", "2026-09-19T10:00:00Z", ["a", "b", "c", "d"]);
+    entityChat("home", "else", "place/foo-st", "Elsewhere", "2026-09-19T11:00:00Z", ["a"]);
+    thread("home", "plain", "Plain", "[Foo](prevail://person/foo)");
+    buildIndex(vault, { now: NOW });
+    const rows = entityThreads(vault, "person/foo");
+    expect(rows).toEqual([
+      { slug: "new", domain: "home", title: "Newer", updated: Date.parse("2026-09-19T10:00:00Z"), turns: 4 },
+      { slug: "old", domain: "general", title: "Older", updated: Date.parse("2026-09-10T10:00:00Z"), turns: 2 },
+    ]);
+    expect(entityThreads(vault, "person/nobody")).toEqual([]);
+  });
+
+  test("an older link cache without entity fields is re-read", () => {
+    entityChat("general", "c1", "person/foo", "Foo", "2026-09-19T10:00:00Z", ["hi"]);
+    buildIndex(vault, { now: NOW });
+    const path = join(vault, "build", "_meta", "entities", "threads.json");
+    const cache = JSON.parse(readFileSync(path, "utf8"));
+    for (const f of Object.values(cache.files) as Record<string, unknown>[]) { delete f.entity; delete f.turns; }
+    delete cache.v;
+    writeFileSync(path, JSON.stringify(cache));
+    expect(entityThreads(vault, "person/foo").map((t) => t.slug)).toEqual(["c1"]);
+  });
+
+  test("note --append adds dated paragraphs and keeps what was there", () => {
+    setNotes(vault, "person/foo", "First thought.", { now: NOW });
+    appendNote(vault, "person/foo", "  Moves in May.\n", { now: NOW + DAY });
+    const d = appendNote(vault, "person/foo", "Lease ends in June.", { now: NOW + 2 * DAY });
+    expect(d.notes).toBe("First thought.\n\n2026-09-21: Moves in May.\n\n2026-09-22: Lease ends in June.");
+    const fresh = appendNote(vault, "org/foo-co", "Quoted the roof.", { now: NOW });
+    expect(fresh.saved).toBe(true);
+    expect(fresh.notes).toBe("2026-09-20: Quoted the roof.");
+    expect(() => appendNote(vault, "person/foo", "  ")).toThrow(/empty note/);
+  });
+
+  test("chat block: page sections, 10 newest conversations, labeled as the subject", async () => {
+    for (let i = 0; i < 12; i++) thread("home", `t${i}`, `Chat ${i}`, "[Foo](prevail://person/foo)", `2026-09-${String(i + 1).padStart(2, "0")}T10:00:00Z`);
+    const run: ModelRunner = async () => "You planned a trip with Foo.";
+    await refreshEntities(vault, { run, now: NOW });
+    setNotes(vault, "person/foo", "Likes mornings.", { now: NOW });
+    const b = entityChatBlock(vault, "person/foo");
+    expect(b.startsWith("# ENTITY CONTEXT\nThis conversation is about Foo (Person, id person/foo).")).toBe(true);
+    expect(b).toContain("## What you've discussed\nYou planned a trip with Foo.");
+    expect(b).toContain("## Your notes\nLikes mornings.");
+    const convos = b.split("## Recent conversations\n")[1].split("\n");
+    expect(convos.length).toBe(10);
+    expect(convos[0]).toContain("Chat 11");
+    expect(b).not.toContain("Chat 1]");
+  });
+
+  test("chat block is capped and drops the oldest material first", () => {
+    for (let i = 0; i < 10; i++) thread("home", `t${i}`, `Chat ${i}`, "[Foo](prevail://person/foo)", `2026-09-${String(i + 1).padStart(2, "0")}T10:00:00Z`);
+    buildIndex(vault, { now: NOW });
+    setNotes(vault, "person/foo", `OLDEST ${"x".repeat(3000)} NEWEST`, { now: NOW });
+    const b = entityChatBlock(vault, "person/foo", 1000);
+    expect(b.length).toBeLessThanOrEqual(1000);
+    expect(b).not.toContain("## Recent conversations");
+    expect(b).not.toContain("OLDEST");
+    expect(b).toContain("NEWEST");
+    expect(b).toContain("This conversation is about Foo");
+    const some = entityChatBlock(vault, "person/foo", 3400);
+    expect(some).toContain("Chat 9");
+    expect(some).not.toContain("Chat 0]");
+  });
+
+  test("chat block without a page comes from the index; unknown ids still get a label", () => {
+    thread("home", "t1", "Chat", "Met [Foo](prevail://person/foo) at noon.");
+    buildIndex(vault, { now: NOW });
+    const b = entityChatBlock(vault, "person/foo");
+    expect(b).toContain("This conversation is about Foo (Person, id person/foo)");
+    expect(b).toContain("## Recent mentions");
+    expect(b).toContain("Met Foo at noon.");
+    expect(entityChatBlock(vault, "place/foo-st")).toContain("about foo-st (Place, id place/foo-st). Answer");
   });
 });

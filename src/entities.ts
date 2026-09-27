@@ -177,8 +177,33 @@ function frontmatterField(md: string, key: string): string {
   return m ? m[1].replace(/^["']|["']$/g, "").trim() : "";
 }
 
-interface FileLinks { mtime: number; size: number; title: string; ts: number; domain: string; source: MentionSource; links: RawLink[] }
-interface ThreadCache { files: Record<string, FileLinks> }
+// `entity` is the thread's `entity: <kind>/<slug>` frontmatter tag (an entity
+// chat); `excerpt` is its user turns, the mention snippet for that tag.
+interface FileLinks {
+  mtime: number; size: number; title: string; ts: number; domain: string; source: MentionSource; links: RawLink[];
+  entity?: string; excerpt?: string; turns?: number;
+}
+// v2 added entity/excerpt/turns; an older cache is re-read in full once.
+const CACHE_V = 2;
+interface ThreadCache { v?: number; files: Record<string, FileLinks> }
+
+// Turn headers exactly as the desktop serializer writes them: "## You", or
+// "## <cli>" / "## <cli> · <model>" with a lowercase, space-free cli token.
+const TURN_RE = /^## (You|[a-z0-9][a-z0-9._-]*(?: · .+)?)\s*$/;
+
+function threadShape(md: string): { turns: number; excerpt: string } {
+  const body = md.replace(/^---\n[\s\S]*?\n---\n?/, "");
+  const fmTurns = Number(frontmatterField(md, "turns"));
+  let turns = 0;
+  let role: "user" | "other" | null = null;
+  const user: string[] = [];
+  for (const line of body.split("\n")) {
+    const m = line.match(TURN_RE);
+    if (m) { turns++; role = m[1] === "You" ? "user" : "other"; continue; }
+    if (role === "user" && line.trim()) user.push(line.trim());
+  }
+  return { turns: Number.isFinite(fmTurns) && fmTurns > 0 ? fmTurns : turns, excerpt: displayLine(user.join(" / "), 240) };
+}
 
 // Markdown files that may carry entity links, per domain (and app scope).
 function linkSources(vault: string): { path: string; domain: string; source: MentionSource }[] {
@@ -213,8 +238,9 @@ function linkSources(vault: string): { path: string; domain: string; source: Men
 // Re-reads only files whose mtime or size moved since the last pass.
 export function scanLinks(vault: string): { cache: ThreadCache; read: number } {
   const path = META(vault, "threads.json");
-  const prev = readJson<ThreadCache>(path, { files: {} });
-  const next: ThreadCache = { files: {} };
+  const disk = readJson<ThreadCache>(path, { files: {} });
+  const prev: ThreadCache = disk.v === CACHE_V ? disk : { files: {} };
+  const next: ThreadCache = { v: CACHE_V, files: {} };
   let read = 0;
   for (const src of linkSources(vault)) {
     const rel = relative(vault, src.path);
@@ -227,9 +253,13 @@ export function scanLinks(vault: string): { cache: ThreadCache; read: number } {
     read++;
     const title = frontmatterField(md, "title") || src.path.split("/").pop()!.replace(/\.md$/, "");
     const ts = Date.parse(frontmatterField(md, "updated")) || Date.parse(frontmatterField(md, "created")) || st.mtimeMs;
-    next.files[rel] = { mtime: st.mtimeMs, size: st.size, title: displayLine(title, 120), ts, domain: src.domain, source: src.source, links: extractLinks(md) };
+    const entity = src.source === "thread" ? frontmatterField(md, "entity") : "";
+    next.files[rel] = {
+      mtime: st.mtimeMs, size: st.size, title: displayLine(title, 120), ts, domain: src.domain, source: src.source, links: extractLinks(md),
+      ...(src.source === "thread" ? threadShape(md) : {}), ...(entity ? { entity } : {}),
+    };
   }
-  if (read || Object.keys(prev.files).length !== Object.keys(next.files).length) writeJson(path, next);
+  if (read || disk.v !== CACHE_V || Object.keys(prev.files).length !== Object.keys(next.files).length) writeJson(path, next);
   return { cache: next, read };
 }
 
@@ -606,6 +636,12 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
       seen.add(key);
       add(l.value, l.kind, { source: f.source, ref: rel, domain: f.domain, project: "", title: f.title, ts: f.ts, snippet: l.snippet }, l.label);
     }
+    // An entity chat (entity: <kind>/<slug> tag) is a conversation about that
+    // entity even when the model never linked it.
+    const tag = f.entity ? parseEntityId(f.entity) : null;
+    if (tag?.kind && !seen.has(`${tag.kind}:${tag.slug}`)) {
+      add(tag.slug, tag.kind, { source: f.source, ref: rel, domain: f.domain, project: "", title: f.title, ts: f.ts, snippet: f.excerpt ?? "" });
+    }
   }
   for (const [id, t] of Object.entries(tags.sittings)) {
     for (const e of t.entities) {
@@ -843,6 +879,34 @@ export function setNotes(vault: string, idOrName: string, text: string, o: { kin
   return entityDetail(vault, next, `${kind}/${slug}`)!;
 }
 
+// Add a dated paragraph to the end of "Your notes" (the chat's "Add to notes").
+// Creates a saved page when there is none yet, like setNotes.
+export function appendNote(vault: string, idOrName: string, text: string, o: { kind?: string; name?: string; now?: number } = {}): EntityDetail {
+  const now = o.now ?? Date.now();
+  const para = text.replace(/\r\n/g, "\n").trim();
+  if (!para) throw new Error("empty note");
+  const { kind, slug } = resolveForWrite(readIndex(vault), idOrName, o.kind);
+  const have = readPage(vault, kind, slug)?.notes ?? "";
+  return setNotes(vault, `${kind}/${slug}`, `${have ? `${have}\n\n` : ""}${day(now)}: ${para}`, { ...o, kind, now });
+}
+
+// Entity chats: threads whose frontmatter carries `entity: <id>`, newest first.
+export interface EntityThread { slug: string; domain: string; title: string; updated: number; turns: number }
+
+export function entityThreads(vault: string, idOrName: string): EntityThread[] {
+  const idx = readIndex(vault);
+  const rec = findEntity(idx, idOrName);
+  const want = rec ? { kind: rec.kind as EntityKind | null, slug: rec.id.slice(rec.id.indexOf("/") + 1) } : parseEntityId(idOrName);
+  if (!want) return [];
+  const out: EntityThread[] = [];
+  for (const [rel, f] of Object.entries(scanLinks(vault).cache.files)) {
+    const tag = f.entity ? parseEntityId(f.entity) : null;
+    if (!tag || tag.slug !== want.slug || (want.kind && tag.kind && tag.kind !== want.kind)) continue;
+    out.push({ slug: rel.split("/").pop()!.replace(/\.md$/, ""), domain: f.domain, title: f.title, updated: f.ts, turns: f.turns ?? 0 });
+  }
+  return out.sort((a, b) => b.updated - a.updated);
+}
+
 // ---------------------------------------------------------------------------
 // refresh / backfill entry points
 
@@ -880,4 +944,49 @@ export function entityContextText(d: EntityDetail, maxMentions = 12): string {
   }
   if (d.co_mentions.length) out.push("", `Often mentioned with: ${d.co_mentions.slice(0, 5).map((c) => c.name).join(", ")}`);
   return out.join("\n");
+}
+
+// The context block `prevail chat --entity <id>` puts ahead of every turn:
+// who or what the conversation is about, from the entity's page (digest,
+// notes, the 10 newest Conversations lines), or from the index when there is
+// no page yet. Capped at `cap` chars; the oldest material goes first (older
+// conversation lines, then the oldest notes).
+export function entityChatBlock(vault: string, idOrName: string, cap = 6000): string {
+  const idx = readIndex(vault).generated_ts ? readIndex(vault) : buildIndex(vault);
+  const d = entityDetail(vault, idx, idOrName);
+  const p = parseEntityId(idOrName);
+  const head = "# ENTITY CONTEXT";
+  const about = (name: string, kind: EntityKind | null, id: string) =>
+    `This conversation is about ${name}${kind ? ` (${KIND_LABEL[kind]}, id ${id})` : ""}. Answer with it in mind; the notes below are what the user has recorded.`;
+  if (!d) {
+    const name = idOrName.slice(idOrName.indexOf("/") + 1).trim() || idOrName;
+    return `${head}\n${about(name, p?.kind ?? null, p?.kind ? `${p.kind}/${p.slug}` : "")}\nNothing is recorded about it yet.`;
+  }
+  const slug = d.id.slice(d.id.indexOf("/") + 1);
+  const doc = readPage(vault, d.kind, slug);
+  if (!doc) return clip(`${head}\n${about(d.name, d.kind, d.id)}\n\n${entityContextText(d, 10)}`, cap);
+
+  const top = [head, about(doc.name, d.kind, d.id)];
+  if (doc.aliases.length) top.push(`Also called: ${doc.aliases.join(", ")}`);
+  const convos = doc.conversations.split("\n").filter((l) => l.startsWith("- ")).slice(0, 10);
+  let notes = doc.notes;
+  const render = () => [
+    top.join("\n"),
+    ...(doc.discussed ? [`## What you've discussed\n${doc.discussed}`] : []),
+    ...(notes ? [`## Your notes\n${notes}`] : []),
+    ...(convos.length ? [`## Recent conversations\n${convos.join("\n")}`] : []),
+  ].join("\n\n");
+  let text = render();
+  while (text.length > cap && convos.length) { convos.pop(); text = render(); }
+  if (text.length > cap && notes) {
+    // Notes are appended with dates, so their oldest part is the head.
+    const keep = Math.max(0, notes.length - (text.length - cap) - 2);
+    notes = keep ? `…${notes.slice(notes.length - keep)}` : "";
+    text = render();
+  }
+  return clip(text, cap);
+}
+
+function clip(s: string, cap: number): string {
+  return s.length <= cap ? s : `${s.slice(0, cap - 1)}…`;
 }

@@ -36,8 +36,9 @@ export interface AlignmentReport {
   actions: string[];
 }
 
-// Which domains roll up into each life pillar. Unmapped domains with state
-// land in "other" so nothing is silently dropped.
+// Which domains roll up into each life pillar. A domain not listed here is
+// its own pillar, named after the domain, so a vault with its own domain
+// names gets real rows instead of one catch-all bucket.
 const PILLAR_MAP: Record<string, string[]> = {
   wealth: ["wealth", "tax", "insurance", "benefits", "estate", "real-estate"],
   revenue: ["business", "career", "content", "brand"],
@@ -56,7 +57,7 @@ function readIdealState(vaultPath: string): string | null {
 
 function pillarOf(domain: string): string {
   for (const [pillar, doms] of Object.entries(PILLAR_MAP)) if (doms.includes(domain)) return pillar;
-  return "other";
+  return domain;
 }
 
 /** Build the LLM prompt: ideal state + a compact per-domain state digest. */
@@ -112,6 +113,8 @@ export function signalAlignment(vaultPath: string): AlignmentReport {
   const domains = scanVault(vaultPath);
   const byPillar: Record<string, { domains: string[]; scores: number[]; openLoops: number }> = {};
   for (const d of domains) {
+    // Internal folders (_log, _meta, dot-dirs) are not life domains.
+    if (d.name.startsWith("_") || d.name.startsWith(".")) continue;
     const pillar = pillarOf(d.name);
     const bucket = (byPillar[pillar] ??= { domains: [], scores: [], openLoops: 0 });
     bucket.domains.push(d.name);
@@ -125,7 +128,7 @@ export function signalAlignment(vaultPath: string): AlignmentReport {
     const base = b.scores.length ? Math.round(b.scores.reduce((a, x) => a + x, 0) / b.scores.length) : 0;
     // Open loops pull the readiness signal down a little (capped).
     const score = Math.max(0, Math.min(100, base - Math.min(20, b.openLoops * 2)));
-    return { pillar, score, trend: "flat", rationale: `context ${base}/100, ${b.openLoops} open loop(s)`, domains: b.domains };
+    return { pillar, score, trend: "flat", rationale: `context ${base}/100, ${b.openLoops} open ${b.openLoops === 1 ? "loop" : "loops"}`, domains: b.domains };
   });
   const overall = pillars.length ? Math.round(pillars.reduce((a, p) => a + p.score, 0) / pillars.length) : 0;
   const actions = pillars.filter((p) => p.score < 60).sort((a, b) => a.score - b.score).slice(0, 3)
@@ -160,7 +163,7 @@ export async function computeAlignment(
   let report: AlignmentReport;
   if (opts?.run && ideal) {
     const domains = scanVault(vaultPath);
-    const digests = domains.map((d) => ({ domain: d.name, digest: (() => { try { return vreadFile(join(d.path, "_state.md")); } catch { return ""; } })() }));
+    const digests = domains.map((d) => ({ domain: d.name, digest: (() => { try { return vreadFile(existsSync(join(d.path, "memory", "state.md")) ? join(d.path, "memory", "state.md") : join(d.path, "_state.md")); } catch { return ""; } })() }));
     try {
       const raw = await opts.run(buildAlignmentPrompt(ideal, digests));
       const parsed = parseAlignmentJson(raw);

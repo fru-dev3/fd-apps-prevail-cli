@@ -39,6 +39,21 @@ describe("alignment", () => {
     expect(r.overall).toBeLessThanOrEqual(100);
   });
 
+  test("a domain outside the pillar map is its own pillar, never a catch-all", () => {
+    seed();
+    for (const d of ["foo", "_log"]) {
+      mkdirSync(join(VAULT, d), { recursive: true });
+      writeFileSync(join(VAULT, d, "soul.md"), `# ${d}\n`);
+      writeFileSync(join(VAULT, d, "_state.md"), `# ${d} state\n`);
+    }
+    const r = signalAlignment(VAULT);
+    const pillars = r.pillars.map((p) => p.pillar);
+    expect(pillars).toContain("foo");
+    expect(pillars).not.toContain("other");
+    expect(pillars).not.toContain("_log");
+    for (const p of r.pillars) expect(p.rationale).not.toContain("loop(s)");
+  });
+
   test("parseAlignmentJson extracts pillars + clamps scores from messy model output", () => {
     const raw = 'sure!\n```json\n{"pillars":[{"pillar":"wealth","score":150,"trend":"up","rationale":"on track"},{"pillar":"health","score":-5,"trend":"down","rationale":"slipping"}],"actions":["rebalance"]}\n```';
     const p = parseAlignmentJson(raw)!;

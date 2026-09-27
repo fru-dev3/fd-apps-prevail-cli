@@ -747,6 +747,7 @@ USAGE
                               read/merge a domain's manifest (engine JSON API)
   prevail chat --domain <d> --json
                               stream one chat turn as NDJSON (engine JSON API)
+                              (--entity <kind/slug> scopes it to an entity)
   prevail score <domain> [--audit] --json
                               compute a domain's context-readiness score
   prevail score --all --json  score every domain + life-readiness roll-up
@@ -2744,7 +2745,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
   process.exit(2);
 }
 
-// prevail entities [list|show|save|note|refresh|backfill]: the people, places,
+// prevail entities [list|show|save|note|threads|refresh|backfill]: the people, places,
 // orgs and things the owner talks about (entities.ts). With --json every
 // subcommand prints exactly one JSON line; errors land in `error`.
 async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<void> {
@@ -2801,10 +2802,24 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       const id = pos[1];
       let text = get("--text");
       if (text === "-") text = await Bun.stdin.text();
-      if (!id || text === null) { fail("usage: prevail entities note <kind/slug> --text \"...\""); return; }
+      if (!id || text === null) { fail("usage: prevail entities note <kind/slug> [--append] --text \"...\""); return; }
+      if (a.includes("--append")) {
+        const d = en.appendNote(vault, id, text, { name: get("--name") ?? undefined, kind: get("--kind") ?? undefined });
+        if (json) { out({ ok: true }); return; }
+        console.log(`note added to ${d.page_path}`);
+        return;
+      }
       const d = en.setNotes(vault, id, text, { name: get("--name") ?? undefined, kind: get("--kind") ?? undefined });
       if (json) { out(d); return; }
       console.log(`notes saved to ${d.page_path}`);
+      return;
+    }
+    if (sub === "threads") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities threads <kind/slug> [--json]"); return; }
+      const rows = en.entityThreads(vault, id);
+      if (json) { out(rows); return; }
+      for (const t of rows) console.log(`${new Date(t.updated).toISOString().slice(0, 10)}  ${t.domain.padEnd(12)} ${t.slug}  ${t.title} (${t.turns} turns)`);
       return;
     }
     if (sub === "refresh") {
@@ -2829,7 +2844,7 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       console.log(`tagged ${t.tagged}/${pick.length} sittings in ${t.calls} calls (${t.entities} entity tags, ${res.remaining} still untagged); ${r.entities} entities, ${r.pages_created} new pages`);
       return;
     }
-    fail("usage: prevail entities [list|show <id>|save <id>|note <id> --text ...|refresh|backfill [--limit N]] --vault <path> [--json]");
+    fail("usage: prevail entities [list|show <id>|save <id>|note <id> [--append] --text ...|threads <id>|refresh|backfill [--limit N]] --vault <path> [--json]");
   } catch (e) { fail((e as Error).message); }
 }
 
