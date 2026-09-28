@@ -7,6 +7,16 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.10.3] - 2026-09-28 · Conversations reach every domain and entity they concern
+
+### Added
+- **Touches**: after each chat reply, a small classification step finds the other domains and your own entities the conversation concerns and emits a `touched` event. It never delays the reply, skips short, incognito, Bunker and local-only turns, and costs a fraction of a cent.
+- **Update lines**: each touched domain and entity gets a dated one-line fact in its `updates.jsonl`, linking back to the conversation. `prevail updates` reads them.
+- **Yours and Reference entities**: entities mentioned only in replies stay references and fade after 90 days; things in your own words, with "my" or "our", or that you saved become yours, each with a home domain. `entities set-relation` overrides, and `entities list` filters by relation.
+- **Save as you chat**: `prevail config set autosave off|yours|all` (default yours).
+- **Daily consolidation** on the hub folds updates into each domain's state under "Across your life"; `prevail consolidate` runs it now.
+- A recommendation to catch a domain up when updates from elsewhere are waiting.
+
 ## [1.10.2] - 2026-09-28 · Entity names are the same on every machine
 
 ### Fixed
