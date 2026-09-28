@@ -25,6 +25,19 @@
 //                                       which ids were folded into which, and
 //                                       pairs the user said are not the same
 //   data/entities/_merged/<kind dir>/<slug>/  merged entities' folders, archived
+//   data/entities/relations.json        the user's Yours / Reference overrides
+//                                       (synced, not _meta)
+//
+// Yours vs Reference. Every indexed entity is either the user's own (the
+// property, the lender, the tenant, people in their life) or a reference
+// (the people in an essay the model wrote). Signals, strongest first: the
+// user acted on it (saved, chatted with it, notes, picture, files; sticky),
+// it appears in the user's OWN words (user turns, prompt sittings) rather
+// than only in model output, possessive language near it ("my lawyer"), it
+// appears in a domain's source/ files or an app access-log summary, and it
+// came up in a non-General domain. Weak evidence means reference. A
+// reference entity with no user-word mention in REFERENCE_FADE_DAYS drops out
+// of the index (nothing on disk changes). An override always wins.
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
@@ -32,6 +45,7 @@ import { sanitizeEmDashes } from "./cli-bridge.ts";
 import { dataRoot, DOMAINS_DIR, APPS_DIR, entitiesContainer, runtimePath } from "./path-safety.ts";
 import { displayLine, parseJsonAnswer, runModelOnce, SYNTH_DEFAULTS, type ModelChoice, type ModelRunner } from "./prompt-projects.ts";
 import { tryAcquireLock } from "./file-lock.ts";
+import { readAutosave, type AutosaveMode } from "./config.ts";
 import { vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
 
 // ---------------------------------------------------------------------------
@@ -72,7 +86,14 @@ export interface EntityRec {
   domain?: string; // company/product web domain when one is known (org chips)
   website?: string; // the page's `website:` (set by the user, or inferred for an org)
   picture?: string; // vault-relative picture path when the folder has one
+  relation?: Relation;
+  relation_confidence?: number; // 0..1, confidence in `relation`
+  relation_reason?: string; // one line, why (shown on a reference's Overview)
+  home_domain?: string; // the domain with the most user-word mentions
+  user_mentions?: number; // mentions in the user's own words
 }
+
+export type Relation = "yours" | "reference";
 
 export interface EntityIndex {
   version: 1; generated_ts: number; entities: EntityRec[];
@@ -85,6 +106,7 @@ export interface EntitySummary {
   id: string; name: string; kind: EntityKind; aliases: string[]; mention_count: number; conversations: number;
   last_ts: number; saved: boolean; has_page: boolean; domain?: string;
   website?: string; picture?: string; // picture: absolute path
+  relation: Relation; relation_confidence: number; relation_reason: string; home_domain?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,16 +223,18 @@ function frontmatterField(md: string, key: string): string {
 interface FileLinks {
   mtime: number; size: number; title: string; ts: number; domain: string; source: MentionSource; links: RawLink[];
   entity?: string; excerpt?: string; turns?: number;
+  user?: string; // the user's own turns, lowercased and capped (relation signals)
 }
-// v2 added entity/excerpt/turns; an older cache is re-read in full once.
-const CACHE_V = 2;
+// v2 added entity/excerpt/turns, v3 user; an older cache is re-read in full once.
+const CACHE_V = 3;
+const USER_TEXT_CAP = 8000;
 interface ThreadCache { v?: number; files: Record<string, FileLinks> }
 
 // Turn headers exactly as the desktop serializer writes them: "## You", or
 // "## <cli>" / "## <cli> · <model>" with a lowercase, space-free cli token.
 const TURN_RE = /^## (You|[a-z0-9][a-z0-9._-]*(?: · .+)?)\s*$/;
 
-function threadShape(md: string): { turns: number; excerpt: string } {
+function threadShape(md: string): { turns: number; excerpt: string; user: string } {
   const body = md.replace(/^---\n[\s\S]*?\n---\n?/, "");
   const fmTurns = Number(frontmatterField(md, "turns"));
   let turns = 0;
@@ -221,7 +245,10 @@ function threadShape(md: string): { turns: number; excerpt: string } {
     if (m) { turns++; role = m[1] === "You" ? "user" : "other"; continue; }
     if (role === "user" && line.trim()) user.push(line.trim());
   }
-  return { turns: Number.isFinite(fmTurns) && fmTurns > 0 ? fmTurns : turns, excerpt: displayLine(user.join(" / "), 240) };
+  return {
+    turns: Number.isFinite(fmTurns) && fmTurns > 0 ? fmTurns : turns, excerpt: displayLine(user.join(" / "), 240),
+    user: user.join("\n").toLowerCase().slice(-USER_TEXT_CAP),
+  };
 }
 
 // Markdown files that may carry entity links, per domain (and app scope).
@@ -703,6 +730,7 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
   // An alias never swallows a name that has a page of its own.
   for (const s of pageBySlug.keys()) aliasToSlug.delete(s);
   const acc = new Map<string, Acc>();
+  const chatted = new Set<string>(); // slugs with an entity chat: the user acted
   // slugOnly: the name came from an `entity:` tag, which carries only a slug.
   // That is not a real display name, so it never outvotes one; it is used
   // only when nothing better names the entity.
@@ -736,6 +764,7 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     if (tag?.kind && !seen.has(`${tag.kind}:${tag.slug}`)) {
       add(tag.slug, tag.kind, { source: f.source, ref: rel, domain: f.domain, project: "", title: f.title, ts: f.ts, snippet: f.excerpt ?? "" }, undefined, true);
     }
+    if (tag) chatted.add(redirect.get(tag.slug) ?? aliasToSlug.get(tag.slug) ?? tag.slug);
   }
   for (const [id, t] of Object.entries(tags.sittings)) {
     for (const e of t.entities) {
@@ -744,6 +773,9 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
   }
   for (const p of pages) if (!acc.has(p.slug)) acc.set(p.slug, { slug: p.slug, names: new Map([[p.doc.name, 1]]), kindVotes: new Map([[p.kind, 1]]), mentions: [] });
 
+  const now = opts.now ?? Date.now();
+  const overrides = readRelations(vault).overrides;
+  const corpus = ownCorpus(vault);
   const recs: EntityRec[] = [];
   const refsOf = new Map<string, Set<string>>();
   for (const a of acc.values()) {
@@ -762,6 +794,14 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     a.mentions.sort((x, y) => y.ts - x.ts);
     const refs = new Set(a.mentions.map((m) => `${m.source === "prompt" ? "p" : "f"}:${m.ref}`));
     const id = `${kind}/${a.slug}`;
+    const sig = relationSignals(a.mentions, [name, ...aliases], cache.files, corpus);
+    const acted = chatted.has(a.slug) || (!!page && (page.doc.saved || !!page.doc.notes.trim() || !!page.doc.picture || listEntityFiles(entityDir(vault, page.kind, page.slug)).length > 0));
+    const override = overrides[id];
+    const rel = override
+      ? { relation: override, confidence: 1, reason: override === "yours" ? "You marked this as yours." : "You marked this as a reference." }
+      : scoreRelation({ ...sig, acted });
+    // Reference fade: out of the index, never off the disk.
+    if (rel.relation === "reference" && !acted && now - (sig.lastUserTs || a.mentions[0]?.ts || 0) > REFERENCE_FADE_DAYS * 864e5) continue;
     refsOf.set(id, refs);
     recs.push({
       id, name, kind, aliases, kinds, mention_count: a.mentions.length, conversations: refs.size,
@@ -770,6 +810,8 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
       ...(page?.doc.website ? { website: page.doc.website } : {}),
       ...(page ? pictureOf(vault, page.kind, page.slug, page.doc) : {}),
       ...((page?.doc.domain ?? (kind === "org" ? webDomainOf([name, ...aliases]) : undefined)) ? { domain: page?.doc.domain ?? webDomainOf([name, ...aliases]) } : {}),
+      relation: rel.relation, relation_confidence: rel.confidence, relation_reason: rel.reason,
+      ...(sig.home ? { home_domain: sig.home } : {}), user_mentions: sig.userMentions,
     });
   }
 
@@ -786,7 +828,7 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     });
   }
   recs.sort((a, b) => b.conversations - a.conversations || b.last_ts - a.last_ts || a.name.localeCompare(b.name));
-  const idx: EntityIndex = { version: 1, generated_ts: opts.now ?? Date.now(), entities: recs, merged };
+  const idx: EntityIndex = { version: 1, generated_ts: now, entities: recs, merged };
   writeJson(META(vault, "index.json"), idx);
   return idx;
 }
@@ -797,6 +839,9 @@ export function summarize(r: EntityRec, vault?: string): EntitySummary {
     id: r.id, name: r.name, kind: r.kind, aliases: r.aliases, mention_count: r.mention_count, conversations: r.conversations,
     last_ts: r.last_ts, saved: !!r.saved, has_page: !!r.page, ...(r.domain ? { domain: r.domain } : {}),
     ...(r.website ? { website: r.website } : {}), ...(r.picture ? { picture: vault ? join(vault, r.picture) : r.picture } : {}),
+    // An index written before relations existed reads as yours until the next refresh.
+    relation: r.relation ?? "yours", relation_confidence: r.relation_confidence ?? 0, relation_reason: r.relation_reason ?? "",
+    ...(r.home_domain ? { home_domain: r.home_domain } : {}),
   };
 }
 
@@ -817,12 +862,13 @@ export function findEntity(idx: EntityIndex, idOrName: string): EntityRec | null
   return idx.entities.find((e) => e.name.toLowerCase() === q || e.aliases.some((a) => a.toLowerCase() === q)) ?? null;
 }
 
-export function searchEntities(idx: EntityIndex, q: string, o: { kind?: string; limit?: number; savedOnly?: boolean } = {}): EntityRec[] {
+export function searchEntities(idx: EntityIndex, q: string, o: { kind?: string; limit?: number; savedOnly?: boolean; relation?: string } = {}): EntityRec[] {
   const needle = q.toLowerCase().trim();
   const slug = slugify(q);
   const hits = idx.entities.filter((e) =>
     (!o.kind || e.kind === o.kind)
     && (!o.savedOnly || e.saved)
+    && (!o.relation || (e.relation ?? "yours") === o.relation)
     && (!needle || e.name.toLowerCase().includes(needle) || e.aliases.some((a) => a.toLowerCase().includes(needle)) || (!!slug && e.id.includes(slug))));
   if (needle) hits.sort((a, b) => Number(b.name.toLowerCase().startsWith(needle)) - Number(a.name.toLowerCase().startsWith(needle)) || b.conversations - a.conversations);
   return hits.slice(0, Math.max(1, o.limit ?? 500));
@@ -859,15 +905,25 @@ function newPage(r: { name: string; kind: EntityKind; aliases: string[] }, saved
   };
 }
 
-// Give every indexed entity a page and keep every page's count +
-// Conversations list current. Never touches notes.
-export function syncPages(vault: string, idx: EntityIndex, now = Date.now()): { created: number; updated: number } {
+// Should refresh create a page for this entity on its own? "all" is the old
+// behaviour (every indexed entity); "yours" only the user's own entities over
+// AUTOSAVE_AT; "off" never (the user saves by hand).
+export function wantsAutoPage(r: EntityRec, mode: AutosaveMode): boolean {
+  if (mode === "all") return true;
+  if (mode === "off") return false;
+  return r.relation === "yours" && (r.relation_confidence ?? 0) >= AUTOSAVE_AT;
+}
+
+// Give entities pages (per the autosave mode) and keep every existing page's
+// count + Conversations list current. Never touches notes.
+export function syncPages(vault: string, idx: EntityIndex, now = Date.now(), mode: AutosaveMode = readAutosave()): { created: number; updated: number } {
   let created = 0;
   let updated = 0;
   for (const r of idx.entities) {
     const slug = r.id.slice(r.id.indexOf("/") + 1);
     let doc = readPage(vault, r.kind, slug);
     const isNew = !doc;
+    if (!doc && !wantsAutoPage(r, mode)) continue;
     if (!doc) doc = newPage(r, false, now);
     const convos = conversationsSection(r);
     const site = r.kind === "org" && !doc.website ? inferWebsite(r) : undefined;
@@ -940,7 +996,7 @@ export async function refreshDigests(vault: string, idx: EntityIndex, o: { run: 
       if (!text) continue;
       const doc = readPage(vault, r.kind, slug);
       if (!doc) continue;
-      doc.discussed = text;
+      doc.discussed = withAcross(text, acrossBlockOf(doc.discussed));
       doc.updated = iso(o.now ?? Date.now());
       writePage(vault, r.kind, slug, doc);
       state[r.id] = { hash: hash(r.mentions.map((m) => `${m.ref}|${m.snippet}`).join("\n")), model: model.model, ts: o.now ?? Date.now() };
@@ -968,13 +1024,13 @@ export function entityDetail(vault: string, idx: EntityIndex, idOrName: string):
     if (!p?.kind) return null;
     const doc = readPage(vault, p.kind, p.slug);
     if (!doc) return null;
-    r = { id: `${p.kind}/${p.slug}`, name: doc.name, kind: p.kind, aliases: doc.aliases, kinds: [p.kind], mention_count: 0, conversations: 0, last_ts: 0, mentions: [], co_mentions: [], page: relative(vault, pageFile(vault, p.kind, p.slug) ?? pagePath(vault, p.kind, p.slug)), saved: doc.saved };
+    r = { id: `${p.kind}/${p.slug}`, name: doc.name, kind: p.kind, aliases: doc.aliases, kinds: [p.kind], mention_count: 0, conversations: 0, last_ts: 0, mentions: [], co_mentions: [], page: relative(vault, pageFile(vault, p.kind, p.slug) ?? pagePath(vault, p.kind, p.slug)), saved: doc.saved, relation: doc.saved ? "yours" : "reference", relation_confidence: doc.saved ? 1 : 0.5 };
   }
   const slug = r.id.slice(r.id.indexOf("/") + 1);
   const doc = readPage(vault, r.kind, slug);
   const pic = doc ? pictureOf(vault, r.kind, slug, doc).picture : undefined;
   return {
-    ...r, digest: doc?.discussed ?? "", notes: doc?.notes ?? "",
+    ...r, relation: r.relation ?? "yours", digest: doc?.discussed ?? "", notes: doc?.notes ?? "",
     ...(doc ? { page_path: relative(vault, pageFile(vault, r.kind, slug) ?? pagePath(vault, r.kind, slug)), saved: doc.saved, website: doc.website } : {}),
     // Absolute, for the CLI/desktop.
     picture: pic ? join(vault, pic) : undefined,
@@ -1422,6 +1478,212 @@ export function markNotSame(vault: string, idA: string, idB: string): { ok: true
 }
 
 // ---------------------------------------------------------------------------
+// Yours vs Reference
+
+export const REFERENCE_FADE_DAYS = 90;
+/** Yours at or above this relation confidence get a page automatically (autosave "yours"). */
+export const AUTOSAVE_AT = 0.6;
+const YOURS_AT = 0.5;
+
+export interface RelationSignals {
+  acted: boolean; // saved, chatted with it, notes, picture, files
+  userMentions: number; // mentions in the user's own words
+  possessive: boolean; // "my lawyer", "our house", "I bought" near a mention
+  inSources: boolean; // in a domain's source/ files or an app access-log summary
+  nonGeneral: boolean; // a user-word mention outside General
+}
+
+export function scoreRelation(s: RelationSignals): { relation: Relation; confidence: number; reason: string } {
+  if (s.acted) return { relation: "yours", confidence: 1, reason: "You saved it, chatted about it or added to it." };
+  if (!s.userMentions && !s.inSources) return { relation: "reference", confidence: 0.9, reason: "Only mentioned in replies, not in your own words." };
+  let score = 0;
+  if (s.userMentions) score += s.userMentions >= 6 ? 0.45 : s.userMentions >= 3 ? 0.4 : 0.3;
+  if (s.possessive) score += 0.35;
+  if (s.inSources) score += 0.25;
+  if (s.nonGeneral) score += 0.1;
+  score = Math.round(Math.min(1, score) * 100) / 100;
+  if (score >= YOURS_AT) {
+    return { relation: "yours", confidence: score, reason: s.possessive ? "You call it yours in your own words." : s.inSources ? "It is in your own files." : "You bring it up yourself, often." };
+  }
+  return { relation: "reference", confidence: Math.round((1 - score) * 100) / 100, reason: "Only mentioned in passing." };
+}
+
+const POSS_BEFORE = /\b(my|our|mine|i own|we own|i bought|we bought|i rent|we rent|i hired|we hired|i pay|i met|i sold)\b[^.!?\n]{0,30}$/;
+const POSS_AFTER = /^[^.!?\n]{0,8}\b(is|was|are)\s+(my|our|mine)\b/;
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Word-boundary matchers for an entity's names (3+ chars), lowercase text.
+export function nameMatchers(names: string[]): RegExp[] {
+  return [...new Set(names.map((n) => n.toLowerCase().trim()).filter((n) => n.length >= 3))].map((n) => new RegExp(`(^|[^a-z0-9])${escRe(n)}(?=$|[^a-z0-9])`, "g"));
+}
+
+/** Possessive or relationship language right around a mention in the user's text. */
+export function possessiveNear(text: string, res: RegExp[]): boolean {
+  for (const re of res) {
+    re.lastIndex = 0;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      const at = m.index + m[1].length;
+      if (POSS_BEFORE.test(text.slice(Math.max(0, at - 50), at)) || POSS_AFTER.test(text.slice(at + m[0].length - m[1].length, at + m[0].length - m[1].length + 30))) return true;
+    }
+  }
+  return false;
+}
+
+function nameHit(text: string, res: RegExp[]): boolean {
+  return res.some((re) => { re.lastIndex = 0; return re.test(text); });
+}
+
+// Normalized 1..4-word runs of the user's own files (domain source/ files and
+// app access-log summaries), so a name lookup is one set probe. Capped.
+const CORPUS_CAP = 1024 * 1024;
+const wordsOf = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+export function ownCorpus(vault: string): Set<string> {
+  const out = new Set<string>();
+  let budget = CORPUS_CAP;
+  const feed = (text: string) => {
+    const w = wordsOf(text.slice(0, budget));
+    budget -= Math.min(budget, text.length);
+    for (let i = 0; i < w.length; i++) for (let n = 1; n <= 4 && i + n <= w.length; n++) out.add(w.slice(i, i + n).join(" "));
+  };
+  const walk = (dir: string, depth: number) => {
+    if (budget <= 0 || depth > 3) return;
+    let names: string[] = [];
+    try { names = readdirSync(dir); } catch { return; }
+    for (const n of names) {
+      if (n.startsWith(".") || budget <= 0) continue;
+      const p = join(dir, n);
+      try {
+        const st = statSync(p);
+        if (st.isDirectory()) walk(p, depth + 1);
+        else if (/\.(md|txt|csv|json)$/i.test(n) && st.size <= 256 * 1024) feed(vreadFile(p));
+      } catch { /* unreadable */ }
+    }
+  };
+  const root = dataRoot(vault);
+  const domainsDir = existsSync(join(root, DOMAINS_DIR)) ? join(root, DOMAINS_DIR) : root;
+  try { for (const d of readdirSync(domainsDir)) if (!d.startsWith(".")) walk(join(domainsDir, d, "source"), 0); } catch { /* none */ }
+  try {
+    for (const a of readdirSync(join(root, APPS_DIR))) {
+      if (a.startsWith(".") || budget <= 0) continue;
+      let raw = "";
+      try { raw = vreadFile(join(root, APPS_DIR, a, "_log", "access.jsonl")).slice(-128 * 1024); } catch { continue; }
+      for (const line of raw.split("\n")) { try { const s = (JSON.parse(line) as { summary?: unknown }).summary; if (typeof s === "string") feed(s); } catch { /* partial line */ } }
+    }
+  } catch { /* no apps */ }
+  return out;
+}
+
+export function relationSignals(
+  mentions: Mention[], names: string[], files: Record<string, { user?: string }>, corpus: Set<string>,
+): Omit<RelationSignals, "acted"> & { lastUserTs: number; home?: string } {
+  const res = nameMatchers(names);
+  let userMentions = 0, lastUserTs = 0, possessive = false, nonGeneral = false;
+  const byUser = new Map<string, number>();
+  const byAll = new Map<string, number>();
+  for (const m of mentions) {
+    byAll.set(m.domain, (byAll.get(m.domain) ?? 0) + 1);
+    // A prompt sitting is the user's own prompt; a thread counts when a name
+    // is in its user turns; a brief is model output.
+    const words = m.source === "prompt" ? m.snippet.toLowerCase() : m.source === "thread" ? (files[m.ref]?.user ?? "") : "";
+    if (m.source !== "prompt" && !(words && nameHit(words, res))) continue;
+    userMentions++;
+    lastUserTs = Math.max(lastUserTs, m.ts);
+    byUser.set(m.domain, (byUser.get(m.domain) ?? 0) + 1);
+    if (m.domain && m.domain !== "general" && !m.domain.startsWith("_")) nonGeneral = true;
+    if (!possessive && words && possessiveNear(words, res)) possessive = true;
+  }
+  const inSources = names.some((n) => { const k = wordsOf(n).join(" "); return k.length >= 4 && corpus.has(k); });
+  const top = (m: Map<string, number>) => [...m.entries()].filter(([d]) => d && !d.startsWith("_"))
+    .sort((x, y) => y[1] - x[1] || Number(x[0] === "general") - Number(y[0] === "general") || x[0].localeCompare(y[0]))[0]?.[0];
+  return { userMentions, possessive, inSources, nonGeneral, lastUserTs, home: top(byUser) ?? top(byAll) };
+}
+
+export interface RelationsFile { overrides: Record<string, Relation> }
+
+const relationsPath = (vault: string) => join(entitiesContainer(vault), "relations.json");
+
+export function readRelations(vault: string): RelationsFile {
+  const r = readJson<Partial<RelationsFile>>(relationsPath(vault), {});
+  const overrides: Record<string, Relation> = {};
+  for (const [k, v] of Object.entries(r.overrides ?? {})) if (v === "yours" || v === "reference") overrides[k] = v;
+  return { overrides };
+}
+
+/** `prevail entities set-relation <id> yours|reference`: persisted to relations.json; always wins. */
+export function setRelation(vault: string, idOrName: string, relation: string): { ok: true; id: string; relation: Relation } {
+  if (relation !== "yours" && relation !== "reference") throw new Error(`relation must be yours or reference, not "${relation}"`);
+  const idx = readIndex(vault);
+  const { kind, slug, rec } = resolveForWrite(idx, idOrName);
+  const id = rec?.id ?? `${kind}/${slug}`;
+  const path = relationsPath(vault);
+  mkdirSync(dirname(path), { recursive: true });
+  const lock = tryAcquireLock(`${path}.lock`);
+  try {
+    const r = readRelations(vault);
+    r.overrides[id] = relation;
+    vwriteFileAtomic(path, `${JSON.stringify(r, null, 2)}\n`);
+  } finally { lock?.release(); }
+  // Reflect it in the cached index right away; the next refresh agrees.
+  if (rec) {
+    rec.relation = relation; rec.relation_confidence = 1;
+    rec.relation_reason = relation === "yours" ? "You marked this as yours." : "You marked this as a reference.";
+    writeJson(META(vault, "index.json"), idx);
+  }
+  return { ok: true, id, relation };
+}
+
+/** Yours entities (for the touch step): id, name and aliases. */
+export function yoursEntities(vault: string): { id: string; name: string; aliases: string[] }[] {
+  return readIndex(vault).entities.filter((e) => e.relation === "yours").map((e) => ({ id: e.id, name: e.name, aliases: e.aliases }));
+}
+
+/** Give one entity its page folder when the autosave mode wants it. */
+export function ensureAutoPage(vault: string, id: string, mode: AutosaveMode = readAutosave(), now = Date.now()): boolean {
+  const idx = readIndex(vault);
+  const r = findEntity(idx, id);
+  if (!r || !wantsAutoPage(r, mode)) return false;
+  const slug = slugOf(r.id);
+  if (readPage(vault, r.kind, slug)) return false;
+  const doc = newPage(r, false, now);
+  doc.mention_count = r.mention_count;
+  doc.conversations = conversationsSection(r);
+  writePage(vault, r.kind, slug, doc);
+  r.page = relative(vault, pagePath(vault, r.kind, slug));
+  writeJson(META(vault, "index.json"), idx);
+  return true;
+}
+
+// The consolidated "Across your life" lines live inside What you've
+// discussed, after the digest, so a digest rewrite keeps them.
+const ACROSS = "**Across your life**";
+
+export function acrossBlockOf(discussed: string): string {
+  const i = discussed.indexOf(ACROSS);
+  return i < 0 ? "" : discussed.slice(i).trim();
+}
+
+export function withAcross(digest: string, block: string): string {
+  const i = digest.indexOf(ACROSS);
+  const head = (i < 0 ? digest : digest.slice(0, i)).trim();
+  return [head, block.trim()].filter(Boolean).join("\n\n");
+}
+
+/** Rewrite an entity page's Across your life block. False when it has no page. */
+export function setEntityAcross(vault: string, id: string, lines: string[], now = Date.now()): boolean {
+  const p = parseEntityId(resolveEntityId(vault, id));
+  if (!p?.kind) return false;
+  const doc = readPage(vault, p.kind, p.slug);
+  if (!doc) return false;
+  const next = withAcross(doc.discussed === EMPTY_DISCUSSED ? "" : doc.discussed, lines.length ? `${ACROSS}\n${lines.join("\n")}` : "");
+  if (next === doc.discussed) return true;
+  doc.discussed = next;
+  doc.updated = iso(now);
+  writePage(vault, p.kind, p.slug, doc);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // refresh / backfill entry points
 
 export interface RefreshEntitiesOptions {
@@ -1430,6 +1692,7 @@ export interface RefreshEntitiesOptions {
   digestLimit?: number;
   log?: (m: string) => void;
   now?: number;
+  autosave?: AutosaveMode; // default: the machine's config
 }
 
 export async function refreshEntities(vault: string, o: RefreshEntitiesOptions = {}) {
@@ -1452,7 +1715,7 @@ export async function refreshEntities(vault: string, o: RefreshEntitiesOptions =
     }
     idx = buildIndex(vault, { now });
   }
-  const pages = syncPages(vault, idx, now);
+  const pages = syncPages(vault, idx, now, o.autosave ?? readAutosave());
   const pending = findDuplicates(idx, readMerges(vault)).length;
   const digests = await refreshDigests(vault, idx, { run: o.run === undefined ? runModelOnce : o.run, model: o.digestModel, limit: o.digestLimit, log: o.log, now });
   return {

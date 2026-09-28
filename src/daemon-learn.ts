@@ -24,6 +24,7 @@ const LEDGER_KEEP_TAIL_BYTES = 512 * 1024;
 import { runChatTurn, detectClis } from "./cli-bridge.ts";
 import { suggestAppsForDomain, readAppSuggestions } from "./app-suggest.ts";
 import { scanCommunityApps } from "./vault.ts";
+import { consolidate } from "./linking.ts";
 
 export interface LearnConfig {
   vaultPath: string;
@@ -415,6 +416,10 @@ async function learnPass(cfg: LearnConfig): Promise<{ domains: number; lines: nu
   }
   // Daily app-suggestion refresh (freshness-gated to ~once/day per domain).
   try { await refreshAppSuggestions(root, cfg); } catch { /* non-fatal */ }
+  // Linking: fold other domains' update lines into each domain's state.md
+  // "Across your life" (and entity pages). Once a day per target, and a no-op
+  // on a client machine: consolidate() checks the role itself.
+  try { consolidate(root); } catch { /* non-fatal */ }
   return { domains, lines };
 }
 

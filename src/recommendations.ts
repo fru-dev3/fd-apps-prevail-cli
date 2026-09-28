@@ -21,13 +21,14 @@ import { readProjectsIndex, type ProjectsIndex } from "./prompt-projects.ts";
 import { recommendationId, imperative } from "./project-restart.ts";
 import { readMirrorCache, mergeApp, type MirrorApp } from "./apps-mirror.ts";
 import { readIndex as readEntityIndex, type EntityRec } from "./entities.ts";
+import { catchUpCount } from "./linking.ts";
 
 export type RecCategory = "rules" | "projects" | "apps" | "people" | "models" | "context";
 
 export type RecActionKind =
   | "create_domain" | "set_domain_model" | "set_domain_models" | "connect_app" | "improve_context"
   | "make_rule" | "open_finding" | "open_project" | "restart_project" | "project_rec"
-  | "signin_app" | "draft_recipe" | "sync_app" | "save_entity";
+  | "signin_app" | "draft_recipe" | "sync_app" | "save_entity" | "open_domain";
 
 export interface RecEvidence {
   kind: "finding" | "project" | "entity" | "app" | "domain" | "benchmark";
@@ -55,7 +56,7 @@ export interface Recommendation {
   metric: { value: number; unit: string };
   leverage: number; // 0 to 100, higher first
   evidence?: RecEvidence;
-  source: "intent" | "projects" | "stuck" | "apps" | "entities" | "context" | "models" | "domains";
+  source: "intent" | "projects" | "stuck" | "apps" | "entities" | "context" | "models" | "domains" | "updates";
   instruction?: string; // copyable text for an agent
   task?: { domain: string; text: string }; // what "add task" puts on a board
   rows?: RecRow[];
@@ -333,7 +334,7 @@ function fromUnfed(domains: string[]): Recommendation[] {
 function fromEntities(vault: string): Recommendation[] {
   const idx = readEntityIndex(vault);
   const cands = idx.entities
-    .filter((e: EntityRec) => (e.kind === "person" || e.kind === "place") && !e.saved && e.conversations >= 3)
+    .filter((e: EntityRec) => (e.kind === "person" || e.kind === "place") && !e.saved && e.conversations >= 3 && e.relation !== "reference")
     .sort((a, b) => b.conversations - a.conversations || b.mention_count - a.mention_count || a.id.localeCompare(b.id))
     .slice(0, 8);
   return cands.map((e) => ({
@@ -367,6 +368,26 @@ function fromContext(vault: string, domains: string[]): Recommendation[] {
         });
       }
     } catch { /* scoring unavailable for this domain */ }
+  }
+  return out;
+}
+
+// A domain other conversations have been noting things into since its state
+// was last written (linking.ts catchUpCount).
+export function fromUpdates(vault: string, domains: string[], now: number): Recommendation[] {
+  const out: Recommendation[] = [];
+  for (const d of domains) {
+    const n = catchUpCount(vault, d, now);
+    if (!n) continue;
+    out.push({
+      id: `updates:${d.toLowerCase()}`, category: "context", source: "updates",
+      title: `Catch ${titleCase(d)} up: ${plural(n, "update")} from other domains`,
+      detail: `Conversations elsewhere noted ${plural(n, "thing")} for ${titleCase(d)} since its state was last written.`,
+      metric: { value: n, unit: "updates" },
+      leverage: clamp(25 + n * 3, 0, 60),
+      evidence: { kind: "domain", ref: d, label: `Domain: ${titleCase(d)}` },
+      action: { kind: "open_domain", domain: d },
+    });
   }
   return out;
 }
@@ -463,6 +484,7 @@ export function buildRecommendations(vaultRoot: string, opts: BuildOptions = {})
   add("apps", () => [...fromApps(vaultRoot, active, now), ...fromUnfed(domains)]);
   add("entities", () => fromEntities(vaultRoot));
   add("context", () => fromContext(vaultRoot, domains));
+  add("updates", () => fromUpdates(vaultRoot, domains, now));
   add("domains", () => fromDomains(vaultRoot, active));
   add("models", () => fromModels(vaultRoot, active));
   return rankRecommendations(recs);

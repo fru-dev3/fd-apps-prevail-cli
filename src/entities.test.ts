@@ -145,7 +145,7 @@ describe("pages", () => {
       expect(prompt).toContain("state only what these excerpts say");
       return "You talked to Sam about a, b and c.";
     };
-    const r = await refreshEntities(vault, { run, now: NOW });
+    const r = await refreshEntities(vault, { run, now: NOW, autosave: "all" });
     expect(r.pages_created).toBe(2);
     const p = pagePath(vault, "person", "sam");
     expect(existsSync(p)).toBe(true);
@@ -163,11 +163,11 @@ describe("pages", () => {
     expect(page).toContain("prevail://file/data/domains/home/memory/threads/a.md");
 
     setNotes(vault, "person/sam", "Prefers text over calls.", { now: NOW });
-    await refreshEntities(vault, { run, now: NOW });
+    await refreshEntities(vault, { run, now: NOW, autosave: "all" });
     expect(digestCalls).toBe(1);
 
     thread("home", "e", "Chat e", "[Sam](prevail://person/Sam) again.");
-    await refreshEntities(vault, { run, now: NOW });
+    await refreshEntities(vault, { run, now: NOW, autosave: "all" });
     expect(digestCalls).toBe(2);
     page = readFileSync(p, "utf8");
     expect(page).toContain("mention_count: 4");
@@ -195,10 +195,10 @@ describe("pages", () => {
     thread("home", "a", "Chat a", "Rode the [Blue kayak](prevail://thing/Blue%20kayak) out.");
     let calls = 0;
     const run: ModelRunner = async () => { calls++; return "You took the kayak out."; };
-    await refreshEntities(vault, { run, now: NOW });
+    await refreshEntities(vault, { run, now: NOW, autosave: "all" });
     expect(calls).toBe(0);
     saveEntity(vault, "thing/blue-kayak", { now: NOW });
-    await refreshEntities(vault, { run, now: NOW });
+    await refreshEntities(vault, { run, now: NOW, autosave: "all" });
     expect(calls).toBe(1);
     expect(readFileSync(pagePath(vault, "thing", "blue-kayak"), "utf8")).toContain("## What you've discussed\n\nYou took the kayak out.");
   });
@@ -207,7 +207,7 @@ describe("pages", () => {
     thread("home", "a", "Chat a", "[Sam](prevail://person/Sam%20Rivera) and later [Sam](prevail://person/Sam).");
     thread("home", "b", "Chat b", "Only [Sam](prevail://person/Sam) here.");
     const before = buildIndex(vault, { now: NOW }).entities.map((e) => e.id).sort();
-    await refreshEntities(vault, { run: null, now: NOW });
+    await refreshEntities(vault, { run: null, now: NOW, autosave: "all" });
     const after = buildIndex(vault, { now: NOW }).entities.map((e) => `${e.id}:${e.mention_count}`).sort();
     expect(before).toEqual(["person/sam", "person/sam-rivera"]);
     expect(after).toEqual(["person/sam-rivera:1", "person/sam:2"]);
@@ -237,7 +237,7 @@ describe("entity chats", () => {
     const prompts: string[] = [];
     const run: ModelRunner = async (p) => { prompts.push(p); return "You asked when Foo moves."; };
     saveEntity(vault, "person/foo", { now: NOW });
-    await refreshEntities(vault, { run, now: NOW });
+    await refreshEntities(vault, { run, now: NOW, autosave: "all" });
     const rec = readIndex(vault).entities.find((e) => e.id === "person/foo")!;
     expect(rec.conversations).toBe(2);
     expect(rec.mentions[0].snippet).toBe("When does Foo move? / And the lease?");
@@ -290,7 +290,7 @@ describe("entity chats", () => {
   test("chat block: page sections, 10 newest conversations, labeled as the subject", async () => {
     for (let i = 0; i < 12; i++) thread("home", `t${i}`, `Chat ${i}`, "[Foo](prevail://person/foo)", `2026-09-${String(i + 1).padStart(2, "0")}T10:00:00Z`);
     const run: ModelRunner = async () => "You planned a trip with Foo.";
-    await refreshEntities(vault, { run, now: NOW });
+    await refreshEntities(vault, { run, now: NOW, autosave: "all" });
     setNotes(vault, "person/foo", "Likes mornings.", { now: NOW });
     const b = entityChatBlock(vault, "person/foo");
     expect(b.startsWith("# ENTITY CONTEXT\nThis conversation is about Foo (Person, id person/foo).")).toBe(true);

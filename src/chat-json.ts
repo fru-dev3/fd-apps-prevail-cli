@@ -4,7 +4,12 @@
 // ChatEvent objects (docs/schemas/ChatEvent.json) — one JSON object per
 // line, flushed as it happens. Typical order:
 //
-//   start → (delta*) → assistant → usage → done
+//   start → (delta*) → assistant → usage → done → (touched)
+//
+// `touched` comes after `done`, just before the process exits: the reply is
+// never held up for it. It says which other domains and which of the user's
+// own entities the exchange also concerns (linking.ts), and is absent when
+// nothing was touched, the step was skipped, or it ran past its deadline.
 //
 // On failure it emits a single `error` event (and still exits non-zero).
 //
@@ -52,6 +57,10 @@ import { turnSources } from "./trusted-sources.ts";
 import { APP_SCOPE_PREFIX, appScopeId, resolveDomainDir } from "./path-safety.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
+import { classifyTouches } from "./route.ts";
+import { runTouchStep } from "./linking.ts";
+import { decisionLayer } from "./decision-config.ts";
+import { readManifest } from "./manifest.ts";
 import {
   makeSessionId,
   makeTurnId,
@@ -66,7 +75,7 @@ import {
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
   type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route"
-    | "routed" | "app_unavailable" | "app_needs_auth";
+    | "routed" | "app_unavailable" | "app_needs_auth" | "touched";
   thread: string;
   ts: number;
   domain?: string;
@@ -125,6 +134,11 @@ export interface ChatEvent {
   // app_needs_auth: the app's display name and, when known, where to sign in.
   name?: string;
   signin_url?: string;
+  // touched: the other domains this exchange concerns, one fact line each, and
+  // the user's own entities it named (ids). `domains` never holds the
+  // conversation's own domain.
+  domains?: { slug: string; fact: string }[];
+  entities?: string[];
 }
 
 // Options for one JSON chat turn.
@@ -187,6 +201,9 @@ export interface ChatJsonOptions {
   // Other domains referenced on this turn (--ref-domain, repeatable): a compact
   // state block each.
   refDomains?: string[];
+  // Incognito: nothing about this conversation spreads past its own thread
+  // (no touch step). Also PREVAIL_INCOGNITO=1.
+  incognito?: boolean;
   // Test seams: stand-ins for engine detection, the model turn and the
   // ~/.prevail message log. Production never sets these.
   deps?: {
@@ -194,6 +211,9 @@ export interface ChatJsonOptions {
     runChatTurn?: typeof runChatTurn;
     persistMessage?: typeof persistMessage;
     mirrorApps?: (vault: string) => MirrorApp[];
+    // The touch classifier. When any deps are given (tests) and this is not,
+    // the touch step is off, so a test never reaches a model.
+    classifyTouches?: typeof classifyTouches;
   };
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
@@ -697,6 +717,23 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
 
   // done
   emit({ type: "done", thread, ts: Date.now() });
+
+  // touched: after the reply is complete, bounded by TOUCH_TIMEOUT_MS.
+  const classify = opts.deps?.classifyTouches ?? (opts.deps ? null : classifyTouches);
+  if (classify) {
+    let manifestLocal = false;
+    try { manifestLocal = readManifest(vaultPath, opts.domain)?.privacy.localOnly ?? false; } catch { /* no manifest */ }
+    const layer = opts.deps ? null : decisionLayer();
+    const touched = await runTouchStep({
+      vault: vaultPath, home: opts.domain, thread, message, reply,
+      localOnly: !!opts.localOnly || turnGuard.localOnly || manifestLocal || process.env.PREVAIL_BUNKER === "1",
+      incognito: !!opts.incognito || process.env.PREVAIL_INCOGNITO === "1",
+      classify,
+      // The decision layer narrows candidates only when it is live.
+      provider: layer?.live ? layer.provider : null,
+    });
+    if (touched) emit({ type: "touched", thread, ts: Date.now(), domains: touched.domains, entities: touched.entities });
+  }
   return 0;
 }
 
@@ -724,6 +761,7 @@ export async function chatJsonCommand(
   const apps: string[] = [];
   const refDomains: string[] = [];
   let scopeApp: string | undefined;
+  let incognito = false;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -758,6 +796,7 @@ export async function chatJsonCommand(
     else if (a === "--ref-domain") { refDomains.push(next ?? ""); i++; }
     else if (a.startsWith("--ref-domain=")) refDomains.push(a.slice("--ref-domain=".length));
     else if (a === "--local-only") localOnly = true;
+    else if (a === "--incognito") incognito = true;
     else if (a === "--web") { const v = (next ?? "").toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; i++; }
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
     else if (a === "--route-bias") { routeBias = next; i++; }
@@ -808,6 +847,7 @@ export async function chatJsonCommand(
     apps,
     scopeApp,
     refDomains,
+    incognito,
   });
 }
 

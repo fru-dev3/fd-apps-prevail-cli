@@ -8,7 +8,7 @@
   "properties": {
     "type": {
       "type": "string",
-      "enum": ["start", "user", "delta", "assistant", "tool", "usage", "error", "done", "route", "routed", "app_unavailable", "app_needs_auth"],
+      "enum": ["start", "user", "delta", "assistant", "tool", "usage", "error", "done", "route", "routed", "app_unavailable", "app_needs_auth", "touched"],
       "description": "Event kind. 'start' opens the turn; 'delta' carries a streamed text chunk; 'assistant' is the finalized reply; 'usage' reports token spend; 'done' closes the turn; 'error' reports failure."
     },
     "thread": {
@@ -83,6 +83,21 @@
     "signin_url": {
       "type": "string",
       "description": "On 'app_needs_auth': where to sign in, when known."
+    },
+    "domains": {
+      "type": "array",
+      "description": "On 'touched' (after 'done'): the other domains this exchange concerns, one fact line each. Never the conversation's own domain.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slug", "fact"],
+        "properties": { "slug": { "type": "string" }, "fact": { "type": "string", "maxLength": 200 } }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "description": "On 'touched': ids (kind/slug) of the user's own entities this exchange named.",
+      "items": { "type": "string" }
     }
   },
   "allOf": [

@@ -30,7 +30,7 @@ import { tmpdir } from "node:os";
 
 import { vaultDomains } from "./apps-mirror.ts";
 import { appendDecision, readDecisions } from "./decisions.ts";
-import { evaluateDecision, type ChoiceQuestion, type DecisionProvider } from "./decision.ts";
+import { evaluateDecision, type ChoiceQuestion, type DecisionProvider, type NoulQuestion } from "./decision.ts";
 
 export interface RouteHit {
   slug: string;
@@ -328,6 +328,187 @@ export async function routeMessage(opts: RouteOptions): Promise<RouteResult> {
   const parsed = parseRouteReply(raw, domains);
   if (!parsed) return none("routing reply was not usable");
   return { domains: parsed.domains, reason: parsed.reason || (parsed.domains.length ? "classified" : "general"), source: "model" };
+}
+
+// ── Touches: every place a conversation concerns ────────────────────────
+//
+// Routing answers "where does this General message belong". A touch answers
+// the wider question for ANY conversation, after the reply: which OTHER
+// domains (and which of the user's own entities) does this exchange concern,
+// and what does it mean for each, in one line. A real estate chat about a
+// water damage claim and a lawyer also touches insurance and legal.
+//
+// Same two paths as routing: the decision layer (one yes/no question per
+// domain, cheap) narrows the candidates, and the small model writes the fact
+// lines. With no decision provider the model does both. The runner is
+// injectable; tests never spawn anything.
+
+export interface TouchDomainOption {
+  slug: string;
+  /** One line: what the domain is about (its manifest summary). */
+  description: string;
+}
+
+export interface TouchEntityOption {
+  id: string;
+  name: string;
+  aliases: string[];
+}
+
+export interface TouchHit {
+  slug: string;
+  confidence: number;
+  /** One line, at most TOUCH_FACT_CHARS: what this conversation means there. */
+  fact: string;
+}
+
+export interface TouchResult {
+  domains: TouchHit[];
+  /** Entity-specific fact lines the model offered, by entity id. */
+  entity_facts: Record<string, string>;
+  source: "typesafe" | "model" | "none";
+}
+
+export interface TouchOptions {
+  /** The conversation's own domain: never a touch target. */
+  home: string;
+  message: string;
+  reply: string;
+  domains: TouchDomainOption[];
+  entities?: TouchEntityOption[];
+  provider?: DecisionProvider | null;
+  runner?: RouteRunner | null;
+  timeoutMs?: number;
+}
+
+/** A touch below this is not recorded. */
+export const TOUCH_MIN_CONFIDENCE = 0.6;
+export const TOUCH_MAX_DOMAINS = 4;
+export const TOUCH_FACT_CHARS = 200;
+/** Characters of the reply the classifier sees. */
+export const TOUCH_REPLY_CHARS = 3_000;
+/** Shorter user messages ("thanks", "ok do it") are not worth a call. */
+export const TOUCH_MIN_MESSAGE = 20;
+
+export function clipFact(s: string): string {
+  const t = s.replace(/\s+/g, " ").replace(/\s*\u2014\s*/g, ", ").trim();
+  return t.length > TOUCH_FACT_CHARS ? `${t.slice(0, TOUCH_FACT_CHARS - 3)}...` : t;
+}
+
+export function buildTouchQuestions(domains: TouchDomainOption[]): Record<string, NoulQuestion> {
+  const out: Record<string, NoulQuestion> = {};
+  for (const d of domains) {
+    out[d.slug] = {
+      type: "noul",
+      instructions: `Does this conversation carry news or a fact that matters to the user's ${labelFor(d.slug).toLowerCase()} life area${d.description ? ` (${d.description})` : ""}?`,
+    };
+  }
+  return out;
+}
+
+export function buildTouchPrompt(o: { message: string; reply: string; domains: TouchDomainOption[]; entities: TouchEntityOption[] }): { system: string; prompt: string } {
+  const system = [
+    "You read one exchange between a user and an assistant and list which of the user's OTHER life areas it concerns. You never answer the message.",
+    "Valid area slugs, each with what it covers:",
+    ...o.domains.map((d) => `- ${d.slug}: ${d.description || labelFor(d.slug)}`),
+    "Reply with ONLY a JSON object, no prose and no code fence, shaped exactly:",
+    '{"domains":[{"slug":"<valid slug>","confidence":<0..1>,"fact":"<one line>"}],"entity_facts":{"<entity id>":"<one line>"}}',
+    "List only areas the exchange clearly carries news or a fact for, most likely first, at most 4.",
+    "fact: one plain line under 200 characters saying what this exchange means for that area, with concrete names, amounts and dates from the text. Never invent anything.",
+    "entity_facts: optional, only for the listed entities the exchange is about, when a line specific to that entity says more than the area fact.",
+    'If it concerns no listed area, reply {"domains":[],"entity_facts":{}}.',
+  ].join("\n");
+  const ents = o.entities.length
+    ? `The user's own people, places and things (id = name):\n${o.entities.slice(0, 60).map((e) => `- ${e.id} = ${[e.name, ...e.aliases.slice(0, 3)].join(" / ")}`).join("\n")}\n\n`
+    : "";
+  const prompt = `${ents}User:\n${o.message.slice(0, ROUTE_MAX_TEXT)}\n\nAssistant:\n${o.reply.slice(0, TOUCH_REPLY_CHARS)}`;
+  return { system, prompt };
+}
+
+/** Parse a touch reply: real slugs only, the threshold applied, at most 4. Null when unusable. */
+export function parseTouchReply(raw: string, domains: string[], entityIds: string[] = []): Omit<TouchResult, "source"> | null {
+  const s = raw.trim();
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  let o: unknown;
+  try {
+    o = JSON.parse(s.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!o || typeof o !== "object" || !Array.isArray((o as Record<string, unknown>).domains)) return null;
+  const obj = o as Record<string, unknown>;
+  const k = new Set(domains);
+  const seen = new Set<string>();
+  const hits: TouchHit[] = [];
+  for (const h of obj.domains as unknown[]) {
+    if (!h || typeof h !== "object") continue;
+    const r = h as Record<string, unknown>;
+    const slug = norm(String(r.slug ?? ""));
+    const c = Number(r.confidence);
+    const fact = typeof r.fact === "string" ? clipFact(r.fact) : "";
+    if (!k.has(slug) || seen.has(slug) || !Number.isFinite(c) || c < TOUCH_MIN_CONFIDENCE || !fact) continue;
+    seen.add(slug);
+    hits.push({ slug, confidence: round2(Math.min(1, c)), fact });
+  }
+  hits.sort((a, b) => b.confidence - a.confidence);
+  const ids = new Set(entityIds);
+  const entity_facts: Record<string, string> = {};
+  const ef = obj.entity_facts;
+  if (ef && typeof ef === "object" && !Array.isArray(ef)) {
+    for (const [id, v] of Object.entries(ef as Record<string, unknown>)) {
+      if (ids.has(id) && typeof v === "string" && v.trim()) entity_facts[id] = clipFact(v);
+    }
+  }
+  return { domains: hits.slice(0, TOUCH_MAX_DOMAINS), entity_facts };
+}
+
+/**
+ * Classify one finished exchange into the other domains it touches. Never
+ * throws: every failure is an empty result, which the caller treats as "this
+ * conversation stays where it is".
+ */
+export async function classifyTouches(opts: TouchOptions): Promise<TouchResult> {
+  const empty: TouchResult = { domains: [], entity_facts: {}, source: "none" };
+  const home = norm(opts.home);
+  let domains = opts.domains.filter((d) => d.slug && norm(d.slug) !== home && norm(d.slug) !== GENERAL);
+  const entities = opts.entities ?? [];
+  if (!domains.length && !entities.length) return empty;
+  const text = `User: ${opts.message.slice(0, ROUTE_MAX_TEXT)}\n\nAssistant: ${opts.reply.slice(0, TOUCH_REPLY_CHARS)}`;
+
+  // Decision layer first: one yes/no per domain. It cannot write the fact
+  // lines, so it only narrows which domains the model is asked about, and
+  // spares the model call entirely when nothing clears the bar.
+  let source: TouchResult["source"] = "model";
+  const confidence = new Map<string, number>();
+  if (opts.provider && domains.length) {
+    const res = await evaluateDecision(opts.provider, text, buildTouchQuestions(domains));
+    if (res) {
+      for (const d of domains) {
+        const a = res.answers[d.slug];
+        if (a?.type === "noul" && a.probability >= TOUCH_MIN_CONFIDENCE) confidence.set(d.slug, round2(a.probability));
+      }
+      domains = domains.filter((d) => confidence.has(d.slug)).sort((a, b) => confidence.get(b.slug)! - confidence.get(a.slug)!).slice(0, TOUCH_MAX_DOMAINS);
+      source = "typesafe";
+      if (!domains.length && !entities.length) return { ...empty, source };
+    }
+  }
+
+  const runner = opts.runner === undefined ? claudeRouteRunner : opts.runner;
+  if (!runner) return empty;
+  const { system, prompt } = buildTouchPrompt({ message: opts.message, reply: opts.reply, domains, entities });
+  let raw = "";
+  try {
+    raw = await runner({ system, prompt, timeoutMs: opts.timeoutMs ?? ROUTE_TIMEOUT_MS });
+  } catch {
+    return empty;
+  }
+  const parsed = parseTouchReply(raw, domains.map((d) => d.slug), entities.map((e) => e.id));
+  if (!parsed) return empty;
+  // The decision layer's confidence stands where it answered.
+  const hits = parsed.domains.map((h) => (confidence.has(h.slug) ? { ...h, confidence: confidence.get(h.slug)! } : h));
+  return { domains: hits, entity_facts: parsed.entity_facts, source };
 }
 
 // ── helpers ────────────────────────────────────────────────────────────

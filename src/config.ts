@@ -148,6 +148,10 @@ export interface UserConfig {
   // --local-only on every engine call and the engine forces local-only as a
   // backstop, so no prompt ever reaches a cloud provider. Mirrors the desktop's
   // PREVAIL_BUNKER. Off (missing) by default. Read/written via readBunker/setBunker.
+  // Entity autosave: which entities get a page on their own as you chat.
+  // "yours" (default) = only the user's own; "all" = every indexed entity (the
+  // pre-1.10.3 behaviour); "off" = only what the user saves.
+  autosave?: AutosaveMode;
   bunker?: boolean;
   // App mode: "demo" (exploring the synthetic sample vault) vs "production"
   // (the user's real vault). Drives the demo badge + the switch-to-production
@@ -363,6 +367,21 @@ export function setBunker(on: boolean): void {
   if (on) next.bunker = true;
   else delete next.bunker;
   writeConfig(next);
+}
+
+export type AutosaveMode = "off" | "yours" | "all";
+export const AUTOSAVE_MODES: readonly AutosaveMode[] = ["off", "yours", "all"];
+
+export function readAutosave(): AutosaveMode {
+  const v = readConfig()?.autosave;
+  return v === "off" || v === "all" ? v : "yours";
+}
+
+/** Writes a minimal config on first run, like setMachineRole. */
+export function setAutosave(mode: AutosaveMode): void {
+  if (!AUTOSAVE_MODES.includes(mode)) throw new Error(`autosave must be off, yours or all, not "${mode}"`);
+  const cfg = readConfig() ?? { vaultPath: bundledDemoVaultPath(), createdAt: new Date().toISOString() };
+  writeConfig({ ...cfg, autosave: mode });
 }
 
 export type AppMode = "demo" | "production";

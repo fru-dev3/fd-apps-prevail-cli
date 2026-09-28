@@ -66,6 +66,9 @@ interface Args {
   decisionArgs: string[];
   route: boolean;
   routeArgs: string[];
+  // updates | consolidate | config (linking.ts)
+  linking: string | null;
+  linkingArgs: string[];
   appmode: boolean;
   appmodeArgs: string[];
   models: boolean;
@@ -199,6 +202,8 @@ function parseArgs(argv: string[]): Args {
   let decisionArgs: string[] = [];
   let route = false;
   let routeArgs: string[] = [];
+  let linking: string | null = null;
+  let linkingArgs: string[] = [];
   let appmode = false;
   let appmodeArgs: string[] = [];
   let models = false;
@@ -388,6 +393,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "route") {
       route = true;
       routeArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "updates" || a === "consolidate" || a === "config") {
+      linking = a;
+      linkingArgs = argv.slice(i + 1);
       break;
     } else if (a === "appmode") {
       appmode = true;
@@ -627,6 +636,8 @@ function parseArgs(argv: string[]): Args {
     decisionArgs,
     route,
     routeArgs,
+    linking,
+    linkingArgs,
     appmode,
     appmodeArgs,
     models,
@@ -2755,7 +2766,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
 // orgs and things the owner talks about (entities.ts). With --json every
 // subcommand prints exactly one JSON line; errors land in `error`.
 async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<void> {
-  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests", "--file", "--url"]);
+  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests", "--file", "--url", "--relation"]);
   const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
   const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(a[i - 1]!)));
   const sub = pos[0] ?? "list";
@@ -2775,8 +2786,13 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       // The cached index when fresh enough, else rebuild (no model, cheap).
       let idx = en.readIndex(vault);
       if (!idx.generated_ts || a.includes("--rebuild")) idx = en.buildIndex(vault);
-      const hits = en.searchEntities(idx, get("--q") ?? "", { kind: get("--kind") ?? undefined, limit: num("--limit", 2000), savedOnly: a.includes("--saved") });
-      if (json) { out({ generated_ts: idx.generated_ts, total: idx.entities.length, entities: hits.map((e) => en.summarize(e, vault)) }); return; }
+      const hits = en.searchEntities(idx, get("--q") ?? "", { kind: get("--kind") ?? undefined, limit: num("--limit", 2000), savedOnly: a.includes("--saved"), relation: get("--relation") ?? undefined });
+      if (json) {
+        const counts = { yours: 0, reference: 0 };
+        for (const e of idx.entities) counts[e.relation === "reference" ? "reference" : "yours"]++;
+        out({ generated_ts: idx.generated_ts, total: idx.entities.length, counts, entities: hits.map((e) => en.summarize(e, vault)) });
+        return;
+      }
       for (const e of hits) console.log(`${String(e.conversations).padStart(4)}  ${e.id.padEnd(36)} ${e.saved ? "saved " : e.page ? "page  " : "      "}${e.name}`);
       return;
     }
@@ -2841,6 +2857,14 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       const r = en.mergeEntities(vault, keep, drop);
       if (json) { out(r); return; }
       console.log(`merged ${drop} into ${r.id}`);
+      return;
+    }
+    if (sub === "set-relation") {
+      const [id, rel] = [pos[1], pos[2]];
+      if (!id || !rel) { fail("usage: prevail entities set-relation <id> yours|reference [--json]"); return; }
+      const r = en.setRelation(vault, id, rel);
+      if (json) { out(r); return; }
+      console.log(`${r.id} is now ${r.relation === "yours" ? "yours" : "a reference"}`);
       return;
     }
     if (sub === "not-same") {
@@ -6609,6 +6633,10 @@ async function main() {
   if (args.route) {
     await routeCommand(args.routeArgs, args.vaultPath);
     return;
+  }
+  if (args.linking) {
+    const { linkingCommand } = await import("./linking.ts");
+    process.exit(await linkingCommand(args.linking, args.linkingArgs, args.vaultPath));
   }
   if (args.appmode) {
     process.exit(await appmodeCommand(args.appmodeArgs));

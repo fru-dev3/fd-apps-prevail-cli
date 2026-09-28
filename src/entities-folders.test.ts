@@ -71,7 +71,7 @@ describe("folders", () => {
 
   test("refresh migrates", async () => {
     flat(ents("orgs"), "foo-co", page("Foo Co", "x").replace("kind: person", "kind: org"));
-    await refreshEntities(vault, { run: null, now: NOW });
+    await refreshEntities(vault, { run: null, now: NOW, autosave: "all" });
     expect(existsSync(ents("orgs", "foo-co", "entity.md"))).toBe(true);
   });
 });
@@ -103,7 +103,7 @@ describe("picture, website, files", () => {
     thread("t2", "[Barco](prevail://org/Barco) was mentioned next to https://bazco.com/x.");
     thread("t3", "[Quxco](prevail://person/Quxco) wrote from https://quxco.com.");
     thread("t4", "[Zedco Inc](prevail://org/Zedco%20Inc) sent a quote.");
-    await refreshEntities(vault, { run: null, now: NOW });
+    await refreshEntities(vault, { run: null, now: NOW, autosave: "all" });
     const idx = readIndex(vault);
     const site = (id: string) => idx.entities.find((e) => e.id === id)!.website;
     expect(site("org/fooco")).toBe("fooco.com");
