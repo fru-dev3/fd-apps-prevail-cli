@@ -7,6 +7,16 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.10.1] - 2026-09-28 · Apps in chat, trusted sources, entity folders and de-duplication
+
+### Added
+- **Apps as chat scopes**: `chat --app <id>` (repeatable) and `--scope-app <id>` put an app in front of the model; reads run, writes and sends still queue for approval. `--entity` is now repeatable and `--ref-domain <slug>` references another domain.
+- **Routing to the app's runtime**: a turn that needs an app another runtime owns is moved there (`routed`), or explained (`app_unavailable`); an app that needs sign-in says so (`app_needs_auth`).
+- **App access log**: every app tool call a conversation makes is written to `data/apps/<id>/_log/access.jsonl`, redacted (no message bodies, emails and sensitive values replaced by their category). `apps access-log` and `apps threads` read it back. Tool events carry the app, the tool name and read or write.
+- **Trusted sources**: `apps add-source --kind mcp-remote|web|links` adds your own data sites as read-only apps (remote MCP servers are attached per turn on Claude); `apps remove-source` archives, never deletes. Trust is kept per Mac, where the model cannot edit it.
+- **Entity de-duplication**: `entities refresh` merges clear duplicates and lists unclear ones for review (`entities duplicates`, `merge`, `not-same`). Nothing is lost: aliases, mentions, notes and files move to the kept entity and merged pages are archived.
+- **Entity folders**: each entity is a folder (`entity.md`, an optional picture, `files/`), migrated automatically; `set-picture`, `set-website`, `files`, `add-file`.
+
 ## [1.10.0] - 2026-09-27 · Chat with an entity
 
 ### Added
