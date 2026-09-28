@@ -13,15 +13,26 @@
 //   build/_meta/entities/threads.json   per-file link cache (mtime checkpoints)
 //   build/_meta/entities/tags.json      per-sitting tag cache
 //   build/_meta/entities/digests.json   which mention set each digest covered
-//   data/entities/<kind dir>/<slug>.md  pages (the user's "Your notes" section
-//                                       is never rewritten by any code here)
+//   data/entities/<kind dir>/<slug>/    one folder per entity:
+//     entity.md                         the page (the user's "Your notes"
+//                                       section is never rewritten here)
+//     picture.<png|jpg|webp|svg>        optional picture
+//     files/                            optional attachments
+//                                       (a pre-folder vault has <slug>.md;
+//                                       it is read as a fallback and moved
+//                                       into the folder on refresh)
+//   data/entities/merges.json           merge decisions (synced, not _meta):
+//                                       which ids were folded into which, and
+//                                       pairs the user said are not the same
+//   data/entities/_merged/<kind dir>/<slug>/  merged entities' folders, archived
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, relative } from "node:path";
 import { sanitizeEmDashes } from "./cli-bridge.ts";
 import { dataRoot, DOMAINS_DIR, APPS_DIR, entitiesContainer, runtimePath } from "./path-safety.ts";
 import { displayLine, parseJsonAnswer, runModelOnce, SYNTH_DEFAULTS, type ModelChoice, type ModelRunner } from "./prompt-projects.ts";
-import { vreadFile, vwriteFile } from "./vault-session.ts";
+import { tryAcquireLock } from "./file-lock.ts";
+import { vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
 
 // ---------------------------------------------------------------------------
 // contract types
@@ -59,13 +70,21 @@ export interface EntityRec {
   page?: string; // vault-relative page path when a page exists
   saved?: boolean;
   domain?: string; // company/product web domain when one is known (org chips)
+  website?: string; // the page's `website:` (set by the user, or inferred for an org)
+  picture?: string; // vault-relative picture path when the folder has one
 }
 
-export interface EntityIndex { version: 1; generated_ts: number; entities: EntityRec[] }
+export interface EntityIndex {
+  version: 1; generated_ts: number; entities: EntityRec[];
+  // merged id -> the id it now resolves to (from data/entities/merges.json,
+  // re-read on every readIndex/buildIndex, never trusted from the cache)
+  merged?: Record<string, string>;
+}
 
 export interface EntitySummary {
   id: string; name: string; kind: EntityKind; aliases: string[]; mention_count: number; conversations: number;
   last_ts: number; saved: boolean; has_page: boolean; domain?: string;
+  website?: string; picture?: string; // picture: absolute path
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +469,8 @@ export interface PageDoc {
   updated: string;
   mention_count: number;
   domain?: string;
+  website?: string; // a bare domain or URL
+  picture?: string; // file name inside the entity folder
   preamble: string; // anything above the first known section, kept verbatim
   discussed: string;
   notes: string;
@@ -463,8 +484,26 @@ const H_CONVOS = "Conversations";
 const EMPTY_DISCUSSED = "_Nothing summarized yet._";
 const EMPTY_CONVOS = "_No conversations yet._";
 
+export const PAGE_FILE = "entity.md";
+
+export function entityDir(vault: string, kind: EntityKind, slug: string): string {
+  return join(entitiesContainer(vault), KIND_DIR[kind], slug);
+}
+
+// Where a page is written: the entity folder's entity.md.
 export function pagePath(vault: string, kind: EntityKind, slug: string): string {
-  return join(entitiesContainer(vault), KIND_DIR[kind], `${slug}.md`);
+  return join(entityDir(vault, kind, slug), PAGE_FILE);
+}
+
+const flatPath = (vault: string, kind: EntityKind, slug: string) => join(entitiesContainer(vault), KIND_DIR[kind], `${slug}.md`);
+
+// The page file that exists: the folder's entity.md, else a pre-folder
+// <slug>.md, else null.
+export function pageFile(vault: string, kind: EntityKind, slug: string): string | null {
+  const p = pagePath(vault, kind, slug);
+  if (existsSync(p)) return p;
+  const flat = flatPath(vault, kind, slug);
+  return existsSync(flat) ? flat : null;
 }
 
 function parseList(v: string): string[] {
@@ -507,6 +546,8 @@ export function parsePage(md: string, fallback: { kind: EntityKind; slug: string
       else if (key === "updated") doc.updated = val;
       else if (key === "mention_count") doc.mention_count = Number(val) || 0;
       else if (key === "domain") doc.domain = val || undefined;
+      else if (key === "website") doc.website = val || undefined;
+      else if (key === "picture") doc.picture = val || undefined;
       else doc.extra[key] = rawVal;
     }
   }
@@ -539,6 +580,8 @@ export function renderPage(d: PageDoc): string {
     `updated: ${d.updated}`,
     `mention_count: ${d.mention_count}`,
     ...(d.domain ? [`domain: ${d.domain}`] : []),
+    ...(d.website ? [`website: ${yamlStr(d.website)}`] : []),
+    ...(d.picture ? [`picture: ${yamlStr(d.picture)}`] : []),
     ...Object.entries(d.extra).map(([k, v]) => `${k}: ${v}`),
     "---",
     "",
@@ -554,15 +597,53 @@ export function renderPage(d: PageDoc): string {
 }
 
 export function readPage(vault: string, kind: EntityKind, slug: string): PageDoc | null {
-  const p = pagePath(vault, kind, slug);
-  if (!existsSync(p)) return null;
+  const p = pageFile(vault, kind, slug);
+  if (!p) return null;
   try { return parsePage(vreadFile(p), { kind, slug }); } catch { return null; }
 }
 
 function writePage(vault: string, kind: EntityKind, slug: string, d: PageDoc) {
   const p = pagePath(vault, kind, slug);
+  // A pre-folder page moves into its folder first, so nothing is left behind.
+  const flat = flatPath(vault, kind, slug);
+  if (!existsSync(p) && existsSync(flat)) migrateOne(flat, p);
   mkdirSync(dirname(p), { recursive: true });
   vwriteFile(p, renderPage(d));
+}
+
+// Move one flat page into its folder. Never overwrites: when entity.md is
+// already there the flat file lands beside it as entity.conflict[-N].md.
+function migrateOne(flat: string, target: string): "moved" | string {
+  mkdirSync(dirname(target), { recursive: true });
+  if (!existsSync(target)) { renameSync(flat, target); return "moved"; }
+  let n = 1;
+  let to = join(dirname(target), "entity.conflict.md");
+  while (existsSync(to)) to = join(dirname(target), `entity.conflict-${++n}.md`);
+  renameSync(flat, to);
+  return to;
+}
+
+// Pre-folder vaults: move every <kind dir>/<slug>.md (and the same in
+// _merged/) to <slug>/entity.md. Idempotent; never deletes or overwrites.
+export function migrateEntityFolders(vault: string): { moved: number; conflicts: string[] } {
+  const res = { moved: 0, conflicts: [] as string[] };
+  const root = entitiesContainer(vault);
+  for (const base of [root, join(root, "_merged")]) {
+    for (const kind of ENTITY_KINDS) {
+      const dir = join(base, KIND_DIR[kind]);
+      let names: string[] = [];
+      try { names = readdirSync(dir); } catch { continue; }
+      for (const n of names) {
+        if (!n.endsWith(".md") || n.startsWith(".")) continue;
+        const flat = join(dir, n);
+        try { if (!statSync(flat).isFile()) continue; } catch { continue; }
+        const r = migrateOne(flat, join(dir, n.slice(0, -3), PAGE_FILE));
+        if (r === "moved") res.moved++;
+        else res.conflicts.push(relative(vault, r));
+      }
+    }
+  }
+  return res;
 }
 
 export interface PageRef { id: string; kind: EntityKind; slug: string; path: string; doc: PageDoc }
@@ -573,11 +654,17 @@ export function listPages(vault: string): PageRef[] {
   for (const kind of ENTITY_KINDS) {
     let names: string[] = [];
     try { names = readdirSync(join(root, KIND_DIR[kind])); } catch { continue; }
+    // Folders (<slug>/entity.md) and pre-folder <slug>.md pages, once each.
+    const slugs = new Set<string>();
     for (const n of names) {
-      if (!n.endsWith(".md") || n.startsWith(".")) continue;
-      const slug = n.slice(0, -3);
+      if (n.startsWith(".")) continue;
+      if (n.endsWith(".md")) slugs.add(n.slice(0, -3));
+      else if (existsSync(join(root, KIND_DIR[kind], n, PAGE_FILE))) slugs.add(n);
+    }
+    for (const slug of slugs) {
       const doc = readPage(vault, kind, slug);
-      if (doc) out.push({ id: `${kind}/${slug}`, kind, slug, path: relative(vault, pagePath(vault, kind, slug)), doc });
+      const file = pageFile(vault, kind, slug);
+      if (doc && file) out.push({ id: `${kind}/${slug}`, kind, slug, path: relative(vault, file), doc });
     }
   }
   return out;
@@ -588,7 +675,7 @@ export function listPages(vault: string): PageRef[] {
 
 export function readIndex(vault: string): EntityIndex {
   const i = readJson<Partial<EntityIndex>>(META(vault, "index.json"), {});
-  return { version: 1, generated_ts: i.generated_ts ?? 0, entities: i.entities ?? [] };
+  return { version: 1, generated_ts: i.generated_ts ?? 0, entities: i.entities ?? [], merged: mergeMap(readMerges(vault)) };
 }
 
 interface Acc {
@@ -601,7 +688,10 @@ interface Acc {
 export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIndex {
   const { cache } = scanLinks(vault);
   const tags = readTags(vault);
-  const pages = listPages(vault);
+  const merged = mergeMap(readMerges(vault));
+  const redirect = slugRedirects(merged);
+  // A merged entity's page is archived; one still here (sync lag) is ignored.
+  const pages = listPages(vault).filter((p) => !redirect.has(p.slug));
 
   // A page fixes an entity's kind and folds its aliases in.
   const pageBySlug = new Map<string, PageRef>();
@@ -616,7 +706,7 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
   const add = (rawName: string, kind: EntityKind, m: Mention, label?: string) => {
     let slug = slugify(rawName);
     if (!slug) return;
-    slug = aliasToSlug.get(slug) ?? slug;
+    slug = redirect.get(slug) ?? aliasToSlug.get(slug) ?? slug;
     const a: Acc = acc.get(slug) ?? { slug, names: new Map(), kindVotes: new Map(), mentions: [] };
     acc.set(slug, a);
     // A slug-shaped link value (prevail://person/sam-rivera) names nothing
@@ -667,6 +757,8 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
       id, name, kind, aliases, kinds, mention_count: a.mentions.length, conversations: refs.size,
       last_ts: a.mentions[0]?.ts ?? 0, mentions: a.mentions.slice(0, MAX_MENTIONS), co_mentions: [],
       ...(page ? { page: page.path, saved: page.doc.saved } : {}),
+      ...(page?.doc.website ? { website: page.doc.website } : {}),
+      ...(page ? pictureOf(vault, page.kind, page.slug, page.doc) : {}),
       ...((page?.doc.domain ?? (kind === "org" ? webDomainOf([name, ...aliases]) : undefined)) ? { domain: page?.doc.domain ?? webDomainOf([name, ...aliases]) } : {}),
     });
   }
@@ -684,20 +776,28 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     });
   }
   recs.sort((a, b) => b.conversations - a.conversations || b.last_ts - a.last_ts || a.name.localeCompare(b.name));
-  const idx: EntityIndex = { version: 1, generated_ts: opts.now ?? Date.now(), entities: recs };
+  const idx: EntityIndex = { version: 1, generated_ts: opts.now ?? Date.now(), entities: recs, merged };
   writeJson(META(vault, "index.json"), idx);
   return idx;
 }
 
-export function summarize(r: EntityRec): EntitySummary {
+// `vault` turns the picture into an absolute path (CLI JSON).
+export function summarize(r: EntityRec, vault?: string): EntitySummary {
   return {
     id: r.id, name: r.name, kind: r.kind, aliases: r.aliases, mention_count: r.mention_count, conversations: r.conversations,
     last_ts: r.last_ts, saved: !!r.saved, has_page: !!r.page, ...(r.domain ? { domain: r.domain } : {}),
+    ...(r.website ? { website: r.website } : {}), ...(r.picture ? { picture: vault ? join(vault, r.picture) : r.picture } : {}),
   };
 }
 
+function pictureOf(vault: string, kind: EntityKind, slug: string, doc: PageDoc): { picture?: string } {
+  if (!doc.picture || doc.picture.includes("/") || doc.picture.includes("\\")) return {};
+  const p = join(entityDir(vault, kind, slug), doc.picture);
+  return existsSync(p) ? { picture: relative(vault, p) } : {};
+}
+
 export function findEntity(idx: EntityIndex, idOrName: string): EntityRec | null {
-  const p = parseEntityId(idOrName);
+  const p = redirectParsed(idx.merged, parseEntityId(idOrName));
   if (!p) return null;
   const exact = idx.entities.find((e) => e.id === `${p.kind}/${p.slug}`);
   if (exact) return exact;
@@ -760,7 +860,9 @@ export function syncPages(vault: string, idx: EntityIndex, now = Date.now()): { 
     const isNew = !doc;
     if (!doc) doc = newPage(r, false, now);
     const convos = conversationsSection(r);
-    if (!isNew && doc.mention_count === r.mention_count && doc.conversations === convos) continue;
+    const site = r.kind === "org" && !doc.website ? inferWebsite(r) : undefined;
+    if (!isNew && !site && doc.mention_count === r.mention_count && doc.conversations === convos) continue;
+    if (site) { doc.website = site; r.website = site; }
     doc.mention_count = r.mention_count;
     doc.conversations = convos;
     doc.updated = iso(now);
@@ -772,6 +874,32 @@ export function syncPages(vault: string, idx: EntityIndex, now = Date.now()): { 
   }
   if (created || updated) writeJson(META(vault, "index.json"), idx);
   return { created, updated };
+}
+
+// An org's website, only from a URL in its own mentions whose registrable
+// domain spells the org's name ("Foo Co" <- https://www.fooco.com/x or
+// foo.com). Never guessed from the name alone; never for other kinds.
+const URL_RE = /\b(?:https?:\/\/|www\.)([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi;
+const SLD = new Set(["co", "com", "org", "net", "ac", "gov", "edu"]);
+
+export function registrableLabel(host: string): string {
+  const parts = host.toLowerCase().replace(/^www\./, "").split(".").filter(Boolean);
+  if (parts.length < 2) return "";
+  const i = parts.length >= 3 && parts[parts.length - 1].length === 2 && SLD.has(parts[parts.length - 2]) ? parts.length - 3 : parts.length - 2;
+  return parts[i] ?? "";
+}
+
+export function inferWebsite(r: EntityRec): string | undefined {
+  if (r.kind !== "org") return undefined;
+  const want = new Set([r.name, ...r.aliases].map((n) => nameTokens(n, "org").join("")).filter((n) => n.length >= 3));
+  for (const m of r.mentions) {
+    URL_RE.lastIndex = 0;
+    for (let x = URL_RE.exec(m.snippet); x; x = URL_RE.exec(m.snippet)) {
+      const host = x[1].toLowerCase().replace(/^www\./, "").replace(/\.+$/, "");
+      if (want.has(registrableLabel(host))) return host;
+    }
+  }
+  return undefined;
 }
 
 export function buildDigestPrompt(r: EntityRec): string {
@@ -826,21 +954,27 @@ export function entityDetail(vault: string, idx: EntityIndex, idOrName: string):
   let r = findEntity(idx, idOrName);
   if (!r) {
     // A saved page that the index has not seen yet.
-    const p = parseEntityId(idOrName);
+    const p = redirectParsed(idx.merged, parseEntityId(idOrName));
     if (!p?.kind) return null;
     const doc = readPage(vault, p.kind, p.slug);
     if (!doc) return null;
-    r = { id: `${p.kind}/${p.slug}`, name: doc.name, kind: p.kind, aliases: doc.aliases, kinds: [p.kind], mention_count: 0, conversations: 0, last_ts: 0, mentions: [], co_mentions: [], page: relative(vault, pagePath(vault, p.kind, p.slug)), saved: doc.saved };
+    r = { id: `${p.kind}/${p.slug}`, name: doc.name, kind: p.kind, aliases: doc.aliases, kinds: [p.kind], mention_count: 0, conversations: 0, last_ts: 0, mentions: [], co_mentions: [], page: relative(vault, pageFile(vault, p.kind, p.slug) ?? pagePath(vault, p.kind, p.slug)), saved: doc.saved };
   }
   const slug = r.id.slice(r.id.indexOf("/") + 1);
   const doc = readPage(vault, r.kind, slug);
-  return { ...r, digest: doc?.discussed ?? "", notes: doc?.notes ?? "", ...(doc ? { page_path: relative(vault, pagePath(vault, r.kind, slug)), saved: doc.saved } : {}) };
+  const pic = doc ? pictureOf(vault, r.kind, slug, doc).picture : undefined;
+  return {
+    ...r, digest: doc?.discussed ?? "", notes: doc?.notes ?? "",
+    ...(doc ? { page_path: relative(vault, pageFile(vault, r.kind, slug) ?? pagePath(vault, r.kind, slug)), saved: doc.saved, website: doc.website } : {}),
+    // Absolute, for the CLI/desktop.
+    picture: pic ? join(vault, pic) : undefined,
+  };
 }
 
 function resolveForWrite(idx: EntityIndex, idOrName: string, kindHint?: string): { kind: EntityKind; slug: string; rec: EntityRec | null } {
   const rec = findEntity(idx, idOrName);
   if (rec) return { kind: rec.kind, slug: rec.id.slice(rec.id.indexOf("/") + 1), rec };
-  const p = parseEntityId(idOrName);
+  const p = redirectParsed(idx.merged, parseEntityId(idOrName));
   const kind = p?.kind ?? (isKind(kindHint) ? kindHint : null);
   if (!p || !kind) throw new Error(`unknown entity "${idOrName}": use <kind>/<name> with kind person, place, org or thing`);
   return { kind, slug: p.slug, rec: null };
@@ -896,15 +1030,385 @@ export interface EntityThread { slug: string; domain: string; title: string; upd
 export function entityThreads(vault: string, idOrName: string): EntityThread[] {
   const idx = readIndex(vault);
   const rec = findEntity(idx, idOrName);
-  const want = rec ? { kind: rec.kind as EntityKind | null, slug: rec.id.slice(rec.id.indexOf("/") + 1) } : parseEntityId(idOrName);
+  const want = rec ? { kind: rec.kind as EntityKind | null, slug: rec.id.slice(rec.id.indexOf("/") + 1) } : redirectParsed(idx.merged, parseEntityId(idOrName));
   if (!want) return [];
   const out: EntityThread[] = [];
   for (const [rel, f] of Object.entries(scanLinks(vault).cache.files)) {
-    const tag = f.entity ? parseEntityId(f.entity) : null;
-    if (!tag || tag.slug !== want.slug || (want.kind && tag.kind && tag.kind !== want.kind)) continue;
+    // Threads are never rewritten: an `entity:` tag naming a merged id counts
+    // for its keeper through the merge map.
+    const raw = f.entity ? parseEntityId(f.entity) : null;
+    const tag = redirectParsed(idx.merged, raw);
+    if (!tag || tag.slug !== want.slug || (tag === raw && want.kind && tag.kind && tag.kind !== want.kind)) continue;
     out.push({ slug: rel.split("/").pop()!.replace(/\.md$/, ""), domain: f.domain, title: f.title, updated: f.ts, turns: f.turns ?? 0 });
   }
   return out.sort((a, b) => b.updated - a.updated);
+}
+
+// ---------------------------------------------------------------------------
+// duplicates: find entities that are the same one, merge them, remember
+// "not the same" answers. Precision over recall: only a name that is the same
+// once normalized (or a multi-word alias) merges on its own; a shared first
+// name, a short form or a likely typo is only ever proposed.
+
+export interface MergeRec { from: string; into: string; ts: string; auto: boolean; reason: string }
+export interface MergesFile { merges: MergeRec[]; notSame: [string, string][] }
+
+export const AUTO_MERGE = 0.9;
+export const PROPOSE_AT = 0.5;
+
+const mergesPath = (vault: string) => join(entitiesContainer(vault), "merges.json");
+
+export function readMerges(vault: string): MergesFile {
+  const m = readJson<Partial<MergesFile>>(mergesPath(vault), {});
+  return {
+    merges: Array.isArray(m.merges) ? m.merges.filter((r) => typeof r?.from === "string" && typeof r?.into === "string") : [],
+    notSame: Array.isArray(m.notSame) ? m.notSame.filter((p): p is [string, string] => Array.isArray(p) && p.length === 2 && p.every((x) => typeof x === "string")) : [],
+  };
+}
+
+// Read-modify-write of merges.json under its lock, written atomically.
+function updateMerges(vault: string, fn: (m: MergesFile) => void) {
+  const path = mergesPath(vault);
+  mkdirSync(dirname(path), { recursive: true });
+  const lock = tryAcquireLock(`${path}.lock`);
+  try {
+    const m = readMerges(vault);
+    fn(m);
+    vwriteFileAtomic(path, `${JSON.stringify(m, null, 2)}\n`);
+  } finally { lock?.release(); }
+}
+
+// from id -> the id it finally resolves to (merge chains followed, cycle-safe).
+export function mergeMap(m: MergesFile): Record<string, string> {
+  const next = new Map(m.merges.map((r) => [r.from, r.into]));
+  const out: Record<string, string> = {};
+  for (const from of next.keys()) {
+    let at = from;
+    const seen = new Set([at]);
+    while (next.has(at) && !seen.has(next.get(at)!)) { at = next.get(at)!; seen.add(at); }
+    if (at !== from) out[from] = at;
+  }
+  return out;
+}
+
+const slugOf = (id: string) => id.slice(id.indexOf("/") + 1);
+
+// The index keys entities by slug, so redirects are by slug too.
+function slugRedirects(merged: Record<string, string>): Map<string, string> {
+  return new Map(Object.entries(merged).map(([f, t]) => [slugOf(f), slugOf(t)]));
+}
+
+function redirectParsed(merged: Record<string, string> | undefined, p: { kind: EntityKind | null; slug: string } | null): { kind: EntityKind | null; slug: string } | null {
+  if (!p || !merged) return p;
+  const into = (p.kind ? merged[`${p.kind}/${p.slug}`] : undefined) ?? Object.entries(merged).find(([f]) => slugOf(f) === p.slug)?.[1];
+  return into ? parseEntityId(into) : p;
+}
+
+export const resolveEntityId = (vault: string, id: string): string => {
+  const p = redirectParsed(mergeMap(readMerges(vault)), parseEntityId(id));
+  return p ? (p.kind ? `${p.kind}/${p.slug}` : p.slug) : id;
+};
+
+const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+export interface DuplicateSide { id: string; name: string; kind: EntityKind; mentions: number }
+export interface DuplicateCandidate { pair: string; a: DuplicateSide; b: DuplicateSide; confidence: number; reason: string }
+
+const ORG_SUFFIX = new Set(["inc", "llc", "ltd", "co", "corp", "corporation", "company", "the", "gmbh", "plc", "ag"]);
+
+function nameTokens(name: string, kind: EntityKind): string[] {
+  const t = name.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, " and ").replace(/['’]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+  const kept = kind === "org" ? t.filter((w) => !ORG_SUFFIX.has(w)) : t;
+  return kept.length ? kept : t;
+}
+
+function editDistance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// A likely typo or speech-to-text variant: one short word off by one letter
+// (two for 8+ letters), or one word off by one letter in a same-length name
+// where that word has 5+ letters. "Foo Bar" vs "Foo Baz" never qualifies.
+function typoOf(a: string[], b: string[]): boolean {
+  if (a.length !== b.length || a.length > 3) return false;
+  const diff = a.map((w, i) => [w, b[i]] as const).filter(([x, y]) => x !== y);
+  if (diff.length !== 1) return false;
+  const [x, y] = diff[0];
+  const len = Math.min(x.length, y.length);
+  if (a.length === 1) return len >= 4 && editDistance(x, y) <= (len >= 8 ? 2 : 1);
+  return len >= 5 && editDistance(x, y) === 1;
+}
+
+interface Shape { rec: EntityRec; toks: string[]; norm: string; compact: string; aliasNorms: Set<string>; refs: Set<string> }
+
+const quote = (s: string) => `"${s}"`;
+
+function scorePair(x: Shape, y: Shape, containers: Map<string, number>): { confidence: number; reason: string } | null {
+  const [A, B] = [x.rec, y.rec];
+  if (x.norm === y.norm || x.compact === y.compact) return { confidence: 0.97, reason: `${quote(A.name)} and ${quote(B.name)} are the same name written differently` };
+  // One name is listed as the other's alias.
+  const aliasHit = y.aliasNorms.has(x.norm) ? { alias: x, of: y } : x.aliasNorms.has(y.norm) ? { alias: y, of: x } : null;
+  let score = 0;
+  let reason = "";
+  if (aliasHit && aliasHit.alias.toks.length > 1) {
+    return { confidence: 0.93, reason: `${quote(aliasHit.alias.rec.name)} is already another name for ${quote(aliasHit.of.rec.name)}` };
+  }
+  if (aliasHit) { score = 0.75; reason = `${quote(aliasHit.of.rec.name)} is also called ${quote(aliasHit.alias.rec.name)}`; }
+  // A one-word name inside a longer one ("Foo" in "Foo Bar"). A bare shared
+  // first name: weaker when several longer names contain the same word, and
+  // weaker still for places, orgs and things ("Foo" vs "Foo Maps").
+  const [short, long] = x.toks.length === 1 ? [x, y] : [y, x];
+  if (!score && short.toks.length === 1 && long.toks.length > 1 && short.norm.length >= 3 && long.toks.includes(short.norm)) {
+    const ambiguous = (containers.get(`${A.kind}:${short.norm}`) ?? 0) > 1;
+    score = (A.kind === "person" ? 0.65 : 0.55) - (ambiguous ? 0.1 : 0);
+    reason = `${quote(short.rec.name)} could be short for ${quote(long.rec.name)}${ambiguous ? " (other names contain it too)" : ""}`;
+  }
+  if (!score && typoOf(x.toks, y.toks)) { score = 0.65; reason = `${quote(A.name)} and ${quote(B.name)} look like spellings of one name`; }
+  if (!score) return null;
+  // Supporting evidence only: never lifts a proposal to an automatic merge.
+  let shared = 0;
+  for (const r of x.refs) if (y.refs.has(r)) shared++;
+  if (shared) { score = Math.min(0.85, score + Math.min(0.1, 0.05 * shared)); reason += `; both come up in ${shared > 1 ? `${shared} of the same conversations` : "the same conversation"}`; }
+  return { confidence: Math.round(score * 100) / 100, reason };
+}
+
+// "The fuller name": more words, then longer, then more mentions.
+function fuller(a: EntityRec, b: EntityRec, ta: string[], tb: string[]): boolean {
+  return ta.length !== tb.length ? ta.length > tb.length : a.name.length !== b.name.length ? a.name.length > b.name.length : a.mention_count >= b.mention_count;
+}
+
+// Candidate pairs, same kind only, confidence >= PROPOSE_AT, minus pairs the
+// user said are not the same. `a` is the side with the fuller name (the
+// default keeper). Sorted by confidence.
+export function findDuplicates(idx: EntityIndex, merges: MergesFile): DuplicateCandidate[] {
+  const map = mergeMap(merges);
+  const res = (id: string) => map[id] ?? id;
+  const blocked = new Set(merges.notSame.map(([a, b]) => pairKey(res(a), res(b))));
+  const shapes: Shape[] = [];
+  for (const r of idx.entities) {
+    const toks = nameTokens(r.name, r.kind);
+    if (!toks.length) continue;
+    shapes.push({
+      rec: r, toks, norm: toks.join(" "), compact: toks.join(""),
+      aliasNorms: new Set(r.aliases.map((a) => nameTokens(a, r.kind).join(" ")).filter(Boolean)),
+      refs: new Set(r.mentions.map((m) => `${m.source}:${m.ref}`)),
+    });
+  }
+  const containers = new Map<string, number>();
+  for (const s of shapes) if (s.toks.length > 1) for (const t of new Set(s.toks)) containers.set(`${s.rec.kind}:${t}`, (containers.get(`${s.rec.kind}:${t}`) ?? 0) + 1);
+  const side = (r: EntityRec): DuplicateSide => ({ id: r.id, name: r.name, kind: r.kind, mentions: r.mention_count });
+  const out: DuplicateCandidate[] = [];
+  // ponytail: all pairs within a kind, O(n^2) with cheap checks first; block by
+  // token if entity counts reach the tens of thousands.
+  for (let i = 0; i < shapes.length; i++) {
+    for (let j = i + 1; j < shapes.length; j++) {
+      const x = shapes[i];
+      const y = shapes[j];
+      if (x.rec.kind !== y.rec.kind || blocked.has(pairKey(x.rec.id, y.rec.id))) continue;
+      const s = scorePair(x, y, containers);
+      if (!s || s.confidence < PROPOSE_AT) continue;
+      const [a, b] = fuller(x.rec, y.rec, x.toks, y.toks) ? [x.rec, y.rec] : [y.rec, x.rec];
+      out.push({ pair: pairKey(a.id, b.id), a: side(a), b: side(b), confidence: s.confidence, reason: s.reason });
+    }
+  }
+  return out.sort((p, q) => q.confidence - p.confidence || q.a.mentions + q.b.mentions - p.a.mentions - p.b.mentions);
+}
+
+export function entityDuplicates(vault: string): DuplicateCandidate[] {
+  const idx = readIndex(vault).generated_ts ? readIndex(vault) : buildIndex(vault);
+  return findDuplicates(idx, readMerges(vault));
+}
+
+// Fold `mergeId` into `keepId`. Nothing is lost: the keeper gains the other's
+// name and aliases as aliases, its notes (appended under a dated "Merged from"
+// line) and, through merges.json, every mention, conversation and `entity:`
+// tag. The merged page moves to data/entities/_merged/. The keeper keeps its
+// own display name (auto-merges pick the fuller name as keeper).
+export function mergeEntities(vault: string, keepId: string, mergeId: string, o: { auto?: boolean; reason?: string; now?: number; idx?: EntityIndex; rebuild?: boolean } = {}): { ok: true; id: string } {
+  const now = o.now ?? Date.now();
+  const idx = o.idx ? { ...o.idx, merged: mergeMap(readMerges(vault)) } : readIndex(vault).generated_ts ? readIndex(vault) : buildIndex(vault, { now });
+  const keep = entityDetail(vault, idx, keepId);
+  const gone = entityDetail(vault, idx, mergeId);
+  if (!keep) throw new Error(`no entity "${keepId}"`);
+  if (!gone) throw new Error(`no entity "${mergeId}"`);
+  if (keep.id === gone.id) throw new Error(`"${mergeId}" is already ${keep.id}`);
+  const kSlug = slugOf(keep.id);
+  const gSlug = slugOf(gone.id);
+  const kDoc = readPage(vault, keep.kind, kSlug) ?? { ...newPage(keep, false, now), mention_count: keep.mention_count, conversations: conversationsSection(keep) };
+  const gDoc = readPage(vault, gone.kind, gSlug);
+
+  const seen = new Set([kDoc.name.toLowerCase()]);
+  const aliases: string[] = [];
+  for (const a of [...kDoc.aliases, gDoc?.name ?? gone.name, ...(gDoc?.aliases ?? []), ...gone.aliases]) {
+    const t = a.trim();
+    if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); aliases.push(t); }
+  }
+  kDoc.aliases = aliases;
+  // User text is never dropped: the other page's notes (and anything it had
+  // above its sections) land at the end of the keeper's notes.
+  const carried = [gDoc?.preamble ?? "", gDoc?.notes ?? ""].filter((t) => t.trim()).join("\n\n");
+  if (carried) kDoc.notes = `${kDoc.notes ? `${kDoc.notes}\n\n` : ""}${day(now)}: Merged from ${gDoc?.name ?? gone.name}:\n${carried}`;
+  if (gDoc?.saved) kDoc.saved = true;
+  if (!kDoc.domain && gDoc?.domain) kDoc.domain = gDoc.domain;
+  for (const [k, v] of Object.entries(gDoc?.extra ?? {})) if (!(k in kDoc.extra)) kDoc.extra[k] = v;
+  kDoc.updated = iso(now);
+  writePage(vault, keep.kind, kSlug, kDoc);
+
+  updateMerges(vault, (m) => {
+    m.merges.push({ from: gone.id, into: keep.id, ts: iso(now), auto: !!o.auto, reason: o.reason ?? "merged by you" });
+  });
+
+  // The merged entity's files are copied to the keeper (its picture too when
+  // the keeper has none); then its whole folder is archived under _merged/.
+  const gDir = entityDir(vault, gone.kind, gSlug);
+  const kDir = entityDir(vault, keep.kind, kSlug);
+  for (const f of listEntityFiles(gDir)) copyInto(join(gDir, "files", f.name), join(kDir, "files"), f.name);
+  const gPic = gDoc ? pictureOf(vault, gone.kind, gSlug, gDoc).picture : undefined;
+  if (gPic && !pictureOf(vault, keep.kind, kSlug, kDoc).picture) {
+    const name = `picture${extname(gPic)}`;
+    mkdirSync(kDir, { recursive: true });
+    if (!existsSync(join(kDir, name))) { copyFileSync(join(vault, gPic), join(kDir, name)); kDoc.picture = name; writePage(vault, keep.kind, kSlug, kDoc); }
+  }
+  const archive = join(entitiesContainer(vault), "_merged", KIND_DIR[gone.kind]);
+  let to = join(archive, gSlug);
+  if (existsSync(to)) to = join(archive, `${gSlug}-${day(now)}-${hash(String(now)).slice(0, 6)}`);
+  const flat = flatPath(vault, gone.kind, gSlug);
+  if (existsSync(gDir)) {
+    mkdirSync(archive, { recursive: true });
+    renameSync(gDir, to);
+  }
+  if (existsSync(flat)) migrateOne(flat, join(to, PAGE_FILE));
+  if (o.rebuild !== false) syncPages(vault, buildIndex(vault, { now }), now);
+  return { ok: true, id: keep.id };
+}
+
+// ---------------------------------------------------------------------------
+// entity folder: picture, website, files
+
+const PICTURE_TYPES: Record<string, string> = { ".png": "png", ".jpg": "jpg", ".jpeg": "jpg", ".webp": "webp", ".svg": "svg" };
+export const PICTURE_MAX = 5 * 1024 * 1024;
+
+function pictureType(buf: Buffer, ext: string): string | null {
+  const want = PICTURE_TYPES[ext.toLowerCase()];
+  if (!want) return null;
+  const ok = want === "png" ? buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    : want === "jpg" ? buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff
+    : want === "webp" ? buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP"
+    : /<svg[\s>]/i.test(buf.toString("utf8", 0, 4096));
+  return ok ? want : null;
+}
+
+// The page for a write: resolves merges, creates a saved page when there is
+// none yet (like setNotes).
+function pageForWrite(vault: string, idOrName: string, now: number): { kind: EntityKind; slug: string; doc: PageDoc } {
+  const { kind, slug, rec } = resolveForWrite(readIndex(vault), idOrName);
+  let doc = readPage(vault, kind, slug);
+  if (!doc) {
+    doc = newPage({ name: rec?.name || slug, kind, aliases: rec?.aliases ?? [] }, true, now);
+    if (rec) { doc.mention_count = rec.mention_count; doc.conversations = conversationsSection(rec); }
+  }
+  return { kind, slug, doc };
+}
+
+// Copy `src` into `dir` as `name`, never overwriting: "a.pdf" becomes
+// "a (2).pdf" when taken. Returns the name used.
+function copyInto(src: string, dir: string, name: string): string {
+  mkdirSync(dir, { recursive: true });
+  const ext = extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  let n = 1;
+  let use = name;
+  while (existsSync(join(dir, use))) use = `${stem} (${++n})${ext}`;
+  copyFileSync(src, join(dir, use));
+  return use;
+}
+
+// ponytail: pictures and files are copied as-is (binary), not through the
+// vault's text encryption; add a binary vault writer if encrypted vaults need them sealed.
+export function setPicture(vault: string, idOrName: string, file: string, o: { now?: number } = {}): { ok: true; path: string } {
+  const now = o.now ?? Date.now();
+  let st;
+  try { st = statSync(file); } catch { throw new Error(`no file "${file}"`); }
+  if (!st.isFile()) throw new Error(`not a file: "${file}"`);
+  if (st.size > PICTURE_MAX) throw new Error("picture is over 5 MB");
+  const type = pictureType(readFileSync(file), extname(file));
+  if (!type) throw new Error("picture must be a png, jpg, webp or svg image");
+  const { kind, slug, doc } = pageForWrite(vault, idOrName, now);
+  const dir = entityDir(vault, kind, slug);
+  const name = `picture.${type}`;
+  // A previous picture is kept in files/, never overwritten.
+  const prev = doc.picture && !doc.picture.includes("/") ? join(dir, doc.picture) : "";
+  if (prev && existsSync(prev)) {
+    copyInto(prev, join(dir, "files"), `previous-${day(now)}${extname(prev)}`);
+  }
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(file, join(dir, name));
+  doc.picture = name;
+  doc.updated = iso(now);
+  writePage(vault, kind, slug, doc);
+  buildIndex(vault, { now });
+  return { ok: true, path: join(dir, name) };
+}
+
+export function setWebsite(vault: string, idOrName: string, url: string, o: { now?: number } = {}): { ok: true } {
+  const now = o.now ?? Date.now();
+  const u = url.trim();
+  if (u && !/^(https?:\/\/)?[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?(\/\S*)?$/i.test(u)) throw new Error(`not a website: "${url}"`);
+  const { kind, slug, doc } = pageForWrite(vault, idOrName, now);
+  doc.website = u || undefined;
+  doc.updated = iso(now);
+  writePage(vault, kind, slug, doc);
+  buildIndex(vault, { now });
+  return { ok: true };
+}
+
+export interface EntityFile { name: string; size: number; mtime: number }
+
+function listEntityFiles(dir: string): EntityFile[] {
+  const fdir = join(dir, "files");
+  let names: string[] = [];
+  try { names = readdirSync(fdir); } catch { return []; }
+  const out: EntityFile[] = [];
+  for (const name of names) {
+    if (name.startsWith(".")) continue;
+    try { const st = statSync(join(fdir, name)); if (st.isFile()) out.push({ name, size: st.size, mtime: st.mtimeMs }); } catch { /* gone */ }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function entityFiles(vault: string, idOrName: string): EntityFile[] {
+  const { kind, slug } = resolveForWrite(readIndex(vault), idOrName);
+  return listEntityFiles(entityDir(vault, kind, slug));
+}
+
+export function addEntityFile(vault: string, idOrName: string, file: string, o: { now?: number } = {}): { ok: true; name: string } {
+  let st;
+  try { st = statSync(file); } catch { throw new Error(`no file "${file}"`); }
+  if (!st.isFile()) throw new Error(`not a file: "${file}"`);
+  const now = o.now ?? Date.now();
+  const { kind, slug, doc } = pageForWrite(vault, idOrName, now);
+  if (!pageFile(vault, kind, slug)) writePage(vault, kind, slug, doc);
+  const safe = basename(file).replace(/[\/\\:\0]/g, "-").replace(/^\.+/, "") || "file";
+  return { ok: true, name: copyInto(file, join(entityDir(vault, kind, slug), "files"), safe) };
+}
+
+// Record that two entities are different; the pair is never proposed again.
+export function markNotSame(vault: string, idA: string, idB: string): { ok: true } {
+  const idx = readIndex(vault).generated_ts ? readIndex(vault) : buildIndex(vault);
+  const ids = [idA, idB].map((id) => findEntity(idx, id)?.id ?? resolveEntityId(vault, id));
+  if (ids[0] === ids[1]) throw new Error("that is one entity");
+  updateMerges(vault, (m) => {
+    const key = pairKey(ids[0], ids[1]);
+    if (!m.notSame.some(([a, b]) => pairKey(a, b) === key)) m.notSame.push(ids[0] < ids[1] ? [ids[0], ids[1]] : [ids[1], ids[0]]);
+  });
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -920,10 +1424,31 @@ export interface RefreshEntitiesOptions {
 
 export async function refreshEntities(vault: string, o: RefreshEntitiesOptions = {}) {
   const now = o.now ?? Date.now();
-  const idx = buildIndex(vault, { now });
+  const mig = migrateEntityFolders(vault);
+  if (mig.conflicts.length) o.log?.(`entities: ${mig.conflicts.length} pages kept beside an existing entity.md as entity.conflict*.md`);
+  let idx = buildIndex(vault, { now });
+  // Fold clear duplicates (confidence >= AUTO_MERGE) before pages are synced.
+  // A few rounds, since one merge can make the next pair clear.
+  let merged = 0;
+  for (let round = 0; round < 5; round++) {
+    const clear = findDuplicates(idx, readMerges(vault)).filter((c) => c.confidence >= AUTO_MERGE);
+    if (!clear.length) break;
+    const used = new Set<string>();
+    for (const c of clear) {
+      if (used.has(c.a.id) || used.has(c.b.id)) continue;
+      used.add(c.a.id); used.add(c.b.id);
+      mergeEntities(vault, c.a.id, c.b.id, { auto: true, reason: c.reason, now, idx, rebuild: false });
+      merged++;
+    }
+    idx = buildIndex(vault, { now });
+  }
   const pages = syncPages(vault, idx, now);
+  const pending = findDuplicates(idx, readMerges(vault)).length;
   const digests = await refreshDigests(vault, idx, { run: o.run === undefined ? runModelOnce : o.run, model: o.digestModel, limit: o.digestLimit, log: o.log, now });
-  return { entities: idx.entities.length, pages_created: pages.created, pages_updated: pages.updated, digests_written: digests.written, digests_pending: digests.pending };
+  return {
+    entities: idx.entities.length, pages_created: pages.created, pages_updated: pages.updated, digests_written: digests.written, digests_pending: digests.pending,
+    merged, duplicates_pending: pending,
+  };
 }
 
 // ---------------------------------------------------------------------------

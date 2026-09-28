@@ -8,7 +8,7 @@
   "properties": {
     "type": {
       "type": "string",
-      "enum": ["start", "user", "delta", "assistant", "tool", "usage", "error", "done"],
+      "enum": ["start", "user", "delta", "assistant", "tool", "usage", "error", "done", "route", "routed", "app_unavailable", "app_needs_auth"],
       "description": "Event kind. 'start' opens the turn; 'delta' carries a streamed text chunk; 'assistant' is the finalized reply; 'usage' reports token spend; 'done' closes the turn; 'error' reports failure."
     },
     "thread": {
@@ -34,14 +34,13 @@
       "description": "Text payload. On 'delta' this is the incremental chunk; on 'assistant'/'user' it is the full message."
     },
     "tool": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Tool-call detail. Present on 'tool' events.",
-      "properties": {
-        "name": { "type": "string" },
-        "input": {},
-        "output": {}
-      }
+      "type": "string",
+      "description": "On a 'tool' event that carries 'app': the tool's short name within that app (e.g. 'search', 'send_message'). Present on both the running and the done/failed step."
+    },
+    "access": {
+      "type": "string",
+      "enum": ["read", "write", "blocked"],
+      "description": "On a 'tool' event that carries 'app': the tool's access class, from the same classifier as the app access log (data/apps/<id>/_log/access.jsonl)."
     },
     "usage": {
       "type": "object",
@@ -60,6 +59,30 @@
     "error": {
       "type": "string",
       "description": "Error message. Present only on 'error' events."
+    },
+    "app": {
+      "type": "string",
+      "description": "Mirrored app id. On 'app_unavailable' / 'app_needs_auth', and on a 'tool' event whose tool belongs to that app."
+    },
+    "runtime": {
+      "type": "string",
+      "description": "On 'routed': the engine kind the turn moved to because it owns every referenced app."
+    },
+    "reason": {
+      "type": "string",
+      "description": "On 'routed': why."
+    },
+    "runtime_needed": {
+      "type": "string",
+      "description": "On 'app_unavailable': the engine kind that owns the app's connector."
+    },
+    "name": {
+      "type": "string",
+      "description": "On 'app_needs_auth': the app's display name."
+    },
+    "signin_url": {
+      "type": "string",
+      "description": "On 'app_needs_auth': where to sign in, when known."
     }
   },
   "allOf": [

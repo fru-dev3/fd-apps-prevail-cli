@@ -46,6 +46,10 @@ import {
 import { readRouteOverrides, type RouteOverride } from "./route-learning.ts";
 import { generalDir } from "./decisions.ts";
 import { entityChatBlock } from "./entities.ts";
+import { appChatBlock, appToolAccess, mirrorApps, planAppRouting, refDomainBlock } from "./app-scope.ts";
+import type { MirrorApp } from "./apps-mirror.ts";
+import { turnSources } from "./trusted-sources.ts";
+import { APP_SCOPE_PREFIX, appScopeId, resolveDomainDir } from "./path-safety.ts";
 import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
 import {
@@ -61,7 +65,8 @@ import {
 // docs/schemas/ChatEvent.json — kept as a local interface (rather than
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
-  type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route";
+  type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route"
+    | "routed" | "app_unavailable" | "app_needs_auth";
   thread: string;
   ts: number;
   domain?: string;
@@ -105,6 +110,21 @@ export interface ChatEvent {
   // rendered as a header above the live checklist. Re-sent whenever the model
   // revises the plan. Absent on simple one-shot replies.
   plan?: string[];
+  // Apps as chat scopes. `app` is the referenced app's id on app_unavailable /
+  // app_needs_auth, and on a `tool` event whose tool belongs to a mirrored app.
+  app?: string;
+  // On a `tool` event with `app`: the tool's short name (search, send_message)
+  // and its access class, from the same classifier as the app access log.
+  tool?: string;
+  access?: "read" | "write" | "blocked";
+  // routed: the engine kind the turn moved to, and why.
+  runtime?: string;
+  reason?: string;
+  // app_unavailable: the engine kind that owns the app's connector.
+  runtime_needed?: string;
+  // app_needs_auth: the app's display name and, when known, where to sign in.
+  name?: string;
+  signin_url?: string;
 }
 
 // Options for one JSON chat turn.
@@ -155,13 +175,25 @@ export interface ChatJsonOptions {
   // Entity chat: an entity id (person/foo). Every turn gets the entity's
   // context block (entities.ts entityChatBlock) ahead of the message, rebuilt
   // from the page each turn and never persisted with the user turn.
-  entity?: string;
+  // Several may be given (one block each, sharing ENTITY_BUDGET); the first is
+  // exported to the turn as PREVAIL_ENTITY_ID.
+  entity?: string | string[];
+  // Apps referenced on this turn (--app, repeatable): an APP CONTEXT block
+  // each, runtime routing, and sign-in notices. Rebuilt every turn.
+  apps?: string[];
+  // The app whose own chat space this thread lives in (--scope-app). Implies
+  // it is referenced too; the turn runs in data/apps/<id>/_scope.
+  scopeApp?: string;
+  // Other domains referenced on this turn (--ref-domain, repeatable): a compact
+  // state block each.
+  refDomains?: string[];
   // Test seams: stand-ins for engine detection, the model turn and the
   // ~/.prevail message log. Production never sets these.
   deps?: {
     detectClis?: typeof detectClis;
     runChatTurn?: typeof runChatTurn;
     persistMessage?: typeof persistMessage;
+    mirrorApps?: (vault: string) => MirrorApp[];
   };
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
@@ -201,6 +233,14 @@ function estimateUsage(
 function engineLabel(cli: AvailableCli, model: string): string {
   const m = model.trim() || defaultModelFor(cli.kind);
   return `${cli.kind}:${m}`;
+}
+
+// Every referenced entity shares this many characters of context.
+const ENTITY_BUDGET = 8000;
+const APP_ID_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
+
+function uniq(xs: (string | undefined)[] | undefined): string[] {
+  return [...new Set((xs ?? []).map((x) => (x ?? "").trim()).filter(Boolean))];
 }
 
 function findDomain(vaultPath: string, name: string): Domain | null {
@@ -250,7 +290,21 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const message = opts.message?.trim();
   if (!message) return fail("empty message");
 
-  let domain = findDomain(vaultPath, opts.domain);
+  // An app's own chat space: --scope-app <id> is the `_app-<id>` scope key,
+  // stored under data/apps/<id>/_scope like any other thread space.
+  const scopeApp = (opts.scopeApp ?? "").trim() || appScopeId(opts.domain ?? "") || "";
+  if (scopeApp && !APP_ID_RE.test(scopeApp)) return fail(`invalid app id: ${scopeApp}`);
+  const domainKey = scopeApp ? `${APP_SCOPE_PREFIX}${scopeApp}` : opts.domain;
+  const appIds = uniq([...(scopeApp ? [scopeApp] : []), ...(opts.apps ?? [])]);
+  const badApp = appIds.find((id) => !APP_ID_RE.test(id));
+  if (badApp) return fail(`invalid app id: ${badApp}`);
+
+  let domain = scopeApp ? null : findDomain(vaultPath, domainKey);
+  if (scopeApp) {
+    const dir = resolveDomainDir(vaultPath, domainKey);
+    try { mkdirSync(dir, { recursive: true }); } catch { /* best effort */ }
+    domain = { name: domainKey, path: dir, hasState: false, openLoopCount: 0, stateMtime: null, skills: [] };
+  }
   // General may not be scaffolded on disk yet (no chats stored there). It's a
   // real, addressable space, so synthesize it at general_dir rather than
   // failing — this is what lets domainless General chat run.
@@ -261,6 +315,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     domain = { name: "general", path: gdir, hasState: false, openLoopCount: 0, stateMtime: null, skills: [] };
   }
   if (!domain) return fail(`unknown domain: ${opts.domain}`);
+  // Everything below persists under the resolved key (`_app-<id>` for an app scope).
+  opts = { ...opts, domain: domainKey };
 
   // Lazy back-compat: fold any desktop-style _threads/<slug>.md transcripts
   // into JSONL so a freshly-imported vault has a uniform source of truth
@@ -278,7 +334,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const runTurn = opts.deps?.runChatTurn ?? runChatTurn;
   const persist = opts.deps?.persistMessage ?? persistMessage;
   const available = await (opts.deps?.detectClis ?? detectClis)();
-  const cli = pickCli(available, wantedCli, opts.localOnly ?? false);
+  let cli = pickCli(available, wantedCli, opts.localOnly ?? false);
   // Privacy + cost guard for every turn on this path. runChatTurn's guard was
   // opt-in and NO caller passed it, so a domain whose manifest says
   // privacy.localOnly still ran on a cloud CLI, and budget caps never fired.
@@ -289,6 +345,19 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     if (opts.localOnly) return fail("no local engine available (ollama not detected)");
     if (wantedCli) return fail(`engine not available: ${wantedCli}`);
     return fail("no AI CLI detected (claude/codex/antigravity/ollama)");
+  }
+
+  // Apps: each connector belongs to one runtime. When this engine lacks a
+  // referenced app and one runtime owns them all, run the turn there.
+  const apps = appIds.length ? (opts.deps?.mirrorApps ?? mirrorApps)(vaultPath) : [];
+  const appPlan = appIds.length
+    ? planAppRouting(appIds, apps, cli.kind, (k) => !turnGuard.localOnly && !opts.localOnly && available.some((c) => c.kind === k))
+    : null;
+  if (appPlan?.route) {
+    cli = available.find((c) => c.kind === appPlan.route!.runtime)!;
+    // A model id belongs to the engine it was picked for; the routed engine
+    // starts on its own default (Auto still routes within it).
+    if ((opts.model ?? "").trim() !== "auto") opts = { ...opts, model: "" };
   }
 
   // Resolve the model. The ONLY behavioral change from before is guarded behind
@@ -380,11 +449,21 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const threadId = (opts.threadId ?? "").trim() || (rawSession || undefined);
   // Entity block first (what the conversation is about), then any preamble.
   // A broken entity lookup never blocks the turn; it just runs unscoped.
-  let entityBlock = "";
-  if (opts.entity?.trim()) {
-    try { entityBlock = entityChatBlock(vaultPath, opts.entity.trim()); } catch { entityBlock = ""; }
+  // Then the referenced apps and domains. All rebuilt every turn, none saved.
+  const entityIds = uniq(Array.isArray(opts.entity) ? opts.entity : [opts.entity]);
+  const perEntity = entityIds.length ? Math.min(6000, Math.floor(ENTITY_BUDGET / entityIds.length)) : 0;
+  const blocks: string[] = [];
+  for (const id of entityIds) {
+    try { blocks.push(entityChatBlock(vaultPath, id, perEntity)); } catch { /* unscoped */ }
   }
-  const lead = [entityBlock, opts.preamble?.trim() ?? ""].filter(Boolean).join("\n\n---\n\n");
+  for (const id of appIds) {
+    try { blocks.push(appChatBlock(vaultPath, id, apps.find((a) => a.id === id) ?? null)); } catch { /* skip */ }
+  }
+  for (const d of uniq(opts.refDomains)) {
+    if (d === opts.domain) continue;
+    try { const b = refDomainBlock(vaultPath, d); if (b) blocks.push(b); } catch { /* skip */ }
+  }
+  const lead = [...blocks, opts.preamble?.trim() ?? ""].filter(Boolean).join("\n\n---\n\n");
   const modelPrompt = lead ? `${lead}\n\n---\n\n${message}` : message;
 
   // Pi-style branchable nodes: the user turn roots off the last node already
@@ -408,6 +487,15 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   emit({ type: "user", thread, ts: startTs, role: "user", text: message });
   // route (auto only) — the chosen model + why, for the routing chip. Emitted
   // before the model call so the UI can label the turn as it streams.
+  if (appPlan?.route) {
+    emit({ type: "routed", thread, ts: startTs, runtime: appPlan.route.runtime, reason: appPlan.route.reason });
+  }
+  for (const u of appPlan?.unavailable ?? []) {
+    emit({ type: "app_unavailable", thread, ts: startTs, app: u.app, runtime_needed: u.runtime_needed });
+  }
+  for (const n of appPlan?.needsAuth ?? []) {
+    emit({ type: "app_needs_auth", thread, ts: startTs, app: n.app, name: n.name, ...(n.signin_url ? { signin_url: n.signin_url } : {}) });
+  }
   if (routeInfo) {
     emit({ type: "route", thread, ts: startTs, domain: opts.domain, engine, route: routeInfo });
   }
@@ -433,6 +521,16 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // switches to the structured (stream-json) runner when tools are actually
   // injected, so a tool-less turn streams byte-for-byte as before.
   const stepLabels = new Map<string, string>();
+  // Which mirrored app each step's tool belongs to (by MCP server name), with
+  // the tool's short name and access class (the access log's classifier).
+  const stepApps = new Map<string, { app: string; tool: string; access: "read" | "write" | "blocked" }>();
+  const appFields = (name: string | undefined, id: string) => {
+    const known = stepApps.get(id);
+    if (known) return known;
+    const h = appToolAccess(toolApps, name ?? "");
+    return h ? { app: h.app.id, tool: h.tool, access: h.access } : null;
+  };
+  const toolApps = apps.length ? apps : (opts.deps?.mirrorApps ?? mirrorApps)(vaultPath);
   let stepSeq = 0;
   const onTool = (ev: ToolEvent) => {
     try {
@@ -453,18 +551,22 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         const label = stepLabel(ev.name, ev.input);
         const detail = stepDetail(ev.name, ev.input);
         stepLabels.set(id, label);
-        emit({ type: "tool", thread, ts: Date.now(), text: label, step: { id, label, status: "running", ...(detail ? { detail } : {}) } });
+        const app = appFields(ev.name, id);
+        if (app) stepApps.set(id, app);
+        emit({ type: "tool", thread, ts: Date.now(), text: label, ...(app ?? {}), step: { id, label, status: "running", ...(detail ? { detail } : {}) } });
       } else {
         const label = stepLabels.get(id) ?? stepLabel(ev.name);
         const failed = ev.ok === false;
         // On failure the detail line becomes WHY it failed (the tool's own error
         // snippet); successful results keep the call-time detail already shown.
         const detail = failed && ev.resultText ? ev.resultText : undefined;
+        const app = appFields(ev.name, id);
         emit({
           type: "tool",
           thread,
           ts: Date.now(),
           text: label,
+          ...(app ?? {}),
           step: { id, label, status: failed ? "failed" : "done", ...(detail ? { detail } : {}) },
         });
       }
@@ -474,22 +576,31 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // non-cascade turn (so the assistant/usage/persistence are byte-identical); on
   // a cascade escalation it becomes the escalated target.
   let ranModel = model;
+  // What every model call on this turn shares. A turn that references an app
+  // also sees the user's own runtime connectors (that is where app tools live),
+  // under the act gate like any app chat.
+  const turnBase = {
+    prompt: modelPrompt,
+    threadId,
+    entityId: entityIds[0],
+    cwd: domain.path,
+    cli,
+    guard: turnGuard,
+    isFirst: opts.fresh === true || !opts.sessionId, // resume → not first (claude uses --continue)
+    webAccess: opts.webAccess,
+    googleAccount: opts.googleAccount,
+    inheritUserMcp: opts.inheritUserMcp || appIds.length > 0,
+    // Referenced trusted sources: remote MCP servers and fetchable hosts.
+    ...(() => {
+      const t = turnSources(apps.filter((a) => appIds.includes(a.id)));
+      return { ...(Object.keys(t.remoteMcp).length ? { remoteMcp: t.remoteMcp } : {}), ...(t.fetchHosts.length ? { fetchHosts: t.fetchHosts } : {}) };
+    })(),
+  };
   try {
     if (cascadePlan) {
       // 1) Cheap pass, BUFFERED (no deltas) so it can be discarded silently if we
       //    escalate - the consumer never sees a throwaway partial answer.
-      const cheapReply = await runTurn({
-        prompt: modelPrompt,
-        threadId,
-        cwd: domain.path,
-        cli,
-        guard: turnGuard,
-        model: cascadePlan.cheapModel,
-        isFirst: opts.fresh === true || !opts.sessionId,
-        webAccess: opts.webAccess,
-        googleAccount: opts.googleAccount,
-        inheritUserMcp: opts.inheritUserMcp,
-      });
+      const cheapReply = await runTurn({ ...turnBase, model: cascadePlan.cheapModel });
       if (cascadeShouldEscalate({ difficulty: cascadePlan.difficulty, confidence: cascadePlan.confidence, reply: cheapReply })) {
         // 2) Escalate: announce it transparently with a second `route` event, then
         //    re-run on the router's normal pick WITH streaming (the normal UX).
@@ -510,15 +621,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
           },
         });
         reply = await runTurn({
-          prompt: modelPrompt,
-          threadId,
-          cwd: domain.path,
-          cli,
-          guard: turnGuard,
+          ...turnBase,
           model: ranModel,
-          isFirst: opts.fresh === true || !opts.sessionId,
-          webAccess: opts.webAccess,
-          googleAccount: opts.googleAccount,
           onTool,
           onChunk: (delta: string) => {
             if (!delta) return;
@@ -534,16 +638,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       }
     } else {
       reply = await runTurn({
-        prompt: modelPrompt,
-        threadId,
-        cwd: domain.path,
-        cli,
-        guard: turnGuard,
+        ...turnBase,
         model,
-        isFirst: opts.fresh === true || !opts.sessionId, // resume → not first (claude uses --continue)
-        webAccess: opts.webAccess,
-        googleAccount: opts.googleAccount,
-        inheritUserMcp: opts.inheritUserMcp,
         onTool,
         onChunk: (delta: string) => {
           if (!delta) return;
@@ -624,7 +720,10 @@ export async function chatJsonCommand(
   let googleAccount: string | undefined;
   let inheritUserMcp = false;
   let threadId: string | undefined;
-  let entity: string | undefined;
+  const entity: string[] = [];
+  const apps: string[] = [];
+  const refDomains: string[] = [];
+  let scopeApp: string | undefined;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -646,8 +745,18 @@ export async function chatJsonCommand(
     else if (a.startsWith("--thread=")) threadId = a.slice("--thread=".length);
     // --entity: scope the conversation to an entity (person/foo); see
     // ChatJsonOptions.entity.
-    else if (a === "--entity") { entity = next; i++; }
-    else if (a.startsWith("--entity=")) entity = a.slice("--entity=".length);
+    // Repeatable: one context block each.
+    else if (a === "--entity") { entity.push(next ?? ""); i++; }
+    else if (a.startsWith("--entity=")) entity.push(a.slice("--entity=".length));
+    // --app <id> (repeatable): reference an app; --scope-app <id>: this thread
+    // belongs to the app (stored in data/apps/<id>/_scope). --ref-domain <slug>
+    // (repeatable): reference another domain's state.
+    else if (a === "--app") { apps.push(next ?? ""); i++; }
+    else if (a.startsWith("--app=")) apps.push(a.slice("--app=".length));
+    else if (a === "--scope-app") { scopeApp = next; i++; }
+    else if (a.startsWith("--scope-app=")) scopeApp = a.slice("--scope-app=".length);
+    else if (a === "--ref-domain") { refDomains.push(next ?? ""); i++; }
+    else if (a.startsWith("--ref-domain=")) refDomains.push(a.slice("--ref-domain=".length));
     else if (a === "--local-only") localOnly = true;
     else if (a === "--web") { const v = (next ?? "").toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; i++; }
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
@@ -696,6 +805,9 @@ export async function chatJsonCommand(
     inheritUserMcp,
     threadId,
     entity,
+    apps,
+    scopeApp,
+    refDomains,
   });
 }
 

@@ -27,6 +27,7 @@ import { tryAcquireLock } from "./file-lock.ts";
 import { scanSensitive, findingCategories, readEgressGuard } from "./egress-guard.ts";
 import { auditAction } from "./action-audit.ts";
 import { classifyAction, type ActionClass } from "./action-policy.ts";
+import { isTrustedFetch, isTrustedReadTool } from "./trusted-sources.ts";
 
 export interface PendingAct {
   id: string;
@@ -405,6 +406,9 @@ export function gateBuiltin(vault: string, vaultLockOn: boolean, toolName: strin
     return { action: "allow" };
   }
   if (isWeb) {
+    // A trusted web or links source (apps add-source) may be read: WebFetch is
+    // a GET, and only to a host in the _meta registry the model cannot edit.
+    if (name === "WebFetch" && isTrustedFetch(vault, toolInput)) return { action: "allow" };
     return { action: "deny", reason: `Vault Lock is on: ${name} (outbound web) is blocked so nothing can be fetched from or leaked to the network during a confined run. Work from the vault, or the user can turn off Vault Lock.` };
   }
   if (isBash) {
@@ -452,6 +456,8 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
     return builtin;
   }
   if (classifyAct(toolName) === "allow") return { action: "allow" };
+  // A trusted remote MCP source's read tools (readOnlyHint at add time) run live.
+  if (isTrustedReadTool(vault, toolName)) return { action: "allow" };
   const argsJson = JSON.stringify(toolInput ?? {});
   const hash = actHash(toolName, argsJson);
   // The user already said no to this exact call: refuse without re-queueing,
@@ -528,6 +534,20 @@ export function threadIdFromEnv(env: NodeJS.ProcessEnv = process.env): string | 
   return /^[A-Za-z0-9_-]{1,128}$/.test(t) ? t : undefined;
 }
 
+/** The entity an entity chat is about (PREVAIL_ENTITY_ID, set like the thread
+ *  id). Only a plain <kind>/<slug> id is trusted. */
+export function entityIdFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const e = (env.PREVAIL_ENTITY_ID ?? "").trim();
+  return /^[a-z]{1,20}\/[A-Za-z0-9_.-]{1,128}$/.test(e) ? e : undefined;
+}
+
+/** How a gate decision reads in the app access log. */
+export function accessOutcome(d: GateDecision): "ran" | "queued" | "denied" | "declined" {
+  if (d.action === "allow") return "ran";
+  if (d.reason === DECLINED_REASON) return "declined";
+  return /\[prevail-act:[^\]]+\]/.test(d.reason ?? "") ? "queued" : "denied";
+}
+
 /** The hook entrypoint: read the Claude Code PreToolUse JSON from stdin, gate,
  *  and print the decision in the hook protocol. Never throws (a gate crash
  *  must fail CLOSED for gated tools, so unparseable input denies). */
@@ -550,6 +570,14 @@ export async function runActGateHook(vault: string, domain: string, vaultLockOn 
     decision = classifyAct(toolName) === "allow"
       ? { action: "allow" }
       : { action: "deny", reason: `Prevail's action gate errored (${(e as Error).message}); the action was not run.` };
+  }
+  // The app access log: every MCP call that belongs to a mirrored app, reads
+  // included. Recorded after the decision and never able to change it.
+  if (toolName.startsWith("mcp__")) {
+    try {
+      const { recordAppAccess } = await import("./app-scope.ts");
+      recordAppAccess(vault, toolName, toolInput, accessOutcome(decision), { thread: threadIdFromEnv(), entity: entityIdFromEnv(), domain });
+    } catch { /* logging never blocks a tool call */ }
   }
   if (decision.action === "allow") { process.stdout.write("{}\n"); return; }
   process.stdout.write(`${JSON.stringify({

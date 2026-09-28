@@ -769,7 +769,7 @@ async function refreshEntityLayer(ctx: MirrorContext, m: ModelOpts, opts: Refres
       if (t.tagged) m.log(`entities: tagged ${t.tagged} new sittings`);
     }
     const r = await refreshEntities(ctx.vault, { run, digestModel: m.model, digestLimit: 5, log: m.log, now: ctx.now });
-    m.log(`entities: ${r.entities} known, ${r.pages_created} new pages, ${r.digests_written} digests`);
+    m.log(`entities: ${r.entities} known, ${r.pages_created} new pages, ${r.digests_written} digests, ${r.merged} merged`);
   } catch { m.log("entities: refresh failed; retry next refresh"); } // no message: it can name an entity
 }
 

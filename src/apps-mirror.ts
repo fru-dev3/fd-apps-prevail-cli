@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { appsContainer, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { withTrustedSources } from "./trusted-sources.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 
@@ -26,7 +27,9 @@ import { vreadFile, vwriteFile } from "./vault-session.ts";
 
 export type RuntimeId = "claude" | "codex" | "gemini" | "agy";
 export type ToolKind = "read" | "write" | "send" | "money";
-export type MirrorStatus = "connected" | "needs_auth" | "disabled" | "error";
+// untrusted_here: a trusted-source folder synced from another Mac that this
+// Mac's registry (build/_meta/apps/trusted.json) does not trust.
+export type MirrorStatus = "connected" | "needs_auth" | "disabled" | "error" | "untrusted_here";
 export type Schedule = "daily" | "weekly" | "manual";
 
 export interface MirrorTool {
@@ -66,6 +69,14 @@ export interface MirrorApp {
   last_sync?: number | null;
   last_error?: string | null;
   records_last_sync?: number;
+  // Trusted sources (trusted-sources.ts): the user's own sites added with
+  // `apps add-source`. Absent on runtime connectors.
+  trusted?: boolean;
+  // Whether this Mac's registry trusts it (false: synced from another Mac).
+  trusted_here?: boolean;
+  integration?: "mcp-remote" | "web" | "links";
+  urls?: string[];
+  source?: { title?: string; llms?: string; endpoints?: { path: string; summary?: string }[] };
 }
 
 export interface RuntimeInfo {
@@ -747,13 +758,13 @@ export async function refreshMirror(vault: string, opts: { tools?: boolean } & M
   }
   const base: MirrorDoc = { generated_at: ts, runtimes: [claude.info, codex.info, gemini.info, agy.info], apps };
   writeJson(mirrorCachePath(vault), base);
-  return { ...base, apps: base.apps.map((a) => mergeApp(vault, a)) };
+  return { ...base, apps: withTrustedSources(vault, base.apps.map((a) => mergeApp(vault, a))) };
 }
 
 export async function listMirror(vault: string, deps: MirrorDeps = {}): Promise<MirrorDoc> {
   const cache = readMirrorCache(vault);
   if (!cache) return refreshMirror(vault, deps);
-  return { ...cache, apps: cache.apps.map((a) => mergeApp(vault, a)) };
+  return { ...cache, apps: withTrustedSources(vault, cache.apps.map((a) => mergeApp(vault, a))) };
 }
 
 export async function findApp(vault: string, id: string, deps: MirrorDeps = {}): Promise<MirrorApp | null> {
@@ -768,7 +779,8 @@ export async function appTools(vault: string, id: string, deps: MirrorDeps = {})
   const now = deps.now ?? Date.now;
   const app = await findApp(vault, id, deps);
   if (!app) throw new Error(`no mirrored app "${id}" (run: prevail apps refresh)`);
-  if (app.runtime !== "claude") return app;
+  // Trusted sources list their tools at add time (apps add-source re-probes).
+  if (app.runtime !== "claude" || app.trusted) return app;
   const init = await discoverClaudeTools(vault, exec);
   if (!init) throw new Error("tool discovery failed: claude did not report its tool list");
   const tools = claudeToolsForServer(init.tools, app.server);

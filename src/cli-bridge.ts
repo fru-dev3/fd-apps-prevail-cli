@@ -9,7 +9,7 @@ import type { Domain, ViewKey } from "./vault.ts";
 import { readResponseFramework, readWebAccess, vaultLockActive } from "./config.ts";
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
-import { buildRoot, vaultRootForCwd } from "./path-safety.ts";
+import { APP_SCOPE_PREFIX, APP_SCOPE_SUBDIR, buildRoot, vaultRootForCwd } from "./path-safety.ts";
 import { buildHarnessArgs } from "./harness-profiles.ts";
 import {
   type BudgetCaps,
@@ -317,14 +317,18 @@ export function scrubbedEnv(): NodeJS.ProcessEnv {
   // Thread linkage: a turn that knows its Prevail thread runs inside
   // turnThread, so every CLI it spawns (and that CLI's act-gate hook) sees
   // PREVAIL_THREAD_ID and a held act can be tied back to its conversation.
-  const thread = turnThread.getStore();
-  if (thread) out.PREVAIL_THREAD_ID = thread;
+  // PREVAIL_ENTITY_ID rides the same way on an entity chat, so the hook's app
+  // access log can say which entity a connector call was made for.
+  const ctx = turnThread.getStore();
+  if (ctx?.thread) out.PREVAIL_THREAD_ID = ctx.thread;
+  if (ctx?.entity) out.PREVAIL_ENTITY_ID = ctx.entity;
   return out;
 }
 
-// The Prevail thread id of the turn currently running, carried through the
-// async call tree (a per-turn env would race in a daemon running several).
-const turnThread = new AsyncLocalStorage<string>();
+// The Prevail thread (and entity) of the turn currently running, carried
+// through the async call tree (a per-turn env would race in a daemon running
+// several).
+const turnThread = new AsyncLocalStorage<{ thread?: string; entity?: string }>();
 
 export interface AvailableCli {
   kind: CliKind;
@@ -870,6 +874,17 @@ export interface ChatTurn {
   // spawned CLI as PREVAIL_THREAD_ID so the act-gate hook can record which
   // conversation a held action came from. Omitted => no thread linkage.
   threadId?: string;
+  // The entity an entity chat is about (<kind>/<slug>). Exported to the spawned
+  // CLI as PREVAIL_ENTITY_ID so the act-gate hook's app access log records it.
+  entityId?: string;
+  // Trusted sources referenced on this turn (trusted-sources.ts turnSources).
+  // remoteMcp: app id -> remote MCP URL, attached to a Claude turn as an http
+  // MCP server under the app id (tools mcp__<id>__*), beside the inherited
+  // user config. fetchHosts: hosts a web/links source lets WebFetch GET.
+  // Other engines get neither (routing reports app_unavailable for remote MCP;
+  // web/links sources are described in the prompt only).
+  remoteMcp?: Record<string, string>;
+  fetchHosts?: string[];
   // Optional cancellation. Aborting the signal SIGTERMs the child process so
   // Escape in the cockpit can drop an in-flight prompt without waiting for
   // the model to finish. runCapture resolves with "(cancelled)" on abort.
@@ -995,11 +1010,14 @@ export function codexWritableRoot(cwd: string): string {
 
 export function runChatTurn(turn: ChatTurn): Promise<string> {
   const t = turn.threadId?.trim();
-  if (t && /^[A-Za-z0-9_-]{1,128}$/.test(t)) return turnThread.run(t, () => runChatTurnInner(turn));
+  const e = turn.entityId?.trim();
+  const thread = t && /^[A-Za-z0-9_-]{1,128}$/.test(t) ? t : undefined;
+  const entity = e && /^[a-z]{1,20}\/[A-Za-z0-9_.-]{1,128}$/.test(e) ? e : undefined;
+  if (thread || entity) return turnThread.run({ thread, entity }, () => runChatTurnInner(turn));
   return runChatTurnInner(turn);
 }
 
-async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp }: ChatTurn): Promise<string> {
+async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1222,13 +1240,15 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     // real step events for the checklist; a tool-less chat turn stays on the
     // plain runCapture path, byte-for-byte unchanged.
     let toolsInjected = false;
+    const mcpConfigs: string[] = [];
+    const allowed: string[] = [];
     try {
       const { agentMcpConfigForClaude, agentMcpServerIds } = await import("./agent-mcp.ts");
       const gwsAccount = googleAccount?.trim() || undefined;
       const mcpCfg = agentMcpConfigForClaude(vaultPath, { googleAccount: gwsAccount });
       if (mcpCfg) {
         toolsInjected = true;
-        args.push("--mcp-config", mcpCfg);
+        mcpConfigs.push(mcpCfg);
         // Engine-managed turn = engine-managed tool surface. Without this,
         // claude also loads the USER'S global MCP config (claude.ai Gmail /
         // Calendar / Drive connectors, authenticated as whatever claude.ai
@@ -1256,10 +1276,27 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
           // effect, and letting the model maintain a todo list is how we surface a
           // "Plan" header for a multi-step job (the engine turns each TodoWrite
           // into a plan event). Harmless when the model never plans.
-          if (ids.length) args.push("--allowedTools", ...ids.map((id) => `mcp__${id}`), "TodoWrite");
+          if (ids.length) allowed.push(...ids.map((id) => `mcp__${id}`), "TodoWrite");
         }
       }
     } catch { /* never let MCP wiring break a turn */ }
+    // Trusted sources: a referenced remote MCP source joins this turn as an
+    // http server keyed by its app id, merged with whatever else is loaded
+    // (the inherited user config on app turns). Its calls pass the act gate
+    // below like any connector: registered reads run and are logged, anything
+    // else queues. A web/links source lets WebFetch GET its hosts only.
+    try {
+      const { remoteMcpConfig } = await import("./trusted-sources.ts");
+      const inline = remoteMcpConfig(remoteMcp ?? {});
+      if (inline) {
+        toolsInjected = true;
+        mcpConfigs.push(inline);
+        if (!act) allowed.push(...Object.keys(remoteMcp ?? {}).map((id) => `mcp__${id}`));
+      }
+      if (!act && webMode === "allow") allowed.push(...(fetchHosts ?? []).filter((h) => /^[a-z0-9.-]+(:\d+)?$/.test(h)).map((h) => `WebFetch(domain:${h.replace(/:\d+$/, "")})`));
+    } catch { /* never let source wiring break a turn */ }
+    if (mcpConfigs.length) args.push("--mcp-config", ...mcpConfigs);
+    if (allowed.length) args.push("--allowedTools", ...new Set(allowed));
     // ACTION GATEWAY (G1): every claude turn that can see MCP tools carries the
     // PreToolUse act-gate hook, so connector writes (inherited claude.ai
     // connectors, any user MCP server) queue for approval and pass
@@ -1269,7 +1306,10 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     if (toolsInjected || inheritUserMcp || act) {
       try {
         const { actGateSettingsPath } = await import("./act-gate.ts");
-        args.push("--settings", actGateSettingsPath(vaultRootForCwd(cwd), basename(cwd) || "general", vaultLockOn()));
+        // An app's own chat space (data/apps/<id>/_scope) is keyed _app-<id>,
+        // not "_scope", so its acts and access-log lines name the app scope.
+        const scopeKey = basename(cwd) === APP_SCOPE_SUBDIR ? `${APP_SCOPE_PREFIX}${basename(dirname(cwd))}` : basename(cwd) || "general";
+        args.push("--settings", actGateSettingsPath(vaultRootForCwd(cwd), scopeKey, vaultLockOn()));
       } catch { /* the gws spine still holds for Google; never break the turn */ }
     }
     // Ground-truth tool capture: switch to structured stream-json so we can

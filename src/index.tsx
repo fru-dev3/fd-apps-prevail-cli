@@ -721,6 +721,8 @@ USAGE
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
   prevail apps [...]          mirror of your AI runtimes' MCP connectors + read-only sync recipes
+                              (apps access-log / apps threads <id> --json: app access and chats)
+                              (apps add-source / remove-source: trusted sources, read-only)
                               (connectors list --json for the machine list)
                               connectors scopes <id> — show what an OAuth grant requests
                               connectors disconnect <id> — revoke + delete a stored token
@@ -747,7 +749,10 @@ USAGE
                               read/merge a domain's manifest (engine JSON API)
   prevail chat --domain <d> --json
                               stream one chat turn as NDJSON (engine JSON API)
-                              (--entity <kind/slug> scopes it to an entity)
+                              (--entity <kind/slug> scopes it to an entity; repeatable)
+                              (--app <id> references an app, repeatable; --scope-app <id>
+                               keeps the thread in the app's own space; --ref-domain <d>
+                               references another domain, repeatable)
   prevail score <domain> [--audit] --json
                               compute a domain's context-readiness score
   prevail score --all --json  score every domain + life-readiness roll-up
@@ -2745,11 +2750,12 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
   process.exit(2);
 }
 
-// prevail entities [list|show|save|note|threads|refresh|backfill]: the people, places,
+// prevail entities [list|show|save|note|threads|duplicates|merge|not-same|set-picture|set-website|files|add-file|
+// migrate-folders|refresh|backfill]: the people, places,
 // orgs and things the owner talks about (entities.ts). With --json every
 // subcommand prints exactly one JSON line; errors land in `error`.
 async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<void> {
-  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests"]);
+  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests", "--file", "--url"]);
   const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
   const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(a[i - 1]!)));
   const sub = pos[0] ?? "list";
@@ -2770,7 +2776,7 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       let idx = en.readIndex(vault);
       if (!idx.generated_ts || a.includes("--rebuild")) idx = en.buildIndex(vault);
       const hits = en.searchEntities(idx, get("--q") ?? "", { kind: get("--kind") ?? undefined, limit: num("--limit", 2000), savedOnly: a.includes("--saved") });
-      if (json) { out({ generated_ts: idx.generated_ts, total: idx.entities.length, entities: hits.map(en.summarize) }); return; }
+      if (json) { out({ generated_ts: idx.generated_ts, total: idx.entities.length, entities: hits.map((e) => en.summarize(e, vault)) }); return; }
       for (const e of hits) console.log(`${String(e.conversations).padStart(4)}  ${e.id.padEnd(36)} ${e.saved ? "saved " : e.page ? "page  " : "      "}${e.name}`);
       return;
     }
@@ -2822,12 +2828,67 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       for (const t of rows) console.log(`${new Date(t.updated).toISOString().slice(0, 10)}  ${t.domain.padEnd(12)} ${t.slug}  ${t.title} (${t.turns} turns)`);
       return;
     }
+    if (sub === "duplicates") {
+      const rows = en.entityDuplicates(vault);
+      if (json) { out(rows); return; }
+      if (!rows.length) { console.log("no possible duplicates"); return; }
+      for (const d of rows) console.log(`${d.confidence.toFixed(2)}  ${d.a.id} <- ${d.b.id}  ${d.reason}`);
+      return;
+    }
+    if (sub === "merge") {
+      const [keep, drop] = [pos[1], pos[2]];
+      if (!keep || !drop) { fail("usage: prevail entities merge <keepId> <mergeId> [--json]"); return; }
+      const r = en.mergeEntities(vault, keep, drop);
+      if (json) { out(r); return; }
+      console.log(`merged ${drop} into ${r.id}`);
+      return;
+    }
+    if (sub === "not-same") {
+      const [x, y] = [pos[1], pos[2]];
+      if (!x || !y) { fail("usage: prevail entities not-same <idA> <idB> [--json]"); return; }
+      const r = en.markNotSame(vault, x, y);
+      if (json) { out(r); return; }
+      console.log(`noted: ${x} and ${y} are different`);
+      return;
+    }
+    if (sub === "set-picture" || sub === "add-file") {
+      const id = pos[1];
+      const file = get("--file");
+      if (!id || !file) { fail(`usage: prevail entities ${sub} <id> --file <path> [--json]`); return; }
+      const r = sub === "set-picture" ? en.setPicture(vault, id, file) : en.addEntityFile(vault, id, file);
+      if (json) { out(r); return; }
+      console.log("path" in r ? `picture set: ${r.path}` : `added ${r.name}`);
+      return;
+    }
+    if (sub === "set-website") {
+      const id = pos[1];
+      const url = get("--url");
+      if (!id || url === null) { fail("usage: prevail entities set-website <id> --url <url> [--json]"); return; }
+      const r = en.setWebsite(vault, id, url);
+      if (json) { out(r); return; }
+      console.log(url ? `website set: ${url}` : "website cleared");
+      return;
+    }
+    if (sub === "files") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities files <id> [--json]"); return; }
+      const rows = en.entityFiles(vault, id);
+      if (json) { out(rows); return; }
+      for (const f of rows) console.log(`${String(f.size).padStart(10)}  ${new Date(f.mtime).toISOString().slice(0, 10)}  ${f.name}`);
+      return;
+    }
+    if (sub === "migrate-folders") {
+      const r = en.migrateEntityFolders(vault);
+      if (json) { out(r); return; }
+      console.log(`${r.moved} pages moved into folders${r.conflicts.length ? `; kept beside an existing page: ${r.conflicts.join(", ")}` : ""}`);
+      return;
+    }
     if (sub === "refresh") {
       const mr = await import("./mirror.ts");
       const noDigest = a.includes("--no-digests");
       const r = await en.refreshEntities(vault, { run: noDigest ? null : undefined, digestModel: mr.modelChoice(get("--model")), digestLimit: num("--digests", 10), log });
       if (json) { out(r); return; }
-      console.log(`${r.entities} entities, ${r.pages_created} new pages, ${r.pages_updated} pages updated, ${r.digests_written} digests (${r.digests_pending} pending)`);
+      console.log(`${r.entities} entities, ${r.pages_created} new pages, ${r.pages_updated} pages updated, ${r.digests_written} digests (${r.digests_pending} pending), ${r.merged} merged, ${r.duplicates_pending} possible duplicates`);
       return;
     }
     if (sub === "backfill") {
@@ -2844,11 +2905,11 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       console.log(`tagged ${t.tagged}/${pick.length} sittings in ${t.calls} calls (${t.entities} entity tags, ${res.remaining} still untagged); ${r.entities} entities, ${r.pages_created} new pages`);
       return;
     }
-    fail("usage: prevail entities [list|show <id>|save <id>|note <id> [--append] --text ...|threads <id>|refresh|backfill [--limit N]] --vault <path> [--json]");
+    fail("usage: prevail entities [list|show <id>|save <id>|note <id> [--append] --text ...|threads <id>|duplicates|merge <keepId> <mergeId>|not-same <idA> <idB>|set-picture <id> --file F|set-website <id> --url U|files <id>|add-file <id> --file F|migrate-folders|refresh|backfill [--limit N]] --vault <path> [--json]");
   } catch (e) { fail((e as Error).message); }
 }
 
-// prevail apps [list|refresh|tools|recipe|sync|archive]: the live mirror of the
+// prevail apps [list|refresh|tools|recipe|sync|archive|access-log|threads|add-source|remove-source]: the live mirror of the
 // MCP connectors the user signed into in Claude Code / Codex / Antigravity /
 // Gemini, plus read-only sync recipes. See apps-mirror.ts. With --json every
 // subcommand prints exactly one JSON line and exits 0 (errors in `error`).
@@ -2938,7 +2999,47 @@ async function appsCommand(a: string[], vaultPath?: string | null): Promise<void
       console.log(apply ? `moved ${r.moved.length} app folder(s) to data/apps/_archive/` : `${r.candidates.length} candidate(s); run with --apply to move them`);
       return;
     }
-    fail("usage: prevail apps [list|refresh [--tools]|tools <id>|recipe draft|save <id>|sync <id>|sync --due|archive --dry-run|--apply] [--vault <path>] [--json]");
+    if (sub === "access-log") {
+      // Every MCP call the act gate saw for an app (reads too), newest first.
+      const { readAccessLog } = await import("./app-scope.ts");
+      const n = Number(get("--limit"));
+      const rows = readAccessLog(vault, {
+        app: get("--app"), domain: get("--domain"), entity: get("--entity"), thread: get("--thread"),
+        limit: Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined,
+      });
+      if (json) { out(rows); return; }
+      for (const r of rows) console.log(`${new Date(r.ts).toISOString().slice(0, 19)}  ${r.app.padEnd(20)} ${r.access.padEnd(7)} ${r.outcome.padEnd(8)} ${r.tool}  ${r.summary}`);
+      return;
+    }
+    if (sub === "add-source") {
+      // A trusted source: the user's own site, read-only (trusted-sources.ts).
+      const urls = a.flatMap((x, i) => (x === "--url" && a[i + 1] ? [a[i + 1]!] : x.startsWith("--url=") ? [x.slice(6)] : []));
+      const { addSource } = await import("./trusted-sources.ts");
+      const r = await addSource(vault, { kind: get("--kind") ?? "", urls, name: get("--name") ?? "" });
+      if (json) { out(r); return; }
+      console.log(`${r.adopted ? "adopted" : "added"} ${r.app.id} (${r.app.integration}): ${r.probe.ok ? "reachable" : `check failed: ${r.probe.error}`}`);
+      for (const t of r.probe.tools ?? []) console.log(`  ${t.kind.padEnd(6)} ${t.name}`);
+      return;
+    }
+    if (sub === "remove-source") {
+      const id = pos[1];
+      if (!id) return fail("usage: prevail apps remove-source <id>");
+      const { removeSource } = await import("./trusted-sources.ts");
+      const r = removeSource(vault, id);
+      if (json) { out({ ok: true, archived: r }); return; }
+      console.log(`archived ${r.id} to ${r.to}`);
+      return;
+    }
+    if (sub === "threads") {
+      const id = pos[1];
+      if (!id) return fail("usage: prevail apps threads <id>");
+      const { appThreads } = await import("./app-scope.ts");
+      const rows = appThreads(vault, id);
+      if (json) { out(rows); return; }
+      for (const t of rows) console.log(`${new Date(t.updated).toISOString().slice(0, 10)}  ${t.slug}  ${t.title} (${t.turns} turns)`);
+      return;
+    }
+    fail("usage: prevail apps [list|refresh [--tools]|tools <id>|recipe draft|save <id>|sync <id>|sync --due|archive --dry-run|--apply|access-log [--app <id>] [--domain <d>] [--entity <id>] [--thread <t>] [--limit N]|threads <id>|add-source --kind mcp-remote|web|links --url <u> [--url <u2>...] --name <n>|remove-source <id>] [--vault <path>] [--json]");
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (sub === "sync") return fail(msg, { ok: false, id: pos[1] ?? null, records: 0, files: [] });
@@ -3325,6 +3426,11 @@ async function connectorsCommand(args: string[]): Promise<void> {
     `no connector with id "${wantId}". Available: ${apps.map((a) => a.id).join(", ") || "none"}. Try: prevail connectors list --json`;
   const sub = args[0];
   if (!sub || sub === "list" || sub === "ls") {
+    // Trusted sources report their real kind and URLs, and whether THIS Mac
+    // trusts them (a folder synced from another Mac may not be). Read-only.
+    const ts = await import("./trusted-sources.ts");
+    const reg = ts.readRegistry(connectorsVault);
+    const srcOf = (id: string) => { try { return ts.sourceInfo(connectorsVault, id, reg); } catch { return null; } };
     if (args.includes("--json")) {
       process.stdout.write(
         `${JSON.stringify(
@@ -3335,13 +3441,15 @@ async function connectorsCommand(args: string[]): Promise<void> {
             let runs: Array<Record<string, unknown>> = [];
             let firstFetchOk = false;
             try { const st = readSyncState(a); nextDueTs = st.next_due_ts; runs = (st.runs ?? []).slice(-5); firstFetchOk = st.first_fetch_ok; } catch { /* none yet */ }
+            const src = srcOf(a.id);
             return {
             id: a.id,
             title: a.title,
-            integration: a.integration ?? "manual",
+            integration: src?.integration ?? a.integration ?? "manual",
             path: a.path,
             // Enriched for the desktop Apps view: real connection + sync state.
-            status: a.status,
+            status: src && !src.trusted_here ? "untrusted_here" : a.status,
+            ...(src ? { name: src.name, urls: src.urls, trusted: true, trusted_here: src.trusted_here } : {}),
             configured: a.configured,
             domains: a.domains ?? [],
             // The user's "what to pull" instruction.
@@ -3376,8 +3484,9 @@ async function connectorsCommand(args: string[]): Promise<void> {
     }
     console.log(`${apps.length} connector${apps.length === 1 ? "" : "s"}:\n`);
     for (const a of apps) {
-      const integ = (a.integration ?? "manual").padEnd(8);
-      console.log(`  ${integ}  ${a.id.padEnd(20)}  ${a.title}`);
+      const src = srcOf(a.id);
+      const integ = (src?.integration ?? a.integration ?? "manual").padEnd(8);
+      console.log(`  ${integ}  ${a.id.padEnd(20)}  ${a.title}${src ? `  ${src.urls.join(", ")}${src.trusted_here ? "" : "  (untrusted here)"}` : ""}`);
     }
     return;
   }

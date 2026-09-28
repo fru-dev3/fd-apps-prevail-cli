@@ -179,7 +179,7 @@ describe("pages", () => {
     buildIndex(vault, { now: NOW });
     const d = saveEntity(vault, "org/acme", { now: NOW });
     expect(d.saved).toBe(true);
-    expect(d.page_path).toBe("data/entities/orgs/acme.md");
+    expect(d.page_path).toBe("data/entities/orgs/acme/entity.md");
     expect(readIndex(vault).entities.find((e) => e.id === "org/acme")?.saved).toBe(true);
     const saved = saveEntity(vault, "thing/blue-kayak", { name: "Blue kayak", now: NOW });
     expect(saved.name).toBe("Blue kayak");
