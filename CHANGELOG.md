@@ -7,6 +7,11 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.10.2] - 2026-09-28 · Entity names are the same on every machine
+
+### Fixed
+- An entity's display name no longer depends on the order the system lists files (macOS and Linux differ). A slug from an `entity:` conversation tag never outvotes a real name, and every remaining tie is broken the same way everywhere.
+
 ## [1.10.1] - 2026-09-28 · Apps in chat, trusted sources, entity folders and de-duplication
 
 ### Added

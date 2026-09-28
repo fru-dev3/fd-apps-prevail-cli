@@ -703,7 +703,10 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
   // An alias never swallows a name that has a page of its own.
   for (const s of pageBySlug.keys()) aliasToSlug.delete(s);
   const acc = new Map<string, Acc>();
-  const add = (rawName: string, kind: EntityKind, m: Mention, label?: string) => {
+  // slugOnly: the name came from an `entity:` tag, which carries only a slug.
+  // That is not a real display name, so it never outvotes one; it is used
+  // only when nothing better names the entity.
+  const add = (rawName: string, kind: EntityKind, m: Mention, label?: string, slugOnly = false) => {
     let slug = slugify(rawName);
     if (!slug) return;
     slug = redirect.get(slug) ?? aliasToSlug.get(slug) ?? slug;
@@ -712,7 +715,8 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     // A slug-shaped link value (prevail://person/sam-rivera) names nothing
     // new; the label carries the display name then.
     const display = rawName === slug && label ? label : rawName;
-    a.names.set(display, (a.names.get(display) ?? 0) + 1);
+    if (slugOnly) { if (!a.names.has(display)) a.names.set(display, 0); }
+    else a.names.set(display, (a.names.get(display) ?? 0) + 1);
     if (label && label !== display && slugify(label) !== slug) a.names.set(label, (a.names.get(label) ?? 0) + 0.5);
     a.kindVotes.set(kind, (a.kindVotes.get(kind) ?? 0) + 1);
     a.mentions.push(m);
@@ -730,7 +734,7 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     // entity even when the model never linked it.
     const tag = f.entity ? parseEntityId(f.entity) : null;
     if (tag?.kind && !seen.has(`${tag.kind}:${tag.slug}`)) {
-      add(tag.slug, tag.kind, { source: f.source, ref: rel, domain: f.domain, project: "", title: f.title, ts: f.ts, snippet: f.excerpt ?? "" });
+      add(tag.slug, tag.kind, { source: f.source, ref: rel, domain: f.domain, project: "", title: f.title, ts: f.ts, snippet: f.excerpt ?? "" }, undefined, true);
     }
   }
   for (const [id, t] of Object.entries(tags.sittings)) {
@@ -746,7 +750,13 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     const page = pageBySlug.get(a.slug);
     const kinds = [...a.kindVotes.entries()].sort((x, y) => y[1] - x[1]).map(([k]) => k);
     const kind = page?.kind ?? kinds[0];
-    const names = [...a.names.entries()].sort((x, y) => y[1] - x[1] || y[0].length - x[0].length).map(([n]) => n);
+    // Deterministic on every platform (file scan order differs between
+    // macOS and Linux): votes, then a real name over a slug-shaped one, then
+    // the longer name, then alphabetical.
+    const slugShaped = (n: string) => (n === slugify(n) ? 1 : 0);
+    const names = [...a.names.entries()]
+      .sort((x, y) => y[1] - x[1] || slugShaped(x[0]) - slugShaped(y[0]) || y[0].length - x[0].length || x[0].localeCompare(y[0]))
+      .map(([n]) => n);
     const name = page?.doc.name ?? names[0];
     const aliases = [...new Set([...(page?.doc.aliases ?? []), ...names.filter((n) => n !== name)])].slice(0, 12);
     a.mentions.sort((x, y) => y.ts - x.ts);

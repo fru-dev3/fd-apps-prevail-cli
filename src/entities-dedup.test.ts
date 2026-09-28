@@ -166,6 +166,14 @@ describe("merging", () => {
     expect(d.mention_count).toBe(2);
   });
 
+  test("an entity tag's slug never outvotes a real name, whatever the scan order", () => {
+    // The tagged thread sorts first, so a scan-order tie would pick the slug.
+    thread("a0", ["hi"], "entity: person/foo-bar\n", "2026-09-19T10:00:00Z");
+    thread("z9", [link("person", "Foo Bar")]);
+    buildIndex(vault, { now: NOW });
+    expect(readIndex(vault).entities.find((e) => e.id === "person/foo-bar")!.name).toBe("Foo Bar");
+  });
+
   test("a merged id resolves to its keeper: show, threads, chat block, entity tags, notes", () => {
     thread("t1", [link("person", "Foo")]);
     thread("t2", [link("person", "Foo Bar")]);
