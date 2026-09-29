@@ -51,9 +51,12 @@ import { vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
 // ---------------------------------------------------------------------------
 // contract types
 
-export type EntityKind = "person" | "place" | "org" | "thing";
-export const ENTITY_KINDS: EntityKind[] = ["person", "place", "org", "thing"];
-export const KIND_DIR: Record<EntityKind, string> = { person: "people", place: "places", org: "orgs", thing: "things" };
+// A project is an effort with an outcome and an end (projects.ts). It lives in
+// the same folder layout, is always "yours", and is only ever created by hand
+// (or an accepted suggestion), never by tagging.
+export type EntityKind = "person" | "place" | "org" | "thing" | "project";
+export const ENTITY_KINDS: EntityKind[] = ["person", "place", "org", "thing", "project"];
+export const KIND_DIR: Record<EntityKind, string> = { person: "people", place: "places", org: "orgs", thing: "things", project: "projects" };
 
 export type MentionSource = "thread" | "prompt" | "brief";
 
@@ -91,7 +94,12 @@ export interface EntityRec {
   relation_reason?: string; // one line, why (shown on a reference's Overview)
   home_domain?: string; // the domain with the most user-word mentions
   user_mentions?: number; // mentions in the user's own words
+  project?: ProjectFields; // kind project only: the page's project frontmatter
 }
+
+export type ProjectStatus = "active" | "paused" | "done" | "archived";
+export const PROJECT_STATUSES: ProjectStatus[] = ["active", "paused", "done", "archived"];
+export interface ProjectFields { status: ProjectStatus; outcome: string; target?: string; domains: string[]; intent_project?: string }
 
 export type Relation = "yours" | "reference";
 
@@ -107,6 +115,8 @@ export interface EntitySummary {
   last_ts: number; saved: boolean; has_page: boolean; domain?: string;
   website?: string; picture?: string; // picture: absolute path
   relation: Relation; relation_confidence: number; relation_reason: string; home_domain?: string;
+  // kind project only, flattened
+  status?: ProjectStatus; outcome?: string; target?: string; domains?: string[]; intent_project?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,7 +404,7 @@ function parseTagAnswer(out: string, ids: string[]): Record<string, TagEntity[]>
         const name = typeof (e as TagEntity)?.name === "string" ? clean((e as TagEntity).name).slice(0, 120) : "";
         const kind = (e as TagEntity)?.kind;
         const slug = slugify(name);
-        if (!name || !slug || !isKind(kind) || seen.has(slug)) continue;
+        if (!name || !slug || !isKind(kind) || kind === "project" || seen.has(slug)) continue;
         seen.add(slug);
         list.push({ name, kind });
       }
@@ -533,7 +543,7 @@ export function pageFile(vault: string, kind: EntityKind, slug: string): string 
   return existsSync(flat) ? flat : null;
 }
 
-function parseList(v: string): string[] {
+export function parseList(v: string): string[] {
   const s = v.trim();
   if (!s) return [];
   if (s.startsWith("[")) {
@@ -594,7 +604,7 @@ export function parsePage(md: string, fallback: { kind: EntityKind; slug: string
   return doc;
 }
 
-const yamlStr = (s: string) => (/^[\w .,'()&+-]*$/.test(s) && !/^[\s-]|:\s|\s$/.test(s) && s !== "" && !/^(true|false|null|\d)/i.test(s) ? s : JSON.stringify(s));
+export const yamlStr = (s: string) => (/^[\w .,'()&+-]*$/.test(s) && !/^[\s-]|:\s|\s$/.test(s) && s !== "" && !/^(true|false|null|\d)/i.test(s) ? s : JSON.stringify(s));
 
 export function renderPage(d: PageDoc): string {
   const fm = [
@@ -629,7 +639,7 @@ export function readPage(vault: string, kind: EntityKind, slug: string): PageDoc
   try { return parsePage(vreadFile(p), { kind, slug }); } catch { return null; }
 }
 
-function writePage(vault: string, kind: EntityKind, slug: string, d: PageDoc) {
+export function writePage(vault: string, kind: EntityKind, slug: string, d: PageDoc) {
   const p = pagePath(vault, kind, slug);
   // A pre-folder page moves into its folder first, so nothing is left behind.
   const flat = flatPath(vault, kind, slug);
@@ -797,7 +807,9 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     const sig = relationSignals(a.mentions, [name, ...aliases], cache.files, corpus);
     const acted = chatted.has(a.slug) || (!!page && (page.doc.saved || !!page.doc.notes.trim() || !!page.doc.picture || listEntityFiles(entityDir(vault, page.kind, page.slug)).length > 0));
     const override = overrides[id];
-    const rel = override
+    const rel = kind === "project"
+      ? { relation: "yours" as const, confidence: 1, reason: "A project you track." }
+      : override
       ? { relation: override, confidence: 1, reason: override === "yours" ? "You marked this as yours." : "You marked this as a reference." }
       : scoreRelation({ ...sig, acted });
     // Reference fade: out of the index, never off the disk.
@@ -812,6 +824,7 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
       ...((page?.doc.domain ?? (kind === "org" ? webDomainOf([name, ...aliases]) : undefined)) ? { domain: page?.doc.domain ?? webDomainOf([name, ...aliases]) } : {}),
       relation: rel.relation, relation_confidence: rel.confidence, relation_reason: rel.reason,
       ...(sig.home ? { home_domain: sig.home } : {}), user_mentions: sig.userMentions,
+      ...(kind === "project" && page ? { project: projectFields(page.doc) } : {}),
     });
   }
 
@@ -842,6 +855,23 @@ export function summarize(r: EntityRec, vault?: string): EntitySummary {
     // An index written before relations existed reads as yours until the next refresh.
     relation: r.relation ?? "yours", relation_confidence: r.relation_confidence ?? 0, relation_reason: r.relation_reason ?? "",
     ...(r.home_domain ? { home_domain: r.home_domain } : {}),
+    ...(r.project ? { ...r.project } : {}),
+  };
+}
+
+const unq = (v: string | undefined) => (v ?? "").trim().replace(/^["']|["']$/g, "").trim();
+
+/** A project page's project frontmatter (status defaults to active). */
+export function projectFields(doc: PageDoc): ProjectFields {
+  const status = unq(doc.extra.status) as ProjectStatus;
+  const target = unq(doc.extra.target);
+  const intent = unq(doc.extra.intent_project);
+  let outcome = unq(doc.extra.outcome);
+  try { if (doc.extra.outcome?.trim().startsWith("\"")) outcome = JSON.parse(doc.extra.outcome.trim()); } catch { /* keep as read */ }
+  return {
+    status: PROJECT_STATUSES.includes(status) ? status : "active", outcome,
+    ...(target ? { target } : {}), domains: parseList(doc.extra.domains ?? "").map((d) => d.toLowerCase()),
+    ...(intent ? { intent_project: intent } : {}),
   };
 }
 
@@ -898,7 +928,7 @@ export function conversationsSection(r: EntityRec, max = 50): string {
   return lines.join("\n");
 }
 
-function newPage(r: { name: string; kind: EntityKind; aliases: string[] }, saved: boolean, now: number): PageDoc {
+export function newPage(r: { name: string; kind: EntityKind; aliases: string[] }, saved: boolean, now: number): PageDoc {
   return {
     name: r.name, kind: r.kind, aliases: r.aliases.slice(0, 8), saved, created: iso(now), updated: iso(now), mention_count: 0,
     preamble: "", discussed: "", notes: "", conversations: "", extra: {},
@@ -1727,7 +1757,7 @@ export async function refreshEntities(vault: string, o: RefreshEntitiesOptions =
 // ---------------------------------------------------------------------------
 // text renderings (CLI + MCP)
 
-const KIND_LABEL: Record<EntityKind, string> = { person: "Person", place: "Place", org: "Company or product", thing: "Thing" };
+const KIND_LABEL: Record<EntityKind, string> = { person: "Person", place: "Place", org: "Company or product", thing: "Thing", project: "Project" };
 
 export function entityContextText(d: EntityDetail, maxMentions = 12): string {
   const out: string[] = [`# ${d.name} (${KIND_LABEL[d.kind]}, id ${d.id})`];

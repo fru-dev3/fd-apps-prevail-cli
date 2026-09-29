@@ -70,7 +70,8 @@ test("the app block names the runtime, status, grouped tools and the approval ru
   expect(b).toContain("belongs to the Claude runtime. Status: connected.");
   expect(b).toContain("Reads: search_threads\nWrites: create_draft\nBlocked: send_message");
   expect(b).toContain("## How to operate it (SKILL.md)\nSearch before drafting.");
-  expect(b.endsWith("Reads run; writes and sends are queued for the user's approval.")).toBe(true);
+  expect(b).toContain("Reads run; writes and sends are queued for the user's approval.");
+  expect(b.endsWith("Do not try other ways to reach it (files, shell, other tools).")).toBe(true);
   expect(appChatBlock(vault, "foo-none", null)).toContain("not in the apps mirror");
 });
 

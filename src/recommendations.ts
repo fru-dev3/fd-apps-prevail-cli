@@ -22,13 +22,14 @@ import { recommendationId, imperative } from "./project-restart.ts";
 import { readMirrorCache, mergeApp, type MirrorApp } from "./apps-mirror.ts";
 import { readIndex as readEntityIndex, type EntityRec } from "./entities.ts";
 import { catchUpCount } from "./linking.ts";
+import { suggestStructureRanked } from "./structure.ts";
 
-export type RecCategory = "rules" | "projects" | "apps" | "people" | "models" | "context";
+export type RecCategory = "rules" | "projects" | "apps" | "people" | "models" | "context" | "structure";
 
 export type RecActionKind =
   | "create_domain" | "set_domain_model" | "set_domain_models" | "connect_app" | "improve_context"
   | "make_rule" | "open_finding" | "open_project" | "restart_project" | "project_rec"
-  | "signin_app" | "draft_recipe" | "sync_app" | "save_entity" | "open_domain";
+  | "signin_app" | "draft_recipe" | "sync_app" | "save_entity" | "open_domain" | "structure_suggestion";
 
 export interface RecEvidence {
   kind: "finding" | "project" | "entity" | "app" | "domain" | "benchmark";
@@ -56,7 +57,7 @@ export interface Recommendation {
   metric: { value: number; unit: string };
   leverage: number; // 0 to 100, higher first
   evidence?: RecEvidence;
-  source: "intent" | "projects" | "stuck" | "apps" | "entities" | "context" | "models" | "domains" | "updates";
+  source: "intent" | "projects" | "stuck" | "apps" | "entities" | "context" | "models" | "domains" | "updates" | "structure";
   instruction?: string; // copyable text for an agent
   task?: { domain: string; text: string }; // what "add task" puts on a board
   rows?: RecRow[];
@@ -65,6 +66,7 @@ export interface Recommendation {
     domain?: string; model?: string; cli?: string;
     rule?: string; finding?: string; item?: string; project?: string;
     app?: string; entity?: string; index?: number;
+    id?: string; // structure_suggestion: the suggestion id for `prevail suggest accept|dismiss`
   };
 }
 
@@ -392,6 +394,18 @@ export function fromUpdates(vault: string, domains: string[], now: number): Reco
   return out;
 }
 
+// Pending structure suggestions (structure.ts): a new domain, a project to
+// track, a dormant domain to archive. Accept / dismiss go through `prevail suggest`.
+export function fromStructure(vault: string, now: number): Recommendation[] {
+  return suggestStructureRanked(vault, now).map((s) => ({
+    id: `structure:${s.id}`, category: "structure" as const, source: "structure" as const,
+    title: s.title, detail: s.reason, metric: s.metric,
+    leverage: clamp(35 + s.confidence * 25),
+    ...(s.kind === "archive_domain" ? { evidence: { kind: "domain" as const, ref: s.evidence[0]!.domain, label: `Domain: ${titleCase(s.evidence[0]!.domain)}` } } : {}),
+    action: { kind: "structure_suggestion" as const, id: s.id },
+  }));
+}
+
 function fromDomains(vault: string, have: Set<string>): Recommendation[] {
   let doc: { intents?: Array<{ title?: string; goal?: string; domains?: string[]; status?: string }> };
   try { doc = JSON.parse(readFileSync(join(runtimePath(vault, "_meta"), "intents_distilled.json"), "utf8")); } catch { return []; }
@@ -457,7 +471,7 @@ function fromModels(vault: string, active: Set<string>): Recommendation[] {
 
 // ---------------------------------------------------------------------------
 
-export const CATEGORY_ORDER: RecCategory[] = ["rules", "projects", "apps", "people", "models", "context"];
+export const CATEGORY_ORDER: RecCategory[] = ["rules", "projects", "apps", "people", "models", "context", "structure"];
 
 export function rankRecommendations(recs: Recommendation[]): Recommendation[] {
   const seen = new Set<string>();
@@ -486,6 +500,7 @@ export function buildRecommendations(vaultRoot: string, opts: BuildOptions = {})
   add("context", () => fromContext(vaultRoot, domains));
   add("updates", () => fromUpdates(vaultRoot, domains, now));
   add("domains", () => fromDomains(vaultRoot, active));
+  add("structure", () => fromStructure(vaultRoot, now));
   add("models", () => fromModels(vaultRoot, active));
   return rankRecommendations(recs);
 }

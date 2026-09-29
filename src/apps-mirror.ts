@@ -621,6 +621,17 @@ export function applyInitStatus(app: MirrorApp, initStatus: string | undefined):
   if (app.status_detail === undefined) delete app.status_detail;
 }
 
+/** Persist a live init status for one app into the mirror cache, so the Apps
+ *  page shows it (e.g. "Needs sign-in"). No-op without a cache or the app. */
+export function updateMirrorStatus(vault: string, id: string, initStatus: string): void {
+  const doc = readMirrorCache(vault);
+  const app = doc?.apps.find((a) => a.id === id);
+  if (!doc || !app) return;
+  const before = `${app.status}|${app.status_detail ?? ""}`;
+  applyInitStatus(app, initStatus);
+  if (`${app.status}|${app.status_detail ?? ""}` !== before) writeJson(mirrorCachePath(vault), doc);
+}
+
 // ── Cache + manifest merge ────────────────────────────────────────────────────
 
 export function readMirrorCache(vault: string): MirrorDoc | null {

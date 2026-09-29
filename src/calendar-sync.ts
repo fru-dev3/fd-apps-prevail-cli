@@ -242,7 +242,7 @@ export function resolveDefaultGwsAccount(): string | undefined {
 // the identity lives - token material is opaque on disk). Cached per process:
 // used only to resolve email-looking account selectors, never on hot paths.
 const profileEmailCache = new Map<string, string | null>();
-function gwsProfileEmail(configDir: string): string | null {
+export function gwsProfileEmail(configDir: string): string | null {
   const hit = profileEmailCache.get(configDir);
   if (hit !== undefined) return hit;
   let email: string | null = null;

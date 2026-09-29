@@ -34,9 +34,19 @@ describe("gws-mcp account precedence (Fix 1)", () => {
     expect(lastQueuedAccount()).toBe("personal");
   });
 
-  test("an explicit tool-arg account overrides the launched --account", () => {
-    callGoogleWorkspace({ args: SEND_ARGS, account: "work" }, VAULT, "general", "personal");
+  test("an explicit tool-arg account overrides the first of a multi-account pick", () => {
+    callGoogleWorkspace({ args: SEND_ARGS, account: "work" }, VAULT, "general", "personal,work");
     expect(lastQueuedAccount()).toBe("work");
+  });
+
+  test("a single pick: a write to a different account is refused and nothing queues", () => {
+    const dir = (a: string) => (a === "foo@example.com" ? "/x/gws-personal" : `/x/gws-${a}`);
+    const r = callGoogleWorkspace({ args: SEND_ARGS, account: "work" }, VAULT, "general", "personal", undefined, undefined, dir);
+    expect(r[0]!.text).toContain('can only go to that account');
+    expect(readPendingGws(VAULT)).toHaveLength(0);
+    // The same account named another way (its email) is fine and queues to the pick.
+    callGoogleWorkspace({ args: SEND_ARGS, account: "foo@example.com" }, VAULT, "general", "personal", undefined, undefined, dir);
+    expect(lastQueuedAccount()).toBe("personal");
   });
 
   test("no pick + zero or one connected account => proceeds (unambiguous)", () => {

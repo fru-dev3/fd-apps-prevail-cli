@@ -17,6 +17,8 @@ import {
   appDir,
   classifyTool,
   claudeServerKey,
+  claudeToolPrefix,
+  normalizeStatus,
   readMirrorCache,
   type MirrorApp,
   type RuntimeId,
@@ -27,7 +29,9 @@ import { findingCategories, scanSensitive } from "./egress-guard.ts";
 import { sourceBlockLines, withTrustedSources } from "./trusted-sources.ts";
 import { scanLinks } from "./entities.ts";
 import { tryAcquireLock } from "./file-lock.ts";
-import { appsContainer, resolveDomainDir } from "./path-safety.ts";
+import { boundGoogleAccountLabel } from "./vault.ts";
+import { GOOGLE_APP_RE, accountEmail, classifyGwsCommand, googleAccounts } from "./gws-gateway.ts";
+import { APP_SCOPE_PREFIX, appsContainer, resolveDomainDir } from "./path-safety.ts";
 import { vappendLine, vreadFile } from "./vault-session.ts";
 
 // ── Runtimes ─────────────────────────────────────────────────────────────────
@@ -68,7 +72,24 @@ export function toolGroups(app: MirrorApp): { reads: string[]; writes: string[];
   return g;
 }
 
+/** The exact Claude tool names of the referenced apps' READ tools (as the
+ *  mirror classifies them), pre-allowed on the turn: headless Claude refuses
+ *  any tool not in --allowedTools, and the act gate's allow is not a grant.
+ *  Writes, sends and money tools are never listed; they queue at the gate. */
+export function appReadTools(apps: MirrorApp[], ids: string[]): string[] {
+  const out: string[] = [];
+  for (const id of ids) {
+    const app = apps.find((a) => a.id === id);
+    if (!app || app.runtime !== "claude" || app.trusted) continue;
+    for (const t of app.tools ?? []) {
+      if (t.kind === "read" && /^[A-Za-z0-9_-]{1,128}$/.test(t.name)) out.push(`${claudeToolPrefix(app.server)}${t.name}`);
+    }
+  }
+  return [...new Set(out)];
+}
+
 export const APP_INSTRUCTION = "Use this app's tools to get what the user asks for. Reads run; writes and sends are queued for the user's approval.";
+export const APP_NO_WORKAROUNDS = "If this app's tools are not available in this conversation, say in one sentence that it needs to be connected, and stop. Do not try other ways to reach it (files, shell, other tools).";
 
 /** One APP CONTEXT block. `app` is the mirror entry, null when the id is not
  *  mirrored. Rebuilt every turn, never persisted. */
@@ -103,7 +124,7 @@ export function appChatBlock(vault: string, id: string, app: MirrorApp | null, c
     if (skill) lines.push("", "## How to operate it (SKILL.md)", skill);
     if (state) lines.push("", "## State", state);
   }
-  lines.push("", APP_INSTRUCTION);
+  lines.push("", APP_INSTRUCTION, APP_NO_WORKAROUNDS);
   return clip(lines.join("\n"), cap);
 }
 
@@ -150,6 +171,28 @@ export function planAppRouting(ids: string[], apps: MirrorApp[], current: CliKin
   return plan;
 }
 
+/** Referenced Claude connectors the live init event says are not usable.
+ *  Pending servers are still starting and are skipped. */
+export function initAppProblems(ids: string[], apps: MirrorApp[], init: { servers: { name: string; status: string }[] }): {
+  needsAuth: { app: string; name: string; status: string; signin_url?: string }[];
+  unavailable: { app: string; reason: string }[];
+} {
+  const out = { needsAuth: [] as { app: string; name: string; status: string; signin_url?: string }[], unavailable: [] as { app: string; reason: string }[] };
+  for (const id of ids) {
+    const app = apps.find((a) => a.id === id);
+    if (!app || app.runtime !== "claude" || app.trusted) continue;
+    const srv = init.servers.find((x) => x.name === app.server || claudeServerKey(x.name) === claudeServerKey(app.server));
+    if (!srv) {
+      out.unavailable.push({ app: id, reason: `${app.name} did not load in this Claude session, so its tools are not available. Check it is connected in Claude.` });
+      continue;
+    }
+    if (/pending/i.test(srv.status) || normalizeStatus(srv.status) === "connected") continue;
+    const hint = (app.signin_hint ?? "").trim();
+    out.needsAuth.push({ app: id, name: app.name, status: srv.status, ...(/^https?:\/\//i.test(hint) ? { signin_url: hint } : {}) });
+  }
+  return out;
+}
+
 // ── Tool -> app ──────────────────────────────────────────────────────────────
 
 /** The app a streamed tool call belongs to: an MCP tool name
@@ -177,6 +220,9 @@ export interface AccessLine {
   thread?: string;
   domain?: string;
   entity?: string;
+  /** Google tool calls only: the account it ran as (a gws label or email;
+   *  "claude" for Claude's own one-account connector). Local only. */
+  account?: string;
   summary: string;
 }
 
@@ -233,11 +279,45 @@ export function recordAppAccess(
   toolName: string,
   toolInput: unknown,
   outcome: AccessOutcome,
-  ctx: { thread?: string; domain?: string; entity?: string; now?: number; apps?: MirrorApp[] } = {},
+  ctx: {
+    thread?: string; domain?: string; entity?: string; googleAccount?: string; now?: number; apps?: MirrorApp[];
+    /** Label -> email (tests inject; default reads the gws profiles). */
+    toEmail?: (account: string) => string;
+    /** The default account's email for an "all" write (tests inject). */
+    writeDefault?: () => string | undefined;
+  } = {},
 ): string | null {
   try {
-    const hit = appToolAccess(ctx.apps ?? mirrorApps(vault), toolName);
-    if (!hit) return null;
+    const apps = ctx.apps ?? mirrorApps(vault);
+    let hit: { appId: string; tool: string; access: AccessKind } | null = null;
+    let account: string | undefined;
+    if (toolName === GWS_TOOL) {
+      // Prevail's google_workspace connector: logged under the Google app whose
+      // chat this is, else the mirrored app named for the gws service.
+      const input = (toolInput ?? {}) as { args?: unknown; account?: unknown };
+      const args = Array.isArray(input.args) ? input.args.filter((x): x is string => typeof x === "string") : [];
+      const scoped = ctx.domain?.startsWith(APP_SCOPE_PREFIX) ? ctx.domain.slice(APP_SCOPE_PREFIX.length) : "";
+      const svc = (args[0] ?? "").toLowerCase();
+      const appId = GOOGLE_APP_RE.test(scoped) ? scoped : svc ? apps.find((a) => a.id.toLowerCase().includes(svc))?.id : undefined;
+      if (!appId || !args.length) return null;
+      hit = { appId, tool: "google_workspace", access: classifyGwsCommand(args).kind };
+      // The account the connector actually targets (gws-mcp's rules), as an email.
+      const argAcct = typeof input.account === "string" ? input.account.trim() : "";
+      const picks = (ctx.googleAccount ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+      const all = picks[0]?.toLowerCase() === "all";
+      let target: string | undefined;
+      if (hit.access === "write" && all) {
+        target = (ctx.writeDefault ?? (() => googleAccounts(appId, { bound: boundGoogleAccountLabel(vault) }).find((a) => a.default && a.via === "gws")?.id))();
+      } else if (hit.access === "write" && picks.length === 1) target = picks[0];
+      else target = argAcct || (all ? undefined : picks[0]);
+      target ||= "default";
+      account = (ctx.toEmail ?? ((a: string) => accountEmail(a)))(target);
+    } else {
+      const h = appToolAccess(apps, toolName);
+      if (!h) return null;
+      hit = { appId: h.app.id, tool: h.tool, access: h.access };
+      if (GOOGLE_APP_RE.test(h.app.id)) account = "claude";
+    }
     const line: AccessLine = {
       ts: ctx.now ?? Date.now(),
       tool: hit.tool,
@@ -246,21 +326,24 @@ export function recordAppAccess(
       ...(ctx.thread ? { thread: ctx.thread } : {}),
       ...(ctx.domain ? { domain: ctx.domain } : {}),
       ...(ctx.entity ? { entity: ctx.entity } : {}),
+      ...(account ? { account: account.slice(0, 256) } : {}),
       summary: summarizeArgs(toolInput),
     };
-    const path = accessLogPath(vault, hit.app.id);
+    const path = accessLogPath(vault, hit.appId);
     mkdirSync(join(path, ".."), { recursive: true });
     // One write of one short line (O_APPEND); the lock covers the encrypted
     // vault's read-modify-write append.
     const lock = tryAcquireLock(`${path}.lock`);
     try { vappendLine(path, `${JSON.stringify(line)}\n`); } finally { lock?.release(); }
-    return hit.app.id;
+    return hit.appId;
   } catch {
     return null;
   }
 }
 
-export interface AccessFilter { app?: string; domain?: string; entity?: string; thread?: string; limit?: number }
+const GWS_TOOL = "mcp__google_workspace__google_workspace";
+
+export interface AccessFilter { app?: string; domain?: string; entity?: string; thread?: string; account?: string; limit?: number }
 
 /** Matching access lines, newest first, each with its `app`. */
 export function readAccessLog(vault: string, f: AccessFilter = {}): (AccessLine & { app: string })[] {
@@ -285,6 +368,7 @@ export function readAccessLog(vault: string, f: AccessFilter = {}): (AccessLine 
       if (f.domain && o.domain !== f.domain) continue;
       if (f.entity && o.entity !== f.entity) continue;
       if (f.thread && o.thread !== f.thread) continue;
+      if (f.account && o.account !== f.account) continue;
       out.push({ ...o, app: id });
     }
   }

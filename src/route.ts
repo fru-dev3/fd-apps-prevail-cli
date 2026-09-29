@@ -362,10 +362,27 @@ export interface TouchHit {
   fact: string;
 }
 
+/** An active project the classifier may say this exchange concerns. */
+export interface TouchProjectOption extends TouchEntityOption {
+  outcome: string;
+}
+
+/** A life area the exchange concerns that none of the user's domains covers. */
+export interface UnhomedHit {
+  /** Short lowercase label, e.g. "pets". */
+  label: string;
+  fact: string;
+  /** A bounded effort with an outcome and an end (a trip, a build), not an ongoing area. */
+  effort?: boolean;
+}
+
 export interface TouchResult {
   domains: TouchHit[];
   /** Entity-specific fact lines the model offered, by entity id. */
   entity_facts: Record<string, string>;
+  /** Ids of the active projects this exchange concerns. */
+  projects?: string[];
+  unhomed?: UnhomedHit[];
   source: "typesafe" | "model" | "none";
 }
 
@@ -376,6 +393,8 @@ export interface TouchOptions {
   reply: string;
   domains: TouchDomainOption[];
   entities?: TouchEntityOption[];
+  /** The user's active projects. */
+  projects?: TouchProjectOption[];
   provider?: DecisionProvider | null;
   runner?: RouteRunner | null;
   timeoutMs?: number;
@@ -389,6 +408,8 @@ export const TOUCH_FACT_CHARS = 200;
 export const TOUCH_REPLY_CHARS = 3_000;
 /** Shorter user messages ("thanks", "ok do it") are not worth a call. */
 export const TOUCH_MIN_MESSAGE = 20;
+export const TOUCH_MAX_UNHOMED = 2;
+export const TOUCH_MAX_PROJECTS = 30;
 
 export function clipFact(s: string): string {
   const t = s.replace(/\s+/g, " ").replace(/\s*\u2014\s*/g, ", ").trim();
@@ -406,27 +427,32 @@ export function buildTouchQuestions(domains: TouchDomainOption[]): Record<string
   return out;
 }
 
-export function buildTouchPrompt(o: { message: string; reply: string; domains: TouchDomainOption[]; entities: TouchEntityOption[] }): { system: string; prompt: string } {
+export function buildTouchPrompt(o: { message: string; reply: string; domains: TouchDomainOption[]; entities: TouchEntityOption[]; projects?: TouchProjectOption[]; home?: string }): { system: string; prompt: string } {
+  const projects = (o.projects ?? []).slice(0, TOUCH_MAX_PROJECTS);
   const system = [
     "You read one exchange between a user and an assistant and list which of the user's OTHER life areas it concerns. You never answer the message.",
-    "Valid area slugs, each with what it covers:",
-    ...o.domains.map((d) => `- ${d.slug}: ${d.description || labelFor(d.slug)}`),
+    ...(o.domains.length ? ["Valid area slugs, each with what it covers:", ...o.domains.map((d) => `- ${d.slug}: ${d.description || labelFor(d.slug)}`)] : ["There are no other areas to list."]),
     "Reply with ONLY a JSON object, no prose and no code fence, shaped exactly:",
-    '{"domains":[{"slug":"<valid slug>","confidence":<0..1>,"fact":"<one line>"}],"entity_facts":{"<entity id>":"<one line>"}}',
+    '{"domains":[{"slug":"<valid slug>","confidence":<0..1>,"fact":"<one line>"}],"entity_facts":{"<entity id>":"<one line>"},"projects":["<project id>"],"unhomed":[{"label":"<area>","fact":"<one line>","effort":<true|false>}]}',
     "List only areas the exchange clearly carries news or a fact for, most likely first, at most 4.",
     "fact: one plain line under 200 characters saying what this exchange means for that area, with concrete names, amounts and dates from the text. Never invent anything.",
-    "entity_facts: optional, only for the listed entities the exchange is about, when a line specific to that entity says more than the area fact.",
-    'If it concerns no listed area, reply {"domains":[],"entity_facts":{}}.',
+    "entity_facts: optional, only for the listed entities or projects the exchange is about, when a line specific to one says more than the area fact.",
+    "projects: the ids of the listed projects this exchange clearly concerns, by name or by what the project is meant to achieve. Empty when none.",
+    `unhomed: at most ${TOUCH_MAX_UNHOMED} life areas the exchange clearly concerns that neither the listed areas${o.home ? ` nor the conversation's own area (${o.home})` : ""} cover, each as a short lowercase label of one or two words (e.g. "pets", "woodworking") with one fact line. effort is true when it is a bounded effort with an outcome and an end (a trip, learning a skill, a build) rather than an ongoing area of life. Empty when every topic has a home or the exchange is small talk.`,
+    'If it concerns nothing, reply {"domains":[],"entity_facts":{},"projects":[],"unhomed":[]}.',
   ].join("\n");
   const ents = o.entities.length
     ? `The user's own people, places and things (id = name):\n${o.entities.slice(0, 60).map((e) => `- ${e.id} = ${[e.name, ...e.aliases.slice(0, 3)].join(" / ")}`).join("\n")}\n\n`
     : "";
-  const prompt = `${ents}User:\n${o.message.slice(0, ROUTE_MAX_TEXT)}\n\nAssistant:\n${o.reply.slice(0, TOUCH_REPLY_CHARS)}`;
+  const projs = projects.length
+    ? `The user's active projects (id = name: what done looks like):\n${projects.map((p) => `- ${p.id} = ${[p.name, ...p.aliases.slice(0, 2)].join(" / ")}${p.outcome ? `: ${p.outcome}` : ""}`).join("\n")}\n\n`
+    : "";
+  const prompt = `${ents}${projs}User:\n${o.message.slice(0, ROUTE_MAX_TEXT)}\n\nAssistant:\n${o.reply.slice(0, TOUCH_REPLY_CHARS)}`;
   return { system, prompt };
 }
 
 /** Parse a touch reply: real slugs only, the threshold applied, at most 4. Null when unusable. */
-export function parseTouchReply(raw: string, domains: string[], entityIds: string[] = []): Omit<TouchResult, "source"> | null {
+export function parseTouchReply(raw: string, domains: string[], entityIds: string[] = [], projectIds: string[] = []): Omit<TouchResult, "source"> | null {
   const s = raw.trim();
   const start = s.indexOf("{");
   const end = s.lastIndexOf("}");
@@ -461,7 +487,22 @@ export function parseTouchReply(raw: string, domains: string[], entityIds: strin
       if (ids.has(id) && typeof v === "string" && v.trim()) entity_facts[id] = clipFact(v);
     }
   }
-  return { domains: hits.slice(0, TOUCH_MAX_DOMAINS), entity_facts };
+  const pids = new Set(projectIds);
+  const projects = Array.isArray(obj.projects) ? uniq(obj.projects.filter((p): p is string => typeof p === "string" && pids.has(p))) : [];
+  // An unhomed label is never one of the user's domains (a known slug is a touch, not a gap).
+  const known = new Set([...domains, GENERAL]);
+  const unhomed: UnhomedHit[] = [];
+  if (Array.isArray(obj.unhomed)) {
+    for (const u of obj.unhomed as unknown[]) {
+      if (!u || typeof u !== "object") continue;
+      const r = u as Record<string, unknown>;
+      const label = typeof r.label === "string" ? r.label.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 40) : "";
+      const fact = typeof r.fact === "string" ? clipFact(r.fact) : "";
+      if (!label || !fact || known.has(label) || unhomed.some((x) => x.label === label)) continue;
+      unhomed.push({ label, fact, ...(r.effort === true ? { effort: true } : {}) });
+    }
+  }
+  return { domains: hits.slice(0, TOUCH_MAX_DOMAINS), entity_facts, projects, unhomed: unhomed.slice(0, TOUCH_MAX_UNHOMED) };
 }
 
 /**
@@ -474,7 +515,9 @@ export async function classifyTouches(opts: TouchOptions): Promise<TouchResult> 
   const home = norm(opts.home);
   let domains = opts.domains.filter((d) => d.slug && norm(d.slug) !== home && norm(d.slug) !== GENERAL);
   const entities = opts.entities ?? [];
-  if (!domains.length && !entities.length) return empty;
+  const projects = opts.projects ?? [];
+  // With no other area at all the model still runs: it is how a topic with
+  // no home (unhomed) is noticed.
   const text = `User: ${opts.message.slice(0, ROUTE_MAX_TEXT)}\n\nAssistant: ${opts.reply.slice(0, TOUCH_REPLY_CHARS)}`;
 
   // Decision layer first: one yes/no per domain. It cannot write the fact
@@ -491,24 +534,28 @@ export async function classifyTouches(opts: TouchOptions): Promise<TouchResult> 
       }
       domains = domains.filter((d) => confidence.has(d.slug)).sort((a, b) => confidence.get(b.slug)! - confidence.get(a.slug)!).slice(0, TOUCH_MAX_DOMAINS);
       source = "typesafe";
-      if (!domains.length && !entities.length) return { ...empty, source };
+      // Nothing cleared the bar: the model is still asked, with no areas
+      // listed, for projects and topics with no home.
     }
   }
 
   const runner = opts.runner === undefined ? claudeRouteRunner : opts.runner;
   if (!runner) return empty;
-  const { system, prompt } = buildTouchPrompt({ message: opts.message, reply: opts.reply, domains, entities });
+  const { system, prompt } = buildTouchPrompt({ message: opts.message, reply: opts.reply, domains, entities, projects, home });
   let raw = "";
   try {
     raw = await runner({ system, prompt, timeoutMs: opts.timeoutMs ?? ROUTE_TIMEOUT_MS });
   } catch {
     return empty;
   }
-  const parsed = parseTouchReply(raw, domains.map((d) => d.slug), entities.map((e) => e.id));
+  // Every slug the user has (home and the ones the decision layer dropped too)
+  // is known, so none of them comes back as unhomed.
+  const parsed = parseTouchReply(raw, domains.map((d) => d.slug), [...entities, ...projects].map((e) => e.id), projects.map((p) => p.id));
   if (!parsed) return empty;
+  const mine = new Set([home, ...opts.domains.map((d) => norm(d.slug))]);
   // The decision layer's confidence stands where it answered.
   const hits = parsed.domains.map((h) => (confidence.has(h.slug) ? { ...h, confidence: confidence.get(h.slug)! } : h));
-  return { domains: hits, entity_facts: parsed.entity_facts, source };
+  return { domains: hits, entity_facts: parsed.entity_facts, projects: parsed.projects, unhomed: (parsed.unhomed ?? []).filter((u) => !mine.has(u.label)), source };
 }
 
 // ── helpers ────────────────────────────────────────────────────────────

@@ -541,6 +541,13 @@ export function entityIdFromEnv(env: NodeJS.ProcessEnv = process.env): string | 
   return /^[a-z]{1,20}\/[A-Za-z0-9_.-]{1,128}$/.test(e) ? e : undefined;
 }
 
+/** The turn's Google account pick (PREVAIL_GOOGLE_ACCOUNT): a label, an
+ *  email, a comma list or "all". Only plain selector characters are trusted. */
+export function googleAccountFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const g = (env.PREVAIL_GOOGLE_ACCOUNT ?? "").trim();
+  return /^[A-Za-z0-9._%+@,-]{1,256}$/.test(g) ? g : undefined;
+}
+
 /** How a gate decision reads in the app access log. */
 export function accessOutcome(d: GateDecision): "ran" | "queued" | "denied" | "declined" {
   if (d.action === "allow") return "ran";
@@ -576,15 +583,27 @@ export async function runActGateHook(vault: string, domain: string, vaultLockOn 
   if (toolName.startsWith("mcp__")) {
     try {
       const { recordAppAccess } = await import("./app-scope.ts");
-      recordAppAccess(vault, toolName, toolInput, accessOutcome(decision), { thread: threadIdFromEnv(), entity: entityIdFromEnv(), domain });
+      recordAppAccess(vault, toolName, toolInput, accessOutcome(decision), { thread: threadIdFromEnv(), entity: entityIdFromEnv(), domain, googleAccount: googleAccountFromEnv() });
     } catch { /* logging never blocks a tool call */ }
   }
-  if (decision.action === "allow") { process.stdout.write("{}\n"); return; }
-  process.stdout.write(`${JSON.stringify({
+  process.stdout.write(`${JSON.stringify(hookOutput(toolName, decision))}\n`);
+}
+
+/** The PreToolUse hook JSON for one decision (Claude Code hook protocol:
+ *  hookSpecificOutput.permissionDecision). An MCP call the gate allows gets an
+ *  explicit "allow", so Claude's own permission system never refuses a read
+ *  the gate approved in a headless turn. Builtins it allows print {} and keep
+ *  the normal permission flow. */
+export function hookOutput(toolName: string, decision: GateDecision): Record<string, unknown> {
+  if (decision.action === "allow") {
+    if (!toolName.startsWith("mcp__")) return {};
+    return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "allowed by Prevail's action gate" } };
+  }
+  return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: decision.reason ?? "queued for the user's approval",
     },
-  })}\n`);
+  };
 }

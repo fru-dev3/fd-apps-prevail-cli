@@ -13,7 +13,7 @@
 import { existsSync } from "node:fs";
 import { VERSION } from "./version.ts";
 import { classifyGwsCommand, runGwsRead, addPendingGws } from "./gws-gateway.ts";
-import { resolveGwsAccounts } from "./calendar-sync.ts";
+import { resolveGwsAccounts, resolveGwsConfigDir } from "./calendar-sync.ts";
 import { boundGoogleAccountLabel } from "./vault.ts";
 import { runGwsDoctor } from "./gws-doctor.ts";
 import { threadIdFromEnv } from "./act-gate.ts";
@@ -118,7 +118,12 @@ export function callGoogleWorkspace(
   // app-binding lookup; production callers use the live resolution.
   resolveAccounts: typeof resolveGwsAccounts = resolveGwsAccounts,
   lookupBoundAccount: (vault: string) => string | undefined = defaultBoundLookup,
+  // Same-account test for a single pick (label, email or dir all name one account).
+  accountDir: (account: string) => string | undefined = resolveGwsConfigDir,
 ): McpContent[] {
+  // The launched pick may be a comma list; its first entry is the default target.
+  const picks = (defaultAccount ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+  defaultAccount = picks[0];
   const argsIn = rawArgs.args;
   if (!Array.isArray(argsIn) || argsIn.some((a) => typeof a !== "string") || argsIn.length === 0) {
     return wrapText("Error: `args` must be a non-empty array of strings (the gws argument vector).");
@@ -136,9 +141,37 @@ export function callGoogleWorkspace(
   // refused below rather than guessed, so Prevail never acts as the wrong
   // identity. This is what makes the chip selection binding even when the model
   // passes no `account`.
-  let account = (typeof rawArgs.account === "string" && rawArgs.account.trim())
-    ? rawArgs.account.trim()
-    : defaultAccount;
+  const argAccount = typeof rawArgs.account === "string" && rawArgs.account.trim() ? rawArgs.account.trim() : undefined;
+  let account: string | undefined = argAccount ?? defaultAccount;
+  // "all" (chat --google-account all): reads fan out, one call per account,
+  // each naming its account; drafts and writes go to exactly ONE account, the
+  // default (the app binding, or the only connected one), never the model's pick.
+  // ONE account picked: drafts and writes go only to it. A model-supplied
+  // different account is refused, never queued. Reads may still name another.
+  if (picks.length === 1 && defaultAccount!.toLowerCase() !== "all" && argAccount && classifyGwsCommand(args).kind === "write") {
+    const same = argAccount.toLowerCase() === defaultAccount!.toLowerCase() || accountDir(argAccount) === accountDir(defaultAccount!);
+    if (!same) {
+      return wrapText(`Error: the user picked the Google account "${defaultAccount}" for this chat, so a draft or write can only go to that account. Nothing was queued for "${argAccount}". Retry without account, or ask the user to switch accounts.`);
+    }
+    account = defaultAccount;
+  }
+  if (defaultAccount?.toLowerCase() === "all") {
+    const res = resolveAccounts();
+    const labels = res.kind === "ambiguous" ? res.labels : res.kind === "single" ? [res.label] : [];
+    const bound = lookupBoundAccount(vaultPath);
+    const writeTo = res.kind === "single" ? res.label : bound && labels.includes(bound) ? bound : undefined;
+    if (classifyGwsCommand(args).kind === "read") {
+      account = argAccount ?? (res.kind === "single" ? res.label : undefined);
+      if (!account && labels.length > 1) {
+        return wrapText(`Error: all Google accounts are selected (${labels.join(", ")}), so nothing was run. Call this read once per account with account:"<account>" and label each result with its account.`);
+      }
+    } else {
+      if (!writeTo && labels.length > 1) {
+        return wrapText(`Error: all Google accounts are selected and none is the default, so this draft or write was not queued. Ask the user to pick the one account it should go to.`);
+      }
+      account = writeTo;
+    }
+  }
   // Never guess between identities: when NO account was picked (no tool-arg, no
   // composer chip) and this machine has MORE THAN ONE connected Google account,
   // refuse with the connected labels instead of silently acting as one of them.
@@ -294,7 +327,7 @@ export async function runGwsMcpServer(vaultPath: string, domain?: string, accoun
     }
     const id = req.id ?? null;
     try {
-      const result = dispatch(req, vaultPath, defaultDomain, defaultAccount);
+      const result = dispatch(req, vaultPath, defaultDomain, rawAccount);
       if (req.id !== undefined && req.id !== null) {
         send({ jsonrpc: "2.0", id, result });
       }

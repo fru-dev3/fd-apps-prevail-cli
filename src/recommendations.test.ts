@@ -18,7 +18,9 @@ function vault(): { root: string; put: (rel: string, v: unknown) => void; done: 
 }
 
 const NOW = Date.UTC(2031, 4, 20);
-const offline = { now: NOW, skip: { context: true, models: true } } as const;
+// NOW is years after the temp domains are created, so the dormant-domain
+// rule would fire on every test; structure has its own tests (structure.test.ts).
+const offline = { now: NOW, skip: { context: true, models: true, structure: true } } as const;
 
 test("domain rec for a missing area; resolved and existing areas ignored", () => {
   const v = vault();
@@ -152,7 +154,7 @@ test("ranking: by leverage, duplicates dropped, counts per category", () => {
     ({ id, category, leverage, title: id, detail: "", metric: { value: 1, unit: "" }, source: "intent", action: { kind: "open_finding" } });
   const ranked = rankRecommendations([r("a", "context", 10), r("b", "rules", 80), r("c", "apps", 80), r("b", "rules", 5)]);
   expect(ranked.map((x) => x.id)).toEqual(["b", "c", "a"]);
-  expect(categoryCounts(ranked)).toEqual({ rules: 1, projects: 0, apps: 1, people: 0, models: 0, context: 1 });
+  expect(categoryCounts(ranked)).toEqual({ rules: 1, projects: 0, apps: 1, people: 0, models: 0, context: 1, structure: 0 });
 });
 
 test("an empty vault yields nothing and never throws", () => {

@@ -42,6 +42,8 @@ interface Args {
   mirrorArgs: string[];
   entities: boolean;
   entitiesArgs: string[];
+  suggest: boolean;
+  suggestArgs: string[];
   suggestApps: boolean;
   suggestAppsArgs: string[];
   appsMirror: boolean;
@@ -178,6 +180,8 @@ function parseArgs(argv: string[]): Args {
   let mirrorArgs: string[] = [];
   let entities = false;
   let entitiesArgs: string[] = [];
+  let suggest = false;
+  let suggestArgs: string[] = [];
   let suggestApps = false;
   let suggestAppsArgs: string[] = [];
   let appsMirror = false;
@@ -334,6 +338,10 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "apps") {
       appsMirror = true;
       appsMirrorArgs = argv.slice(i + 1);
+      break;
+    } else if (a === "suggest") {
+      suggest = true;
+      suggestArgs = argv.slice(i + 1);
       break;
     } else if (a === "suggest-apps") {
       suggestApps = true;
@@ -612,6 +620,8 @@ function parseArgs(argv: string[]): Args {
     mirrorArgs,
     entities,
     entitiesArgs,
+    suggest,
+    suggestArgs,
     suggestApps,
     suggestAppsArgs,
     appsMirror,
@@ -732,7 +742,7 @@ USAGE
   prevail briefing [...]      schedule per-domain prompts (e.g. daily 7am wealth digest)
   prevail connectors [...]    list connectors / run OAuth flows / test connections
   prevail apps [...]          mirror of your AI runtimes' MCP connectors + read-only sync recipes
-                              (apps access-log / apps threads <id> --json: app access and chats)
+                              (apps access-log [--account A] / apps threads <id> / apps accounts <id> --json: app access, chats, Google accounts)
                               (apps add-source / remove-source: trusted sources, read-only)
                               (connectors list --json for the machine list)
                               connectors scopes <id> — show what an OAuth grant requests
@@ -2808,13 +2818,15 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
         fail(`no entity "${id}"`);
         return;
       }
-      if (json) { out({ found: true, ...d }); return; }
+      // A project also carries its status, outcome, target, domains and goals.
+      const full = d.kind === "project" ? ((await import("./projects.ts")).projectDetail(vault, d.id) ?? d) : d;
+      if (json) { out({ found: true, ...full }); return; }
       console.log(en.entityContextText(d, 30));
       return;
     }
     if (sub === "save") {
       const id = pos[1];
-      if (!id) { fail("usage: prevail entities save <kind/slug> [--name \"Display name\"] [--kind person|place|org|thing]"); return; }
+      if (!id) { fail("usage: prevail entities save <kind/slug> [--name \"Display name\"] [--kind person|place|org|thing|project]"); return; }
       const d = en.saveEntity(vault, id, { name: get("--name") ?? undefined, kind: get("--kind") ?? undefined });
       if (json) { out(d); return; }
       console.log(`saved ${d.id} -> ${d.page_path}`);
@@ -3023,12 +3035,26 @@ async function appsCommand(a: string[], vaultPath?: string | null): Promise<void
       console.log(apply ? `moved ${r.moved.length} app folder(s) to data/apps/_archive/` : `${r.candidates.length} candidate(s); run with --apply to move them`);
       return;
     }
+    if (sub === "accounts") {
+      // The Google accounts an app can read through: every gws account on this
+      // machine, plus Claude's own connector (one account). Local output only.
+      const id = pos[1];
+      if (!id) return fail("usage: prevail apps accounts <app-id>");
+      const { googleAccounts } = await import("./gws-gateway.ts");
+      const { mirrorApps } = await import("./app-scope.ts");
+      const { boundGoogleAccountLabel } = await import("./vault.ts");
+      const claude = mirrorApps(vault).find((m) => m.id === id && m.runtime === "claude" && !m.trusted);
+      const rows = googleAccounts(id, { bound: boundGoogleAccountLabel(vault), ...(claude ? { claudeConnector: claude.name } : {}) });
+      if (json) { out(rows); return; }
+      for (const r of rows) console.log(`${r.default ? "*" : " "} ${r.id}${r.label ? ` (${r.label})` : ""}  via ${r.via}`);
+      return;
+    }
     if (sub === "access-log") {
       // Every MCP call the act gate saw for an app (reads too), newest first.
       const { readAccessLog } = await import("./app-scope.ts");
       const n = Number(get("--limit"));
       const rows = readAccessLog(vault, {
-        app: get("--app"), domain: get("--domain"), entity: get("--entity"), thread: get("--thread"),
+        app: get("--app"), domain: get("--domain"), entity: get("--entity"), thread: get("--thread"), account: get("--account"),
         limit: Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined,
       });
       if (json) { out(rows); return; }
@@ -6244,6 +6270,9 @@ async function main() {
     const vault = await vaultFlagOrDefault(a, args.vaultPath);
     const json = a.includes("--json");
     const sub = a[0] && !a[0].startsWith("--") ? a[0] : "list";
+    // create | set | show project/<slug>: the tracked project entities (projects.ts).
+    const ent = (await import("./projects.ts")).projectsEntityCommand(a, vault);
+    if (ent !== null) { process.exitCode = ent; return; }
     const pp = await import("./prompt-projects.ts");
     if (sub === "build") {
       const cli = (get("--cli") ?? "claude") as "claude" | "codex";
@@ -6354,6 +6383,12 @@ async function main() {
     if (recs.length === 0) { console.log("no recommendations right now — keep using Prevail and they'll appear."); return; }
     console.log(`${recs.length} recommendation${recs.length === 1 ? "" : "s"}:\n`);
     for (const r of recs) console.log(`  [${r.category}] ${r.title}\n    ${r.detail}\n`);
+    return;
+  }
+  if (args.suggest) {
+    // prevail suggest structure | accept <id> | dismiss <id> [--forever] --vault V --json
+    const vault = await vaultFlagOrDefault(args.suggestArgs, args.vaultPath);
+    process.exitCode = await (await import("./structure.ts")).suggestCommand(args.suggestArgs, vault);
     return;
   }
   if (args.suggestApps) {

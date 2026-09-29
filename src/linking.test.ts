@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runChatJson } from "./chat-json.ts";
 import { readAutosave, setAutosave } from "./config.ts";
 import { buildIndex, findEntity, readIndex, readPage, readRelations, refreshEntities, saveEntity, scoreRelation, setRelation } from "./entities.ts";
-import { catchUpCount, consolidate, readUpdates, recordTouch, replaceSection, runTouchStep, touchSkipReason, touchedEntities } from "./linking.ts";
+import { catchUpCount, consolidate, readUpdates, recordTouch, replaceSection, replyIsError, runTouchStep, TOUCH_MAX_ENTITIES, touchSkipReason, touchedEntities, userText } from "./linking.ts";
 import { fromUpdates } from "./recommendations.ts";
 import { classifyTouches, parseTouchReply, TOUCH_FACT_CHARS, type TouchOptions, type TouchResult } from "./route.ts";
 import type { DecisionProvider } from "./decision.ts";
@@ -89,11 +89,13 @@ describe("touch classification", () => {
     expect(asked[1]).toEqual(["insurance"]);
     expect(narrowed).toMatchObject({ source: "typesafe", domains: [{ slug: "insurance", confidence: 0.83, fact: "Claim filed" }] });
 
-    // Nothing clears the bar and no entities: no model call at all.
+    // Nothing clears the bar: the model is still asked, with no areas listed
+    // (it may notice a topic with no home), and no domain comes back.
     const none: DecisionProvider = { ...provider, evaluate: async (_s, q) => ({ answers: Object.fromEntries(Object.keys(q).map((k) => [k, { type: "noul" as const, probability: 0.1 }])) }) as never };
     const before = asked.length;
     expect((await classifyTouches({ ...opts, provider: none })).domains).toEqual([]);
-    expect(asked.length).toBe(before);
+    expect(asked.length).toBe(before + 1);
+    expect(asked.at(-1)).toEqual([]);
   });
 
   test("skip rules: short, incognito, local-only unless the classifier is local", () => {
@@ -329,4 +331,60 @@ test("index list carries relation fields for the CLI", () => {
   const e = readIndex(vault).entities.find((x) => x.id === "person/zed-tenant")!;
   expect(e).toMatchObject({ relation: "yours", home_domain: "realestate" });
   expect(typeof e.relation_confidence).toBe("number");
+});
+
+// Bug 2: "Also noted in" listed unrelated entities after a failed Gmail turn.
+describe("touches come only from the user's words and the model's links", () => {
+  const yours = [
+    { id: "project/foo-herd", name: "Foo Herd", aliases: [] },
+    { id: "place/foo-town", name: "Foo Town", aliases: [] },
+    { id: "project/bar", name: "Bar", aliases: ["BQ"] },
+    { id: "person/qux", name: "Qux Quxson", aliases: [] },
+    { id: "person/zed", name: "Zed Zedson", aliases: [] },
+    { id: "person/wim", name: "Wim Wimson", aliases: [] },
+  ];
+
+  test("regression: injected context blocks never produce touches", () => {
+    const message = "# APP CONTEXT: Foo Mail\nApp id foo-mail. Foo Herd, Foo Town, Qux Quxson and Bar are mentioned here.\n\n---\n\n# REFERENCED DOMAIN: foo\nFoo Herd again.\n\n---\n\ncheck my unread email";
+    expect(userText(message)).toBe("check my unread email");
+    expect(touchedEntities(yours, message, "")).toEqual([]);
+  });
+
+  test("tool output and error text in the reply are never matched; only prevail:// links", () => {
+    const reply = "Error: Foo Herd and Foo Town could not be reached (Qux Quxson).";
+    expect(touchedEntities(yours, "check my unread email", reply)).toEqual([]);
+    expect(touchedEntities(yours, "check my unread email", "See [Foo Town](prevail://place/Foo%20Town).")).toEqual(["place/foo-town"]);
+  });
+
+  test("short names (4 characters or fewer) match whole-word and case-sensitive", () => {
+    expect(touchedEntities(yours, "the bar is open tonight", "")).toEqual([]);
+    expect(touchedEntities(yours, "Barbara called about it", "")).toEqual([]);
+    expect(touchedEntities(yours, "how is Bar going", "")).toEqual(["project/bar"]);
+    expect(touchedEntities(yours, "the bq numbers", "")).toEqual([]);
+    expect(touchedEntities(yours, "the BQ numbers", "")).toEqual(["project/bar"]);
+    expect(touchedEntities(yours, "the foo herd grew", "")).toEqual(["project/foo-herd"]);
+  });
+
+  test("at most 4 entities per turn", () => {
+    expect(TOUCH_MAX_ENTITIES).toBe(4);
+    const all = "Foo Herd, Foo Town, Bar, Qux Quxson, Zed Zedson and Wim Wimson all came up";
+    expect(touchedEntities(yours, all, "")).toHaveLength(4);
+  });
+
+  test("an error reply, or a turn whose tool calls all failed, records no touches", async () => {
+    const base = { message: "check my unread email from the foo herd folks please", localOnly: false, incognito: false };
+    expect(replyIsError("Claude requested permissions to use mcp__foo__search_threads, but you haven't granted it yet.")).toBe(true);
+    expect(replyIsError("Error: the request failed.")).toBe(true);
+    expect(replyIsError("")).toBe(true);
+    expect(replyIsError("You have 3 unread emails from Foo, all about the herd.")).toBe(false);
+    expect(touchSkipReason({ ...base, reply: "Error: the request failed." })).toBe("error reply");
+    expect(touchSkipReason({ ...base, reply: "Three unread.", toolsAllFailed: true })).toBe("tool calls failed");
+    let asked = 0;
+    const classify = async (): Promise<TouchResult> => { asked++; return { domains: [{ slug: "legal", confidence: 1, fact: "x" }], entity_facts: {}, projects: ["project/foo-herd"], source: "model" }; };
+    const step = { vault, home: "general", thread: "t", message: base.message, localOnly: false, incognito: false, classify };
+    expect(await runTouchStep({ ...step, reply: "I couldn't read your email: permission was not granted." })).toBeNull();
+    expect(await runTouchStep({ ...step, reply: "Three unread.", toolsAllFailed: true })).toBeNull();
+    expect(asked).toBe(0);
+    expect(existsSync(dom("legal", "memory", "updates.jsonl"))).toBe(false);
+  });
 });

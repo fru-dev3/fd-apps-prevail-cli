@@ -280,6 +280,13 @@ function writeJson(path: string, v: unknown) {
   vwriteFile(path, `${JSON.stringify(v, null, 2)}\n`);
 }
 
+/** Sittings per Intent project: the sessions the last build assigned to it. */
+export function projectSittings(vault: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const slug of Object.values(readState(vault).sessions)) if (slug) out[slug] = (out[slug] ?? 0) + 1;
+  return out;
+}
+
 export function readProjectsIndex(vault: string): ProjectsIndex | null {
   try { return JSON.parse(vreadFile(indexPath(vault))) as ProjectsIndex; } catch { return null; }
 }

@@ -9,7 +9,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { resolveGwsBinary, gwsSpawnEnv, resolveDefaultGwsAccount } from "./calendar-sync.ts";
+import { resolveGwsBinary, gwsSpawnEnv, resolveDefaultGwsAccount, gwsProfileEmail, listGwsProfiles, type GwsProfile } from "./calendar-sync.ts";
 import { auditAction } from "./action-audit.ts";
 import { runtimePath } from "./path-safety.ts";
 
@@ -381,4 +381,51 @@ export function runGwsApproved(vaultRoot: string, id: string, opts?: { allowSens
   // The action was approved and attempted; clear it from the queue either way.
   removePendingGws(vaultRoot, id);
   return result;
+}
+
+// ── Google accounts per app (`prevail apps accounts <app-id>`) ─────────────
+// Claude's Gmail/Drive/Calendar connector holds ONE Google account; Prevail's
+// google_workspace connector (the gws spine) holds every account signed in on
+// this machine. Emails are read locally from each gws profile and only ever
+// printed to the local caller, never sent to telemetry.
+
+export interface GoogleAccount { id: string; label?: string; default: boolean; via: "gws" | "claude" }
+
+export const GOOGLE_APP_RE = /gmail|google|drive|calendar/i;
+
+export interface GoogleAccountDeps {
+  profiles?: GwsProfile[];
+  emailOf?: (p: GwsProfile) => string | null;
+  /** The Google app's bound account label (standing default). */
+  bound?: string;
+  /** A Claude connector for this app, when mirrored (its name). */
+  claudeConnector?: string;
+}
+
+export function googleAccounts(appId: string, deps: GoogleAccountDeps = {}): GoogleAccount[] {
+  if (!GOOGLE_APP_RE.test(appId)) return [];
+  const profiles = deps.profiles ?? listGwsProfiles();
+  const emailOf = deps.emailOf ?? ((p: GwsProfile) => gwsProfileEmail(p.configDir));
+  const labels = profiles.map((p) => p.label);
+  const def = profiles.length === 1 ? labels[0] : deps.bound && labels.includes(deps.bound) ? deps.bound : undefined;
+  const out: GoogleAccount[] = profiles.map((p) => {
+    const email = emailOf(p);
+    return { id: email || p.label, ...(email ? { label: p.label } : {}), default: p.label === def, via: "gws" as const };
+  });
+  if (deps.claudeConnector) out.push({ id: "claude", label: `${deps.claudeConnector} (Claude connector, one account)`, default: out.length === 0, via: "claude" });
+  return out;
+}
+
+/** The email of a gws account selector (label, "default", email or dir), for
+ *  the access log. Falls back to the selector when no email is known. */
+export function accountEmail(account: string, deps: { profiles?: GwsProfile[]; emailOf?: (p: GwsProfile) => string | null } = {}): string {
+  const a = account.trim();
+  if (a.includes("@")) return a.toLowerCase();
+  try {
+    const profiles = deps.profiles ?? listGwsProfiles();
+    const emailOf = deps.emailOf ?? ((p: GwsProfile) => gwsProfileEmail(p.configDir));
+    const p = profiles.find((x) => x.label === a || x.configDir === a) ?? (a === "default" && profiles.length === 1 ? profiles[0] : undefined);
+    const email = p ? emailOf(p) : null;
+    return email || a;
+  } catch { return a; }
 }

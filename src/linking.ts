@@ -17,12 +17,15 @@
 //       thread's reach, since threads themselves are never rewritten
 // Checkpoints (per machine; only the hub consolidates):
 //   build/_meta/linking/consolidate.json
+// Topics with no home (per machine; read by the structure suggestions):
+//   build/_meta/linking/unhomed.jsonl
+//       { ts, thread, home, label, fact, effort? }          one per label per turn
 
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
-  KIND_DIR, ensureAutoPage, entityDir, extractLinks, nameMatchers, parseEntityId, resolveEntityId, setEntityAcross, slugify, yoursEntities,
+  KIND_DIR, ensureAutoPage, entityDir, extractLinks, nameMatchers, parseEntityId, readIndex, resolveEntityId, setEntityAcross, slugify, yoursEntities,
   type EntityKind,
 } from "./entities.ts";
 import { readManifest } from "./manifest.ts";
@@ -30,7 +33,7 @@ import { tryAcquireLock } from "./file-lock.ts";
 import { isClientMachine, CLIENT_ROLE_MESSAGE } from "./machine-role.ts";
 import { listDomainDirs, v4ContentPath } from "./vault-layout-v4.ts";
 import { entitiesContainer, resolveDomainDir, runtimePath } from "./path-safety.ts";
-import { TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchResult } from "./route.ts";
+import { TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchProjectOption, type TouchResult, type UnhomedHit } from "./route.ts";
 import { vappendLine, vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
 
 export interface DomainUpdate { ts: number; from_domain: string; thread: string; fact: string; entities: string[] }
@@ -54,14 +57,22 @@ export function touchesPath(vault: string, home: string): string {
   return join(resolveDomainDir(vault, home), "memory", "touches.jsonl");
 }
 
+export interface UnhomedLine extends UnhomedHit { ts: number; thread: string; home: string }
+
+export const unhomedPath = (vault: string) => runtimePath(vault, join("_meta", "linking", "unhomed.jsonl"));
+
+export function readUnhomed(vault: string): UnhomedLine[] {
+  return readJsonl<UnhomedLine>(unhomedPath(vault)).filter((r) => Number.isFinite(r.ts) && typeof r.label === "string" && typeof r.fact === "string");
+}
+
 // One atomic line append under the file's lock (the same helper the ledgers use).
-function appendJsonl(path: string, row: unknown): void {
+export function appendJsonl(path: string, row: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const lock = tryAcquireLock(`${path}.lock`);
   try { vappendLine(path, `${JSON.stringify(row)}\n`); } finally { lock?.release(); }
 }
 
-function readJsonl<T>(path: string): T[] {
+export function readJsonl<T>(path: string): T[] {
   let raw = "";
   try { raw = vreadFile(path); } catch { return []; }
   const out: T[] = [];
@@ -112,7 +123,7 @@ export function recordTouch(vault: string, t: RecordTouchInput): { domains: { sl
 
 /** Hard deadline for the whole step; on timeout nothing is written or emitted. */
 export const TOUCH_TIMEOUT_MS = 8_000;
-const TOUCH_MAX_ENTITIES = 8;
+export const TOUCH_MAX_ENTITIES = 4;
 
 export interface TouchStepInput {
   vault: string;
@@ -129,20 +140,54 @@ export interface TouchStepInput {
   provider?: TouchOptions["provider"];
   timeoutMs?: number;
   now?: number;
+  /** Every tool call on the turn failed (at least one ran). */
+  toolsAllFailed?: boolean;
 }
 
 export interface TouchedPayload { domains: { slug: string; fact: string }[]; entities: string[] }
 
-export function touchSkipReason(i: Pick<TouchStepInput, "message" | "localOnly" | "incognito" | "classifierLocal">): string | null {
+/** The active projects, for the touch step. */
+export function activeProjects(vault: string): TouchProjectOption[] {
+  return readIndex(vault).entities
+    .filter((e) => e.kind === "project" && (e.project?.status ?? "active") === "active")
+    .map((e) => ({ id: e.id, name: e.name, aliases: e.aliases, outcome: e.project?.outcome ?? "" }));
+}
+
+// A reply that is mainly an error: empty, led by "error"/"failed", or short and
+// about a failure. Such a turn concerns nothing, so it touches nothing.
+const ERROR_LEAD_RE = /^(error|failed|failure)\b/i;
+const ERROR_WORD_RE = /\b(error|failed|fails|couldn'?t|could not|unable to|not granted|haven'?t granted|permission|denied|not available|unavailable)\b/i;
+export function replyIsError(reply: string): boolean {
+  const t = reply.trim();
+  return !t || ERROR_LEAD_RE.test(t) || (t.length <= 600 && ERROR_WORD_RE.test(t));
+}
+
+export function touchSkipReason(i: Pick<TouchStepInput, "message" | "localOnly" | "incognito" | "classifierLocal"> & { reply?: string; toolsAllFailed?: boolean }): string | null {
   if (i.incognito) return "incognito";
+  if (i.toolsAllFailed) return "tool calls failed";
+  if (i.reply !== undefined && replyIsError(i.reply)) return "error reply";
   if (i.message.trim().length < TOUCH_MIN_MESSAGE) return "short message";
   if (i.localOnly && !i.classifierLocal) return "local only";
   return null;
 }
 
+/** The user's own words: drops injected context blocks ("# APP CONTEXT: ...",
+ *  "# ENTITY ...", preambles) that lead a message, joined by "---" rules. */
+export function userText(message: string): string {
+  const parts = message.split(/\n\s*---\s*\n/);
+  let i = 0;
+  while (i < parts.length - 1 && /^\s*# [A-Z][A-Z ]+/.test(parts[i]!)) i++;
+  return parts.slice(i).join("\n---\n");
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * The user's own entities this exchange names: Yours entities linked in the
- * reply (prevail:// links), plus Yours names or aliases in the USER's text.
+ * reply (prevail:// links the model wrote), plus Yours names or aliases in the
+ * USER's own text. Never injected context, tool output or error text. Names of
+ * 4 characters or fewer match whole-word and case-sensitive. At most
+ * TOUCH_MAX_ENTITIES.
  */
 export function touchedEntities(yours: TouchEntityOption[], message: string, reply: string): string[] {
   const bySlug = new Map<string, string>();
@@ -156,9 +201,14 @@ export function touchedEntities(yours: TouchEntityOption[], message: string, rep
     const s = slugify(l.value);
     push(bySlug.get(`${l.kind}/${s}`) ?? bySlug.get(s));
   }
-  const text = message.toLowerCase();
+  const raw = userText(message);
+  const text = raw.toLowerCase();
   for (const e of yours) {
-    if (nameMatchers([e.name, ...e.aliases]).some((re) => { re.lastIndex = 0; return re.test(text); })) push(e.id);
+    const names = [e.name, ...e.aliases].map((n) => n.trim()).filter(Boolean);
+    const short = names.filter((n) => n.length <= 4);
+    const hit = nameMatchers(names.filter((n) => n.length > 4)).some((re) => { re.lastIndex = 0; return re.test(text); })
+      || short.some((n) => new RegExp(`(^|[^A-Za-z0-9])${escapeRe(n)}(?=$|[^A-Za-z0-9])`).test(raw));
+    if (hit) push(e.id);
   }
   return out.slice(0, TOUCH_MAX_ENTITIES);
 }
@@ -185,16 +235,19 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
     const home = i.home.toLowerCase();
     const domains = domainOptions(i.vault, home);
     let yours: TouchEntityOption[] = [];
-    try { yours = yoursEntities(i.vault); } catch { /* no index yet */ }
-    if (!domains.length && !yours.length) return null;
-    const entities = touchedEntities(yours, i.message, i.reply);
+    let projects: TouchProjectOption[] = [];
+    try { projects = activeProjects(i.vault); } catch { /* no index yet */ }
+    // Projects that are paused, done or archived are never touched.
+    try { yours = yoursEntities(i.vault).filter((e) => !e.id.startsWith("project/") || projects.some((p) => p.id === e.id)); } catch { /* no index yet */ }
+    // Even with nothing to link, the step runs: it notices topics with no home.
+    const named = touchedEntities(yours, i.message, i.reply);
     const deadline = i.timeoutMs ?? TOUCH_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), deadline); });
     const res = await Promise.race([
       i.classify({
         home, message: i.message, reply: i.reply, domains, provider: i.provider,
-        entities: yours.filter((e) => entities.includes(e.id)),
+        entities: yours.filter((e) => named.includes(e.id) && !e.id.startsWith("project/")), projects,
         // The runner kills its own child a little before the step gives up.
         timeoutMs: Math.max(1_000, deadline - 500),
       }),
@@ -202,12 +255,20 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
     ]);
     clearTimeout(timer);
     if (!res) return null;
+    const ts = i.now ?? Date.now();
+    for (const u of res.unhomed ?? []) {
+      appendJsonl(unhomedPath(i.vault), { ts, thread: i.thread, home, label: u.label, fact: u.fact, ...(u.effort ? { effort: true } : {}) } satisfies UnhomedLine);
+    }
+    const active = new Set(projects.map((p) => p.id));
+    // Entities come only from the user's words and the reply's links (named);
+    // a project the classifier names counts only when named too.
+    const entities = named.filter((id) => !id.startsWith("project/") || active.has(id)).slice(0, TOUCH_MAX_ENTITIES);
     if (!res.domains.length && !entities.length) return null;
     const excerpt = i.message.replace(/\s+/g, " ").trim();
     const w = recordTouch(i.vault, {
       home, thread: i.thread, domains: res.domains, entities, entityFacts: res.entity_facts,
       fallbackFact: `Came up in ${labelFor(home)}: ${excerpt.length > 160 ? `${excerpt.slice(0, 157)}...` : excerpt}`,
-      ts: i.now,
+      ts,
     });
     return w.domains.length || w.entities.length ? w : null;
   } catch {

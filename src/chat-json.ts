@@ -51,7 +51,9 @@ import {
 import { readRouteOverrides, type RouteOverride } from "./route-learning.ts";
 import { generalDir } from "./decisions.ts";
 import { entityChatBlock } from "./entities.ts";
-import { appChatBlock, appToolAccess, mirrorApps, planAppRouting, refDomainBlock } from "./app-scope.ts";
+import { GOOGLE_APP_RE } from "./gws-gateway.ts";
+import { updateMirrorStatus } from "./apps-mirror.ts";
+import { appChatBlock, appReadTools, initAppProblems, appToolAccess, mirrorApps, planAppRouting, refDomainBlock } from "./app-scope.ts";
 import type { MirrorApp } from "./apps-mirror.ts";
 import { turnSources } from "./trusted-sources.ts";
 import { APP_SCOPE_PREFIX, appScopeId, resolveDomainDir } from "./path-safety.ts";
@@ -171,6 +173,8 @@ export interface ChatJsonOptions {
   // The user's Google-account chip selection (composer Modes). Threaded to the
   // google_workspace connector as its authoritative default target account.
   // Comma-joined list allowed; absent => the connector's own default account.
+  // "all": reads fan out across every account, writes go to the default one.
+  // "claude": Claude's own one-account connector (no gws pick).
   googleAccount?: string;
   // App-chat passthrough: let the turn also see the user's own Claude Code MCP
   // servers (their claude.ai connectors). Strict surface otherwise.
@@ -211,6 +215,7 @@ export interface ChatJsonOptions {
     runChatTurn?: typeof runChatTurn;
     persistMessage?: typeof persistMessage;
     mirrorApps?: (vault: string) => MirrorApp[];
+    updateMirrorStatus?: (vault: string, id: string, status: string) => void;
     // The touch classifier. When any deps are given (tests) and this is not,
     // the touch step is off, so a test never reaches a model.
     classifyTouches?: typeof classifyTouches;
@@ -470,6 +475,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // Entity block first (what the conversation is about), then any preamble.
   // A broken entity lookup never blocks the turn; it just runs unscoped.
   // Then the referenced apps and domains. All rebuilt every turn, none saved.
+  // "claude" names Claude's own one-account connector: no gws pick.
+  const googlePick = opts.googleAccount?.trim() && opts.googleAccount.trim().toLowerCase() !== "claude" ? opts.googleAccount.trim() : undefined;
   const entityIds = uniq(Array.isArray(opts.entity) ? opts.entity : [opts.entity]);
   const perEntity = entityIds.length ? Math.min(6000, Math.floor(ENTITY_BUDGET / entityIds.length)) : 0;
   const blocks: string[] = [];
@@ -478,6 +485,24 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   }
   for (const id of appIds) {
     try { blocks.push(appChatBlock(vaultPath, id, apps.find((a) => a.id === id) ?? null)); } catch { /* skip */ }
+  }
+  // --google-account all: reads fan out across every gws account, one call per
+  // account; drafts and writes go to the default account only, and queue.
+  if (googlePick?.toLowerCase() === "all") {
+    try {
+      const { googleAccounts } = await import("./gws-gateway.ts");
+      const { boundGoogleAccountLabel } = await import("./vault.ts");
+      const accts = googleAccounts(appIds.find((id) => GOOGLE_APP_RE.test(id)) ?? "google", { bound: boundGoogleAccountLabel(vaultPath) });
+      if (accts.length) {
+        const def = accts.find((x) => x.default);
+        blocks.push([
+          "# GOOGLE ACCOUNTS: all",
+          `The user chose all their Google accounts: ${accts.map((x) => x.id).join(", ")}.`,
+          "For reads, call the google_workspace tool once per account with account set to that account, and label every result with its account.",
+          `Drafts and writes go to exactly one account: ${def ? def.id : "none is the default, so ask the user which one"}. They queue for the user's approval. Never send.`,
+        ].join("\n"));
+      }
+    } catch { /* the connector still refuses unlabeled reads */ }
   }
   for (const d of uniq(opts.refDomains)) {
     if (d === opts.domain) continue;
@@ -552,6 +577,9 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   };
   const toolApps = apps.length ? apps : (opts.deps?.mirrorApps ?? mirrorApps)(vaultPath);
   let stepSeq = 0;
+  // Tool results on this turn, for the touch step (all failed = no touches).
+  let toolResults = 0;
+  let toolFailures = 0;
   const onTool = (ev: ToolEvent) => {
     try {
       // The model's own plan: a TodoWrite call carries a todo list we surface as a
@@ -577,6 +605,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       } else {
         const label = stepLabels.get(id) ?? stepLabel(ev.name);
         const failed = ev.ok === false;
+        toolResults++;
+        if (failed) toolFailures++;
         // On failure the detail line becomes WHY it failed (the tool's own error
         // snippet); successful results keep the call-time detail already shown.
         const detail = failed && ev.resultText ? ev.resultText : undefined;
@@ -608,8 +638,26 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     guard: turnGuard,
     isFirst: opts.fresh === true || !opts.sessionId, // resume → not first (claude uses --continue)
     webAccess: opts.webAccess,
-    googleAccount: opts.googleAccount,
+    googleAccount: googlePick,
     inheritUserMcp: opts.inheritUserMcp || appIds.length > 0,
+    // The referenced apps' read tools, pre-allowed (headless Claude refuses
+    // anything not allowed up front). Writes still queue at the act gate.
+    ...(() => { const r = appReadTools(apps, appIds); return r.length ? { appReadTools: r } : {}; })(),
+    // Live connector status from Claude's init event: a referenced app whose
+    // server needs sign-in (or did not load) is reported at once, and the
+    // mirror learns it so the Apps page shows it too.
+    ...(appIds.length ? {
+      onInit: (init: { servers: { name: string; status: string }[] }) => {
+        const p = initAppProblems(appIds, apps, init);
+        for (const n of p.needsAuth) {
+          if (!appPlan?.needsAuth.some((x) => x.app === n.app)) {
+            emit({ type: "app_needs_auth", thread, ts: Date.now(), app: n.app, name: n.name, ...(n.signin_url ? { signin_url: n.signin_url } : {}) });
+          }
+          try { (opts.deps?.updateMirrorStatus ?? updateMirrorStatus)(vaultPath, n.app, n.status); } catch { /* display state only */ }
+        }
+        for (const u of p.unavailable) emit({ type: "app_unavailable", thread, ts: Date.now(), app: u.app, reason: u.reason });
+      },
+    } : {}),
     // Referenced trusted sources: remote MCP servers and fetchable hosts.
     ...(() => {
       const t = turnSources(apps.filter((a) => appIds.includes(a.id)));
@@ -726,6 +774,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     const layer = opts.deps ? null : decisionLayer();
     const touched = await runTouchStep({
       vault: vaultPath, home: opts.domain, thread, message, reply,
+      toolsAllFailed: toolResults > 0 && toolFailures === toolResults,
       localOnly: !!opts.localOnly || turnGuard.localOnly || manifestLocal || process.env.PREVAIL_BUNKER === "1",
       incognito: !!opts.incognito || process.env.PREVAIL_INCOGNITO === "1",
       classify,

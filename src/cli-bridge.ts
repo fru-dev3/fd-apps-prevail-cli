@@ -322,13 +322,15 @@ export function scrubbedEnv(): NodeJS.ProcessEnv {
   const ctx = turnThread.getStore();
   if (ctx?.thread) out.PREVAIL_THREAD_ID = ctx.thread;
   if (ctx?.entity) out.PREVAIL_ENTITY_ID = ctx.entity;
+  // The turn's Google account pick, so the access log names the account.
+  if (ctx?.google) out.PREVAIL_GOOGLE_ACCOUNT = ctx.google;
   return out;
 }
 
 // The Prevail thread (and entity) of the turn currently running, carried
 // through the async call tree (a per-turn env would race in a daemon running
 // several).
-const turnThread = new AsyncLocalStorage<{ thread?: string; entity?: string }>();
+const turnThread = new AsyncLocalStorage<{ thread?: string; entity?: string; google?: string }>();
 
 export interface AvailableCli {
   kind: CliKind;
@@ -885,6 +887,14 @@ export interface ChatTurn {
   // web/links sources are described in the prompt only).
   remoteMcp?: Record<string, string>;
   fetchHosts?: string[];
+  // Exact tool names (mcp__<server>__<tool>) of the referenced apps' READ
+  // tools, added to --allowedTools on a chat turn so headless Claude does not
+  // refuse them. Never write tools: those still queue at the act gate.
+  appReadTools?: string[];
+  // Claude only (stream-json turns): called with the session's init event, the
+  // MCP servers that loaded and each one's live status (connected, failed,
+  // needs-auth, pending), so an app turn can report a connector needing sign-in.
+  onInit?: (init: import("./apps-mirror.ts").ClaudeInit) => void;
   // Optional cancellation. Aborting the signal SIGTERMs the child process so
   // Escape in the cockpit can drop an in-flight prompt without waiting for
   // the model to finish. runCapture resolves with "(cancelled)" on abort.
@@ -1013,11 +1023,13 @@ export function runChatTurn(turn: ChatTurn): Promise<string> {
   const e = turn.entityId?.trim();
   const thread = t && /^[A-Za-z0-9_-]{1,128}$/.test(t) ? t : undefined;
   const entity = e && /^[a-z]{1,20}\/[A-Za-z0-9_.-]{1,128}$/.test(e) ? e : undefined;
-  if (thread || entity) return turnThread.run({ thread, entity }, () => runChatTurnInner(turn));
+  const g = turn.googleAccount?.trim();
+  const google = g && /^[A-Za-z0-9._%+@,-]{1,256}$/.test(g) ? g : undefined;
+  if (thread || entity || google) return turnThread.run({ thread, entity, google }, () => runChatTurnInner(turn));
   return runChatTurnInner(turn);
 }
 
-async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts }: ChatTurn): Promise<string> {
+async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, onInit }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1295,6 +1307,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
       }
       if (!act && webMode === "allow") allowed.push(...(fetchHosts ?? []).filter((h) => /^[a-z0-9.-]+(:\d+)?$/.test(h)).map((h) => `WebFetch(domain:${h.replace(/:\d+$/, "")})`));
     } catch { /* never let source wiring break a turn */ }
+    if (!act && appReadTools?.length) allowed.push(...appReadTools);
     if (mcpConfigs.length) args.push("--mcp-config", ...mcpConfigs);
     if (allowed.length) args.push("--allowedTools", ...new Set(allowed));
     // ACTION GATEWAY (G1): every claude turn that can see MCP tools carries the
@@ -1324,7 +1337,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     if (onTool && (act || toolsInjected || inheritUserMcp)) {
       args.push("--output-format", "stream-json", "--verbose");
       args.push(...head);
-      return runClaudeStream(cli.bin, args, cwd, signal, onChunk, onTool, maxOutputChars);
+      return runClaudeStream(cli.bin, args, cwd, signal, onChunk, onTool, maxOutputChars, onInit);
     }
     args.push(...head);
     return runCapture(cli.bin, args, cwd, signal, onChunk, maxOutputChars);
@@ -2083,6 +2096,7 @@ export function runClaudeStream(
   onChunk: ((delta: string) => void) | undefined,
   onTool: (ev: ToolEvent) => void,
   maxOutputChars?: number,
+  onInit?: (init: import("./apps-mirror.ts").ClaudeInit) => void,
 ): Promise<string> {
   return new Promise((resolve) => {
     if (signal?.aborted) { resolve("(cancelled)"); return; }
@@ -2118,6 +2132,15 @@ export function runClaudeStream(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleEvent = (ev: any) => {
       if (!ev || typeof ev !== "object") return;
+      // The session's init event: which MCP servers loaded and their live status.
+      if (onInit && ev.type === "system" && ev.subtype === "init") {
+        try {
+          const servers = Array.isArray(ev.mcp_servers) ? ev.mcp_servers.filter((x: unknown) => x && typeof x === "object").map((x: { name?: unknown; status?: unknown }) => ({ name: String(x.name ?? ""), status: String(x.status ?? "") })).filter((x: { name: string }) => x.name) : [];
+          const tools = Array.isArray(ev.tools) ? ev.tools.filter((t: unknown): t is string => typeof t === "string") : [];
+          onInit({ tools, servers });
+        } catch { /* never break on callback */ }
+        return;
+      }
       if (ev.type === "assistant" && ev.message && Array.isArray(ev.message.content)) {
         for (const b of ev.message.content) {
           if (b && b.type === "text" && typeof b.text === "string" && b.text) {
