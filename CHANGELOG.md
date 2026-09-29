@@ -7,6 +7,19 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.10.4] - 2026-09-28 · Projects, structure suggestions, app fixes and several Google accounts
+
+### Added
+- **Projects**: a `project` entity kind with status, outcome, target, domains and goals (`projects create|set|show`). Conversations touch projects like any entity.
+- **Structure suggestions**: `suggest structure` proposes a new domain for a topic with no home (3+ conversations in 30 days), a project for a recurring effort, or archiving a domain dormant for a year. `suggest accept|dismiss` records your answer; accepting a domain fills it in from those conversations, and archiving never deletes.
+- **Several Google accounts**: `apps accounts <app>` and `chat --google-account <account|all>`. A single picked account locks drafts and writes to it; the access log records each call's account.
+- **Live connection check**: on an app turn, a connector that is not connected in Claude produces a sign-in notice at once and updates the app's status.
+
+### Fixed
+- An app's read tools are now pre-approved for the turn inside Claude Code, so reads such as a Gmail search are no longer refused. Writes and sends still wait for approval.
+- "Also noted in" only lists entities from your own words or links the model wrote, at most four, and nothing for a failed turn.
+- When an app is unavailable, the model says so once instead of trying other ways in.
+
 ## [1.10.3] - 2026-09-28 · Conversations reach every domain and entity they concern
 
 ### Added
