@@ -402,6 +402,11 @@ function parseArgs(argv: string[]): Args {
       route = true;
       routeArgs = argv.slice(i + 1);
       break;
+    } else if (a === "file") {
+      // `prevail file plan`: the filing plan lives with routing.
+      route = true;
+      routeArgs = ["file", ...argv.slice(i + 1)];
+      break;
     } else if (a === "updates" || a === "consolidate" || a === "config") {
       linking = a;
       linkingArgs = argv.slice(i + 1);
@@ -1454,8 +1459,17 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
 //
 //   route --text <msg|-> [--thread <id>] [--json]
 //       -> { domains: [{ slug, confidence }], reason, source }
+//   route --text <msg|-> [--thread <id>] [--current home,a,b] [--turn N] [--incognito] [--json]
+//       adds { primary, secondary: [slug], candidates: [{ slug, score }], unfiled,
+//              changed, checked }. Generous filing: the top domain is home at
+//       0.35, others link at 0.6 (at most 3 new). With --turn it only asks on
+//       turns 1, 3 and every 5th (checked:false otherwise); --current is kept,
+//       never removed; `changed` says whether to emit a route event.
 //   route correct --thread <id> --domains a,b [--from x,y] [--text -]
 //       -> { ok, id, domains }   (logged to General's decision log)
+//   file plan [--limit N] [--json]
+//       -> { plan: [{ thread, title, current_home, primary, secondary, candidates,
+//            unfiled }], skipped, total, cached }   read-only (see filing.ts)
 //
 // `--text -` reads the message from stdin so it never appears in argv. The
 // message is the only user content sent to the routing provider, and it is
@@ -1495,27 +1509,50 @@ async function routeCommand(args: string[], vaultOverride: string | null): Promi
     return;
   }
 
-  const text = readText();
   const bunker = process.env.PREVAIL_BUNKER === "1";
-  let provider: import("./decision.ts").DecisionProvider | null = null;
-  if (!bunker) {
+  const decisionProvider = async (): Promise<import("./decision.ts").DecisionProvider | null> => {
+    if (bunker) return null;
     const { warmDecisionKey } = await import("./decision-config.ts");
     // A 1Password reference can take seconds to resolve; routing waits a
     // little for it and otherwise moves on without the decision layer.
     const key = await Promise.race([warmDecisionKey(), new Promise<null>((r) => setTimeout(() => r(null), 1_500))]);
-    if (key) {
-      const { TypeSafeProvider } = await import("./decision-typesafe.ts");
-      provider = new TypeSafeProvider({ apiKey: () => key, endpoint: process.env.PREVAIL_TYPESAFE_URL || undefined });
+    if (!key) return null;
+    const { TypeSafeProvider } = await import("./decision-typesafe.ts");
+    return new TypeSafeProvider({ apiKey: () => key, endpoint: process.env.PREVAIL_TYPESAFE_URL || undefined });
+  };
+
+  if (args[0] === "file") {
+    if (args[1] !== "plan") {
+      console.error("usage: prevail file plan [--limit N] [--vault V] [--json]");
+      process.exit(1);
     }
+    const { filingPlan } = await import("./filing.ts");
+    const limit = Number(val("--limit"));
+    const plan = await filingPlan({ vault, limit: Number.isFinite(limit) && limit > 0 ? limit : undefined, provider: await decisionProvider(), bunker });
+    if (json) console.log(JSON.stringify(plan));
+    else {
+      for (const r of plan.plan) console.log(`${r.thread}  ${r.unfiled ? `unfiled (${r.candidates.map((c) => c.slug).join(", ")})` : [r.primary, ...r.secondary].join(", ")}`);
+      console.log(`${plan.plan.length} of ${plan.total}, ${plan.skipped} skipped, ${plan.cached} cached`);
+    }
+    process.exit(0);
   }
+
+  const text = readText();
+  const incognito = args.includes("--incognito") || process.env.PREVAIL_INCOGNITO === "1";
+  const provider = incognito ? null : await decisionProvider();
+  const turn = Number(val("--turn"));
   const timeout = Number(val("--timeout"));
-  const res = bunker
-    ? { domains: [], reason: "Bunker Mode: routing is a cloud call", source: "none" as const }
+  const current = list(val("--current"));
+  const skip = bunker ? "Bunker Mode: routing is a cloud call" : incognito ? "incognito" : null;
+  const res: import("./route.ts").RouteResult = skip
+    ? { domains: [], reason: skip, source: "none", primary: current[0] ?? null, secondary: current.slice(1), candidates: [], unfiled: false, changed: false, checked: false }
     : await route.routeMessage({
         vault,
         text,
         thread: val("--thread") ?? null,
         provider,
+        current,
+        turn: Number.isInteger(turn) && turn > 0 ? turn : null,
         timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : undefined,
       });
   if (json) {

@@ -69,7 +69,7 @@ describe("routeMessage via the model runner", () => {
     const f = fixed('{"domains":[{"slug":"real-estate","confidence":0.91}],"reason":"tenant lease"}');
     const text = "The tenant at Maple Court wants to renew the lease early";
     const r = await routeMessage({ vault, text, runner: f.runner, provider: null });
-    expect(r).toEqual({ domains: [{ slug: "real-estate", confidence: 0.91 }], reason: "tenant lease", source: "model" });
+    expect(r).toMatchObject({ domains: [{ slug: "real-estate", confidence: 0.91 }], reason: "tenant lease", source: "model", primary: "real-estate", secondary: [], unfiled: false });
     expect(f.seen).toHaveLength(1);
     expect(f.seen[0].prompt).toBe(`Message:\n${text}`);
     expect(f.seen[0].system).toContain("finance, health, real-estate");
@@ -129,7 +129,7 @@ describe("corrections", () => {
 
     const f = fixed("{}");
     const pinned = await routeMessage({ vault, text: "and what about closing costs", thread: "t-1", runner: f.runner, provider: null });
-    expect(pinned).toEqual({ domains: [{ slug: "finance", confidence: 1 }], reason: "you filed this thread", source: "correction" });
+    expect(pinned).toMatchObject({ domains: [{ slug: "finance", confidence: 1 }], reason: "you filed this thread", source: "correction", primary: "finance" });
     expect(f.seen).toHaveLength(0);
   });
 

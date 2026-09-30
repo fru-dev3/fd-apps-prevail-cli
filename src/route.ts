@@ -40,10 +40,32 @@ export interface RouteHit {
 
 export type RouteSource = "typesafe" | "model" | "correction" | "none";
 
-export interface RouteResult {
+export interface RouteCandidateScore {
+  slug: string;
+  /** 0..1 relevance */
+  score: number;
+}
+
+/** Where a General conversation is filed: one home domain, generously, plus linked ones. */
+export interface Filing {
+  /** The home domain, or null (kept in General by the user, or unfiled). */
+  primary: string | null;
+  /** Other domains it concerns, at most FILE_MAX_SECONDARY new ones. */
+  secondary: string[];
+  /** The top ranked domains, so an unfiled conversation always has one-click choices. */
+  candidates: RouteCandidateScore[];
+  /** Nothing cleared the low bar. Rare. */
+  unfiled: boolean;
+}
+
+export interface RouteResult extends Filing {
   domains: RouteHit[];
   reason: string;
   source: RouteSource;
+  /** The filing differs from `current` (the caller emits a route event only then). */
+  changed: boolean;
+  /** False when this turn is not a re-check turn: nothing was asked. */
+  checked: boolean;
 }
 
 export interface RouteExample {
@@ -66,6 +88,10 @@ export interface RouteOptions {
   domains?: string[];
   /** Deadline for the model path. */
   timeoutMs?: number;
+  /** The thread's filing so far (its `routed` frontmatter), home first. Kept, never removed. */
+  current?: string[];
+  /** 1-based user turn. When set, routing runs only on re-check turns (1, 3, then every 5th). */
+  turn?: number | null;
 }
 
 /** The domain General stands for itself; it is never a routing target. */
@@ -83,6 +109,12 @@ export const ROUTE_MAX_HITS = 3;
 /** The model this job uses. The job is `route`; the model is only a version string. */
 export const ROUTE_MODEL = "claude-haiku-4-5";
 export const ROUTE_TIMEOUT_MS = 20_000;
+/** Filing is generous: the best domain becomes home at this low bar. */
+export const FILE_PRIMARY_BAR = 0.35;
+/** Other domains are linked at this bar. */
+export const FILE_SECONDARY_BAR = 0.6;
+export const FILE_MAX_SECONDARY = 3;
+export const FILE_CANDIDATES = 3;
 
 export const CORRECTION_TYPE = "route_correction";
 
@@ -166,6 +198,56 @@ export function threadCorrection(vault: string, thread: string, known: string[])
   return null;
 }
 
+/** Domains the user removed from this thread in any correction: never re-added. */
+export function threadRemovals(vault: string, thread: string, known: string[]): Set<string> {
+  const k = new Set(known);
+  const out = new Set<string>();
+  for (const r of corrections(vault)) {
+    if (r.thread !== thread) continue;
+    const kept = new Set(slugList(r.domains, k));
+    for (const d of slugList((r as { from?: unknown }).from, k)) if (!kept.has(d)) out.add(d);
+  }
+  // A domain the newest correction keeps is not removed, whatever came before.
+  for (const d of threadCorrection(vault, thread, known) ?? []) out.delete(d);
+  return out;
+}
+
+/** Re-check cadence as a conversation grows: turn 1, turn 3, then every 5th turn. */
+export function isRecheckTurn(turn: number): boolean {
+  return turn === 1 || turn === 3 || (turn > 0 && turn % 5 === 0);
+}
+
+/**
+ * File a conversation from ranked scores. Generous: the top domain is home
+ * when it clears FILE_PRIMARY_BAR. `base` (what the user confirmed, or the
+ * filing so far) is kept as is; only new secondary domains are added.
+ */
+export function fileFromScores(
+  ranked: RouteCandidateScore[],
+  o: { base?: string[]; removed?: Set<string> } = {},
+): Filing {
+  const removed = o.removed ?? new Set<string>();
+  const base = uniq((o.base ?? []).map(norm)).filter(Boolean);
+  const scores = [...ranked].filter((c) => !removed.has(c.slug)).sort((a, b) => b.score - a.score);
+  const candidates = scores.slice(0, FILE_CANDIDATES);
+  let primary: string | null = base[0] ?? null;
+  if (!primary && scores[0] && scores[0].score >= FILE_PRIMARY_BAR) primary = scores[0].slug;
+  const secondary = base.slice(1);
+  let added = 0;
+  for (const c of scores) {
+    if (added >= FILE_MAX_SECONDARY) break;
+    if (c.score < FILE_SECONDARY_BAR || c.slug === primary || secondary.includes(c.slug)) continue;
+    secondary.push(c.slug);
+    added++;
+  }
+  return { primary, secondary: primary ? secondary : [], candidates, unfiled: !primary };
+}
+
+function sameFiling(current: string[], f: Filing): boolean {
+  const next = f.primary ? [f.primary, ...f.secondary] : [];
+  return current.length === next.length && current.every((d, i) => d === next[i]);
+}
+
 // ── Decision layer path ────────────────────────────────────────────────
 
 export function buildRouteQuestion(domains: string[]): ChoiceQuestion {
@@ -198,9 +280,9 @@ export function buildRoutePrompt(text: string, domains: string[], examples: Rout
     `The only valid area slugs are: ${domains.join(", ")}.`,
     "Reply with ONLY a JSON object, no prose and no code fence, shaped exactly:",
     '{"domains":[{"slug":"<one of the valid slugs>","confidence":<0..1>}],"reason":"<under 12 words>"}',
-    "List only areas the message is clearly about, most likely first, at most 3.",
-    "Confidence is your probability that the message belongs in that area.",
-    'If it is general chat or not about any listed area, reply {"domains":[],"reason":"general"}.',
+    "List the areas the message is related to, even loosely, most likely first, at most 3.",
+    "Confidence is how strongly the message relates to that area: 0.9 plainly about it, 0.6 clearly touches it, 0.4 a loose but real link.",
+    'Only for small talk related to no listed area at all, reply {"domains":[],"reason":"general"}.',
   ].join("\n");
   const ex = examples.length
     ? "Earlier messages the user filed themselves (follow these):\n" +
@@ -278,38 +360,30 @@ export const claudeRouteRunner: RouteRunner = async ({ system, prompt, timeoutMs
 
 // ── Entry point ────────────────────────────────────────────────────────
 
-const none = (reason: string): RouteResult => ({ domains: [], reason, source: "none" });
+const noFiling: Filing = { primary: null, secondary: [], candidates: [], unfiled: false };
+const none = (reason: string): RouteResult => ({ domains: [], reason, source: "none", ...noFiling, changed: false, checked: true });
 
-/**
- * Route one message. Never throws: every failure is an empty result with a
- * reason, which the caller treats as "stay in General".
- */
-export async function routeMessage(opts: RouteOptions): Promise<RouteResult> {
-  const text = (opts.text ?? "").trim();
-  if (!text) return none("empty message");
-  const domains = (opts.domains ?? routableDomains(opts.vault)).map(norm).filter((d) => d && d !== GENERAL);
-  if (domains.length === 0) return none("no domains in this vault");
+interface Classified {
+  domains: RouteHit[];
+  /** Every real domain with its score, best first (no floor). */
+  ranked: RouteCandidateScore[];
+  reason: string;
+  source: RouteSource;
+}
 
-  // The user already filed this thread: that answer stands until they change it.
-  if (opts.thread) {
-    const pinned = threadCorrection(opts.vault, opts.thread, domains);
-    if (pinned) {
-      return {
-        domains: pinned.map((slug) => ({ slug, confidence: 1 })),
-        reason: pinned.length ? "you filed this thread" : "you kept this thread in General",
-        source: "correction",
-      };
-    }
-  }
-
+async function classify(opts: RouteOptions, text: string, domains: string[]): Promise<Classified | null> {
   if (opts.provider) {
     const res = await evaluateDecision(opts.provider, text.slice(0, ROUTE_MAX_TEXT), { route: buildRouteQuestion(domains) });
     const a = res?.answers.route;
     if (a && a.type === "choice") {
       const probs = Object.keys(a.probabilities).length ? a.probabilities : { [a.choice]: a.confidence };
       const hits = hitsFromProbabilities(probs, domains);
+      const ranked = domains
+        .map((slug) => ({ slug, score: round2(Number.isFinite(probs[slug]) ? probs[slug] : 0) }))
+        .sort((x, y) => y.score - x.score);
       return {
         domains: hits,
+        ranked,
         reason: hits.length ? `decision layer picked ${labelFor(hits[0].slug).toLowerCase()}` : "decision layer: general",
         source: "typesafe",
       };
@@ -317,17 +391,69 @@ export async function routeMessage(opts: RouteOptions): Promise<RouteResult> {
   }
 
   const runner = opts.runner === undefined ? claudeRouteRunner : opts.runner;
-  if (!runner) return none("no routing provider available");
+  if (!runner) return null;
   const { system, prompt } = buildRoutePrompt(text, domains, recentRouteExamples(opts.vault, domains));
   let raw = "";
   try {
     raw = await runner({ system, prompt, timeoutMs: opts.timeoutMs ?? ROUTE_TIMEOUT_MS });
   } catch {
-    return none("routing model unavailable");
+    return null;
   }
   const parsed = parseRouteReply(raw, domains);
-  if (!parsed) return none("routing reply was not usable");
-  return { domains: parsed.domains, reason: parsed.reason || (parsed.domains.length ? "classified" : "general"), source: "model" };
+  if (!parsed) return null;
+  return {
+    domains: parsed.domains,
+    ranked: parsed.domains.map((h) => ({ slug: h.slug, score: h.confidence })),
+    reason: parsed.reason || (parsed.domains.length ? "classified" : "general"),
+    source: "model",
+  };
+}
+
+/**
+ * Route one message (or a growing conversation) and file it. Never throws:
+ * every failure is an empty result with a reason, which the caller treats as
+ * "leave the filing as it is".
+ */
+export async function routeMessage(opts: RouteOptions): Promise<RouteResult> {
+  const current = uniq((opts.current ?? []).map(norm)).filter((d) => d && d !== GENERAL);
+  const kept: Filing = { ...noFiling, primary: current[0] ?? null, secondary: current.slice(1) };
+  if (opts.turn != null && !isRecheckTurn(opts.turn)) {
+    return { domains: [], reason: "not a re-check turn", source: "none", ...kept, changed: false, checked: false };
+  }
+  const text = (opts.text ?? "").trim();
+  if (!text) return none("empty message");
+  const domains = (opts.domains ?? routableDomains(opts.vault)).map(norm).filter((d) => d && d !== GENERAL);
+  if (domains.length === 0) return none("no domains in this vault");
+
+  const pinned = opts.thread ? threadCorrection(opts.vault, opts.thread, domains) : null;
+  const removed = opts.thread ? threadRemovals(opts.vault, opts.thread, domains) : new Set<string>();
+  const done = (r: Omit<RouteResult, "changed" | "checked">): RouteResult => ({
+    ...r,
+    changed: !sameFiling(current, r) || (r.unfiled && current.length === 0),
+    checked: true,
+  });
+
+  // The user already filed this thread: that answer stands. A plain route
+  // returns it without asking anything; a re-check may only add new domains.
+  if (pinned && (opts.turn == null || pinned.length === 0)) {
+    return done({
+      domains: pinned.map((slug) => ({ slug, confidence: 1 })),
+      reason: pinned.length ? "you filed this thread" : "you kept this thread in General",
+      source: "correction",
+      primary: pinned[0] ?? null,
+      secondary: pinned.slice(1),
+      candidates: [],
+      unfiled: false,
+    });
+  }
+
+  const c = await classify(opts, text, domains);
+  const base = pinned ?? current;
+  if (!c) {
+    const r = none(opts.runner === null && !opts.provider ? "no routing provider available" : "routing model unavailable");
+    return { ...r, ...(base.length ? { primary: base[0], secondary: base.slice(1) } : {}) };
+  }
+  return done({ domains: c.domains, reason: c.reason, source: c.source, ...fileFromScores(c.ranked, { base, removed }) });
 }
 
 // ── Touches: every place a conversation concerns ────────────────────────
