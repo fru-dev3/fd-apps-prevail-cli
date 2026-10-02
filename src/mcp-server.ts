@@ -284,6 +284,16 @@ export async function runMcpServer(
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"], description: "text (default): the confirmed Compass. json: every line with its status." } } },
     },
     {
+      name: "read_metrics",
+      description: "The user's metrics, computed from what they already do (AI tools, git, task boards, loops, decisions, prompts, trips, watch history, card statements): this week's glance against their own normal, and every metric with its honesty tier (measured, derived), coverage and the files behind it. No data entry; counts only.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["glance", "list"], description: "glance (default): this week in numbers, as text. list: every metric as JSON." } } },
+    },
+    {
+      name: "metric_series",
+      description: "One metric over time: per day or per week values (zeros included) for a metric id from read_metrics (for example m-ai-spend, m-commits, m-shipped).",
+      inputSchema: { type: "object", properties: { id: { type: "string" }, per: { type: "string", enum: ["day", "week"] }, count: { type: "number", description: "How many periods back (default 26 weeks or 90 days)." } }, required: ["id"] },
+    },
+    {
       name: "read_recommendations",
       description: "Prevail's one ranked 'what to do next' list across the whole vault: instructions to save as rules, project next steps and stuck projects to restart, connectors to sign in or sync, recurring people and places to save, better model defaults, and context gaps. Deterministic, ranked by leverage.",
       inputSchema: { type: "object", properties: {} },
@@ -680,6 +690,10 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const format = args.format === "intent" || args.format === "raw" ? args.format : "handoff";
       try { return wrapText(restartText(vaultPath, slug, format, { withPrompts: args.with_prompts === true })); } catch (e) { return wrapText((e as Error).message); }
     }
+    case "read_metrics":
+      return wrapText(await tReadMetrics(args, vaultPath));
+    case "metric_series":
+      return wrapText(await tMetricSeries(args, vaultPath));
     case "read_compass":
       return wrapText(await tReadCompass(args, vaultPath));
     case "read_recommendations":
@@ -1128,6 +1142,22 @@ function tVaultStatus(vaultPath: string): string {
 
 // Mirrored connectors (prevail apps): the cached mirror only, never the slow
 // runtime listing. Empty string when there is no mirror cache yet.
+export async function tReadMetrics(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const m = await import("./metrics.ts");
+  const c = await m.computeMetrics(vaultPath);
+  if (args.format === "list") return JSON.stringify(m.listMetrics(c, vaultPath), null, 2);
+  return m.glanceMarkdown(m.glance(c));
+}
+
+export async function tMetricSeries(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const m = await import("./metrics.ts");
+  const id = typeof args.id === "string" ? args.id : "";
+  if (!m.CATALOG.some((x) => x.id === id)) return `Unknown metric "${id}". Known: ${m.CATALOG.map((x) => x.id).join(", ")}`;
+  const per = args.per === "day" ? "day" : "week";
+  const count = typeof args.count === "number" && args.count > 0 ? Math.min(400, Math.floor(args.count)) : per === "day" ? 90 : 26;
+  return JSON.stringify({ id, per, points: m.series(await m.computeMetrics(vaultPath), id, per, count) });
+}
+
 export async function tReadCompass(args: Record<string, unknown>, vaultPath: string): Promise<string> {
   const c = await import("./compass.ts");
   if (args.format === "json") return JSON.stringify(c.compassJson(vaultPath), null, 2);

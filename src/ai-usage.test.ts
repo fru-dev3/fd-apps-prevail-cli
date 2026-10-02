@@ -212,4 +212,11 @@ describe("honesty", () => {
     expect(ev).toHaveLength(1);
     expect(ev[0]!.attrs.out).toBe(9);
   });
+  test("a record with no usable time is dropped, never a 0-12-31 day", () => {
+    const ev = toEvents("antigravity", [
+      { k: "a", ts: -62_000_000_000_000, kind: "ai.session", session: "s1" },
+      { k: "b", ts: NOW, kind: "ai.session", session: "s2" },
+    ], "h");
+    expect(ev.map((e) => e.ts.length)).toEqual([10]);
+  });
 });

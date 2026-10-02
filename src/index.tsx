@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 // Top-level commands whose module parses its own arguments (module-commands.ts).
-const MODULE_COMMANDS = ["chief", "fold", "compass"];
+const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics"];
 
 interface Args {
   vaultPath: string | null;
@@ -804,6 +804,10 @@ USAGE
                               the Compass (build/compass.md): mission, values, roles,
                               goals, rules, every line in your words; bootstrap
                               drafts proposed lines from the vault, quote per line
+  prevail metrics scan [--backfill]|compute|sources|list|series <id>|rhythm|glance --json
+                              metrics from what you already do: AI tools, git, task
+                              boards, loops, decisions, prompts, trips, watch history,
+                              card statements; each with a tier, coverage and sources
   prevail manifest get|set <domain> --json
                               read/merge a domain's manifest (engine JSON API)
   prevail chat --domain <d> --json
@@ -5716,7 +5720,15 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
         ai = { ms: r.ms, tools: Object.fromEntries(Object.entries(r.tools).map(([k, v]) => [k, { shape: v.shape, events: v.events }])) };
       } catch (e) { ai = { error: String(e).slice(0, 200) }; }
     }
-    process.stdout.write(`${JSON.stringify({ ...result, ai })}\n`);
+    // And this Mac's git repos into the per-host git events (Metrics M1).
+    let gitScan: unknown = null;
+    if (!args.includes("--no-git")) {
+      try {
+        const { scanGit } = await import("./metrics.ts");
+        gitScan = scanGit(vault);
+      } catch (e) { gitScan = { error: String(e).slice(0, 200) }; }
+    }
+    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {

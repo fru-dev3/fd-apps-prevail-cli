@@ -570,6 +570,7 @@ const dayOf = (ts: number) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+const MIN_TS = Date.UTC(2000, 0, 1);
 const tokTotal = (r: AiRecord) => (r.t ? r.t.in + r.t.out + r.t.cr + r.t.cw + r.t.cw1h : 0);
 
 /**
@@ -582,7 +583,9 @@ const tokTotal = (r: AiRecord) => (r.t ? r.t.in + r.t.out + r.t.cr + r.t.cw + r.
 export function toEvents(tool: string, records: AiRecord[], host: string): AiEvent[] {
   const best = new Map<string, AiRecord>();
   for (const r of records) {
-    if (!r.ts) continue;
+    // A record with no usable time (zero, or a bad conversion) is dropped,
+    // so it can never land in a "0-12-31" month file.
+    if (!r.ts || r.ts < MIN_TS) continue;
     const had = best.get(r.k);
     if (!had || tokTotal(r) > tokTotal(had)) best.set(r.k, r);
   }
@@ -643,7 +646,7 @@ function monthsToWrite(now: number): string[] {
  * each adapter saw; also written to build/_meta/apps/adapters.<host>.json so
  * an unknown shape shows up as a health problem, never as silent zeros.
  */
-export function scanAiUsage(vault: string, opts: { roots?: Roots; now?: number; host?: string; only?: string[] } = {}): ScanReport {
+export function scanAiUsage(vault: string, opts: { roots?: Roots; now?: number; host?: string; only?: string[]; backfill?: boolean } = {}): ScanReport {
   const t0 = Date.now();
   const roots = opts.roots ?? defaultRoots();
   const host = opts.host ?? hostSlug();
@@ -671,7 +674,11 @@ export function scanAiUsage(vault: string, opts: { roots?: Roots; now?: number; 
     let written = 0;
     if (res.health.present) {
       const dir = join(eventsDir(vault), tool);
-      for (const m of months) {
+      // A backfill also writes older months this host has no file for yet
+      // (older months are otherwise frozen as written).
+      const want = new Set(months);
+      if (opts.backfill) for (const e of events) if (!existsSync(join(dir, `${monthOf(e.ts)}.${host}.jsonl`))) want.add(monthOf(e.ts));
+      for (const m of want) {
         const rows = events.filter((e) => monthOf(e.ts) === m);
         const file = join(dir, `${m}.${host}.jsonl`);
         if (!rows.length && !existsSync(file)) continue;

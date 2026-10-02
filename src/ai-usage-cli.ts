@@ -1,6 +1,9 @@
 // `prevail ai` - AI tool usage from the tools' own local records.
 //
-//   prevail ai scan [--only claude,codex] [--json]   read every adapter now
+//   prevail ai scan [--only claude,codex] [--backfill] [--json]
+//                                                    read every adapter now;
+//                                                    --backfill also writes older
+//                                                    months that have no file yet
 //   prevail ai usage [--month YYYY-MM] [--tool t] [--json]
 //                                                    this month across every host
 //   prevail ai tools [--json]                        adapters' health and tools
@@ -26,7 +29,7 @@ export async function aiCommand(args: string[], vault: string): Promise<number> 
 
   if (sub === "scan") {
     const only = get("--only")?.split(",").map((s) => s.trim()).filter(Boolean);
-    const r = scanAiUsage(vault, only ? { only } : {});
+    const r = scanAiUsage(vault, { ...(only ? { only } : {}), backfill: args.includes("--backfill") });
     if (json) out(r);
     else {
       console.log(`ai scan on ${r.host} (${r.ms} ms), months ${r.months.join(", ")}`);

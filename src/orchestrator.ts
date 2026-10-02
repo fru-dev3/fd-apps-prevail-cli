@@ -24,7 +24,7 @@
 import { join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { vwriteFile } from "./vault-session.ts";
+import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis, type AvailableCli } from "./cli-bridge.ts";
 import { scanCommunityApps } from "./vault.ts";
 import { loadSkillsForConnector, packForSkill, runSkillPackWithFallback } from "./connector-skills.ts";
@@ -39,7 +39,10 @@ export type PlaybookStep =
   // output: the file (in its domain, {date} allowed) the step must write; it
   // then counts as done only when that file exists, and later steps read it.
   | { kind: "agent"; goal: string; domain?: string; web?: boolean; label?: string; output?: string }
-  | { kind: "synthesize"; domain: string; output: string; instruction: string; label?: string };
+  | { kind: "synthesize"; domain: string; output: string; instruction: string; label?: string }
+  // The week's metrics glance, computed by code (never written by a model),
+  // to `output`; with appendTo, also added to the end of that file.
+  | { kind: "glance"; domain: string; output: string; appendTo?: string; label?: string };
 
 export interface Playbook {
   id: string;
@@ -87,6 +90,7 @@ function stepLabel(step: PlaybookStep, i: number): string {
   if (step.label) return step.label;
   if (step.kind === "skill") return `${step.app}:${step.skill}`;
   if (step.kind === "agent") return `agent: ${step.goal.slice(0, 48)}`;
+  if (step.kind === "glance") return `glance → ${step.domain}/${step.output}`;
   return `synthesize → ${step.domain}/${step.output}`;
 }
 
@@ -130,6 +134,9 @@ export async function runPlaybook(
         collected.push(...res.outputs);
       } else if (step.kind === "agent") {
         await runAgentStep(step, ctx, cli, runDir, collected, res);
+        collected.push(...res.outputs);
+      } else if (step.kind === "glance") {
+        await runGlanceStep(step, ctx, res);
         collected.push(...res.outputs);
       } else {
         await runSynthesizeStep(step, ctx, cli, collected, res);
@@ -229,6 +236,28 @@ async function runSynthesizeStep(step: Extract<PlaybookStep, { kind: "synthesize
   await runChatTurn({ prompt, cwd: domainDir, cli, model: ctx.model || "", isFirst: true, bare: false, act: true, webAccess: "deny", signal: ctx.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS), maxOutputChars: 4000 });
   if (existsSync(outAbs)) { res.ok = true; res.outputs.push(outAbs); res.note = `wrote ${output}`; }
   else { res.note = "synthesis produced no file"; }
+}
+
+async function runGlanceStep(step: Extract<PlaybookStep, { kind: "glance" }>, ctx: OrchestratorCtx, res: StepResult): Promise<void> {
+  const gate = gateAction(`write summary document ${step.output}`, { vault: ctx.vault, autonomousActs: ctx.autonomousActs });
+  res.decision = gate.decision;
+  if (gate.decision !== "auto") { res.note = gate.reason ?? gate.decision; return; }
+  const domainDir = safeDomainDir(ctx.vault, step.domain);
+  const output = expandOutput(step.output);
+  const outAbs = resolve(domainDir, output.replace(/^\/+/, ""));
+  const appendAbs = step.appendTo ? resolve(domainDir, expandOutput(step.appendTo).replace(/^\/+/, "")) : "";
+  if (!outAbs.startsWith(domainDir) || (appendAbs && !appendAbs.startsWith(domainDir))) { res.note = "refusing to write outside the domain"; return; }
+  const { computeMetrics, glance, glanceMarkdown } = await import("./metrics.ts");
+  const md = glanceMarkdown(glance(await computeMetrics(ctx.vault)));
+  mkdirSync(dirname(outAbs), { recursive: true });
+  vwriteFile(outAbs, md);
+  res.outputs.push(outAbs);
+  if (appendAbs && existsSync(appendAbs)) {
+    const cur = vreadFile(appendAbs);
+    if (!cur.includes("## This week in numbers")) vwriteFile(appendAbs, `${cur.replace(/\s*$/, "")}\n\n${md}`);
+  }
+  res.ok = true;
+  res.note = `wrote ${output}${appendAbs && existsSync(appendAbs) ? `, added to ${expandOutput(step.appendTo!)}` : ""}`;
 }
 
 function safeDomainDir(vault: string, domain: string): string {

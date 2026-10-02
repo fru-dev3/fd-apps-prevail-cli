@@ -420,7 +420,19 @@ async function learnPass(cfg: LearnConfig): Promise<{ domains: number; lines: nu
   // "Across your life" (and entity pages). Once a day per target, and a no-op
   // on a client machine: consolidate() checks the role itself.
   try { consolidate(root); } catch { /* non-fatal */ }
+  // Metrics: once a day, on the hub only, every source into the daily points
+  // (any Mac can still compute on demand; the hub keeps them fresh).
+  try { await dailyMetrics(root); } catch { /* non-fatal */ }
   return { domains, lines };
+}
+
+async function dailyMetrics(root: string, now = Date.now()): Promise<void> {
+  const { readMachineRole } = await import("./config.ts");
+  if (readMachineRole() !== "hub") return;
+  const { metricsDir, computeMetrics } = await import("./metrics.ts");
+  const stamp = join(metricsDir(root), "catalog.json");
+  try { if (now - statSync(stamp).mtimeMs < 20 * 3600_000) return; } catch { /* never computed */ }
+  await computeMetrics(root, { now });
 }
 
 // The daemon loop: distill on an interval until SIGINT.
