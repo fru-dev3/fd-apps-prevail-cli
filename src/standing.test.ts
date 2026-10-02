@@ -12,6 +12,7 @@ import { approvePendingAct, denyPendingAct, OPERATOR_TOOL, readPendingActs } fro
 import { setAutonomyState, setPolicyFor } from "./autonomy.ts";
 import { fireEventTriggers, loopsOnce, triggerMatches } from "./daemon-loops.ts";
 import { markSeen, playbookInbox, setTrigger } from "./playbooks.ts";
+import { runtimePath } from "./path-safety.ts";
 import { specialistFacts } from "./specialist-facts.ts";
 import { topCandidates } from "./said.ts";
 
@@ -216,5 +217,14 @@ describe("loops run playbooks; the Sentinel fires them on events", () => {
     expect(playbookInbox(V).map((x) => [x.trigger, x.event])).toEqual([["event", "Renew the foo policy 2026-11-01"]]);
     expect(triggerMatches("mission", "mission/foo-trip", { kind: "mission", domain: "foo", mission: "foo-trip", text: "Foo trip has gone quiet" })).toBe(true);
     expect(triggerMatches("admin", "general", { kind: "admin", domain: "bar", text: "x" })).toBe(true);
+  });
+
+  test("an Inbox result names the specialists each step staffed, so their faces show", () => {
+    const dir = join(runtimePath(V, "_meta"), "jobs", "loop-foo-faces");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ runId: "loop-foo-faces", playbook: "foo-weekly", ok: true, note: "", trigger: "schedule", ts: 5,
+      steps: [{ label: "researcher + scout: foo", ok: true, decision: "auto", note: "", specialists: ["researcher", "scout"] }, { label: "a task", ok: true, decision: "auto", note: "" }] }));
+    const r = playbookInbox(V).find((x) => x.runId === "loop-foo-faces")!;
+    expect(r.steps.map((x) => x.specialists ?? [])).toEqual([["researcher", "scout"], []]);
   });
 });

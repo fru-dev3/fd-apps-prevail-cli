@@ -76,6 +76,8 @@ export interface StepResult {
   ok: boolean;
   note: string;
   outputs: string[];   // absolute paths produced
+  /** The specialists a specialist step staffed (their faces on the Inbox result). */
+  specialists?: string[];
 }
 
 export interface PlaybookRunResult {
@@ -154,7 +156,8 @@ export async function runPlaybook(
     const label = stepLabel(step, i);
     emit(ctx, { phase: "step", index: i, kind: step.kind, label });
 
-    const res: StepResult = { index: i, kind: step.kind, label, decision: "auto", ok: false, note: "", outputs: [] };
+    const res: StepResult = { index: i, kind: step.kind, label, decision: "auto", ok: false, note: "", outputs: [],
+      ...(step.kind === "specialist" ? { specialists: (step.specialists ?? (step.specialist ? [step.specialist] : [])).map((x) => x.toLowerCase()) } : {}) };
     try {
       if (step.kind === "skill") {
         await runSkillStep(step, ctx, res);

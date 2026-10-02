@@ -150,7 +150,7 @@ export function adoptPlaybook(vault: string, id: string): Playbook {
 
 // ── Results of scheduled and event runs land in the Inbox ───────────────────
 
-export interface InboxResult { runId: string; playbook: string; name: string; trigger: "schedule" | "event"; event?: string; domain?: string; ok: boolean; note: string; ts: number; waiting: number; steps: { label: string; ok: boolean; decision: string; note: string }[] }
+export interface InboxResult { runId: string; playbook: string; name: string; trigger: "schedule" | "event"; event?: string; domain?: string; ok: boolean; note: string; ts: number; waiting: number; steps: { label: string; ok: boolean; decision: string; note: string; specialists?: string[] }[] }
 const seenPath = (vault: string) => join(runtimePath(vault, "_meta"), "jobs", "inbox-seen.json");
 function readSeen(vault: string): string[] { try { return JSON.parse(readFileSync(seenPath(vault), "utf8")) as string[]; } catch { return []; } }
 
@@ -163,9 +163,9 @@ export function playbookInbox(vault: string, limit = 30): InboxResult[] {
   for (const id of readdirSync(root)) {
     if (seen.has(id) || !/^(loop|event)-/.test(id)) continue;
     try {
-      const r = JSON.parse(readFileSync(join(root, id, "run.json"), "utf8")) as { runId: string; playbook: string; name?: string; ok: boolean; note: string; steps: { label: string; ok: boolean; decision: string; note: string }[]; trigger?: string; event?: string; domain?: string; ts?: number };
+      const r = JSON.parse(readFileSync(join(root, id, "run.json"), "utf8")) as { runId: string; playbook: string; name?: string; ok: boolean; note: string; steps: { label: string; ok: boolean; decision: string; note: string; specialists?: string[] }[]; trigger?: string; event?: string; domain?: string; ts?: number };
       if (r.trigger !== "schedule" && r.trigger !== "event") continue;
-      out.push({ runId: r.runId, playbook: r.playbook, name: r.name ?? r.playbook, trigger: r.trigger, ...(r.event ? { event: r.event } : {}), ...(r.domain ? { domain: r.domain } : {}), ok: r.ok, note: r.note, ts: r.ts ?? statSync(join(root, id, "run.json")).mtimeMs, waiting: r.steps.filter((x) => x.decision === "ask").length, steps: r.steps.map((x) => ({ label: x.label, ok: x.ok, decision: x.decision, note: x.note.slice(0, 300) })) });
+      out.push({ runId: r.runId, playbook: r.playbook, name: r.name ?? r.playbook, trigger: r.trigger, ...(r.event ? { event: r.event } : {}), ...(r.domain ? { domain: r.domain } : {}), ok: r.ok, note: r.note, ts: r.ts ?? statSync(join(root, id, "run.json")).mtimeMs, waiting: r.steps.filter((x) => x.decision === "ask").length, steps: r.steps.map((x) => ({ label: x.label, ok: x.ok, decision: x.decision, note: x.note.slice(0, 300), ...(Array.isArray(x.specialists) && x.specialists.length ? { specialists: x.specialists.filter((y) => typeof y === "string").slice(0, 6) } : {}) })) });
     } catch { /* not a finished run */ }
   }
   return out.sort((a, b) => b.ts - a.ts).slice(0, limit);
