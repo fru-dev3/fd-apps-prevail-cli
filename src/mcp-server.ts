@@ -1146,7 +1146,7 @@ export async function tReadMetrics(args: Record<string, unknown>, vaultPath: str
   const m = await import("./metrics.ts");
   const c = await m.computeMetrics(vaultPath);
   if (args.format === "list") return JSON.stringify(m.listMetrics(c, vaultPath), null, 2);
-  return m.glanceMarkdown(m.glance(c));
+  return m.glanceMarkdown(m.glance(c, { ids: m.glanceIds(vaultPath) }));
 }
 
 export async function tMetricSeries(args: Record<string, unknown>, vaultPath: string): Promise<string> {

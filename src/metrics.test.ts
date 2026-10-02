@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  baseline, CATALOG, computeMetrics, glance, glanceMarkdown, listMetrics, readRegistry, rhythm, scanGit, series,
+  baseline, CATALOG, computeMetrics, glance, glanceIds, glanceMarkdown, listMetrics, readRegistry, rhythm, scanGit, series,
   spendEvents, taskEvents, tripEvents, watchEvents, weekOf, weekly,
 } from "./metrics.ts";
 import { runPlaybook } from "./orchestrator.ts";
@@ -164,6 +164,12 @@ describe("metrics, baselines and the glance", () => {
     expect(series(c, "m-commits", "week", 2)).toEqual([{ date: "2026-09-21", value: 0 }, { date: "2026-09-28", value: 2 }]);
     expect(rhythm(c, 30).filter((d) => d.kind === "commit").map((d) => [d.day, d.hour])).toEqual([["2026-09-29", 10], ["2026-09-30", 22]]);
     expect(listMetrics(c, V).length).toBe(CATALOG.length);
+    // Pinning in metrics.md decides what the glance shows.
+    expect(glanceIds(V)).toEqual(["m-ai-spend", "m-shipped", "m-commits", "m-tasks-done", "m-prompts", "m-trips"]);
+    const md0 = readFileSync(join(V, "build", "metrics.md"), "utf8");
+    writeFileSync(join(V, "build", "metrics.md"), md0.replace("## Pinned\n", "## Pinned\n\n- Watch time ~id:m-watch-minutes ~per:week\n- Not a metric ~id:m-nope\n"));
+    expect(glanceIds(V)).toEqual(["m-watch-minutes"]);
+    expect(glance(c, { ids: glanceIds(V) }).rows.map((r) => r.id)).toEqual(["m-watch-minutes"]);
   }, { timeout: 30_000 } as never);
 
   test("a quiet week against a steady normal is the surprise", async () => {

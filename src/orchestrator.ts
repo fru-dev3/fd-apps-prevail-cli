@@ -247,8 +247,8 @@ async function runGlanceStep(step: Extract<PlaybookStep, { kind: "glance" }>, ct
   const outAbs = resolve(domainDir, output.replace(/^\/+/, ""));
   const appendAbs = step.appendTo ? resolve(domainDir, expandOutput(step.appendTo).replace(/^\/+/, "")) : "";
   if (!outAbs.startsWith(domainDir) || (appendAbs && !appendAbs.startsWith(domainDir))) { res.note = "refusing to write outside the domain"; return; }
-  const { computeMetrics, glance, glanceMarkdown } = await import("./metrics.ts");
-  const md = glanceMarkdown(glance(await computeMetrics(ctx.vault)));
+  const { computeMetrics, glance, glanceIds, glanceMarkdown } = await import("./metrics.ts");
+  const md = glanceMarkdown(glance(await computeMetrics(ctx.vault), { ids: glanceIds(ctx.vault) }));
   mkdirSync(dirname(outAbs), { recursive: true });
   vwriteFile(outAbs, md);
   res.outputs.push(outAbs);

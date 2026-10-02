@@ -466,7 +466,8 @@ export function readRegistry(vault: string): Map<string, { status: Lifecycle; to
     if (!/^- \S/.test(l)) continue;
     const tokens: Record<string, string> = {};
     for (const m of l.matchAll(/~([a-z][a-z0-9_-]*):(\S+)/g)) tokens[m[1]!] = m[2]!;
-    if (tokens.id) out.set(tokens.id, { status, tokens });
+    // A metric listed twice keeps its first line (Pinned comes first).
+    if (tokens.id && !out.has(tokens.id)) out.set(tokens.id, { status, tokens });
   }
   return out;
 }
@@ -591,6 +592,12 @@ export interface GlanceRow {
 export interface Glance { week: string; through: string; rows: GlanceRow[]; surprise: string | null; computed: number }
 
 const GLANCE_IDS = ["m-ai-spend", "m-shipped", "m-commits", "m-tasks-done", "m-prompts", "m-trips"];
+
+/** What the glance shows: the metrics pinned in metrics.md (at most five), else the default set. */
+export function glanceIds(vault: string): string[] {
+  const pinned = [...readRegistry(vault).entries()].filter(([id, r]) => r.status === "pinned" && CATALOG.some((m) => m.id === id)).map(([id]) => id);
+  return pinned.length ? pinned.slice(0, 5) : GLANCE_IDS;
+}
 
 function coverageOf(m: MetricDef, c: Computed, week?: string): { coverage: string; citations: { file: string; note?: string }[] } {
   const src = m.srcs.includes("*") ? "ai" : m.srcs[0] === "capture" ? "prompts" : m.srcs[0]!;
@@ -721,7 +728,7 @@ export async function metricsCommand(argv: string[], vault: string): Promise<num
     return 0;
   }
   if (sub === "rhythm") { const r = rhythm(c, Number(args.get("days") ?? 30) || 30); if (args.json) out(r); else console.log(`${r.length} dots`); return 0; }
-  if (sub === "glance") { const g = glance(c, { week: args.get("week") }); if (args.json) out(g); else process.stdout.write(glanceMarkdown(g)); return 0; }
+  if (sub === "glance") { const g = glance(c, { week: args.get("week"), ids: glanceIds(vault) }); if (args.json) out(g); else process.stdout.write(glanceMarkdown(g)); return 0; }
   console.error("usage: prevail metrics scan [--backfill] | compute | sources | list | series <id> [--per day|week] | rhythm | glance [--week YYYY-MM-DD] [--json]");
   return 1;
 }
