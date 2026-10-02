@@ -34,6 +34,7 @@ import { listJobs } from "./jobs.ts";
 import { openCommitments, readFiled, type HeaderLite, type OpenCommitment } from "./commitments.ts";
 import { readMailHeaders } from "./source-sync.ts";
 import { computeRadarSync, readRadar } from "./radar.ts";
+import { dayLine } from "./time.ts";
 import { missionToday } from "./mission-progress.ts";
 import { checkinFor, reviewWeek } from "./review.ts";
 import { dayOf, weekOf } from "./metrics.ts";
@@ -248,7 +249,8 @@ export function composeToday(vault: string, opts: { now?: number; refresh?: bool
     items: three,
     fallingBehind: top ? { text: `${top.text}: ${top.evidence}`, key: top.key, kind: top.kind, count: radar.items.length } : overdue ? { text: `${overdue.title}: ${overdue.why}`, ref: overdue.ref } : null,
     decisionDue: dec ? { question: dec.question, due: dec.due, domain: dec.domain, slug: dec.slug, ...(dec.recommendation ? { recommendation: dec.recommendation } : {}) } : null,
-    yourDay: { connected: false, note: "No calendar is connected yet, so your day is not on the card." },
+    // Today T5: the calendar kept on this Mac, or an honest "not connected".
+    yourDay: dayLine(vault, now),
     alsoDue: rest.filter((x) => x.due && daysBetween(date, x.due) <= 7).slice(0, 12),
     feedback,
     // No promise due this week is missing from Today: the ones not among the three are listed.

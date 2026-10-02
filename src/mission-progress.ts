@@ -223,7 +223,8 @@ export async function approveEvent(vault: string, slug: string, id: string, writ
   return next;
 }
 
-async function gwsHold(e: PendingEvent): Promise<{ ok: boolean; id?: string; error?: string }> {
+/** A tentative hold on the user's own primary calendar through the gws CLI (Today T5 holds use it too). */
+export async function gwsHold(e: PendingEvent): Promise<{ ok: boolean; id?: string; error?: string }> {
   try {
     const cs = await import("./calendar-sync.ts");
     const gws = cs.resolveGwsBinary();

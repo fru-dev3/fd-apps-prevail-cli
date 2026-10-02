@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 // Top-level commands whose module parses its own arguments (module-commands.ts).
-const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources", "commitments", "radar", "whereis"];
+const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources", "commitments", "radar", "whereis", "time"];
 
 interface Args {
   vaultPath: string | null;

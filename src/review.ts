@@ -107,6 +107,8 @@ export interface ReviewCard {
   quarterly?: boolean;
   /** Metrics M5: the running n-of-1 experiment's arm this week. */
   experiment?: { id: string; arm: "A" | "B"; text: string } | null;
+  /** Today T5: this week's calendar by value, next week against capacity, holds that ask, drafted declines. */
+  time?: Awaited<ReturnType<typeof import("./time.ts").timeReview>> | null;
 }
 
 /** When the user last did anything in a domain: a chat, a task change, a note from another domain. */
@@ -183,6 +185,7 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     missions: await (async () => { try { return (await import("./mission-progress.ts")).missionReviewLines(vault, now); } catch { return []; } })(),
     ...(await initiativeLines(vault, now)),
     experiment: await (async () => { try { return (await import("./stories.ts")).experimentThisWeek(vault, now); } catch { return null; } })(),
+    time: await (async () => { try { return await (await import("./time.ts")).timeReview(vault, now); } catch { return null; } })(),
     ...(await qualitativeLines(vault, c, week, now)),
   };
 }
@@ -243,6 +246,12 @@ export function reviewText(r: ReviewCard): string {
   for (const m of r.missions ?? []) out.push(`Mission: ${m}`);
   for (const x of r.initiatives ?? []) out.push(`Initiative: ${x.explanation}${x.proposal ? ` ${x.proposal}` : ""}`);
   if (r.experiment) out.push(`Experiment: ${r.experiment.text}`);
+  if (r.time) {
+    if (!r.time.thisWeek.connected) out.push(`Time: ${r.time.thisWeek.note}`);
+    else { out.push(`Time: ${r.time.thisWeek.hours} h on the calendar, ${r.time.thisWeek.meetings} in meetings, ${r.time.thisWeek.focus} focus.`); for (const l of r.time.thisWeek.lines) out.push(`- ${l}`); }
+    if (r.time.warning) out.push(`Next week: ${r.time.warning}`);
+    if (r.time.holds.length) out.push(`${r.time.holds.length} protected block${r.time.holds.length === 1 ? "" : "s"} for next week wait for your yes.`);
+  }
   if (r.quarterly) out.push("The quarterly initiative review is due: keep, switch or drop each one (prevail compass paths review).");
   if (r.radar?.length) { out.push("Falling behind:"); for (const x of r.radar) out.push(`- ${x.text} (${x.evidence})`); }
   for (const w of r.waited) out.push(`Waited for this review: ${w.text}`);

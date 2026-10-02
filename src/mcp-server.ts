@@ -325,6 +325,11 @@ export async function runMcpServer(
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
     },
     {
+      name: "read_time",
+      description: "Time against values (Today T5): this week's calendar hours by Compass value against each value's rank, meetings, focus and after-hours, next week against the user's capacity (a warning when over), protected blocks waiting for a yes and drafted declines (never sent). Says plainly when no calendar is connected.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
+    },
+    {
       name: "weekly_review",
       description: "This week's review card: what moved and drifted against the user's own normal, the metrics glance, Compass lines heard in chat awaiting a yes, metric proposals, and whether the weekly 1-5 calm check-in is done.",
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
@@ -809,6 +814,13 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const t = await import("./today.ts");
       const c = t.composeToday(vaultPath);
       return wrapText(args.format === "json" ? JSON.stringify(c, null, 2) : t.todayText(c));
+    }
+    case "read_time": {
+      const t = await import("./time.ts");
+      const r = await t.timeReview(vaultPath);
+      if (args.format === "json") return wrapText(JSON.stringify(r, null, 2));
+      const w = r.thisWeek;
+      return wrapText([w.connected ? `This week: ${w.hours} h on the calendar, ${w.meetings} h of meetings, ${w.focus} h focus, ${w.afterHours} h after hours.` : w.note ?? "", ...w.byValue.map((v) => `- ${v.title}: ${v.hours} h (${v.share}%, rank ${v.rank})`), ...w.lines, r.warning ? `Next week: ${r.warning}` : "", ...r.holds.map((h) => `Waiting for a yes: ${h.title}, ${h.start}`), ...r.declines.map((d) => `Drafted, yours to send: ${d.body}`)].filter(Boolean).join("\n"));
     }
     case "weekly_review": {
       const r = await import("./review.ts");
