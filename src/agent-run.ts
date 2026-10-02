@@ -278,7 +278,7 @@ export async function runAgentJson(opts: AgentRunOptions): Promise<number> {
     type: "usage",
     thread,
     ts: doneTs,
-    usage: { input_tokens: Math.ceil(goal.length / 4), output_tokens: Math.ceil(finalReply.length / 4) },
+    usage: { input_tokens: Math.ceil(goal.length / 4), output_tokens: Math.ceil(finalReply.length / 4), estimated: true },
   });
 
   // Audit transcript (best-effort): one line per agent run, alongside the

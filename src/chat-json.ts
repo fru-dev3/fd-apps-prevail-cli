@@ -87,6 +87,10 @@ export interface ChatEvent {
     input_tokens?: number;
     output_tokens?: number;
     cost_usd?: number;
+    // True when the counts are a character-based estimate (about 4 characters
+    // a token), not the runtime's own numbers. The real per-turn tokens come
+    // from the runtime's transcript (`prevail ai usage`).
+    estimated?: boolean;
   };
   engine?: string;
   error?: string;
@@ -251,6 +255,7 @@ function estimateUsage(
     output_tokens: outputTokens,
     // Round to a sane number of significant digits.
     cost_usd: Math.round(cost * 1e6) / 1e6,
+    estimated: true,
   };
 }
 

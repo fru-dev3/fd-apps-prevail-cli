@@ -1,7 +1,7 @@
 // System Activity log — the persistent record of everything Prevail does on its
 // own, so the desktop's Automation tab can show a full history (not just the
 // ephemeral "running now" indicator). One append-only JSONL at
-// <vault>/_meta/activity.jsonl; every autonomous producer (loop runs, action
+// <vault>/_meta/activity.<host>.jsonl; every autonomous producer (loop runs, action
 // executions, tasks filed by loops, briefings, app syncs) appends one line.
 //
 // Append is encryption-aware (vappendLine) so it stays consistent with the rest
@@ -10,6 +10,7 @@
 import { join } from "node:path";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { runtimePath } from "./path-safety.ts";
+import { hostSlug } from "./capture.ts";
 import { vappendLine, vrotateLedgerPrefix } from "./vault-session.ts";
 
 // Retention: the activity ledger is append-only and, unlike _intents.jsonl, was
@@ -40,8 +41,12 @@ export interface ActivityEvent {
   ref?: string;             // loop id / skill id / task text — to jump to the source
 }
 
+// One stream per host (activity.<host>.jsonl), like the capture streams: a
+// machine only ever appends its own file, so syncing build/_meta between
+// Macs never conflicts and every Mac sees the hub's loops. The old shared
+// activity.jsonl is read-only history; readers merge every activity*.jsonl.
 export function activityFile(vaultRoot: string): string {
-  return join(runtimePath(vaultRoot, "_meta"), "activity.jsonl");
+  return join(runtimePath(vaultRoot, "_meta"), `activity.${hostSlug()}.jsonl`);
 }
 
 // Append one event. Swallows all errors — a failed log must never fail the run.
@@ -64,7 +69,7 @@ export function logActivity(vaultRoot: string, ev: Omit<ActivityEvent, "ts"> & {
     // the head into the archive once the live file grows past the cap.
     try {
       if (statSync(file).size > ACTIVITY_MAX_BYTES) {
-        vrotateLedgerPrefix(file, join(dir, "activity.archive.jsonl"), ACTIVITY_MAX_BYTES, ACTIVITY_KEEP_TAIL_BYTES);
+        vrotateLedgerPrefix(file, join(dir, `activity.${hostSlug()}.archive.jsonl`), ACTIVITY_MAX_BYTES, ACTIVITY_KEEP_TAIL_BYTES);
       }
     } catch { /* rotation is best-effort */ }
   } catch {
