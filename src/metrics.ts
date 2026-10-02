@@ -176,13 +176,16 @@ export function scanGit(vault: string, opts: { roots?: string[]; host?: string; 
 
 // ── Reading machine events (every host) ─────────────────────────────────────
 
+/** Events that stay on this Mac (sources marked local-only): never synced. */
+export function localEventsRoot(vault: string): string { return join(runtimePath(vault, "_meta"), "events-local"); }
+
 export function readMachineEvents(vault: string, fromDay: string): { events: MetricEvent[]; files: Record<string, string[]> } {
-  const root = eventsRoot(vault);
   const events: MetricEvent[] = [];
   const files: Record<string, string[]> = {};
-  let srcs: string[] = [];
-  try { srcs = readdirSync(root); } catch { return { events, files }; }
   const fromMonth = fromDay.slice(0, 7);
+  for (const root of [eventsRoot(vault), localEventsRoot(vault)]) {
+  let srcs: string[] = [];
+  try { srcs = readdirSync(root); } catch { continue; }
   for (const src of srcs) {
     let fs: string[] = [];
     try { fs = readdirSync(join(root, src)).filter((f) => f.endsWith(".jsonl") && f.slice(0, 7) >= fromMonth); } catch { continue; }
@@ -193,6 +196,7 @@ export function readMachineEvents(vault: string, fromDay: string): { events: Met
         try { const e = JSON.parse(l) as MetricEvent; if (e.ts >= fromDay) events.push({ ...e, src: e.src || src, file: relative(vault, join(root, src, f)) }); } catch { /* skip */ }
       }
     }
+  }
   }
   return { events, files };
 }
@@ -444,11 +448,16 @@ export const CATALOG: MetricDef[] = [
   { id: "m-trips", title: "Trips", family: "Exploration", per: "month", unit: "count", tier: "measured", srcs: ["trips"], kinds: ["trip.activity"], documentary: true, from: "the trip atlas (dated trip folders)" },
   { id: "m-watch-minutes", title: "Watch time", family: "Learning and attention", per: "week", unit: "minutes", tier: "measured", srcs: ["watch"], kinds: ["watch.video"], value: (e) => Number(e.attrs.minutes ?? 0), from: "watch-history scrapes" },
   { id: "m-spend", title: "Card spend", family: "Money", per: "week", unit: "usd", tier: "measured", srcs: ["spend"], kinds: ["money.spend"], value: (e) => Number(e.attrs.usd ?? 0), from: "card statement exports in your app folders" },
+  { id: "m-screen-minutes", title: "Screen time", family: "Time", per: "week", unit: "minutes", tier: "measured", srcs: ["apps"], kinds: ["app.focus"], value: (e) => Number(e.attrs.minutes ?? 0), from: "minutes per app in front, from Screen Time or Prevail's live focus (Mac and iPhone)" },
+  { id: "m-phone-minutes", title: "Phone screen time", family: "Time", per: "week", unit: "minutes", tier: "measured", srcs: ["apps"], kinds: ["app.focus"], value: (e) => (e.attrs.device && e.attrs.device !== "mac" ? Number(e.attrs.minutes ?? 0) : 0), from: "Screen Time minutes synced from the iPhone (Screen Time sharing on)" },
+  { id: "m-web-visits", title: "Web visits", family: "Learning and attention", per: "week", unit: "count", tier: "measured", srcs: ["web"], kinds: ["web.visits"], from: "visits per website domain from your browsers (no addresses; health, finance, adult and dating never counted)" },
   { id: "m-calm", title: "Weekly calm", family: "Inner life", per: "week", unit: "score", tier: "asked", srcs: ["checkins"], kinds: ["checkin.calm"], value: (e) => Number(e.attrs.calm ?? 0), avg: true, from: "your weekly 1-5 check-in" },
 ];
 
-// Sources that are not AI tools, though their events live beside them.
-const NOT_AI = ["git", "checkins", "stated"];
+// The AI tools' own event folders (ai-usage.ts adapters); every other
+// machine source (git, check-ins, apps, web, gmail ...) is its own source.
+export const AI_SRCS = new Set(["claude", "codex", "opencode", "hermes", "antigravity", "cursor", "aionui", "wispr", "glyph"]);
+const NOT_AI = (src: string) => !AI_SRCS.has(src);
 
 /**
  * Learned metrics: a metrics.md line with ~kind: (and ~src:) counts those
@@ -528,7 +537,7 @@ export interface Computed {
   trips: { date: string; region: string; activity: string; file: string }[];
 }
 
-const matches = (m: MetricDef, e: MetricEvent) => m.kinds.includes(e.kind) && (m.srcs.includes("*") ? !["capture", "tasks", "loops", "decisions", "trips", "watch", "spend", ...NOT_AI].includes(e.src) : m.srcs.includes(e.src));
+const matches = (m: MetricDef, e: MetricEvent) => m.kinds.includes(e.kind) && (m.srcs.includes("*") ? AI_SRCS.has(e.src) : m.srcs.includes(e.src));
 
 export function dailyPoints(m: MetricDef, events: MetricEvent[]): Point[] {
   const by = new Map<string, Point>();
@@ -559,15 +568,22 @@ export async function computeMetrics(vault: string, opts: { now?: number; days?:
   const spend = spendEvents(vault);
   const events = [...machine.events, ...tasks.events, ...loops.events, ...decisions.events, ...prompts.events, ...trips.events, ...watch.events, ...spend.events].filter((e) => e.ts >= from);
   const hosts: Record<string, string[]> = {};
-  for (const e of machine.events) { const k = NOT_AI.includes(e.src) ? e.src : "ai"; (hosts[k] ??= []); if (!hosts[k]!.includes(e.host)) hosts[k]!.push(e.host); }
+  for (const e of machine.events) { const k = NOT_AI(e.src) ? e.src : "ai"; (hosts[k] ??= []); if (!hosts[k]!.includes(e.host)) hosts[k]!.push(e.host); }
   const span = (src: string[]) => { const d = events.filter((e) => src.includes(e.src)).map((e) => e.ts).sort(); return d.length ? { first: d[0], last: d[d.length - 1] } : {}; };
-  const aiSrcs = Object.keys(machine.files).filter((s) => !NOT_AI.includes(s));
+  const aiSrcs = Object.keys(machine.files).filter((s) => !NOT_AI(s));
+  // Connected sources (apps, web, gmail, calendar ...): one entry each, with the registry's caveat.
+  const { SOURCES } = await import("./sources.ts");
+  const connected = Object.keys(machine.files).filter((s) => NOT_AI(s) && !["git", "checkins", "stated"].includes(s)).sort().map((src): SourceInfo => {
+    const def = SOURCES.find((d) => d.id === src || d.emits.some((k) => machine.events.some((e) => e.src === src && e.kind === k)));
+    return { id: src, kind: "machine", files: machine.files[src] ?? [], events: machine.events.filter((e) => e.src === src).length, hosts: hosts[src] ?? [], ...(def ? { note: `${def.title}: ${def.reads}${def.localOnly ? "; stays on this Mac" : ""}` } : {}), ...span([src]) };
+  });
   const sources: SourceInfo[] = [
-    { id: "ai", kind: "machine", files: aiSrcs.flatMap((s) => machine.files[s] ?? []), events: machine.events.filter((e) => !NOT_AI.includes(e.src)).length, hosts: hosts.ai ?? [], ...span(aiSrcs) },
+    { id: "ai", kind: "machine", files: aiSrcs.flatMap((s) => machine.files[s] ?? []), events: machine.events.filter((e) => !NOT_AI(e.src)).length, hosts: hosts.ai ?? [], ...span(aiSrcs) },
     { id: "git", kind: "machine", files: machine.files.git ?? [], events: machine.events.filter((e) => e.src === "git").length, hosts: hosts.git ?? [], ...span(["git"]) },
     ...[tasks.info, loops.info, decisions.info, prompts.info, trips.info, watch.info, spend.info].map((i) => ({ ...i, ...span([i.id === "prompts" ? "capture" : i.id]) })),
     { id: "checkins", kind: "machine", files: machine.files.checkins ?? [], events: machine.events.filter((e) => e.src === "checkins").length, hosts: hosts.checkins ?? [], note: "your weekly 1-5, asked once a week", ...span(["checkins"]) },
     { id: "stated", kind: "machine", files: machine.files.stated ?? [], events: machine.events.filter((e) => e.src === "stated").length, hosts: hosts.stated ?? [], note: "numbers you said in chat (counts only)", ...span(["stated"]) },
+    ...connected,
   ];
   const points: Record<string, Point[]> = {};
   const dir = metricsDir(vault);

@@ -11,6 +11,7 @@ export async function runModuleCommand(name: string, args: string[], vault: stri
   if (name === "review") return (await import("./review.ts")).reviewCommand(args, vault);
   if (name === "today") return (await import("./today.ts")).todayCommand(args, vault);
   if (name === "missions" || name === "mission") return (await import("./missions-cli.ts")).missionsCommand(args, vault);
+  if (name === "sources") return (await import("./sources.ts")).sourcesCommand(args, vault);
   if (name === "decide") return (await import("./decision-records.ts")).decideCommand(args, vault);
   console.error(`unknown command: ${name}`);
   return 1;

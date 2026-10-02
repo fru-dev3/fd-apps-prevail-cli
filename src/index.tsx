@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 // Top-level commands whose module parses its own arguments (module-commands.ts).
-const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission"];
+const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources"];
 
 interface Args {
   vaultPath: string | null;
@@ -3044,6 +3044,11 @@ async function appsCommand(a: string[], vaultPath?: string | null): Promise<void
   const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && a[i - 1]!.startsWith("--") && !["--json", "--tools", "--due", "--dry-run", "--apply", "--from-draft"].includes(a[i - 1]!)));
   const sub = pos[0] ?? "list";
   const vault = get("--vault") ?? vaultPath ?? process.env.PREVAIL_VAULT_ROOT ?? readConfig()?.vaultPath ?? (await import("./vault.ts")).resolveDefaultVaultPath();
+  // The stack (apps plan A2 to A4): usage, records, mapping, money, doctor.
+  {
+    const st = await import("./app-stack.ts");
+    if (st.STACK_SUBCOMMANDS.includes(sub)) { process.exitCode = await st.appStackCommand(a, vault); return; }
+  }
   const am = await import("./apps-mirror.ts");
   const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
   const fail = (msg: string, extra: Record<string, unknown> = {}) => {
@@ -5748,7 +5753,18 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
         gitScan = scanGit(vault);
       } catch (e) { gitScan = { error: String(e).slice(0, 200) }; }
     }
-    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan })}\n`);
+    // And this Mac's app and web usage (apps plan A2): Spotlight, browser
+    // domains, Screen Time when Prevail has Full Disk Access, live focus.
+    let appsScanR: unknown = null;
+    if (!args.includes("--no-apps")) {
+      try {
+        const { appsScan } = await import("./app-stack.ts");
+        const { consented } = await import("./sources.ts");
+        const r = appsScan(vault, { consent: (id) => consented(vault, id) });
+        appsScanR = { ms: r.usage.ms, sources: Object.fromEntries(Object.entries(r.usage.sources).map(([k, v]) => [k, v.state])), events: r.usage.events, created: r.records.created.length };
+      } catch (e) { appsScanR = { error: String(e).slice(0, 200) }; }
+    }
+    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {
