@@ -648,7 +648,7 @@ export function glance(c: Computed, opts: { week?: string; ids?: string[] } = {}
 
 export function fmt(v: number, unit: MetricDef["unit"]): string {
   if (unit === "usd") return `$${v >= 100 ? Math.round(v).toLocaleString("en-US") : v.toFixed(2)}`;
-  if (unit === "tokens") return v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : `${Math.round(v / 1e3)}k`;
+  if (unit === "tokens") return v >= 1e9 ? `${(v / 1e9).toFixed(1)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : `${Math.round(v / 1e3)}k`;
   if (unit === "minutes") return `${Math.round(v)} min`;
   return String(Math.round(v * 10) / 10);
 }
