@@ -278,7 +278,7 @@ export async function applyFold(vault: string, plan: FoldPlan): Promise<FoldRece
     const a = archived.find((x) => x.domain === f.domain);
     lines.push(`## ${f.domain}`, "", `Archived to ${a ? relative(domainsRoot, a.to) : "(not archived)"}${a ? `, backup ${a.backup}` : ""}.`, "");
     if (f.loops.length) { lines.push("Loops:"); for (const l of f.loops) lines.push(`- ${l.id}: ${l.to ? `${l.to}/${l.newId}${l.playbook ? ` (playbook ${l.playbook})` : ""}${l.enabled ? "" : ", off"}` : "not carried over"}${l.note ? `. ${l.note}` : ""}`); lines.push(""); }
-    if (f.tasks.length) { lines.push("Open tasks:"); for (const t of f.tasks) lines.push(`- to ${t.to}: ${t.line.replace(/^- \[ \]\s+/, "").slice(0, 120)}`); lines.push(""); }
+    if (f.tasks.length) { lines.push("Open tasks:"); for (const t of f.tasks) lines.push(`- to ${t.to}: ${t.line.replace(/^- \[ \]\s+/, "").replace(/\s*\u2014\s*/g, ", ").slice(0, 120)}`); lines.push(""); }
     const files = f.files.filter((m) => m.how === "copy").length;
     lines.push(`Files: ${files} copied, ${f.files.length - files} merged into General's memory, goals and decisions.`, "");
   }
