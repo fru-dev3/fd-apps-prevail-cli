@@ -5764,12 +5764,17 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
         appsScanR = { ms: r.usage.ms, sources: Object.fromEntries(Object.entries(r.usage.sources).map(([k, v]) => [k, v.state])), events: r.usage.events, created: r.records.created.length };
       } catch (e) { appsScanR = { error: String(e).slice(0, 200) }; }
     }
+    // Once a day: the connection doctor, the stack's cards and the monthly stack review (apps plan A4).
+    let stackR: unknown = null;
+    if (!args.includes("--no-doctor")) {
+      try { stackR = await (await import("./app-doctor.ts")).dailyStackPass(vault); } catch (e) { stackR = { error: String(e).slice(0, 200) }; }
+    }
     // And every connected source that is due (metrics plan M3), if allowed on this Mac.
     let sourcesR: unknown = null;
     if (!args.includes("--no-sources")) {
       try { sourcesR = await (await import("./source-sync.ts")).syncDue(vault); } catch (e) { sourcesR = { error: String(e).slice(0, 200) }; }
     }
-    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, sources: sourcesR })}\n`);
+    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, stack: stackR, sources: sourcesR })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {
@@ -6377,6 +6382,15 @@ async function main() {
     return;
   }
   if (args.doctor) {
+    // `prevail doctor apps`: the connection doctor for the stack (apps plan A4).
+    const di = process.argv.indexOf("doctor");
+    if (process.argv[di + 1] === "apps") {
+      const rest = process.argv.slice(di + 2);
+      const sub = parseJsonSubArgs(rest, args.vaultPath);
+      const vault = sub.vaultPath ?? resolveVault(args.vaultPath);
+      const { appsDoctorCommand } = await import("./app-doctor.ts");
+      process.exit(await appsDoctorCommand(rest, vault, rest.includes("--json")));
+    }
     await doctor({ debug: args.debug });
     return;
   }

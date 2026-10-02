@@ -29,7 +29,10 @@ export interface AppUsage {
   web_visits_30d: number;
   ai_sessions_30d: number;
   last_used?: string;
+  /** The first day of real use in the window (focus, web or AI; a Spotlight last-used date alone says nothing about when it started). */
   first_seen?: string;
+  /** First seen in this Mac's inventory after the baseline. */
+  installed?: string;
   trend: "up" | "down" | "flat" | "new";
   signals: { kind: SignalKind | "ai"; value: string }[];
   hosts: string[];
@@ -60,6 +63,8 @@ export function computeUsage(vault: string, opts: { now?: number; events?: Metri
   const touch = (id: string, e: MetricEvent, kind: SignalKind | "ai", value: string) => {
     const a = get(id);
     if (e.ts >= from) a._days.add(e.ts);
+    if (e.kind !== "app.last_used" && (!a.first_seen || e.ts < a.first_seen)) a.first_seen = e.ts;
+    if (typeof e.attrs.installed === "string" && (!a.installed || e.attrs.installed < a.installed)) a.installed = e.attrs.installed;
     if (e.ts >= d60 && e.ts < d30) a._prev.add(e.ts);
     if (!a.last_used || e.ts > a.last_used) a.last_used = e.ts;
     a._hosts.add(e.host);
@@ -99,7 +104,6 @@ export function computeUsage(vault: string, opts: { now?: number; events?: Metri
   const out: Record<string, AppUsage> = {};
   for (const a of apps.values()) {
     const days = [...a._days];
-    a.first_seen = days.sort()[0];
     a.active_days = { d7: days.filter((d) => d >= d7).length, d30: days.filter((d) => d >= d30).length, d90: days.length };
     a.trend = a._prev.size === 0 ? (a.active_days.d30 ? "new" : "flat") : a.active_days.d30 > a._prev.size * 1.25 ? "up" : a.active_days.d30 < a._prev.size * 0.75 ? "down" : "flat";
     a.minutes_30d = Math.round(a.minutes_30d);
@@ -242,6 +246,28 @@ export async function appStackCommand(argv: string[], vault: string): Promise<nu
       if (args.json) out(rows); else for (const r of rows) console.log(`${String(r.app).padEnd(20)} ${r.freq.padEnd(9)} $${r.usd}  last ${r.last}  next ${r.next}${r.mature ? "" : "  (new)"}`);
       return 0;
     }
+    if (sub === "doctor") { const d = await import("./app-doctor.ts"); return d.appsDoctorCommand(argv, vault, args.json); }
+    if (["stack", "cards", "card", "review", "offboard"].includes(sub)) {
+      const d = await import("./app-doctor.ts");
+      if (sub === "offboard") { const p = d.offboardingDraft(vault, args.pos[1] ?? ""); if (args.json) out({ ok: true, path: p }); else console.log(`Drafted ${p} (nothing was cancelled or sent).`); return 0; }
+      const stack = d.buildStack(vault);
+      const cards = d.visibleCards(d.detectCards(stack, Date.now()), d.readAnswers(vault), Date.now());
+      if (sub === "stack") { if (args.json) out({ ...stack, cards }); else { console.log(`$${stack.month_total} a month known, ${stack.in_use} in use`); for (const a of stack.apps) console.log(`${a.name.padEnd(24)} ${String(a.usage?.active_days.d30 ?? 0).padStart(3)} days  ${a.monthly !== null ? `$${a.monthly}` : "-"}  ${a.health ?? ""}  ${a.verdict}`); } return 0; }
+      if (sub === "cards") { if (args.json) out(cards); else for (const c of cards) console.log(`${c.key} ${c.kind.padEnd(10)} ${c.title}: ${c.why}`); return 0; }
+      if (sub === "review") { const p = d.writeStackReview(vault, stack, cards); if (args.json) out({ ok: true, path: p, line: d.weeklyLine(cards, stack) }); else console.log(`Wrote ${p}`); return 0; }
+      if (sub === "card") {
+        const [key, ans] = [args.pos[1] ?? "", args.pos[2] ?? ""];
+        const all = d.detectCards(stack, Date.now());
+        const card = all.find((c) => c.key === key);
+        if (!card) { console.error(`no card ${key}`); return 1; }
+        const extra: Record<string, string> = {};
+        if (ans === "cancel-steps") extra.draft = d.offboardingDraft(vault, card.app);
+        if (ans === "archive") extra.archived = d.archiveRecord(vault, card.app);
+        const a = d.answerCard(vault, key, ans);
+        if (args.json) out({ ok: true, ...a, ...extra }); else console.log(`${card.title}: ${ans}${extra.draft ? ` (drafted ${extra.draft})` : ""}${extra.archived ? ` (moved to ${extra.archived})` : ""}`);
+        return 0;
+      }
+    }
     if (sub === "records") {
       const recs = readRecords(vault).filter((r) => !r.archived);
       if (args.json) out(recs.map(({ manifest: _m, ...r }) => r));
@@ -252,8 +278,8 @@ export async function appStackCommand(argv: string[], vault: string): Promise<nu
     if (args.json) out({ ok: false, error: (e as Error).message }); else console.error((e as Error).message);
     return 1;
   }
-  console.error("usage: prevail apps scan | usage | unknown | map <kind> <value> <app-id|ignore> | records | money | charges [--all] [--json]");
+  console.error("usage: prevail apps scan | usage | unknown | map <kind> <value> <app-id|ignore> | records | money | charges [--all] | doctor | stack | cards | card <key> keep|snooze|done|review|fix|archive|cancel-steps | review | offboard <id> [--json]");
   return 1;
 }
 
-export const STACK_SUBCOMMANDS = ["scan", "usage", "unknown", "map", "records", "money", "charges"];
+export const STACK_SUBCOMMANDS = ["scan", "usage", "unknown", "map", "records", "money", "charges", "doctor", "stack", "cards", "card", "review", "offboard"];

@@ -77,7 +77,7 @@ export const KNOWN_APPS: KnownApp[] = [
   { id: "linear", name: "Linear", kind: "app", category: "dev", bundles: ["com.linear"], domains: ["linear.app"], merchants: ["LINEAR"], senders: ["linear.app"] },
   { id: "figma", name: "Figma", kind: "app", category: "design", bundles: ["com.figma.Desktop"], domains: ["figma.com"], merchants: ["FIGMA"], senders: ["figma.com"] },
   { id: "canva", name: "Canva", kind: "web", category: "design", bundles: ["com.canva.CanvaDesktop"], domains: ["canva.com"], merchants: ["CANVA"], senders: ["canva.com"] },
-  { id: "slack", name: "Slack", kind: "app", category: "chat", bundles: ["com.tinyspeck.slackmacgap"], domains: ["slack.com"], merchants: ["SLACK"], senders: ["slack.com"], status: "https://slack-status.com" },
+  { id: "slack", name: "Slack", kind: "app", category: "chat", bundles: ["com.tinyspeck.slackmacgap"], domains: ["slack.com"], merchants: ["SLACK"], senders: ["slack.com"] },
   { id: "discord", name: "Discord", kind: "app", category: "chat", bundles: ["com.hnc.Discord"], domains: ["discord.com"], merchants: ["DISCORD"], senders: ["discord.com"] },
   { id: "zoom", name: "Zoom", kind: "app", category: "meetings", bundles: ["us.zoom.xos"], domains: ["zoom.us"], merchants: ["ZOOM"], senders: ["zoom.us"] },
   { id: "spotify", name: "Spotify", kind: "app", category: "music", bundles: ["com.spotify.client"], domains: ["spotify.com"], merchants: ["SPOTIFY"], senders: ["spotify.com"] },

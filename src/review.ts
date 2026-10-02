@@ -88,6 +88,8 @@ export interface ReviewCard {
   woop: { id: string; title: string }[];
   waited: { kind: string; text: string }[];
   interruptions: { used: number; budget: number };
+  /** One line about the stack (apps plan A4): what needs you, else what is in use. */
+  apps: string | null;
 }
 
 /** When the user last did anything in a domain: a chat, a task change, a note from another domain. */
@@ -149,7 +151,17 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     woop: goalsNeedingWoop(vault).slice(0, 1).map((x) => ({ id: x.id, title: x.title })),
     waited: waitedForReview(vault, week).map((w) => ({ kind: w.kind, text: w.text })),
     interruptions: { used: usedThisWeek(vault, now), budget: INTERRUPTION_BUDGET },
+    apps: await appsLine(vault, now),
   };
+}
+
+async function appsLine(vault: string, now: number): Promise<string | null> {
+  try {
+    const d = await import("./app-doctor.ts");
+    const stack = d.buildStack(vault, { now });
+    if (!stack.apps.length) return null;
+    return d.weeklyLine(d.visibleCards(d.detectCards(stack, now), d.readAnswers(vault), now), stack);
+  } catch { return null; }
 }
 
 const weekLabel = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -166,6 +178,7 @@ export function reviewText(r: ReviewCard): string {
   for (const p of r.metricProposals) out.push(`New metric? ${p.title}: ${p.why}`);
   if (r.woop[0]) out.push(`Your goal "${r.woop[0].title}" needs its plan: say "continue my Compass" in chat.`);
   else if (r.question) out.push(`One question: ${r.question.text}`);
+  if (r.apps) out.push(r.apps);
   for (const w of r.waited) out.push(`Waited for this review: ${w.text}`);
   out.push(r.checkin ? `You said calm ${r.checkin.calm} this week.` : "How calm was this week? Reply 1 to 5 (on Telegram: /calm 4).");
   return out.join("\n");

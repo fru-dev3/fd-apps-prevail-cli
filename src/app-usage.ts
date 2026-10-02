@@ -447,12 +447,19 @@ export function scanAppUsage(vault: string, opts: UsageOpts = {}): UsageScan {
   const webBy = new Map<string, DomainDay>();
   const mergeWeb = (ds: DomainDay[]) => { for (const d of ds) { const k = `${d.day}\t${d.domain}`; const c = webBy.get(k); if (c) { c.n += d.n; for (const v of d.via.split(",")) if (!c.via.split(",").includes(v)) c.via += `,${v}`; } else webBy.set(k, { ...d }); } };
 
-  // Inventory.
+  // Inventory. Each bundle's first sighting on this Mac is remembered, so an app
+  // installed later shows as new (the first inventory is the baseline).
   const inv = opts.inventory ?? (on("spotlight") ? spotlightInventory(roots) : []);
   sources.spotlight = on("spotlight") ? { state: inv.length ? "ok" : "absent", files: inv.length } : { state: "off" };
+  const seenPath = join(runtimePath(vault, "_meta"), "apps", `seen-bundles.${host}.json`);
+  let seen: Record<string, string> = {};
+  try { seen = JSON.parse(readFileSync(seenPath, "utf8")) as Record<string, string>; } catch { seen = {}; }
+  const baseline = Object.keys(seen).length === 0;
+  for (const a of inv) if (!seen[a.bundle]) seen[a.bundle] = baseline ? "baseline" : dayOf(now);
+  if (inv.length) { try { mkdirSync(join(seenPath, ".."), { recursive: true }); writeFileSync(seenPath, `${JSON.stringify(seen, null, 1)}\n`); } catch { /* best-effort */ } }
   for (const a of inv) {
     if (!a.last_used || Date.parse(a.last_used) < since) continue;
-    appEv.push({ ts: a.last_used, src: "apps", kind: "app.last_used", n: a.use_count ?? 1, project: a.bundle, host, tier: "measured", attrs: { device: "mac", via: "spotlight", ...(a.category ? { category: a.category } : {}) } });
+    appEv.push({ ts: a.last_used, src: "apps", kind: "app.last_used", n: a.use_count ?? 1, project: a.bundle, host, tier: "measured", attrs: { device: "mac", via: "spotlight", ...(a.category ? { category: a.category } : {}), ...(seen[a.bundle] && seen[a.bundle] !== "baseline" ? { installed: seen[a.bundle]! } : {}) } });
   }
 
   // Focus minutes: Biome first, then knowledgeC, then the live sampler (Mac only, never twice for one day).
