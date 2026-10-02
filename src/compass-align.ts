@@ -461,7 +461,7 @@ export interface Rollup {
   saidVsDid: string[];
   conflicts: Conflict[];
   rules: RuleState[];
-  needsYou: { kind: "conflict" | "rule" | "stalled" | "woop"; key: string; text: string }[];
+  needsYou: { kind: "conflict" | "rule" | "stalled" | "woop" | "initiative"; key: string; text: string }[];
 }
 
 /** How much of the last 28 days' activity happened in a domain (threads, tasks, notes touched). */
@@ -512,6 +512,8 @@ export async function alignmentRollup(vault: string, opts: { now?: number; runne
     }
   } catch { /* review not loaded */ }
   try { const { goalsNeedingWoop } = await import("./compass.ts"); for (const g of goalsNeedingWoop(vault).slice(0, 2)) needsYou.push({ kind: "woop", key: `woop:${g.id}`, text: `${g.title} needs its plan before it goes active.` }); } catch { /* none */ }
+  // Goals G4: an initiative missing its expectations (or past its stop rule), with the explanation and the proposed change.
+  try { const p = await import("./paths.ts"); for (const x of (p.readPathChecks(vault)?.checks ?? []).filter((y) => y.state === "missing" || y.state === "stop")) needsYou.push({ kind: "initiative", key: `initiative:${x.id}`, text: `${x.explanation} ${x.proposal}` }); } catch { /* none */ }
   const r: Rollup = { week: m.weekOf(m.dayOf(now)), computed: now, values, saidVsDid: saidVsDid.slice(0, 4), conflicts, rules, needsYou };
   try { writeFileSync(join(compassMetaDir(vault), "alignment.json"), `${JSON.stringify(r, null, 2)}\n`); } catch { /* read-only */ }
   return r;

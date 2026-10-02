@@ -102,6 +102,9 @@ export interface ReviewCard {
   missions?: string[];
   /** Today T3: everything falling behind (the radar), most urgent first. */
   radar?: { key: string; kind: string; text: string; evidence: string; due?: string }[];
+  /** Goals G4: each chosen initiative against its expectations, with the explanation and a proposed change; the quarterly review when owed. */
+  initiatives?: { id: string; title: string; state: string; explanation: string; proposal: string }[];
+  quarterly?: boolean;
 }
 
 /** When the user last did anything in a domain: a chat, a task change, a note from another domain. */
@@ -176,6 +179,7 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     commitments: await commitmentLines(vault),
     radar: await radarLines(vault, now),
     missions: await (async () => { try { return (await import("./mission-progress.ts")).missionReviewLines(vault, now); } catch { return []; } })(),
+    ...(await initiativeLines(vault, now)),
     ...(await qualitativeLines(vault, c, week, now)),
   };
 }
@@ -186,6 +190,14 @@ async function qualitativeLines(vault: string, c: Awaited<ReturnType<typeof comp
     const h = q.hypotheses(vault, c, week)[0];
     return { asked: q.askedDue(vault, now), hypothesis: h ? { key: h.key, text: h.text } : null, guardrails: q.guardrails(vault, c).filter((g) => g.state === "slipping").map((g) => g.text).slice(0, 2) };
   } catch { return { asked: { ladder: false, who5: false }, hypothesis: null, guardrails: [] }; }
+}
+
+async function initiativeLines(vault: string, now: number): Promise<Pick<ReviewCard, "initiatives" | "quarterly">> {
+  try {
+    const p = await import("./paths.ts");
+    const checks = await p.checkPaths(vault, now);
+    return { initiatives: checks.map((c) => ({ id: c.id, title: c.title, state: c.state, explanation: c.explanation, proposal: c.proposal })), quarterly: p.quarterlyDue(vault, now) };
+  } catch { return { initiatives: [], quarterly: false }; }
 }
 
 async function radarLines(vault: string, now: number): Promise<NonNullable<ReviewCard["radar"]>> {
@@ -226,6 +238,8 @@ export function reviewText(r: ReviewCard): string {
   if (r.asked?.ladder) out.push("Once a quarter: on a ladder from 0 (worst possible life) to 10 (best possible), where do you stand now, and where in five years?");
   if (r.asked?.who5) out.push("This month's WHO-5 is waiting (five quick questions about the last two weeks).");
   for (const m of r.missions ?? []) out.push(`Mission: ${m}`);
+  for (const x of r.initiatives ?? []) out.push(`Initiative: ${x.explanation}${x.proposal ? ` ${x.proposal}` : ""}`);
+  if (r.quarterly) out.push("The quarterly initiative review is due: keep, switch or drop each one (prevail compass paths review).");
   if (r.radar?.length) { out.push("Falling behind:"); for (const x of r.radar) out.push(`- ${x.text} (${x.evidence})`); }
   for (const w of r.waited) out.push(`Waited for this review: ${w.text}`);
   out.push(r.checkin ? `You said calm ${r.checkin.calm} this week.` : "How calm was this week? Reply 1 to 5 (on Telegram: /calm 4).");
