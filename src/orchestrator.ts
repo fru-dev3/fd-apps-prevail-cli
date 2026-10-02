@@ -98,6 +98,10 @@ export interface OrchestratorCtx {
   domain?: string;
   /** Test seams for specialist steps (the model call). */
   runDeps?: import("./jobs.ts").RunDeps;
+  /** What started the run: a loop's clock, a radar event, or the user. Scheduled and event runs land in the Inbox. */
+  trigger?: "schedule" | "event" | "manual";
+  /** The radar item that fired an event run. */
+  event?: string;
 }
 
 const STEP_TIMEOUT_MS = 10 * 60_000;
@@ -194,7 +198,7 @@ export async function runPlaybook(
   const ok = steps.length > 0 && steps.every((s) => s.ok || s.decision !== "auto");
   const note = `${ranOk}/${steps.length} steps completed`;
   // Write a run manifest so the result is fully inspectable.
-  try { vwriteFile(join(runDir, "run.json"), `${JSON.stringify({ runId, playbook: playbook.id, goal: playbook.goal, ok, note, steps }, null, 2)}\n`); } catch { /* best effort */ }
+  try { vwriteFile(join(runDir, "run.json"), `${JSON.stringify({ runId, playbook: playbook.id, name: playbook.name, goal: playbook.goal, ok, note, steps, trigger: ctx.trigger ?? "manual", ...(ctx.event ? { event: ctx.event } : {}), ...(ctx.domain ? { domain: ctx.domain } : {}), ts: Date.now() }, null, 2)}\n`); } catch { /* best effort */ }
   logActivity(ctx.vault, { type: "playbook", domain: playbook.domain, title: `Playbook done: ${playbook.name}`, detail: note, status: ok ? "ok" : "error", ref: runId });
   emit(ctx, { phase: "complete", runId, ok, note });
   return { runId, playbook: playbook.id, ok, note, steps, runDir };

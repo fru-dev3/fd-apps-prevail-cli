@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 // Top-level commands whose module parses its own arguments (module-commands.ts).
-const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources", "commitments", "radar"];
+const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources", "commitments", "radar", "whereis"];
 
 interface Args {
   vaultPath: string | null;
@@ -3252,7 +3252,7 @@ async function playbookCommand(args: string[], vaultPath?: string | null): Promi
   // `prevail playbooks` (list) or `prevail playbook list`
   const first = args[0];
   // Groups, one playbook's steps, Save as playbook, adopt a draft (playbooks.ts).
-  if (first === "rows" || first === "show" || first === "save" || first === "adopt") {
+  if (first === "rows" || first === "show" || first === "save" || first === "adopt" || first === "inbox" || first === "seen" || first === "trigger") {
     const { playbooksCommand } = await import("./playbooks.ts");
     process.exit(await playbooksCommand(args.filter((a, i) => !(a === "--vault" || args[i - 1] === "--vault")), vault));
   }
@@ -6937,15 +6937,17 @@ async function main() {
       out(ag.readPendingActsView(vault));
       return;
     }
-    if (sub === "approve") {
-      const r = ag.approvePendingAct(vault, flag("id"), args.actsArgs.includes("--allow-sensitive"), args.actsArgs.includes("--always"));
-      out(r);
-      if (!r.ok) process.exit(1);
-      return;
-    }
-    if (sub === "deny") {
-      const r = ag.denyPendingAct(vault, flag("id"));
-      out(r);
+    if (sub === "approve" || sub === "deny") {
+      // An engine act (the Operator's action, an MCP mission write) is carried
+      // out by the engine once answered; a connector act waits for its retry.
+      const act = ag.pendingAct(vault, flag("id"));
+      const r = sub === "approve" ? ag.approvePendingAct(vault, flag("id"), args.actsArgs.includes("--allow-sensitive"), args.actsArgs.includes("--always")) : ag.denyPendingAct(vault, flag("id"));
+      let after: unknown = undefined;
+      if (r.ok && act) {
+        const ea = await import("./engine-acts.ts");
+        if (ea.isEngineAct(act.tool)) { try { after = await ea.afterActAnswer(vault, act, sub === "approve" ? "approved" : "denied"); } catch (e) { after = { error: (e as Error).message }; } }
+      }
+      out(after === undefined ? r : { ...r, after });
       if (!r.ok) process.exit(1);
       return;
     }

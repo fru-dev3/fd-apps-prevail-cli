@@ -11,7 +11,7 @@
 // (runChatTurn), same encryption-aware vault I/O (vread/vwrite). Idempotent and
 // best-effort: a failing loop records its error and never blocks the others.
 import { syncedAppsContext } from "./apps-mirror.ts";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { v4ContentPath } from "./vault-layout-v4.ts";
 import { join, basename, resolve } from "node:path";
 import { runtimePath } from "./path-safety.ts";
@@ -108,6 +108,11 @@ interface Loop {
   // orchestrator): on its cadence it runs the named playbook end-to-end instead
   // of the think→propose flow. The loop's autonomy dial governs auto-run vs ask.
   playbook?: string;
+  // Specialists Phase 3: an event trigger instead of a clock. The Sentinel's
+  // radar fires the playbook once per new radar item of this kind
+  // ("admin", "commitment", "mission"...; "kind:words" also needs the words in
+  // the item). An event loop never runs on its cadence.
+  on?: string;
 }
 
 interface LoopsDoc {
@@ -127,6 +132,8 @@ const CADENCE_MS: Record<LoopCadence, number> = {
 // since the last run (continuous loops are always due).
 function isDue(loop: Loop, now: number): boolean {
   if (!loop.enabled || loop.status !== "active") return false;
+  if (loop.on) return false; // event loops wait for their event
+  if (!CADENCE_MS[loop.cadence] && loop.cadence !== "continuous") return false;
   if (!loop.lastRunTs) return true;
   return now - loop.lastRunTs >= CADENCE_MS[loop.cadence];
 }
@@ -439,21 +446,11 @@ export async function runOneLoop(
   // gated to "ask" and skipped this pass).
   if (loop.playbook) {
     onPhase("playbook", `Running playbook: ${loop.playbook}`);
-    const { loadPlaybook, runPlaybook } = await import("./orchestrator.ts");
-    const { isAuto } = await import("./autonomy.ts");
-    const pb = loadPlaybook(root, loop.playbook);
-    if (!pb) return empty(`playbook "${loop.playbook}" not found`, loop.name);
-    const autonomousActs = loop.autonomy === "auto" || cfg.autonomousActs === true || isAuto(root);
-    const pr = await runPlaybook(`loop-${loop.id}-${now}`, pb, {
-      vault: root, provider: cfg.provider, model: runModel, autonomousActs,
-      domain: domainDir.split("/").filter(Boolean).pop(),
-      onProgress: (e) => onPhase("playbook", String(e.label ?? e.phase ?? "")),
-    });
-    loop.lastRunTs = now;
-    entry.history = [{ ts: now, actions: pr.steps.map((s) => `[${s.decision}] ${s.label}`), note: pr.note, done: false, tasksCreated: [] }, ...entry.history].slice(0, 6);
+    const pr = await runPlaybookLoop(cfg, root, domainDir, loop, entry, runModel, now, "manual", (l) => onPhase("playbook", l));
     rt.loops[loop.id] = entry;
     writeRuntime(domainDir, rt);
     try { vwriteFile(loopsFile(domainDir), JSON.stringify(doc, null, 2)); } catch { /* best effort */ }
+    if (!pr) return empty(`playbook "${loop.playbook}" not found`, loop.name);
     onPhase("done", pr.note);
     return { ok: pr.ok, loop: loop.name, note: pr.note, done: false, actions: pr.steps.map((s) => ({ text: s.label, disposition: (s.decision === "auto" ? "task" : "approval") as "task" | "approval" | "suggested" })), tasksCreated: [], pending: [], error: pr.ok ? undefined : pr.note };
   }
@@ -717,6 +714,96 @@ async function runBriefingLoop(p: {
 }
 
 // Run every due loop in one domain. Returns how many loops advanced.
+/** The space a loop's playbook runs in: a mission folder runs as mission/<slug>, a domain by its name. */
+function loopSpace(root: string, domainDir: string): string {
+  const name = domainDir.split("/").filter(Boolean).pop() ?? "general";
+  const missions = resolve(join(root, "data", "missions"));
+  return resolve(domainDir).startsWith(`${missions}/`) ? `mission/${name}` : resolve(domainDir) === resolve(generalDir(root)) ? "general" : name;
+}
+
+/**
+ * A loop that names a playbook runs it end to end through the orchestrator
+ * (the same safety spine: pause, the policy, audit). Scheduled passes and
+ * "Run now" both come here, so a playbook loop never falls back to the
+ * steward prompt. The loop's autonomy dial maps to the orchestrator opt-in.
+ */
+async function runPlaybookLoop(cfg: LoopsConfig, root: string, domainDir: string, loop: Loop, entry: LoopRtEntry, runModel: string, now: number, trigger: "schedule" | "event" | "manual", onPhase: (label: string) => void = () => {}, event?: string) {
+  const { loadPlaybook, runPlaybook } = await import("./orchestrator.ts");
+  const { isAuto } = await import("./autonomy.ts");
+  const pb = loadPlaybook(root, loop.playbook!);
+  loop.lastRunTs = now;
+  if (!pb) { entry.history = [{ ts: now, actions: [], note: `playbook "${loop.playbook}" not found`, done: false, tasksCreated: [] }, ...entry.history].slice(0, 6); return null; }
+  const autonomousActs = loop.autonomy === "auto" || cfg.autonomousActs === true || isAuto(root);
+  const pr = await runPlaybook(`${trigger === "event" ? "event" : "loop"}-${loop.id}-${now}`, pb, {
+    vault: root, provider: cfg.provider, model: runModel, autonomousActs,
+    domain: loopSpace(root, domainDir), trigger, ...(event ? { event } : {}),
+    onProgress: (e) => onPhase(String(e.label ?? e.phase ?? "")),
+  });
+  entry.history = [{ ts: now, actions: pr.steps.map((s) => `[${s.decision}] ${s.label}`), note: `${trigger === "event" ? `on ${event}: ` : ""}${pr.note}`, done: false, tasksCreated: [] }, ...entry.history].slice(0, 6);
+  logActivity(root, { type: "loop_run", domain: basename(domainDir), title: `${loop.name} ran its playbook ${pb.name}`, detail: pr.note, status: pr.ok ? "ok" : "error", ref: loop.id });
+  return pr;
+}
+
+// ── Event triggers (the Sentinel fires playbooks) ──────────────────────────
+
+const triggersLedger = (root: string) => join(runtimePath(root, "_meta"), "triggers.jsonl");
+/** Most event runs one pass may start; the rest wait for the next pass. */
+export const EVENT_RUNS_PER_PASS = 2;
+
+export function readFired(root: string): Set<string> {
+  const p = triggersLedger(root);
+  if (!existsSync(p)) return new Set();
+  return new Set(safeRead(p).split("\n").flatMap((l) => { try { return l.trim() ? [(JSON.parse(l) as { key: string }).key] : []; } catch { return []; } }));
+}
+
+/** Does this radar item fire this loop? kind, optional words, and the loop's own domain (General hears every domain). */
+export function triggerMatches(on: string, space: string, item: { kind: string; domain: string; mission?: string; text: string }): boolean {
+  const [kind, ...words] = on.split(":");
+  if (!kind || item.kind !== kind.trim()) return false;
+  const w = words.join(":").trim().toLowerCase();
+  if (w && !item.text.toLowerCase().includes(w)) return false;
+  if (space === "general") return true;
+  if (space.startsWith("mission/")) return item.mission === space.slice(8);
+  return item.domain === space;
+}
+
+/**
+ * One pass of event triggers: every enabled loop with `on` and a playbook,
+ * against the radar (computed by code). Each radar item fires a loop once,
+ * ever (build/_meta/triggers.jsonl), at most EVENT_RUNS_PER_PASS a pass.
+ */
+export async function fireEventTriggers(cfg: LoopsConfig, items: { key: string; kind: string; domain: string; mission?: string; text: string }[], now = Date.now()): Promise<{ fired: { loop: string; item: string; ok: boolean }[] }> {
+  const root = resolve(cfg.vaultPath);
+  const fired: { loop: string; item: string; ok: boolean }[] = [];
+  const done = readFired(root);
+  for (const t of discoverLoopTargets(root)) {
+    const doc = readDoc(t.path);
+    if (!doc) continue;
+    const space = loopSpace(root, t.path);
+    let touched = false;
+    const rt = readRuntime(t.path);
+    for (const loop of doc.loops) {
+      if (!loop.on || !loop.playbook || !loop.enabled || loop.status !== "active") continue;
+      for (const it of items) {
+        if (fired.length >= EVENT_RUNS_PER_PASS) break;
+        const key = `${space}/${loop.id}/${it.key}`;
+        if (done.has(key) || !triggerMatches(loop.on, space, it)) continue;
+        done.add(key);
+        mkdirSync(runtimePath(root, "_meta"), { recursive: true });
+        const { appendFileSync } = await import("node:fs");
+        appendFileSync(triggersLedger(root), `${JSON.stringify({ ts: now, key, loop: loop.id, space, item: it.key, text: it.text.slice(0, 160) })}\n`);
+        const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
+        const pr = await runPlaybookLoop(cfg, root, t.path, loop, entry, (loop.model ?? "").trim() || cfg.model || "", now, "event", () => {}, it.text);
+        rt.loops[loop.id] = entry;
+        touched = true;
+        fired.push({ loop: `${space}/${loop.id}`, item: it.key, ok: !!pr?.ok });
+      }
+    }
+    if (touched) { writeRuntime(t.path, rt); try { vwriteFile(loopsFile(t.path), JSON.stringify(doc, null, 2)); } catch { /* best effort */ } }
+  }
+  return { fired };
+}
+
 async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Promise<number> {
   const doc = readDoc(domainDir);
   if (!doc) return 0;
@@ -741,6 +828,13 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   for (const loop of due) {
     try {
       const entry: LoopRtEntry = rt.loops[loop.id] ?? { history: [], pending: [] };
+      // Playbook loops run their playbook on the cadence (never the steward prompt).
+      if (loop.playbook) {
+        const pr = await runPlaybookLoop(cfg, resolve(cfg.vaultPath), domainDir, loop, entry, (loop.model ?? "").trim() || cfg.model || "", now, "schedule");
+        rt.loops[loop.id] = entry;
+        if (pr?.ok) advanced += 1;
+        continue;
+      }
       // Briefing loops synthesize + deliver a digest on their cadence (no steward pass).
       if (loop.kind === "briefing") {
         const bModel = (loop.model && loop.model.trim()) ? loop.model.trim() : (cfg.model || "");
@@ -985,6 +1079,16 @@ export function discoverLoopTargets(root: string): { name: string; path: string 
     if (a.enabled === false) continue;
     add(a.id, a.path);
   }
+  // Active missions run their own loops (a weekly practice check-in, a fare
+  // watch); paused, completed and archived ones never do.
+  const mroot = join(root, "data", "missions");
+  if (existsSync(mroot)) {
+    for (const slug of readdirSync(mroot)) {
+      if (slug.startsWith("_") || slug.startsWith(".")) continue;
+      const md = safeRead(join(mroot, slug, "mission.md"));
+      if (/^status:\s*active\s*$/m.test(md)) add(`mission/${slug}`, join(mroot, slug));
+    }
+  }
   return out;
 }
 
@@ -1023,6 +1127,13 @@ export async function loopsOnce(cfg: LoopsConfig): Promise<{ domains: number; lo
         console.error(`[loops] ${d.name}: ${String(e).slice(0, 160)}`);
       }
     }
+    // The Sentinel's radar fires event playbooks (hub only, like every loop).
+    try {
+      const { readRadar, computeRadar } = await import("./radar.ts");
+      const r = readRadar(root, now) ?? (await computeRadar(root, { now }));
+      const ev = await fireEventTriggers(cfg, r.items, now);
+      loops += ev.fired.length;
+    } catch (e) { console.error(`[loops] event triggers: ${String(e).slice(0, 160)}`); }
     return { domains, loops, aiTasks };
   });
   // null = another process held the lock; treat as a no-op pass.

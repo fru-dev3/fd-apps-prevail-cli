@@ -125,7 +125,82 @@ function scoutFacts(vault: string, owner: string): string {
   return st ? `Look one step to the side, at ${best.d} (most recently changed):\n${clip(st, 800)}` : "";
 }
 
+// The Mechanic reads Prevail's own health, computed by code: the connection
+// doctor, sources that failed, loops that error or stopped running, and
+// capture that went quiet.
+async function mechanicFacts(vault: string, _owner: string, now: number): Promise<string> {
+  const out: string[] = [];
+  try {
+    const { readAllHealth } = await import("./app-doctor.ts");
+    const bad = Object.values(readAllHealth(vault)).filter((h) => h.status !== "ok");
+    out.push(bad.length ? "Connections that are not ok (the doctor, by code):" : "The connection doctor finds every checked app ok.");
+    for (const h of bad.slice(0, 10)) out.push(`- ${h.app} on ${h.host}: ${h.status}${h.first_fail ? ` since ${h.first_fail.slice(0, 10)}` : ""}${h.checks[0]?.fix ? `; fix: ${h.checks[0].fix}` : ""}`);
+  } catch { /* no doctor yet */ }
+  try {
+    const { listSources } = await import("./sources.ts");
+    const failing = listSources(vault).filter((x) => x.on && /fail|error|restricted|disabled/i.test(`${x.state} ${x.note ?? ""}`));
+    for (const x of failing.slice(0, 6)) out.push(`- source ${x.id}: ${x.state}${x.note ? ` (${x.note.slice(0, 120)})` : ""}`);
+  } catch { /* no sources */ }
+  // Loops: an enabled loop whose last runs errored, or that has not run for twice its cadence.
+  const cadence: Record<string, number> = { daily: 1, weekly: 7, monthly: 30 };
+  for (const d of listDomainDirs(vault)) {
+    if (d.startsWith("_")) continue;
+    const dir = resolveDomainDir(vault, d);
+    try {
+      const doc = JSON.parse(readText(join(dir, "_loops.json"))) as { loops?: { id: string; name?: string; enabled?: boolean; status?: string; cadence?: string; lastRunTs?: number | null }[] };
+      const rt = (() => { try { return JSON.parse(readText(join(dir, "_loops_runtime.json"))) as { loops?: Record<string, { history?: { ts: number; note?: string }[] }> }; } catch { return {}; } })();
+      for (const l of doc.loops ?? []) {
+        if (l.enabled === false || (l.status && l.status !== "active")) continue;
+        const last = rt.loops?.[l.id]?.history?.[0];
+        if (last?.note && /error|fail|not found|no cli/i.test(last.note)) out.push(`- loop ${d}/${l.id}: last run said "${last.note.slice(0, 120)}"`);
+        const days = cadence[l.cadence ?? ""];
+        if (days && l.lastRunTs && now - l.lastRunTs > 2 * days * 86_400_000) out.push(`- loop ${d}/${l.id}: has not run since ${new Date(l.lastRunTs).toISOString().slice(0, 10)} (${l.cadence})`);
+      }
+    } catch { /* no loops */ }
+  }
+  try {
+    const { readRadar } = await import("./radar.ts");
+    const r = readRadar(vault, now);
+    const cap = (r?.items ?? []).filter((x) => /capture/i.test(x.text));
+    for (const x of cap.slice(0, 4)) out.push(`- ${x.text} (${x.evidence})`);
+  } catch { /* no radar */ }
+  return out.join("\n");
+}
+
+// The Coach and the Interviewer read the Compass goals, what they still lack
+// (a WOOP, a date, a domain) and the candidates heard in chat.
+async function coachFacts(vault: string, owner: string, _now: number): Promise<string> {
+  const out: string[] = [];
+  try {
+    const c = await import("./compass.ts");
+    const goals = c.items(c.readCompass(vault), "goal").filter((g) => !c.isProposed(g) && (!g.tokens.domain || owner === "general" || g.tokens.domain === owner));
+    if (goals.length) out.push("Compass goals (the user's words):", ...goals.slice(0, 10).map((g) => `- ${g.id} ${g.title} [${g.tokens.status ?? "active"}${g.tokens.due ? `, due ${g.tokens.due}` : ""}${c.woopComplete(g) ? "" : ", no if-then plan yet"}]`));
+    const need = c.goalsNeedingWoop(vault).slice(0, 5);
+    if (need.length) out.push(`Goals that still need a WOOP: ${need.map((g) => g.title).join("; ")}.`);
+  } catch { /* no Compass */ }
+  try {
+    const { topCandidates } = await import("./said.ts");
+    const t = topCandidates(vault, 5);
+    if (t.length) out.push("Heard in chat, not yet in the Compass:", ...t.map((x) => `- ${x.kind}: "${x.quote.slice(0, 160)}" (${x.count}x)`));
+  } catch { /* none */ }
+  return out.join("\n");
+}
+
+function interviewerFacts(vault: string, owner: string): string {
+  const dir = resolveDomainDir(vault, owner);
+  const has = (f: string) => readText(join(dir, f)).trim().length;
+  const out: string[] = [`What the notes hold (characters): ideal state ${has("ideal-state.md")}, memory ${has("memory/memory.md")}, state ${has("memory/state.md")}, goals ${has("source/goals.md")}.`];
+  const asked = readText(join(dir, "memory", "memory.md")).match(/^## Questions to ask you[\s\S]*?(?=^## |$(?![\s\S]))/gm);
+  if (asked?.length) out.push(`Already asked, not answered yet:\n${asked.join("\n").slice(0, 1200)}`);
+  return out.join("\n");
+}
+
 const FACTS: Record<string, Facts> = {
+  mechanic: mechanicFacts,
+  coach: coachFacts,
+  interviewer: (v, o) => interviewerFacts(v, o),
+  skeptic: stewardFacts,
+  operator: stewardFacts,
   steward: stewardFacts,
   sentinel: sentinelFacts,
   historian: historianFacts,

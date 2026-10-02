@@ -2,6 +2,9 @@
 // arguments after the command name; each module is imported only when used.
 
 export async function runModuleCommand(name: string, args: string[], vault: string): Promise<number> {
+  // Which vault this engine resolved (--vault, PREVAIL_VAULT_ROOT, the config):
+  // run before anything meant for a copy, to be sure it is the copy.
+  if (name === "whereis") { process.stdout.write(`${JSON.stringify({ vault: (await import("node:path")).resolve(vault), env: process.env.PREVAIL_VAULT_ROOT ?? null })}\n`); return 0; }
   if (name === "chief") return (await import("./chief-of-staff.ts")).chiefCommand(args, vault);
   if (name === "fold") return (await import("./fold.ts")).foldCommand(args, vault);
   if (name === "compass") return (await import("./compass.ts")).compassCommand(args, vault);

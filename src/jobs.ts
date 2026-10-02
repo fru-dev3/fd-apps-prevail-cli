@@ -14,7 +14,11 @@
 //     specialists never call each other.
 //   - Ceilings: no specialist runs with acting tools. A write-vault result is
 //     written by code into the owner domain; a draft is stored, never sent.
-//     A specialist with an act ceiling cannot run in this phase.
+//     The Operator (act-ask) only names actions: code puts each one through
+//     the broker (pause, the autonomy policy, the Compass rules, a mission's
+//     ceiling and money); blocked ones stop, the rest wait in the Inbox for a
+//     yes unless the policy lets that class run alone. A specialist with a
+//     full act ceiling never runs.
 //   - A job starts alone only when every step is reversible (read, draft,
 //     write-vault with Undo), it fits the user's limits (build/chief-of-staff.md,
 //     default $1 and 10 minutes) and the ask does not move money, contact a
@@ -27,12 +31,12 @@
 //     domain's updates.jsonl. Each write has a receipt for Undo.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { classifyAction } from "./action-policy.ts";
 import { isPaused } from "./autonomy.ts";
 import { readChiefOfStaff, chiefOfStaffPath, parseChiefOfStaff } from "./chief-of-staff.ts";
-import { compassBlock } from "./compass.ts";
+import { bootstrapSources, compassBlock, compassMetaDir, quoteSource, titleFromUserWords } from "./compass.ts";
 import { appendDecision, decisionsFile } from "./decisions.ts";
 import { goalsBlock, writeVersioned } from "./goals.ts";
 import { appendJsonl, domainUpdatesPath, readJsonl } from "./linking.ts";
@@ -85,9 +89,20 @@ export interface Job {
   inputs?: { name: string; returns: string; body: string }[];
   /** Goals G3: what the job serves, what it may cost, the non-negotiables it touches. */
   compass?: JobCompass;
+  /** Specialists Phase 3: what the Operator proposed, each behind the broker. */
+  actions?: OperatorAction[];
 }
 
-export interface Receipt { n: number; ts: number; domain: string; kind: "decision" | "task" | "note" | "page" | "draft" | "build"; file: string; ref: string; text: string; undone?: number }
+export interface Receipt { n: number; ts: number; domain: string; kind: "decision" | "task" | "note" | "page" | "draft" | "build" | "memory" | "candidate"; file: string; ref: string; text: string; undone?: number }
+
+/** One action the Operator named, and what the broker and the user made of it. */
+export interface OperatorAction {
+  n: number; text: string; why?: string; undo?: string;
+  cls: string; status: "blocked" | "asks" | "running" | "done" | "failed" | "declined";
+  reason?: string; act?: string; report?: string; ts: number;
+  /** What the egress guard found in it (a money amount...): Allow names it. */
+  carries?: string[];
+}
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
@@ -147,7 +162,7 @@ function alive(vault: string, j: Job): Job {
 
 // ── Dispatch: answer, or a job ──────────────────────────────────────────────
 
-export type Shape = "find" | "plan" | "do" | "understand" | "make";
+export type Shape = "find" | "plan" | "do" | "understand" | "make" | "act";
 
 // A job is something to go and do, not a question to answer. Code reads the
 // shape from the opening verb; anything else is answered as an ordinary turn
@@ -158,6 +173,8 @@ const SHAPES: [Shape, RegExp][] = [
   ["do", /^(please\s+)?(can you\s+|could you\s+)?(draft|write (an? )?(email|letter|message|note|request)|prepare (an? )?(email|letter|request)|reach out)\b/i],
   ["understand", /^(please\s+)?(can you\s+|could you\s+)?(analy[sz]e my|go through my|review my|summari[sz]e my)\b/i],
   ["make", /^(please\s+)?(can you\s+|could you\s+)?(build (me )?(a|an)|make (me )?(a|an) (script|tool|site|page|automation|app)|write (a|an) (script|tool|automation)|code (me )?(a|an))\b/i],
+  // Doing something in the world: the Operator names the actions, each one asks.
+  ["act", /^(please\s+)?(can you\s+|could you\s+)?(book|order|buy|purchase|cancel|renew|sign (me )?up for|pay|schedule|set up (a|an|my))\b/i],
 ];
 
 export function shapeOf(message: string): Shape | null {
@@ -171,7 +188,9 @@ export function shapeOf(message: string): Shape | null {
  * Staffing shapes (built in): find/compare/choose -> Researcher (+ Scout when
  * open-ended), Analyst when money is involved, Steward when it is a decision,
  * Auditor when numbers drive it, Editor to deliver. Plan -> Planner, Steward,
- * Editor. Do -> Planner then Writer (drafts only). Make -> Builder, Auditor.
+ * Editor (the Skeptic's pre-mortem before the Steward). Do -> Planner then
+ * Writer (drafts only). Act -> Planner, Steward, then the Operator, whose
+ * actions each go through the broker. Make -> Builder, Auditor.
  * Understand my data -> Analyst and Historian side by side, Editor.
  * Specialists that are off are left out.
  */
@@ -184,7 +203,10 @@ export function teamFor(shape: Shape, on: Set<string>, opts: { openEnded?: boole
     if (opts.numbers || opts.money) steps.push({ specialists: ["auditor"], gate: true });
     steps.push({ specialists: ["editor"] });
   } else if (shape === "plan") {
-    steps.push({ specialists: ["planner"] }, { specialists: ["steward"], gate: true }, { specialists: ["editor"] });
+    // The Skeptic's pre-mortem before the Steward judges the fit.
+    steps.push({ specialists: ["planner"] }, { specialists: ["skeptic"] }, { specialists: ["steward"], gate: true }, { specialists: ["editor"] });
+  } else if (shape === "act") {
+    steps.push({ specialists: ["planner"] }, { specialists: ["steward"], gate: true }, { specialists: ["operator"] });
   } else if (shape === "do") {
     steps.push({ specialists: ["planner"] }, { specialists: ["writer"] });
   } else if (shape === "make") {
@@ -428,7 +450,7 @@ export function decideStart(vault: string, job: Job, specs: Specialist[], limits
   for (const st of job.team) for (const id of st.specialists) {
     const s = specs.find((x) => x.id === id);
     if (!s || !s.on) reasons.push(`the ${id} is not available`);
-    else if (ceilingRank(s.ceiling) > ceilingRank("draft")) reasons.push(`the ${s.name} would act`);
+    else if (ceilingRank(s.ceiling) > ceilingRank("act-ask")) reasons.push(`the ${s.name} would act`);
     else if (job.mission && ceilingRank(s.ceiling) > ceilingRank(job.mission.ceiling)) reasons.push(`the ${s.name} goes past this mission's ceiling (${job.mission.ceiling})`);
   }
   // Money in a mission: anything that spends asks, and past what is left it says so.
@@ -534,6 +556,15 @@ export interface StepOutput {
   summary: string; body: string; sources: string[]; check: { ok: boolean; missing: string[] };
   notebook: string[]; verdict?: string; drafts?: { to: string; subject: string; body: string }[];
   filed?: { decision?: string; task?: { text: string; due?: string }; tasks?: { text: string; due?: string }[]; notes?: Record<string, string> };
+  /** Operator: the actions it names (each goes through the broker). */
+  actions?: { action: string; why?: string; undo?: string }[];
+  /** Skeptic: the pre-mortem. */
+  risks?: { risk: string; sign?: string; odds?: string }[];
+  /** Interviewer: questions that fill the domain's gaps. */
+  questions?: string[];
+  /** Coach: Compass lines in the user's own words (proposed, never written), and if-then plans. */
+  candidates?: { kind: string; title: string; quote: string }[];
+  plans?: { goal?: string; if_then: string }[];
 }
 
 export function parseStepOutput(raw: string): StepOutput {
@@ -556,6 +587,11 @@ export function parseStepOutput(raw: string): StepOutput {
         ...(typeof j.verdict === "string" ? { verdict: j.verdict.slice(0, 40) } : {}),
         ...(Array.isArray(j.drafts) ? { drafts: (j.drafts as StepOutput["drafts"])!.filter((d) => d && typeof d.body === "string").slice(0, 6).map((d) => ({ to: String(d.to ?? ""), subject: String(d.subject ?? ""), body: String(d.body) })) } : {}),
         ...(j.filed && typeof j.filed === "object" ? { filed: j.filed as StepOutput["filed"] } : {}),
+        ...(Array.isArray(j.actions) ? { actions: (j.actions as { action?: unknown; why?: unknown; undo?: unknown }[]).filter((a) => a && typeof a.action === "string" && a.action.trim()).slice(0, 5).map((a) => ({ action: String(a.action).slice(0, 300), ...(typeof a.why === "string" ? { why: a.why.slice(0, 200) } : {}), ...(typeof a.undo === "string" ? { undo: a.undo.slice(0, 200) } : {}) })) } : {}),
+        ...(Array.isArray(j.risks) ? { risks: (j.risks as { risk?: unknown; sign?: unknown; odds?: unknown }[]).filter((r) => r && typeof r.risk === "string").slice(0, 8).map((r) => ({ risk: String(r.risk).slice(0, 300), ...(typeof r.sign === "string" ? { sign: r.sign.slice(0, 200) } : {}), ...(typeof r.odds === "string" ? { odds: r.odds.slice(0, 20) } : {}) })) } : {}),
+        ...(Array.isArray(j.questions) ? { questions: strs(j.questions).map((q) => q.trim().slice(0, 240)).filter(Boolean).slice(0, 5) } : {}),
+        ...(Array.isArray(j.candidates) ? { candidates: (j.candidates as { kind?: unknown; title?: unknown; quote?: unknown }[]).filter((c) => c && typeof c.title === "string" && typeof c.quote === "string").slice(0, 6).map((c) => ({ kind: ["goal", "value", "rule"].includes(String(c.kind)) ? String(c.kind) : "goal", title: String(c.title).slice(0, 120), quote: String(c.quote).slice(0, 400) })) } : {}),
+        ...(Array.isArray(j.plans) ? { plans: (j.plans as { goal?: unknown; if_then?: unknown }[]).filter((x) => x && typeof x.if_then === "string").slice(0, 8).map((x) => ({ ...(typeof x.goal === "string" ? { goal: x.goal.slice(0, 120) } : {}), if_then: String(x.if_then).slice(0, 300) })) } : {}),
       };
     } catch { /* fall through: prose */ }
   }
@@ -575,6 +611,11 @@ export function codeCheck(s: Specialist, o: StepOutput): string[] {
   if (s.returns === "verified" && !/\b(verified|flagged)\b/i.test(o.verdict ?? o.summary)) miss.push("no verdict (verified or flagged)");
   if (s.returns === "build" && !buildFiles(o.body).length) miss.push("no files (fenced blocks starting with a path line)");
   if (s.returns === "vault changes" && !(o.filed?.task || o.filed?.tasks?.length || Object.keys(o.filed?.notes ?? {}).length)) miss.push("no changes to file");
+  if (s.returns === "action" && !(o.actions?.length)) miss.push("no actions named");
+  if (s.returns === "risks" && (o.risks ?? []).filter((r) => r.sign).length < 2) miss.push("fewer than two risks with an early sign");
+  if (s.returns === "memory updates" && !(o.questions ?? []).some((q) => q.endsWith("?"))) miss.push("no questions");
+  if (s.returns === "goals" && !(o.plans?.length || o.candidates?.length || /\bif\b[\s\S]{2,}?\bthen\b/i.test(o.body))) miss.push("no if-then plan and nothing in the user's words");
+  if (s.returns === "repairs" && !(o.filed?.tasks?.length || o.filed?.task) && !/nothing to repair/i.test(o.summary + o.body)) miss.push("no repairs filed and no \"nothing to repair\"");
   return miss;
 }
 
@@ -633,7 +674,12 @@ export function specialistPrompt(o: { s: Specialist; notes: string; notebook: st
       ? `,\n  "filed": { "tasks": [{ "text": "<a task for the owner>", "due": "YYYY-MM-DD" }], "notes": { ${tells.map((d) => `"${d}": "<one line this domain should know>"`).join(", ")} } }`
     : s.returns === "page"
       ? `,\n  "filed": { "decision": "<one line the owner should keep as the decision, or omit>", "task": { "text": "<the next step for the user>", "due": "YYYY-MM-DD" }, "notes": { ${tells.map((d) => `"${d}": "<one line this domain should know>"`).join(", ")} } }`
-      : s.returns === "draft" ? ',\n  "drafts": [{ "to": "<who>", "subject": "<subject>", "body": "<text>" }]' : "";
+      : s.returns === "draft" ? ',\n  "drafts": [{ "to": "<who>", "subject": "<subject>", "body": "<text>" }]'
+      : s.returns === "action" ? ',\n  "actions": [{ "action": "<one concrete step: verb, what, where, amount when money moves>", "why": "<the plan step it carries out>", "undo": "<how to undo it, or: cannot be undone>" }]'
+      : s.returns === "risks" ? ',\n  "risks": [{ "risk": "<one way it fails>", "sign": "<the early sign to watch>", "odds": "low | medium | high" }]'
+      : s.returns === "memory updates" ? ',\n  "questions": ["<one short question that fills one gap>"]'
+      : s.returns === "goals" ? ',\n  "plans": [{ "goal": "<goal id or title>", "if_then": "If <a cue that happens anyway>, then <one small step>." }],\n  "candidates": [{ "kind": "goal | value | rule", "title": "<in the user\'s own words>", "quote": "<their exact words, copied from the notes>" }]'
+      : s.returns === "repairs" ? `,\n  "filed": { "tasks": [{ "text": "<one repair: what is broken and the fix>", "due": "YYYY-MM-DD" }] }` : "";
   return [
     `You are the ${s.name}, one specialist on a team the user's chief of staff put together. You return one result; you never contact anyone, buy anything or change anything.`,
     `## Mandate\n${s.mandate}`,
@@ -656,7 +702,10 @@ export interface RunDeps {
   detectClis?: typeof import("./cli-bridge.ts").detectClis;
   runChatTurn?: typeof import("./cli-bridge.ts").runChatTurn;
   now?: () => number;
+  /** Carries out one action the broker or the user allowed (the Operator's). */
+  act?: ActFn;
 }
+export type ActFn = (vault: string, domain: string, action: string) => Promise<string>;
 
 /** Run a job to the end, in this process. Never throws; the record says what happened. */
 export async function runJob(vault: string, id: string, deps: RunDeps = {}): Promise<Job> {
@@ -709,8 +758,9 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
       if (!base || !base.on) return { ok: false, status: "failed", note: `the ${sid} is not available` };
       const { spec, notes } = forDomain(vault, base, job!.domains.owner);
       if (!spec.on) return { ok: false, status: "failed", note: `the ${spec.name} is off in ${job!.domains.owner}` };
-      // Ceilings, in code: nothing that acts runs in this phase.
-      if (ceilingRank(spec.ceiling) > ceilingRank("draft")) return { ok: false, status: "needs-approval", note: `the ${spec.name} would act; that needs your approval and is not built yet` };
+      // Ceilings, in code: nothing that acts runs. The Operator (act-ask) runs
+      // read-only and only names actions; code gates each one afterwards.
+      if (ceilingRank(spec.ceiling) > ceilingRank("act-ask")) return { ok: false, status: "needs-approval", note: `the ${spec.name} would act on its own; that is never allowed` };
       // A mission's ceiling can only tighten: a read-only mission never drafts.
       if (job!.mission && ceilingRank(spec.ceiling) > ceilingRank(job!.mission.ceiling)) return { ok: false, status: "needs-approval", note: `the ${spec.name} goes past the mission's ceiling (${job!.mission.ceiling}); raise it on the mission's Setup tab to run it` };
       const notebook = readNotebook(vault, job!.domains.owner, sid);
@@ -793,10 +843,106 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
     saveJob(vault, job);
     fileResults(vault, job, last, drafts, clock(), prior.slice(handedIn));
     job = readJob(vault, id) ?? job;
+    await gateOperator(vault, job, prior.slice(handedIn), deps, clock());
+    job = readJob(vault, id) ?? job;
     return finish("done");
   } catch (e) {
     return finish("failed", `error: ${(e as Error).message}`);
   }
+}
+
+// ── The Operator's actions, each behind the broker ─────────────────────────
+
+/** The domain an action runs in: a mission's owner domain, or the owner. */
+function actDomain(vault: string, owner: string): string {
+  const ms = missionScopeSlug(owner);
+  if (!ms) return owner;
+  try { return readMission(vault, ms)?.domains.find((d) => d.role === "owner")?.slug ?? "general"; } catch { return "general"; }
+}
+
+async function defaultAct(vault: string, domain: string, action: string): Promise<string> {
+  const { executeAction } = await import("./daemon-loops.ts");
+  const { detectClis } = await import("./cli-bridge.ts");
+  const clis = await detectClis();
+  const cli = clis.find((c) => c.kind === "claude") ?? clis[0];
+  if (!cli) throw new Error("no AI runtime available");
+  return executeAction({ vaultPath: vault, intervalSec: 0, provider: cli.kind, model: "" }, domain, action);
+}
+
+/**
+ * Every action the Operator named goes through broker.gateAction (pause, the
+ * autonomy policy, the Compass rules, a mission's ceiling and money). Blocked
+ * ones stop there; ones that ask wait in the Inbox (the act queue) for a yes;
+ * only a class the user's policy lets run alone, with autonomy on auto, runs
+ * now. Code decides; the Operator's own words never do.
+ */
+export async function gateOperator(vault: string, job: Job, ran: { returns: string; out: StepOutput }[], deps: RunDeps = {}, now = Date.now()): Promise<OperatorAction[]> {
+  const named = ran.flatMap((x) => (x.returns === "action" ? x.out.actions ?? [] : [])).slice(0, 5);
+  if (!named.length) return [];
+  const { gateAction } = await import("./broker.ts");
+  const { isAuto } = await import("./autonomy.ts");
+  const { gateEngineAct, OPERATOR_TOOL } = await import("./act-gate.ts");
+  const out: OperatorAction[] = [];
+  for (const [i, a] of named.entries()) {
+    const n = i + 1;
+    const g = gateAction(a.action, { vault, autonomousActs: isAuto(vault), ...(job.mission ? { mission: job.mission } : {}) });
+    const base = { n, text: oneLine(a.action, 300), ...(a.why ? { why: oneLine(a.why) } : {}), ...(a.undo ? { undo: oneLine(a.undo) } : {}), cls: g.cls, ts: now };
+    if (g.decision === "block") { out.push({ ...base, status: "blocked", reason: g.reason ?? "blocked" }); continue; }
+    if (g.decision === "ask") {
+      const q = gateEngineAct(vault, spaceKey(job.domains.owner), OPERATOR_TOOL, { job: job.id, n, action: base.text }, `Operator: ${base.text}`);
+      if (q.state === "allow") { out.push({ ...base, status: "running", reason: "you approved this exact action" }); continue; }
+      const carries = q.id ? (await import("./act-gate.ts")).pendingAct(vault, q.id)?.categories ?? [] : [];
+      out.push({ ...base, status: q.state === "declined" ? "declined" : "asks", reason: g.reason ?? "needs your yes", ...(q.id ? { act: q.id } : {}), ...(carries.length ? { carries } : {}) });
+      continue;
+    }
+    out.push({ ...base, status: "running", reason: "your policy lets this run alone" });
+  }
+  job.actions = out;
+  saveJob(vault, job);
+  for (const x of out.filter((y) => y.status === "running")) await carryOut(vault, job, x, deps);
+  return job.actions;
+}
+
+async function carryOut(vault: string, job: Job, x: OperatorAction, deps: RunDeps): Promise<void> {
+  try {
+    const report = await (deps.act ?? defaultAct)(vault, actDomain(vault, job.domains.owner), x.text);
+    x.status = "done"; x.report = oneLine(report || "done", 600);
+    const { recordSpend } = await import("./autonomy.ts");
+    const { parseAmountUsd } = await import("./broker.ts");
+    if (x.cls === "financial") { const amt = parseAmountUsd(x.text); if (amt) recordSpend(vault, amt); }
+    if (job.mission && x.cls === "financial") {
+      const amt = (await import("./broker.ts")).parseAmountUsd(x.text);
+      if (amt) { try { (await import("./missions.ts")).spend(vault, job.mission.slug, { line: "other", usd: amt, what: x.text.slice(0, 120), ref: `job:${job.id}:${x.n}`, by: "mission" }); } catch { /* no budget line */ } }
+    }
+  } catch (e) { x.status = "failed"; x.report = (e as Error).message.slice(0, 300); }
+  x.ts = Date.now();
+  saveJob(vault, job);
+  logActivity(vault, { type: "job", domain: job.domains.owner, title: `Operator ${x.status}: ${x.text.slice(0, 80)}`, detail: x.report ?? "", status: x.status === "done" ? "ok" : "error", ref: job.id });
+}
+
+/**
+ * The user answered one action (Allow in the Inbox, or Run on the job card):
+ * it runs only when its exact approval is there (a grant, consumed now) and
+ * the broker does not block it (pause, never, a hard rule). Decline marks it.
+ */
+export async function actOnAction(vault: string, id: string, n: number, o: { decline?: boolean; deps?: RunDeps } = {}): Promise<OperatorAction> {
+  const job = readJob(vault, id);
+  if (!job) throw new Error(`no job ${id}`);
+  const x = job.actions?.find((a) => a.n === n);
+  if (!x) throw new Error(`no action ${n} in job ${id}`);
+  if (o.decline) { if (x.status === "asks") { x.status = "declined"; x.ts = Date.now(); saveJob(vault, job); } return x; }
+  if (x.status !== "asks") return x;
+  const { gateAction } = await import("./broker.ts");
+  const g = gateAction(x.text, { vault, autonomousActs: true, ...(job.mission ? { mission: job.mission } : {}) });
+  if (g.decision === "block") { x.status = "blocked"; x.reason = g.reason; saveJob(vault, job); return x; }
+  const { gateEngineAct, OPERATOR_TOOL } = await import("./act-gate.ts");
+  const q = gateEngineAct(vault, spaceKey(job.domains.owner), OPERATOR_TOOL, { job: job.id, n, action: x.text }, `Operator: ${x.text}`);
+  if (q.state === "declined") { x.status = "declined"; saveJob(vault, job); return x; }
+  if (q.state !== "allow") return x; // still waiting for the yes
+  x.status = "running";
+  saveJob(vault, job);
+  await carryOut(vault, job, x, o.deps ?? {});
+  return x;
 }
 
 function writeStep(dir: string, n: number, sid: string, record: unknown): void {
@@ -853,7 +999,7 @@ function fileResults(vault: string, job: Job, last: { returns: string; out: Step
     }
   }
   // The page's filing, plus a Clerk's: tasks for the owner and notes for the domains the job tells.
-  const clerk = all.filter((x) => x.returns === "vault changes").map((x) => x.out.filed ?? {});
+  const clerk = all.filter((x) => x.returns === "vault changes" || x.returns === "repairs").map((x) => x.out.filed ?? {});
   const f: NonNullable<StepOutput["filed"]> = { ...(last.out.filed ?? {}) };
   for (const c of clerk) { f.tasks = [...(f.tasks ?? []), ...(c.task ? [c.task] : []), ...(c.tasks ?? [])]; f.notes = { ...(c.notes ?? {}), ...(f.notes ?? {}) }; }
   if (f?.decision && oneLine(f.decision)) {
@@ -878,6 +1024,35 @@ function fileResults(vault: string, job: Job, last: { returns: string; out: Step
     appendJsonl(domainUpdatesPath(vault, d), { ts: now, from_domain: owner, thread: `job:${job.id}`, fact: oneLine(fact), entities: [] });
     add({ domain: d, kind: "note", file: rel(domainUpdatesPath(vault, d)), ref: `job:${job.id}`, text: `note: ${oneLine(fact, 120)}` });
   }
+  // The Interviewer's questions wait in the owner's memory until answered.
+  const questions = all.flatMap((x) => (x.returns === "memory updates" ? x.out.questions ?? [] : [])).map((q) => oneLine(q, 240)).filter((q) => q.endsWith("?")).slice(0, 5);
+  if (questions.length) {
+    const mem = join(resolveDomainDir(vault, owner), "memory", "memory.md");
+    const cur = readText(mem);
+    const fresh = questions.filter((q) => !cur.includes(q));
+    if (fresh.length) {
+      const block = `\n## Questions to ask you (${day})\n${fresh.map((q) => `- ${q}`).join("\n")}\n`;
+      mkdirSync(join(mem, ".."), { recursive: true });
+      writeFileSync(mem, `${cur.replace(/\s*$/, "\n")}${block}`);
+      add({ domain: owner, kind: "memory", file: rel(mem), ref: block, text: `${fresh.length} question${fresh.length === 1 ? "" : "s"} to ask you, in memory` });
+    }
+  }
+  // The Coach proposes Compass lines only in the user's own words: the quote
+  // must be found verbatim in their notes and the title must use their words.
+  // They wait for the weekly review's Yes; the Compass is never written here.
+  const cands = all.flatMap((x) => (x.returns === "goals" ? x.out.candidates ?? [] : []));
+  if (cands.length) {
+    const ctx = jobContext(vault, job);
+    const sources = [...bootstrapSources(vault), { path: "job context", text: ctx }];
+    const pp = join(compassMetaDir(vault), "proposals.jsonl");
+    for (const c of cands.slice(0, 3)) {
+      if (!quoteSource(c.quote, sources) || !titleFromUserWords(c.title, sources)) continue;
+      const row = JSON.stringify({ ts: now, src: "coach", kind: c.kind, title: oneLine(c.title, 120), text: oneLine(c.quote, 400), source: { thread: `job:${job.id}`, domain: owner }, confidence: 0.6, status: "candidate" });
+      mkdirSync(join(pp, ".."), { recursive: true });
+      appendFileSync(pp, `${row}\n`);
+      add({ domain: "compass", kind: "candidate", file: rel(pp), ref: row, text: `proposed for your Compass: ${oneLine(c.title, 80)} (waits for your yes)` });
+    }
+  }
   if (rows.length) writeReceipts(vault, job.id, rows);
 }
 
@@ -898,6 +1073,12 @@ export function undoFiled(vault: string, id: string, n: number, now = Date.now()
   } else if (r.kind === "task") {
     const lines = readText(abs).split("\n");
     writeFileSync(abs, lines.filter((l) => !l.includes(`~id:${r.ref}`)).join("\n"));
+  } else if (r.kind === "memory") {
+    // Take out exactly the block it wrote, nothing else.
+    const cur = readText(abs);
+    if (cur.includes(r.ref)) writeFileSync(abs, cur.replace(r.ref, ""));
+  } else if (r.kind === "candidate") {
+    writeFileSync(abs, readText(abs).split("\n").filter((l) => l !== r.ref).join("\n"));
   } else if (r.kind === "decision" || r.kind === "note") {
     const lines = readText(abs).split("\n");
     const keep = lines.filter((l) => {
@@ -996,6 +1177,28 @@ export async function jobCommand(argv: string[], vault: string): Promise<number>
     if (sub === "show") { const v = jobView(vault, args.pos[1] ?? ""); if (!v) return fail(`no job ${args.pos[1] ?? ""}`); if (args.json) out(v); else console.log(JSON.stringify(v, null, 2)); return 0; }
     if (sub === "list") { const l = listJobs(vault, Number(args.get("limit") ?? 50) || 50); if (args.json) out(l); else for (const j of l) console.log(`${j.status.padEnd(14)} ${j.id}  ${j.domains.owner}`); return 0; }
     if (sub === "stop") { const j = stopJob(vault, args.pos[1] ?? ""); if (args.json) out(j); else console.log(`${j.id}: ${j.status}`); return 0; }
+    if (sub === "act") {
+      const jid = args.pos[1] ?? "";
+      const n = Number(args.pos[2] ?? args.get("n"));
+      // From the job card: Allow (the user's yes, naming what it carries) or Deny,
+      // answered in the same queue the Inbox reads. Allow runs in its own process.
+      if (args.has("approve") || args.has("deny")) {
+        const j = readJob(vault, jid);
+        const x = j?.actions?.find((a) => a.n === n);
+        if (!j || !x) return fail(`no action ${n} in job ${jid}`);
+        const ag = await import("./act-gate.ts");
+        if (args.has("deny")) { if (x.act) ag.denyPendingAct(vault, x.act); const d = await actOnAction(vault, jid, n, { decline: true }); if (args.json) out({ ok: true, action: d }); else console.log(`declined: ${d.text}`); return 0; }
+        if (x.status !== "asks") return fail(`action ${n} is ${x.status}`);
+        if (x.act && ag.pendingAct(vault, x.act)) { const r = ag.approvePendingAct(vault, x.act, true); if (!r.ok) return fail(r.error ?? "not approved"); }
+        const [bin, ...pre] = selfCommand();
+        spawn(bin!, [...pre, "--vault", vault, "job", "act", jid, String(n)], { detached: true, stdio: "ignore", env: process.env }).unref();
+        if (args.json) out({ ok: true, action: { ...x, status: "running" } }); else console.log(`running: ${x.text}`);
+        return 0;
+      }
+      const x = await actOnAction(vault, jid, n, { decline: args.has("decline") });
+      if (args.json) out({ ok: true, action: x }); else console.log(`${x.status}: ${x.text}${x.report ? ` (${x.report})` : ""}`);
+      return 0;
+    }
     if (sub === "undo") { const r = undoFiled(vault, args.pos[1] ?? "", Number(args.pos[2] ?? args.get("n"))); if (args.json) out({ ok: true, receipt: r }); else console.log(`undone: ${r.text}`); return 0; }
     if (sub === "adjust") {
       const list = (k: string) => (args.get(k) === undefined ? undefined : args.get(k)!.split(",").map((s) => s.trim()).filter(Boolean));
@@ -1006,5 +1209,5 @@ export async function jobCommand(argv: string[], vault: string): Promise<number>
       return 0;
     }
   } catch (e) { return fail((e as Error).message); }
-  return fail("usage: prevail job dispatch <msg> --domain d [--start] | start <id> [--wait] | run <id> | show <id> | list | stop <id> | adjust <id> [--owner d] [--consulted a,b] [--informed a,b] [--team a+b>c] [--effort quick|standard|deep] | undo <id> <n> [--json]");
+  return fail("usage: prevail job dispatch <msg> --domain d [--start] | start <id> [--wait] | run <id> | show <id> | list | stop <id> | act <id> <n> [--decline] | adjust <id> [--owner d] [--consulted a,b] [--informed a,b] [--team a+b>c] [--effort quick|standard|deep] | undo <id> <n> [--json]");
 }

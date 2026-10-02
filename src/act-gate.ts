@@ -302,6 +302,41 @@ function consumeGrant(vault: string, hash: string): ActGrant | null {
   return hit;
 }
 
+// ── Engine acts: the engine's own writes that wait in the same queue ───────
+// The Operator's actions and MCP mission writes (create, status, complete)
+// are queued like a connector write, so the user answers them in the Inbox
+// with the same Allow / Deny. A tool name here never starts with mcp__prevail
+// (that prefix is the engine's own read server and always runs).
+export const OPERATOR_TOOL = "mcp__prevail-operator__act";
+export const MISSION_TOOL_PREFIX = "mcp__prevail-missions__";
+
+/**
+ * The gate for an engine act: "allow" when the user approved this exact call
+ * (a grant, consumed now), "declined" when they said no in the last 30
+ * minutes, otherwise it is queued (once) with a readable summary and "queued"
+ * comes back with the act id.
+ */
+export function gateEngineAct(vault: string, domain: string, tool: string, args: unknown, summary: string): { state: "allow" | "declined" | "queued"; id?: string } {
+  const argsJson = JSON.stringify(args ?? {});
+  const hash = actHash(tool, argsJson);
+  if (isDenied(vault, hash)) return { state: "declined" };
+  if (consumeGrant(vault, hash)) {
+    auditAction(vault, { ts: Date.now(), domain, action: summary.slice(0, 280), outcome: "executed", report: `ran under user grant (${tool})` });
+    return { state: "allow" };
+  }
+  // Scan what the act would carry out (its summary), not the JSON wrapping:
+  // JSON's own quote marks read as a verbatim quote.
+  const findings = readEgressGuard() === "on" ? scanSensitive(summary) : [];
+  const rec = addPendingAct(vault, { domain, summary: summary.slice(0, 200), tool, argsJson, categories: findingCategories(findings) });
+  auditAction(vault, { ts: Date.now(), domain, action: summary.slice(0, 280), outcome: "proposed", report: `queued for approval (${tool})` });
+  return { state: "queued", id: rec.id };
+}
+
+/** The pending act with this id, before an answer removes it from the queue. */
+export function pendingAct(vault: string, id: string): PendingAct | null {
+  return readPendingActs(vault).find((a) => a.id === id) ?? null;
+}
+
 // ── Builtin-tool boundary (C1) ───────────────────────────────────────────────
 // The connector gate above covers MCP tools. But an `act` run also hands the
 // model its RUNTIME BUILTINS - Bash, Write, Edit, Read, WebFetch, WebSearch -

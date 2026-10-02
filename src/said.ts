@@ -116,7 +116,7 @@ export interface TopCandidate { key: string; kind: Candidate["kind"]; title: str
 
 /** The candidates heard most often, not already in the Compass and not answered. */
 export function topCandidates(vault: string, n = 3): TopCandidate[] {
-  const rows = readRows(vault).filter((r) => r.src === "chat" || r.key);
+  const rows = readRows(vault).filter((r) => r.src === "chat" || r.src === "coach" || r.key);
   const answered = new Set(rows.filter((r) => r.key && (r.status === "accepted" || r.status === "dismissed")).map((r) => r.key!));
   const have = new Set(items(readCompass(vault)).map((it) => candidateKey(it.kind, it.title)));
   const by = new Map<string, TopCandidate & { th: Set<string> }>();

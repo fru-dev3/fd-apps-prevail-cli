@@ -9,9 +9,9 @@
 // specialist step, any other is a task for the user. A save from chat is a
 // draft until the user adopts it. Nothing is overwritten: a taken id gets -2.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildRoot, resolveDomainDir } from "./path-safety.ts";
+import { buildRoot, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { listPlaybooks, loadPlaybook, userPlaybookDirs, type Playbook, type PlaybookStep } from "./orchestrator.ts";
 import { jobDir, jobView, listJobs, readJob, type Job } from "./jobs.ts";
@@ -21,7 +21,7 @@ import { parseModArgs } from "./cli-args.ts";
 export type PlaybookGroup = "running" | "yours" | "drafts" | "built-in";
 export interface StepRow { n: number; kind: PlaybookStep["kind"]; label: string; specialists: string[]; returns: string[]; gate: boolean; ask: boolean; domain?: string }
 export interface PlaybookRow { id: string; name: string; goal: string; domain?: string; group: PlaybookGroup; source: "yours" | "built-in"; draft: boolean; steps: number; running: boolean; lastRun?: { ts: number; status: string } }
-export interface PlaybookViewT extends PlaybookRow { rows: StepRow[]; triggers: { domain: string; loop: string; cadence: string; enabled: boolean }[]; runs: { id: string; status: string; ts: number; summary?: string }[]; goalId?: string; pathId?: string; from?: string }
+export interface PlaybookViewT extends PlaybookRow { rows: StepRow[]; triggers: { domain: string; loop: string; cadence: string; enabled: boolean; on?: string }[]; runs: { id: string; status: string; ts: number; summary?: string }[]; goalId?: string; pathId?: string; from?: string }
 
 const yoursDir = (vault: string) => join(buildRoot(vault), "playbooks");
 const isYours = (vault: string, id: string) => userPlaybookDirs(vault).some((d) => existsSync(join(d, `${id}.json`)));
@@ -64,8 +64,8 @@ export function playbookTriggers(vault: string, id: string): PlaybookViewT["trig
   for (const d of listDomainDirs(vault)) {
     if (d.startsWith("_")) continue;
     try {
-      const doc = JSON.parse(readFileSync(join(resolveDomainDir(vault, d), "_loops.json"), "utf8")) as { loops?: { id: string; playbook?: string; cadence?: string; enabled?: boolean }[] };
-      for (const l of doc.loops ?? []) if (l.playbook === id) out.push({ domain: d, loop: l.id, cadence: l.cadence ?? "", enabled: l.enabled !== false });
+      const doc = JSON.parse(readFileSync(join(resolveDomainDir(vault, d), "_loops.json"), "utf8")) as { loops?: { id: string; playbook?: string; cadence?: string; enabled?: boolean; on?: string }[] };
+      for (const l of doc.loops ?? []) if (l.playbook === id) out.push({ domain: d, loop: l.id, cadence: l.on ? `on ${l.on}` : l.cadence ?? "", enabled: l.enabled !== false, ...(l.on ? { on: l.on } : {}) });
     } catch { /* no loops */ }
   }
   return out;
@@ -148,6 +148,61 @@ export function adoptPlaybook(vault: string, id: string): Playbook {
   return pb;
 }
 
+// ── Results of scheduled and event runs land in the Inbox ───────────────────
+
+export interface InboxResult { runId: string; playbook: string; name: string; trigger: "schedule" | "event"; event?: string; domain?: string; ok: boolean; note: string; ts: number; waiting: number; steps: { label: string; ok: boolean; decision: string; note: string }[] }
+const seenPath = (vault: string) => join(runtimePath(vault, "_meta"), "jobs", "inbox-seen.json");
+function readSeen(vault: string): string[] { try { return JSON.parse(readFileSync(seenPath(vault), "utf8")) as string[]; } catch { return []; } }
+
+/** Playbook runs the user did not start (a loop's clock, a radar event), newest first, until marked seen. */
+export function playbookInbox(vault: string, limit = 30): InboxResult[] {
+  const root = join(runtimePath(vault, "_meta"), "jobs");
+  if (!existsSync(root)) return [];
+  const seen = new Set(readSeen(vault));
+  const out: InboxResult[] = [];
+  for (const id of readdirSync(root)) {
+    if (seen.has(id) || !/^(loop|event)-/.test(id)) continue;
+    try {
+      const r = JSON.parse(readFileSync(join(root, id, "run.json"), "utf8")) as { runId: string; playbook: string; name?: string; ok: boolean; note: string; steps: { label: string; ok: boolean; decision: string; note: string }[]; trigger?: string; event?: string; domain?: string; ts?: number };
+      if (r.trigger !== "schedule" && r.trigger !== "event") continue;
+      out.push({ runId: r.runId, playbook: r.playbook, name: r.name ?? r.playbook, trigger: r.trigger, ...(r.event ? { event: r.event } : {}), ...(r.domain ? { domain: r.domain } : {}), ok: r.ok, note: r.note, ts: r.ts ?? statSync(join(root, id, "run.json")).mtimeMs, waiting: r.steps.filter((x) => x.decision === "ask").length, steps: r.steps.map((x) => ({ label: x.label, ok: x.ok, decision: x.decision, note: x.note.slice(0, 300) })) });
+    } catch { /* not a finished run */ }
+  }
+  return out.sort((a, b) => b.ts - a.ts).slice(0, limit);
+}
+
+export function markSeen(vault: string, runId: string): void {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(runId)) throw new Error(`bad run id ${runId}`);
+  const s = readSeen(vault).filter((x) => x !== runId);
+  s.push(runId);
+  mkdirSync(join(seenPath(vault), ".."), { recursive: true });
+  writeFileSync(seenPath(vault), JSON.stringify(s.slice(-500)));
+}
+
+/**
+ * Put a playbook on a schedule or an event in a domain (or mission): a loop
+ * in that space's _loops.json with playbook (and on, for an event). An
+ * existing loop for the same playbook is updated, never doubled.
+ */
+export function setTrigger(vault: string, id: string, space: string, o: { cadence?: "daily" | "weekly" | "monthly"; on?: string; enabled?: boolean; autonomy?: "ask" | "auto" }): { domain: string; loop: string } {
+  if (!loadPlaybook(vault, id)) throw new Error(`no playbook ${id}`);
+  if (!o.cadence && !o.on) throw new Error("a trigger needs a cadence (daily, weekly, monthly) or an event (on: <radar kind>)");
+  if (o.on && !/^(commitment|waiting|routine|relationship|goal|path|admin|domain|decision|mission|rule)(:[^\n]{1,60})?$/.test(o.on)) throw new Error(`unknown event ${o.on}`);
+  const dir = resolveDomainDir(vault, space);
+  if (!dir || !existsSync(dir)) throw new Error(`no domain or mission ${space}`);
+  const file = join(dir, "_loops.json");
+  let doc: { schema?: number; desiredState?: string; loops: Record<string, unknown>[] } = { schema: 1, desiredState: "", loops: [] };
+  try { doc = JSON.parse(readFileSync(file, "utf8")); doc.loops ??= []; } catch { /* new file */ }
+  const loopId = `pb-${id}`.slice(0, 60);
+  const now = Date.now();
+  let l = doc.loops.find((x) => x.id === loopId || (x.playbook === id && !!x.on === !!o.on));
+  if (!l) { l = { id: loopId, name: `Playbook: ${loadPlaybook(vault, id)!.name}`, purpose: loadPlaybook(vault, id)!.goal.slice(0, 200), kind: "steward", type: "open", condition: "", evaluation: "", actions: [], status: "active", lastRunTs: null, createdTs: now }; doc.loops.push(l); }
+  Object.assign(l, { playbook: id, cadence: o.cadence ?? (l.cadence as string | undefined) ?? "weekly", autonomy: o.autonomy ?? (l.autonomy as string | undefined) ?? "auto", enabled: o.enabled ?? true });
+  if (o.on) l.on = o.on; else delete l.on;
+  writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
+  return { domain: space, loop: String(l.id) };
+}
+
 export async function playbooksCommand(argv: string[], vault: string): Promise<number> {
   const args = parseModArgs(argv);
   const sub = args.pos[0] ?? "rows";
@@ -157,7 +212,15 @@ export async function playbooksCommand(argv: string[], vault: string): Promise<n
     if (sub === "rows") { const r = playbookRows(vault); if (args.json) out(r); else for (const x of r) console.log(`${x.group.padEnd(9)} ${x.id.padEnd(28)} ${x.name}`); return 0; }
     if (sub === "show") { const v = playbookView(vault, args.pos[1] ?? ""); if (!v) return fail(`no playbook ${args.pos[1] ?? ""}`); if (args.json) out(v); else for (const r of v.rows) console.log(`${r.n} ${r.specialists.join(" + ") || r.kind}${r.gate ? " GATE" : ""}${r.ask ? " ASK" : ""}  ${r.label}  -> ${r.returns.join(", ")}`); return 0; }
     if (sub === "save") { const pb = saveJobAsPlaybook(vault, args.pos[1] ?? "", { name: args.get("name"), draft: !args.has("adopt") }); if (args.json) out({ ok: true, playbook: pb }); else console.log(`Saved ${pb.draft ? "draft " : ""}playbook ${pb.id} (${pb.steps.length} steps)`); return 0; }
+    if (sub === "inbox") { const r = playbookInbox(vault); if (args.json) out(r); else for (const x of r) console.log(`${x.trigger.padEnd(8)} ${x.name}: ${x.note}${x.event ? ` (on ${x.event})` : ""}`); return 0; }
+    if (sub === "seen") { markSeen(vault, args.pos[1] ?? ""); if (args.json) out({ ok: true }); return 0; }
+    if (sub === "trigger") {
+      const cad = args.get("cadence") as "daily" | "weekly" | "monthly" | undefined;
+      const r = setTrigger(vault, args.pos[1] ?? "", args.get("domain") ?? "general", { ...(cad ? { cadence: cad } : {}), ...(args.get("on") ? { on: args.get("on") } : {}), ...(args.has("off") ? { enabled: false } : {}), ...(args.get("autonomy") === "ask" ? { autonomy: "ask" as const } : {}) });
+      if (args.json) out({ ok: true, ...r }); else console.log(`${args.pos[1]} runs from ${r.domain}/${r.loop}`);
+      return 0;
+    }
     if (sub === "adopt") { const pb = adoptPlaybook(vault, args.pos[1] ?? ""); if (args.json) out({ ok: true, playbook: pb }); else console.log(`${pb.id} is one of yours now`); return 0; }
   } catch (e) { return fail((e as Error).message); }
-  return fail("usage: prevail playbooks rows | show <id> | save <job-id> [--name N] [--adopt] | adopt <id> [--json]");
+  return fail("usage: prevail playbooks rows | show <id> | save <job-id> [--name N] [--adopt] | adopt <id> | inbox | seen <run-id> | trigger <id> --domain d (--cadence daily|weekly|monthly | --on <radar kind>[:words]) [--off] [--json]");
 }
