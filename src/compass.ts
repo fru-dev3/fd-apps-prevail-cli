@@ -39,7 +39,8 @@
 // an item nobody changed is written back byte for byte.
 //
 // Statuses: a proposed line carries ~status:proposed. Confirming a goal makes
-// it active; confirming a value, role, rule or negotiable drops the token
+// it active once its WOOP is done (outcome, obstacle, an if-then plan), else
+// "confirmed" (the user's, not started); confirming a value, role, rule or negotiable drops the token
 // (they are ranked and versioned, never done). Every confirmed change keeps
 // the prior file in build/compass.versions/<ISO>.md and adds a line to
 // build/_meta/compass/ledger.jsonl.
@@ -285,7 +286,19 @@ export function readLedger(vault: string): LedgerLine[] {
 
 const statusOf = (x: { tokens: Record<string, string> }, kind: Kind | "mission") => x.tokens.status ?? (kind === "goal" ? "active" : "confirmed");
 
-/** Confirm proposed lines (all, or by id). Goals become active; others lose the token. */
+// WOOP (wish, outcome, obstacle, plan): a goal goes active only once it has
+// the outcome the user pictures, the obstacle inside them, and an if-then
+// plan, in their words. Until then a confirmed goal is "confirmed" (theirs,
+// not started). An expectation of 1 or 2 out of 5 makes it a small trial
+// ("prototyping") instead.
+export const IF_THEN = /\bif\b[\s\S]{2,}?(\bthen\b|,)/i;
+export function woopComplete(it: { fields: Field[] }): boolean {
+  const f = (k: string) => (field(it, k) ?? "").replace(/^"|"$/g, "").trim();
+  return !!f("outcome") && !!f("obstacle") && IF_THEN.test(f("plan"));
+}
+const activeOrTrial = (it: CompassItem) => (Number(field(it, "expect") ?? 5) <= 2 ? "prototyping" : "active");
+
+/** Confirm proposed lines (all, or by id). A goal becomes active when its WOOP is done, else confirmed; others lose the token. */
 export function confirm(vault: string, ids: string[] | "all", reason = "confirmed", now = Date.now()): string[] {
   const doc = readCompass(vault);
   const changes: Omit<LedgerLine, "ts">[] = [];
@@ -294,7 +307,7 @@ export function confirm(vault: string, ids: string[] | "all", reason = "confirme
   if (m && isProposed(m) && want("mission")) { delete m.tokens.status; m.dirty = true; changes.push({ id: "mission", from: "proposed", to: "confirmed", reason, by: "user" }); }
   for (const it of items(doc)) {
     if (isProposed(it) && want(it.id)) {
-      if (it.kind === "goal") it.tokens.status = "active"; else delete it.tokens.status;
+      if (it.kind === "goal") it.tokens.status = woopComplete(it) ? activeOrTrial(it) : "confirmed"; else delete it.tokens.status;
       it.dirty = true;
       changes.push({ id: it.id, from: "proposed", to: statusOf(it, it.kind), reason, by: "user" });
     }
@@ -320,6 +333,48 @@ export function drop(vault: string, ids: string[], reason = "dropped", now = Dat
   }
   if (changes.length) saveCompass(vault, doc, changes, now);
   return changes.map((c) => c.id);
+}
+
+export interface Woop { outcome?: string; obstacle?: string; plan?: string; expect?: number }
+
+/**
+ * Record a goal's WOOP in the user's words. When outcome, obstacle and an
+ * if-then plan are all there, a confirmed (or proposed) goal goes active, or
+ * becomes a small trial when the user expects 1 or 2 out of 5.
+ */
+export function setWoop(vault: string, id: string, w: Woop, now = Date.now()): { id: string; status: string; complete: boolean } {
+  const doc = readCompass(vault);
+  const it = items(doc, "goal").find((g) => g.id === id);
+  if (!it) throw new Error(`no goal ${id}`);
+  const put = (k: string, v: string | undefined) => {
+    if (v === undefined || !v.trim()) return;
+    const val = JSON.stringify(clean(v));
+    const f = it.fields.find((x) => x.key === k);
+    const at = it.fields.findIndex((x) => x.key === "from");
+    if (f) f.value = val; else if (at >= 0) it.fields.splice(at, 0, { key: k, value: val }); else it.fields.push({ key: k, value: val });
+  };
+  put("outcome", w.outcome); put("obstacle", w.obstacle); put("plan", w.plan);
+  if (w.expect !== undefined) {
+    if (!Number.isInteger(w.expect) || w.expect < 1 || w.expect > 5) throw new Error("expect is 1 to 5");
+    const f = it.fields.find((x) => x.key === "expect");
+    if (f) f.value = String(w.expect); else it.fields.push({ key: "expect", value: String(w.expect) });
+  }
+  it.dirty = true;
+  const before = it.tokens.status ?? "active";
+  const complete = woopComplete(it);
+  const changes: Omit<LedgerLine, "ts">[] = [];
+  if (complete && (before === "confirmed" || before === "prototyping" || (before === "active" && activeOrTrial(it) === "prototyping"))) {
+    const to = activeOrTrial(it);
+    if (to !== before) { it.tokens.status = to; changes.push({ id, from: before, to, reason: "WOOP done", evidence: [field(it, "plan") ?? ""], by: "user" }); }
+  }
+  if (!changes.length) changes.push({ id, from: before, to: before, reason: "WOOP updated", by: "user" });
+  saveCompass(vault, doc, changes, now);
+  return { id, status: it.tokens.status ?? "active", complete };
+}
+
+/** Confirmed goals still waiting for their WOOP, oldest first. */
+export function goalsNeedingWoop(vault: string): CompassItem[] {
+  return items(readCompass(vault), "goal").filter((g) => g.tokens.status === "confirmed" && !woopComplete(g));
 }
 
 // ── In every chat turn ──────────────────────────────────────────────────────
@@ -355,6 +410,8 @@ export function compassBlock(vault: string, opts: { local?: boolean } = {}): str
       parts.push(`- ${g.title}${serves.length ? ` (serves ${serves.join(", ")})` : ""}${g.tokens.due ? ` by ${g.tokens.due}` : ""}`);
     }
   }
+  const shaping = items(doc, "goal").filter((g) => ok(g) && (g.tokens.status === "confirmed" || g.tokens.status === "prototyping"));
+  if (shaping.length) parts.push(`Goals they confirmed but have not started (no plan yet, or a small trial): ${shaping.slice(0, 6).map((g) => g.title).join("; ")}`);
   const roles = items(doc, "role").filter(ok);
   if (roles.length) parts.push(`Roles: ${roles.map((r) => r.title).join(", ")}`);
   if (!parts.length) return "";
@@ -585,8 +642,29 @@ export async function compassCommand(argv: string[], vault: string): Promise<num
     else console.log(`${sub === "confirm" ? "Confirmed" : "Dropped"} ${done.length}: ${done.join(", ") || "nothing"}`);
     return 0;
   }
+  if (sub === "woop") {
+    try {
+      const n = args.get("expect");
+      const r = setWoop(vault, args.pos[1] ?? "", { outcome: args.get("outcome"), obstacle: args.get("obstacle"), plan: args.get("plan"), ...(n !== undefined ? { expect: Number(n) } : {}) });
+      if (args.json) out({ ok: true, ...r }); else console.log(`${r.id}: ${r.status}${r.complete ? "" : " (WOOP not complete: outcome, obstacle and an if-then plan)"}`);
+      return 0;
+    } catch (e) { if (args.json) out({ ok: false, error: (e as Error).message }); else console.error((e as Error).message); return 1; }
+  }
+  if (sub === "interview") {
+    const iv = await import("./interview.ts");
+    const act = args.pos[1] ?? "status";
+    const r = act === "start" ? iv.startInterview(vault) : act === "answer" ? iv.answerInterview(vault, args.pos.slice(2).join(" ") || args.get("text") || "") : act === "pause" ? (iv.pauseInterview(vault), { reply: "Paused.", state: iv.readInterview(vault) }) : { reply: iv.nextInterviewQuestion(vault)?.text ?? "", state: iv.readInterview(vault) };
+    if (args.json) out(r); else console.log(r.reply);
+    return 0;
+  }
+  if (sub === "candidates") {
+    const { topCandidates } = await import("./said.ts");
+    const c = topCandidates(vault, Number(args.get("limit") ?? 10) || 10);
+    if (args.json) out(c); else for (const x of c) console.log(`${x.kind.padEnd(6)} ${x.title}  (${x.count}x) ${x.key}`);
+    return 0;
+  }
   if (sub === "versions") { const v = compassVersions(vault); if (args.json) out(v); else for (const x of v) console.log(x.name); return 0; }
   if (sub === "ledger") { const l = readLedger(vault); if (args.json) out(l); else for (const x of l) console.log(`${new Date(x.ts).toISOString()} ${x.id} ${x.from} -> ${x.to} (${x.reason})`); return 0; }
-  console.error("usage: prevail compass show|block|bootstrap|confirm|drop|versions|ledger [--json]");
+  console.error("usage: prevail compass show|block|bootstrap|confirm|drop|woop <id> [--outcome] [--obstacle] [--plan] [--expect 1-5]|interview start|answer <text>|pause|status|candidates|versions|ledger [--json]");
   return 1;
 }

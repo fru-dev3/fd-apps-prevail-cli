@@ -43,7 +43,7 @@ export interface MetricEvent {
   project?: string;
   model?: string;
   host: string;
-  tier: "measured" | "derived";
+  tier: "measured" | "derived" | "asked";
   attrs: Record<string, number | string>;
   file?: string;           // where it was read from (vault-relative); never written
 }
@@ -417,9 +417,13 @@ export function spendEvents(vault: string): { events: MetricEvent[]; info: Sourc
 
 export type Per = "week" | "month";
 export interface MetricDef {
-  id: string; title: string; family: string; per: Per; unit: "count" | "usd" | "tokens" | "minutes" | "days";
-  tier: "measured" | "derived"; srcs: string[]; kinds: string[]; from: string;
+  id: string; title: string; family: string; per: Per; unit: "count" | "usd" | "tokens" | "minutes" | "days" | "score" | "km" | "mi" | "hours";
+  tier: "measured" | "derived" | "asked" | "inferred"; srcs: string[]; kinds: string[]; from: string;
   value?: (e: MetricEvent) => number; days?: boolean; documentary?: boolean;
+  /** A week's value is the average of its days (a 1-5 check-in), not the sum. */
+  avg?: boolean;
+  /** Learned from the user (a metrics.md line with ~kind:), not built in. */
+  learned?: boolean;
 }
 
 const usdApi = (e: MetricEvent) => Number(e.attrs.usd_api ?? 0);
@@ -440,7 +444,37 @@ export const CATALOG: MetricDef[] = [
   { id: "m-trips", title: "Trips", family: "Exploration", per: "month", unit: "count", tier: "measured", srcs: ["trips"], kinds: ["trip.activity"], documentary: true, from: "the trip atlas (dated trip folders)" },
   { id: "m-watch-minutes", title: "Watch time", family: "Learning and attention", per: "week", unit: "minutes", tier: "measured", srcs: ["watch"], kinds: ["watch.video"], value: (e) => Number(e.attrs.minutes ?? 0), from: "watch-history scrapes" },
   { id: "m-spend", title: "Card spend", family: "Money", per: "week", unit: "usd", tier: "measured", srcs: ["spend"], kinds: ["money.spend"], value: (e) => Number(e.attrs.usd ?? 0), from: "card statement exports in your app folders" },
+  { id: "m-calm", title: "Weekly calm", family: "Inner life", per: "week", unit: "score", tier: "asked", srcs: ["checkins"], kinds: ["checkin.calm"], value: (e) => Number(e.attrs.calm ?? 0), avg: true, from: "your weekly 1-5 check-in" },
 ];
+
+// Sources that are not AI tools, though their events live beside them.
+const NOT_AI = ["git", "checkins", "stated"];
+
+/**
+ * Learned metrics: a metrics.md line with ~kind: (and ~src:) counts those
+ * events, for example "- Runs ~id:m-runs ~per:week ~unit:count ~tier:asked
+ * ~src:stated ~kind:stated.ran". ~value:attr sums an attribute instead of
+ * counting. Unknown kinds simply stay at zero.
+ */
+export function learnedDefs(vault: string): MetricDef[] {
+  const out: MetricDef[] = [];
+  for (const [id, r] of readRegistry(vault)) {
+    const t = r.tokens;
+    if (!t.kind || CATALOG.some((m) => m.id === id) || !/^m-[a-z0-9-]+$/.test(id)) continue;
+    const attr = t.value;
+    out.push({
+      id, title: r.title || id, family: t.family?.replace(/-/g, " ") ?? "Learned", per: t.per === "month" ? "month" : "week",
+      unit: (["count", "usd", "minutes", "days", "score", "km", "mi", "hours"].includes(t.unit ?? "") ? t.unit : "count") as MetricDef["unit"],
+      tier: (["measured", "derived", "asked", "inferred"].includes(t.tier ?? "") ? t.tier : "derived") as MetricDef["tier"],
+      srcs: [t.src ?? "stated"], kinds: t.kind.split(","), from: r.from || `learned: ${t.kind}`,
+      ...(attr ? { value: (e: MetricEvent) => Number(e.attrs[attr] ?? 0) } : {}),
+      learned: true,
+    });
+  }
+  return out;
+}
+
+export function allDefs(vault: string): MetricDef[] { return [...CATALOG, ...learnedDefs(vault)]; }
 
 // ── The registry the user reads: build/metrics.md ───────────────────────────
 
@@ -457,17 +491,22 @@ export function seedMetricsMd(): string {
 }
 
 export type Lifecycle = "pinned" | "tracking" | "paused" | "retired";
-export function readRegistry(vault: string): Map<string, { status: Lifecycle; tokens: Record<string, string> }> {
-  const out = new Map<string, { status: Lifecycle; tokens: Record<string, string> }>();
+export interface RegistryLine { status: Lifecycle; tokens: Record<string, string>; title: string; from: string; because: string }
+export function readRegistry(vault: string): Map<string, RegistryLine> {
+  const out = new Map<string, RegistryLine>();
   let status: Lifecycle = "tracking";
+  let last: RegistryLine | null = null;
   for (const l of readText(metricsMdPath(vault)).split("\n")) {
     const h = /^##\s+(pinned|tracking|paused|retired)\b/i.exec(l);
-    if (h) { status = h[1]!.toLowerCase() as Lifecycle; continue; }
-    if (!/^- \S/.test(l)) continue;
+    if (h) { status = h[1]!.toLowerCase() as Lifecycle; last = null; continue; }
+    const sub = /^\s+(from|because):\s*(.*)$/.exec(l);
+    if (sub && last) { last[sub[1] as "from" | "because"] = sub[2]!.trim(); continue; }
+    if (!/^- \S/.test(l)) { last = null; continue; }
     const tokens: Record<string, string> = {};
     for (const m of l.matchAll(/~([a-z][a-z0-9_-]*):(\S+)/g)) tokens[m[1]!] = m[2]!;
+    const title = l.replace(/^-\s+/, "").replace(/\s+~\S+/g, "").trim();
     // A metric listed twice keeps its first line (Pinned comes first).
-    if (tokens.id && !out.has(tokens.id)) out.set(tokens.id, { status, tokens });
+    if (tokens.id && !out.has(tokens.id)) { last = { status, tokens, title, from: "", because: "" }; out.set(tokens.id, last); } else last = null;
   }
   return out;
 }
@@ -477,6 +516,7 @@ export function readRegistry(vault: string): Map<string, { status: Lifecycle; to
 export interface Point { date: string; value: number; n: number }
 export interface Computed {
   ts: number;
+  defs: MetricDef[];
   from: string;
   points: Record<string, Point[]>;
   sources: SourceInfo[];
@@ -488,7 +528,7 @@ export interface Computed {
   trips: { date: string; region: string; activity: string; file: string }[];
 }
 
-const matches = (m: MetricDef, e: MetricEvent) => m.kinds.includes(e.kind) && (m.srcs.includes("*") ? !["capture", "tasks", "loops", "decisions", "trips", "watch", "spend", "git"].includes(e.src) : m.srcs.includes(e.src));
+const matches = (m: MetricDef, e: MetricEvent) => m.kinds.includes(e.kind) && (m.srcs.includes("*") ? !["capture", "tasks", "loops", "decisions", "trips", "watch", "spend", ...NOT_AI].includes(e.src) : m.srcs.includes(e.src));
 
 export function dailyPoints(m: MetricDef, events: MetricEvent[]): Point[] {
   const by = new Map<string, Point>();
@@ -499,6 +539,9 @@ export function dailyPoints(m: MetricDef, events: MetricEvent[]): Point[] {
     p.value = m.days ? 1 : Math.round((p.value + (m.value ? m.value(e) : e.n)) * 1e4) / 1e4;
     by.set(e.ts, p);
   }
+  // An averaged metric (a check-in) keeps each day's mean, so two Macs that
+  // both recorded one never double it.
+  if (m.avg) for (const p of by.values()) p.value = Math.round((p.value / Math.max(1, p.n)) * 100) / 100;
   return [...by.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -516,27 +559,30 @@ export async function computeMetrics(vault: string, opts: { now?: number; days?:
   const spend = spendEvents(vault);
   const events = [...machine.events, ...tasks.events, ...loops.events, ...decisions.events, ...prompts.events, ...trips.events, ...watch.events, ...spend.events].filter((e) => e.ts >= from);
   const hosts: Record<string, string[]> = {};
-  for (const e of machine.events) { const k = e.src === "git" ? "git" : "ai"; (hosts[k] ??= []); if (!hosts[k]!.includes(e.host)) hosts[k]!.push(e.host); }
+  for (const e of machine.events) { const k = NOT_AI.includes(e.src) ? e.src : "ai"; (hosts[k] ??= []); if (!hosts[k]!.includes(e.host)) hosts[k]!.push(e.host); }
   const span = (src: string[]) => { const d = events.filter((e) => src.includes(e.src)).map((e) => e.ts).sort(); return d.length ? { first: d[0], last: d[d.length - 1] } : {}; };
-  const aiSrcs = Object.keys(machine.files).filter((s) => s !== "git");
+  const aiSrcs = Object.keys(machine.files).filter((s) => !NOT_AI.includes(s));
   const sources: SourceInfo[] = [
-    { id: "ai", kind: "machine", files: aiSrcs.flatMap((s) => machine.files[s] ?? []), events: machine.events.filter((e) => e.src !== "git").length, hosts: hosts.ai ?? [], ...span(aiSrcs) },
+    { id: "ai", kind: "machine", files: aiSrcs.flatMap((s) => machine.files[s] ?? []), events: machine.events.filter((e) => !NOT_AI.includes(e.src)).length, hosts: hosts.ai ?? [], ...span(aiSrcs) },
     { id: "git", kind: "machine", files: machine.files.git ?? [], events: machine.events.filter((e) => e.src === "git").length, hosts: hosts.git ?? [], ...span(["git"]) },
     ...[tasks.info, loops.info, decisions.info, prompts.info, trips.info, watch.info, spend.info].map((i) => ({ ...i, ...span([i.id === "prompts" ? "capture" : i.id]) })),
+    { id: "checkins", kind: "machine", files: machine.files.checkins ?? [], events: machine.events.filter((e) => e.src === "checkins").length, hosts: hosts.checkins ?? [], note: "your weekly 1-5, asked once a week", ...span(["checkins"]) },
+    { id: "stated", kind: "machine", files: machine.files.stated ?? [], events: machine.events.filter((e) => e.src === "stated").length, hosts: hosts.stated ?? [], note: "numbers you said in chat (counts only)", ...span(["stated"]) },
   ];
   const points: Record<string, Point[]> = {};
   const dir = metricsDir(vault);
   mkdirSync(dir, { recursive: true });
-  for (const m of CATALOG) {
+  const defs = allDefs(vault);
+  for (const m of defs) {
     points[m.id] = dailyPoints(m, events);
     writeFileSync(join(dir, `${m.id}.jsonl`), points[m.id]!.map((p) => JSON.stringify(p)).join("\n") + (points[m.id]!.length ? "\n" : ""));
   }
-  writeFileSync(join(dir, "catalog.json"), `${JSON.stringify({ v: 1, ts: now, metrics: CATALOG.map(({ value: _v, ...m }) => m) }, null, 2)}\n`);
+  writeFileSync(join(dir, "catalog.json"), `${JSON.stringify({ v: 1, ts: now, metrics: defs.map(({ value: _v, ...m }) => m) }, null, 2)}\n`);
   writeFileSync(join(runtimePath(vault, "_meta"), "sources.json"), `${JSON.stringify({ ts: now, host: hostSlug(), sources }, null, 2)}\n`);
   if (!existsSync(metricsMdPath(vault))) vwriteFile(metricsMdPath(vault), seedMetricsMd());
   const commitHours = machine.events.filter((e) => e.kind === "git.commit" && typeof e.attrs.hours === "string")
     .flatMap((e) => String(e.attrs.hours).split(",").map((h) => ({ day: e.ts, hour: Number(h) })).filter((x) => Number.isFinite(x.hour)));
-  return { ts: now, from, points, sources, files: machine.files, hosts, times: prompts.times, commitHours, events, trips: trips.trips };
+  return { ts: now, defs, from, points, sources, files: machine.files, hosts, times: prompts.times, commitHours, events, trips: trips.trips };
 }
 
 // ── Weeks, baselines and the glance ─────────────────────────────────────────
@@ -550,11 +596,14 @@ export function weekOf(day: string): string {
 }
 const addDays = (day: string, n: number) => { const d = new Date(`${day}T12:00:00`); d.setDate(d.getDate() + n); return dayOf(d.getTime()); };
 
-export function weekly(points: Point[], days = false): Map<string, number> {
+export function weekly(points: Point[], days = false, avg = false): Map<string, number> {
   const out = new Map<string, number>();
-  for (const p of points) { const w = weekOf(p.date); out.set(w, Math.round(((out.get(w) ?? 0) + (days ? 1 : p.value)) * 100) / 100); }
+  const n = new Map<string, number>();
+  for (const p of points) { const w = weekOf(p.date); n.set(w, (n.get(w) ?? 0) + 1); out.set(w, Math.round(((out.get(w) ?? 0) + (days ? 1 : p.value)) * 100) / 100); }
+  if (avg) for (const [w, v] of out) out.set(w, Math.round((v / (n.get(w) ?? 1)) * 100) / 100);
   return out;
 }
+const weeklyOf = (m: MetricDef, pts: Point[]) => weekly(pts, m.days, m.avg);
 
 function quantile(sorted: number[], q: number): number {
   if (!sorted.length) return 0;
@@ -595,7 +644,8 @@ const GLANCE_IDS = ["m-ai-spend", "m-shipped", "m-commits", "m-tasks-done", "m-p
 
 /** What the glance shows: the metrics pinned in metrics.md (at most five), else the default set. */
 export function glanceIds(vault: string): string[] {
-  const pinned = [...readRegistry(vault).entries()].filter(([id, r]) => r.status === "pinned" && CATALOG.some((m) => m.id === id)).map(([id]) => id);
+  const defs = allDefs(vault);
+  const pinned = [...readRegistry(vault).entries()].filter(([id, r]) => r.status === "pinned" && defs.some((m) => m.id === id)).map(([id]) => id);
   return pinned.length ? pinned.slice(0, 5) : GLANCE_IDS;
 }
 
@@ -624,10 +674,10 @@ export function glance(c: Computed, opts: { week?: string; ids?: string[] } = {}
   const week = opts.week ? weekOf(opts.week) : weekOf(today);
   const rows: GlanceRow[] = [];
   for (const id of opts.ids ?? GLANCE_IDS) {
-    const m = CATALOG.find((x) => x.id === id);
+    const m = c.defs.find((x) => x.id === id);
     if (!m) continue;
     const pts = c.points[id] ?? [];
-    const byWeek = weekly(pts, m.days);
+    const byWeek = weeklyOf(m, pts);
     const spark: number[] = [];
     for (let i = 11; i >= 0; i--) spark.push(byWeek.get(addDays(week, -7 * i)) ?? 0);
     const { coverage, citations } = coverageOf(m, c, week);
@@ -676,11 +726,11 @@ export function glanceMarkdown(g: Glance): string {
 }
 
 export function series(c: Computed, id: string, per: "day" | "week", count: number): { date: string; value: number }[] {
-  const m = CATALOG.find((x) => x.id === id);
+  const m = c.defs.find((x) => x.id === id);
   if (!m) return [];
   const pts = c.points[id] ?? [];
   if (per === "day") return pts.slice(-count).map((p) => ({ date: p.date, value: m.days ? 1 : p.value }));
-  const byWeek = weekly(pts, m.days);
+  const byWeek = weeklyOf(m, pts);
   const end = weekOf(dayOf(c.ts));
   const out: { date: string; value: number }[] = [];
   for (let i = count - 1; i >= 0; i--) { const w = addDays(end, -7 * i); out.push({ date: w, value: byWeek.get(w) ?? 0 }); }
@@ -699,8 +749,8 @@ export function rhythm(c: Computed, days = 30): { day: string; hour: number; kin
 export function listMetrics(c: Computed, vault: string) {
   const reg = readRegistry(vault);
   const week = weekOf(dayOf(c.ts));
-  return CATALOG.map((m) => {
-    const byWeek = weekly(c.points[m.id] ?? [], m.days);
+  return c.defs.map((m) => {
+    const byWeek = weeklyOf(m, c.points[m.id] ?? []);
     const { coverage, citations } = coverageOf(m, c, week);
     return { id: m.id, title: m.title, family: m.family, per: m.per, unit: m.unit, tier: m.tier, documentary: !!m.documentary, status: reg.get(m.id)?.status ?? "tracking", from: m.from, thisWeek: byWeek.get(week) ?? 0, normal: baseline(byWeek, week), coverage, citations, spark: series(c, m.id, "week", 12).map((s) => s.value) };
   });
@@ -716,19 +766,39 @@ export async function metricsCommand(argv: string[], vault: string): Promise<num
     return 0;
   }
   const c = await computeMetrics(vault);
-  if (sub === "compute") { if (args.json) out({ ok: true, ts: c.ts, sources: c.sources }); else console.log(`computed ${CATALOG.length} metrics from ${c.sources.length} sources`); return 0; }
+  if (sub === "compute") { if (args.json) out({ ok: true, ts: c.ts, sources: c.sources }); else console.log(`computed ${c.defs.length} metrics from ${c.sources.length} sources`); return 0; }
   if (sub === "sources") { if (args.json) out(c.sources); else for (const s of c.sources) console.log(`${s.id.padEnd(10)} ${s.kind.padEnd(8)} ${String(s.events).padStart(6)} events  ${s.first ?? ""}${s.last ? ` to ${s.last}` : ""}${s.note ? `  (${s.note})` : ""}`); return 0; }
   if (sub === "list") { const l = listMetrics(c, vault); if (args.json) out(l); else for (const m of l) console.log(`${m.title.padEnd(22)} ${fmt(m.thisWeek, m.unit).padStart(10)}  ${m.tier}`); return 0; }
   if (sub === "series") {
     const id = args.pos[1] ?? "";
-    if (!CATALOG.some((m) => m.id === id)) { console.error(`unknown metric: ${id}`); return 1; }
+    if (!c.defs.some((m) => m.id === id)) { console.error(`unknown metric: ${id}`); return 1; }
     const per = args.get("per") === "day" ? "day" : "week";
     const s = series(c, id, per, Math.min(400, Number(args.get("count") ?? (per === "day" ? 90 : 26)) || 26));
     if (args.json) out(s); else for (const p of s) console.log(`${p.date} ${p.value}`);
     return 0;
   }
   if (sub === "rhythm") { const r = rhythm(c, Number(args.get("days") ?? 30) || 30); if (args.json) out(r); else console.log(`${r.length} dots`); return 0; }
+  if (["proposals", "answer", "pin", "track", "pause", "retire", "insights", "acceptance", "insight-feedback"].includes(sub)) {
+    const mp = await import("./metric-proposals.ts");
+    try {
+      if (sub === "proposals") { const p = mp.proposals(vault, c, Number(args.get("limit") ?? 8) || 8); if (args.json) out(p); else for (const x of p) console.log(`${x.score.toFixed(3)} ${x.kind.padEnd(8)} ${x.title}  ${x.key}`); return 0; }
+      if (sub === "answer") {
+        const a = args.pos[2];
+        if (a !== "track" && a !== "dismiss" && a !== "edit") { console.error("usage: prevail metrics answer <key> track|dismiss|edit [--title t] [--serves id] [--never text]"); return 1; }
+        const r = mp.answerProposal(vault, c, args.pos[1] ?? "", a, { title: args.get("title"), serves: args.get("serves"), never: args.get("never") });
+        if (args.json) out({ ok: true, ...r }); else console.log(r.id ? `Tracking ${r.id}.` : "Noted.");
+        return 0;
+      }
+      if (sub === "insights") { const i = mp.insights(vault, c); if (args.json) out(i); else for (const x of i) console.log(x.text); return 0; }
+      if (sub === "insight-feedback") { mp.insightFeedback(vault, args.pos[1] ?? "", args.pos[2] !== "down"); if (args.json) out({ ok: true }); return 0; }
+      if (sub === "acceptance") { const a = mp.acceptance(vault); if (args.json) out(a); else console.log(`${a.month}: ${a.accepted} of ${a.answered} kept`); return 0; }
+      const to = sub === "pin" ? "pinned" : sub === "track" ? "tracking" : sub === "pause" ? "paused" : "retired";
+      mp.setLifecycle(vault, args.pos[1] ?? "", to, { serves: args.get("serves"), because: args.get("because") });
+      if (args.json) out({ ok: true }); else console.log(`${args.pos[1]}: ${to}`);
+      return 0;
+    } catch (e) { if (args.json) out({ ok: false, error: (e as Error).message }); else console.error((e as Error).message); return 1; }
+  }
   if (sub === "glance") { const g = glance(c, { week: args.get("week"), ids: glanceIds(vault) }); if (args.json) out(g); else process.stdout.write(glanceMarkdown(g)); return 0; }
-  console.error("usage: prevail metrics scan [--backfill] | compute | sources | list | series <id> [--per day|week] | rhythm | glance [--week YYYY-MM-DD] [--json]");
+  console.error("usage: prevail metrics scan [--backfill] | compute | sources | list | series <id> [--per day|week] | rhythm | glance [--week YYYY-MM-DD] | proposals | answer <key> track|dismiss|edit | pin|track|pause|retire <id> [--serves id] [--because text] | insights | acceptance [--json]");
   return 1;
 }

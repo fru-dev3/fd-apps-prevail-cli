@@ -925,6 +925,11 @@ export interface ChatTurn {
   // tools, added to --allowedTools on a chat turn so headless Claude does not
   // refuse them. Never write tools: those still queue at the act gate.
   appReadTools?: string[];
+  // Read-only built-in tools a non-act turn may use without a prompt (a
+  // specialist's Researcher needs WebSearch and WebFetch; vault reading needs
+  // Read, Grep and Glob). Anything not in READ_ONLY_BUILTINS is ignored, so
+  // this can never grant a tool that writes or runs commands.
+  allowTools?: string[];
   // Incognito: none of the user's context (constitution, profile, goals, omega,
   // domain ideal) is added by the engine. The desktop already leaves its own
   // blocks out; without this the engine added the constitution back.
@@ -1021,6 +1026,9 @@ function stripEmDashesProse(s: string): string {
     .replace(/\s+–\s+/g, ", ");
 }
 
+// Built-in tools that only read (the web, or files): the only ones allowTools may grant.
+export const READ_ONLY_BUILTINS = new Set(["WebSearch", "WebFetch", "Read", "Grep", "Glob"]);
+
 export function sanitizeEmDashes(text: string): string {
   if (!text || (!text.includes("—") && !text.includes("–"))) return text;
   // Split out fenced code blocks and inline code spans (kept verbatim). The
@@ -1067,7 +1075,7 @@ export function runChatTurn(turn: ChatTurn): Promise<string> {
   return runChatTurnInner(turn);
 }
 
-async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, onInit, incognito }: ChatTurn): Promise<string> {
+async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, allowTools, onInit, incognito }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1358,6 +1366,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
       if (!act && webMode === "allow") allowed.push(...(fetchHosts ?? []).filter((h) => /^[a-z0-9.-]+(:\d+)?$/.test(h)).map((h) => `WebFetch(domain:${h.replace(/:\d+$/, "")})`));
     } catch { /* never let source wiring break a turn */ }
     if (!act && appReadTools?.length) allowed.push(...appReadTools);
+    if (!act && allowTools?.length) allowed.push(...allowTools.filter((t) => READ_ONLY_BUILTINS.has(t) && (webMode === "allow" || !/^Web/.test(t))));
     if (mcpConfigs.length) args.push("--mcp-config", ...mcpConfigs);
     if (allowed.length) args.push("--allowedTools", ...new Set(allowed));
     // ACTION GATEWAY (G1): every claude turn that can see MCP tools carries the

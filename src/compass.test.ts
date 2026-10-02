@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  applyDraft, bootstrapCompass, compassBlock, compassJson, confirm, drop, fallbackDraft, items, parseCompass,
+  applyDraft, bootstrapCompass, goalsNeedingWoop, setWoop, compassBlock, compassJson, confirm, drop, fallbackDraft, items, parseCompass,
   quoteSource, readCompass, readLedger, serializeCompass, titleFromUserWords, type Source,
 } from "./compass.ts";
 import { buildUserContext } from "./cli-bridge.ts";
@@ -95,13 +95,35 @@ describe("grammar", () => {
   });
 });
 
+describe("WOOP before a goal goes active", () => {
+  test("outcome, obstacle and an if-then plan make a confirmed goal active; a low expectation makes it a small trial", () => {
+    seed();
+    confirm(V, ["g-hike"], "yes", 1000);
+    expect(goalsNeedingWoop(V).map((g) => g.id)).toEqual(["g-hike"]);
+    expect(setWoop(V, "g-hike", { outcome: "We stand on the foo summit together" }, 2000)).toMatchObject({ status: "confirmed", complete: false });
+    expect(() => setWoop(V, "g-hike", { expect: 9 })).toThrow(/1 to 5/);
+    expect(setWoop(V, "g-hike", { obstacle: "I book work on weekends", plan: "If a Saturday is free, then I block it for a training hike" }, 3000)).toMatchObject({ status: "active", complete: true });
+    const g = items(readCompass(V), "goal").find((x) => x.id === "g-hike")!;
+    expect(g.fields.map((f) => f.key)).toEqual(["outcome", "obstacle", "plan"]);
+    expect(readLedger(V).at(-1)).toMatchObject({ id: "g-hike", from: "confirmed", to: "active", reason: "WOOP done" });
+    expect(compassBlock(V)).toContain("Hike the foo trail");
+    expect(setWoop(V, "g-hike", { expect: 2 }, 4000).status).toBe("prototyping");
+    expect(goalsNeedingWoop(V)).toEqual([]);
+  });
+  test("a goal confirmed without its WOOP is named in the chat block as not started", () => {
+    seed();
+    confirm(V, ["g-hike"], "yes", 1000);
+    expect(compassBlock(V)).toContain("not started (no plan yet, or a small trial): Hike the foo trail");
+  });
+});
+
 describe("confirm, drop, versions and the ledger", () => {
-  test("confirming a proposed goal makes it active; dropping removes it but keeps a version and the ledger", () => {
+  test("confirming a proposed goal makes it the user's (active after its WOOP); dropping removes it but keeps a version and the ledger", () => {
     seed();
     expect(confirm(V, ["g-hike"], "yes", 1000)).toEqual(["g-hike"]);
-    expect(readFileSync(join(V, "build", "compass.md"), "utf8")).toContain("Hike the foo trail ~id:g-hike ~status:active");
+    expect(readFileSync(join(V, "build", "compass.md"), "utf8")).toContain("Hike the foo trail ~id:g-hike ~status:confirmed");
     expect(readdirSync(join(V, "build", "compass.versions")).length).toBe(1);
-    expect(readLedger(V)).toEqual([{ ts: 1000, id: "g-hike", from: "proposed", to: "active", reason: "yes", by: "user" }]);
+    expect(readLedger(V)).toEqual([{ ts: 1000, id: "g-hike", from: "proposed", to: "confirmed", reason: "yes", by: "user" }]);
     // Confirming again changes nothing.
     expect(confirm(V, "all")).toEqual([]);
 

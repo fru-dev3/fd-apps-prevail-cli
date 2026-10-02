@@ -25,6 +25,13 @@ export interface Task {
   id?: string;
   trashed?: string; // YYYY-MM-DD soft-delete date; "~trashed:" token. Set = in Trash, not removed.
   priority?: string; // "high" | "critical"; "~priority:" token. Absent = normal.
+  // A promise with a person attached (today-plan T0):
+  //   ~kind:commitment ~to:person/<slug>    something the user said they would do for someone
+  //   ~kind:waiting    ~from:person/<slug>  something someone owes the user
+  // and ~src:<where it came from> (gmail:<thread-hash>, chat:<thread>, job:<id>).
+  kind?: string;   // "commitment" | "waiting"
+  to?: string;
+  from?: string;
 }
 
 export const VALID_STATUS = ["todo", "doing", "review", "blocked", "done", "icebox"] as const;
@@ -69,6 +76,9 @@ function splitMeta(raw: string): { text: string; meta: Partial<Task> } {
           else if (k === "src") meta.source = v;
           else if (k === "trashed") meta.trashed = v;
           else if (k === "priority") meta.priority = v;
+          else if (k === "kind") meta.kind = v;
+          else if (k === "to") meta.to = v;
+          else if (k === "from") meta.from = v;
           else matched = false;
           if (matched) { text = t.slice(0, idx); continue; }
         }
@@ -96,7 +106,7 @@ export function parseTasks(md: string): Task[] {
     else if (t.startsWith("- [x] ") || t.startsWith("- [X] ")) { done = true; rest = t.slice(t.indexOf("] ") + 2); }
     else continue;
     const { text, meta } = splitMeta(rest);
-    out.push({ text, done, due: meta.due, added: meta.added, source: meta.source, owner: meta.owner, status: meta.status, id: meta.id, trashed: meta.trashed, priority: meta.priority });
+    out.push({ text, done, due: meta.due, added: meta.added, source: meta.source, owner: meta.owner, status: meta.status, id: meta.id, trashed: meta.trashed, priority: meta.priority, kind: meta.kind, to: meta.to, from: meta.from });
   }
   return out;
 }
@@ -120,12 +130,16 @@ export function renderTasks(tasks: Task[]): string {
     let line = `- [${t.done ? "x" : " "}] ${t.text.trim()}`;
     if (t.due) line += ` @${t.due}`;
     if (t.added) line += ` +${t.added}`;
-    if (t.source) line += ` ~${t.source}`;
+    // A plain word stays the legacy bare "~source"; anything else ("gmail:<hash>") is "~src:".
+    if (t.source) line += /^[a-zA-Z0-9]+$/.test(t.source) ? ` ~${t.source}` : ` ~src:${t.source}`;
     if (t.owner === "ai") line += " ~owner:ai";
     if (t.status && ["doing", "review", "blocked", "icebox"].includes(t.status)) line += ` ~status:${t.status}`;
     if (t.id) line += ` ~id:${t.id}`;
     if (t.trashed) line += ` ~trashed:${t.trashed}`;
     if (t.priority && ["high", "critical"].includes(t.priority)) line += ` ~priority:${t.priority}`;
+    if (t.kind === "commitment" || t.kind === "waiting") line += ` ~kind:${t.kind}`;
+    if (t.to) line += ` ~to:${t.to}`;
+    if (t.from) line += ` ~from:${t.from}`;
     s += `${line}\n`;
   }
   return s;

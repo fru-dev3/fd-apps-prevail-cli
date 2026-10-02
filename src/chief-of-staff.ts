@@ -31,6 +31,8 @@ export interface ChiefOfStaff {
   limits: { usd: number; minutes: number };
   neverRead: string[];
   learned: string[];
+  /** Jobs the chief of staff judges from chat: auto (start within limits), offer (always ask), off (only @ by hand). */
+  handoff: "off" | "offer" | "auto";
   exists: boolean;
 }
 
@@ -78,6 +80,7 @@ export function parseChiefOfStaff(text: string): ChiefOfStaff {
     limits,
     neverRead: section(body, "Never pull in").map((s) => s.toLowerCase()),
     learned: section(body, "What I've learned"),
+    handoff: (["off", "offer", "auto"] as const).find((h) => h === field("handoff")) ?? "auto",
     exists: !!text.trim(),
   };
 }
@@ -107,6 +110,32 @@ export function setChiefOfStaffName(vault: string, raw: string): ChiefOfStaff {
   else next = `---\nname: ${name}\n---\n\n${text}`;
   writeVersioned(p, next);
   return parseChiefOfStaff(next);
+}
+
+/** Set the handoff mode, the limits or the never-read list, keeping every other line. */
+export function setChiefSetting(vault: string, key: "handoff" | "usd" | "minutes" | "never", value: string): ChiefOfStaff {
+  const p = chiefOfStaffPath(vault);
+  let text = readText(p) || render(parseChiefOfStaff(""));
+  if (key === "handoff") {
+    if (!["off", "offer", "auto"].includes(value)) throw new Error("handoff is off, offer or auto");
+    if (/^---\n[\s\S]*?^handoff:.*$/m.test(text)) text = text.replace(/^handoff:.*$/m, `handoff: ${value}`);
+    else if (text.startsWith("---\n")) text = text.replace(/^---\n/, `---\nhandoff: ${value}\n`);
+    else text = `---\nhandoff: ${value}\n---\n\n${text}`;
+  } else if (key === "usd" || key === "minutes") {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0 || n > (key === "usd" ? 100 : 240)) throw new Error(`${key} must be a positive number (at most ${key === "usd" ? 100 : 240})`);
+    const line = `- ${key}: ${n}`;
+    if (new RegExp(`^-\\s+${key}:.*$`, "m").test(text)) text = text.replace(new RegExp(`^-\\s+${key}:.*$`, "m"), line);
+    else if (/^##\s+Limits\s*$/m.test(text)) text = text.replace(/^(##\s+Limits\s*\n)/m, `$1${line}\n`);
+    else text = `${text.replace(/\s*$/, "")}\n\n## Limits\n${line}\n`;
+  } else {
+    const list = value.split(",").map((d) => d.trim().toLowerCase()).filter((d) => /^[a-z0-9-]{1,40}$/.test(d));
+    const block = `## Never pull in\n${list.map((d) => `- ${d}`).join("\n")}${list.length ? "\n" : ""}`;
+    if (/^##\s+Never pull in\s*$/m.test(text)) text = text.replace(/^##\s+Never pull in\s*\n(?:-\s+.*\n?)*/m, `${block}\n`);
+    else text = `${text.replace(/\s*$/, "")}\n\n${block}`;
+  }
+  writeVersioned(p, text);
+  return parseChiefOfStaff(text);
 }
 
 export const CHIEF_HEADER = "# YOUR CHIEF OF STAFF";
@@ -150,6 +179,18 @@ export async function chiefCommand(argv: string[], vault: string): Promise<numbe
       return 1;
     }
   }
-  console.error("usage: prevail chief show|set-name <name> [--json]");
+  if (sub === "set") {
+    const key = args.pos[1] as "handoff" | "usd" | "minutes" | "never";
+    try {
+      if (!["handoff", "usd", "minutes", "never"].includes(key)) throw new Error("usage: prevail chief set handoff|usd|minutes|never <value>");
+      const c = setChiefSetting(vault, key, args.pos.slice(2).join(" "));
+      if (json) out({ ok: true, ...c }); else console.log("Saved.");
+      return 0;
+    } catch (e) {
+      if (json) out({ ok: false, error: (e as Error).message }); else console.error((e as Error).message);
+      return 1;
+    }
+  }
+  console.error("usage: prevail chief show|set-name <name>|set handoff|usd|minutes|never <value> [--json]");
   return 1;
 }

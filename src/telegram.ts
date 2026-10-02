@@ -324,6 +324,9 @@ async function handleCommand(
           "/framework none     clear framework",
           "/frameworks         list available frameworks",
           "/status             show current chat state",
+          "/today              the three things that matter today",
+          "/review             this week's review card",
+          "/calm <1-5>         the weekly check-in: how calm was this week?",
           "",
           `current: ${state.domain.name} via ${state.cli.label}${state.councilMode ? " · council ON" : ""}`,
           "",
@@ -427,6 +430,12 @@ async function handleCommand(
     case "/frameworks": {
       const lines = FRAMEWORKS.map((f) => `${f.id.padEnd(10)} ${f.label}  ·  ${f.blurb}`);
       await tgSendMessage(cfg.botToken, chatId, `Frameworks:\n${lines.join("\n")}`);
+      return;
+    }
+    case "/today":
+    case "/review":
+    case "/calm": {
+      await tgSendMessage(cfg.botToken, chatId, await briefCommand(head, arg, vaultPath));
       return;
     }
     case "/status": {
@@ -573,4 +582,21 @@ function sleep(ms: number): Promise<void> {
 
 function truncateForLog(s: string): string {
   return s.length > 80 ? s.slice(0, 80) + "…" : s;
+}
+
+/** /today, /review and /calm: the daily card, the weekly card and the check-in, as text. */
+export async function briefCommand(head: string, arg: string, vaultPath: string): Promise<string> {
+  try {
+    if (head === "/today") { const t = await import("./today.ts"); return t.todayText(t.composeToday(vaultPath)); }
+    const r = await import("./review.ts");
+    if (head === "/calm") {
+      const n = Number(arg.trim());
+      if (!Number.isInteger(n) || n < 1 || n > 5) return "Send a number from 1 to 5, like /calm 4";
+      const c = r.checkin(vaultPath, n);
+      return `Noted: calm ${c.calm} for the week of ${c.week}.`;
+    }
+    return r.reviewText(await r.weeklyReview(vaultPath));
+  } catch (e) {
+    return `error: ${(e as Error).message}`;
+  }
 }

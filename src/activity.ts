@@ -24,6 +24,7 @@ export type ActivityType =
   | "loop_run"     // a loop evaluated on its cadence or via Run-now
   | "loop_exec"    // an approved action was executed for real via connectors
   | "task_filed"   // a loop filed a concrete task
+  | "job"          // a job the chief of staff staffed (jobs.ts)
   | "briefing"     // a briefing was synthesized + delivered
   | "sync"         // a connected app was refreshed
   | "nudge"        // a proactive nudge/prompt fired

@@ -294,6 +294,41 @@ export async function runMcpServer(
       inputSchema: { type: "object", properties: { id: { type: "string" }, per: { type: "string", enum: ["day", "week"] }, count: { type: "number", description: "How many periods back (default 26 weeks or 90 days)." } }, required: ["id"] },
     },
     {
+      name: "read_today",
+      description: "The user's Today card: at most three things that matter today (each with its thread to a Compass value, or 'unlinked'), one thing falling behind, the nearest open decision, and what else is due. Computed by code from task boards, commitments, decisions and the Compass.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
+    },
+    {
+      name: "weekly_review",
+      description: "This week's review card: what moved and drifted against the user's own normal, the metrics glance, Compass lines heard in chat awaiting a yes, metric proposals, and whether the weekly 1-5 calm check-in is done.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
+    },
+    {
+      name: "log_checkin",
+      description: "Record the user's weekly check-in: how calm was this week, 1 to 5, with an optional note. Only when the user gave the number themselves.",
+      inputSchema: { type: "object", properties: { calm: { type: "number" }, note: { type: "string" } }, required: ["calm"] },
+    },
+    {
+      name: "list_specialists",
+      description: "The user's specialists (Researcher, Scout, Planner, Steward, Editor, Writer and the rest of the roster): what each returns, its ceiling (read, draft, write vault) and whether it is on.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "hand_off",
+      description: "Hand a job to the user's chief of staff: it picks the owner domain, the domains to read and to tell, and a team of specialists. The job starts on its own only when every step is read, draft or a reversible vault write, it fits the user's limits, and it does not touch money, people, location or identity; otherwise it waits for the user. Returns the job record.",
+      inputSchema: { type: "object", properties: { message: { type: "string" }, domain: { type: "string", description: "Where the ask comes from (default general)." } }, required: ["message"] },
+    },
+    {
+      name: "list_jobs",
+      description: "Jobs the chief of staff staffed and playbook runs, newest first, with status (proposed, running, needs-approval, done, failed, stopped). With id: one job with its steps, result and what it filed in which domain.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } } },
+    },
+    {
+      name: "open_decisions",
+      description: "Open decisions across the user's domains (question, due date, gut call, recommendation), nearest first, plus calibration: how often their gut and the recommendations turned out right per domain.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
       name: "read_recommendations",
       description: "Prevail's one ranked 'what to do next' list across the whole vault: instructions to save as rules, project next steps and stuck projects to restart, connectors to sign in or sync, recurring people and places to save, better model defaults, and context gaps. Deterministic, ranked by leverage.",
       inputSchema: { type: "object", properties: {} },
@@ -696,6 +731,44 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(await tMetricSeries(args, vaultPath));
     case "read_compass":
       return wrapText(await tReadCompass(args, vaultPath));
+    case "read_today": {
+      const t = await import("./today.ts");
+      const c = t.composeToday(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(c, null, 2) : t.todayText(c));
+    }
+    case "weekly_review": {
+      const r = await import("./review.ts");
+      const card = await r.weeklyReview(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(card, null, 2) : r.reviewText(card));
+    }
+    case "log_checkin": {
+      const r = await import("./review.ts");
+      try { const c = r.checkin(vaultPath, Number(args.calm), typeof args.note === "string" ? args.note : undefined); return wrapText(`Recorded calm ${c.calm} for the week of ${c.week}.`); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "list_specialists": {
+      const { loadSpecialists } = await import("./specialists.ts");
+      return wrapText(loadSpecialists(vaultPath).map((x) => `${x.on ? "on " : "off"} ${x.name}: returns ${x.returns}, ceiling ${x.ceiling}${x.mandate ? `. ${x.mandate}` : ""}`).join("\n"));
+    }
+    case "hand_off": {
+      const j = await import("./jobs.ts");
+      const message = typeof args.message === "string" ? args.message : "";
+      if (!message.trim()) return wrapText("message is required");
+      const d = await j.dispatch({ vault: vaultPath, message, domain: typeof args.domain === "string" ? args.domain : "general", trigger: "cli" });
+      if (d.kind !== "job" || !d.job) return wrapText("That reads as a question, not a job; answer it directly.");
+      j.saveJob(vaultPath, d.job);
+      if (d.job.startsAlone) j.startJob(vaultPath, d.job.id);
+      return wrapText(JSON.stringify({ ...d.job, status: d.job.startsAlone ? "running" : d.job.status }, null, 2));
+    }
+    case "list_jobs": {
+      const j = await import("./jobs.ts");
+      if (typeof args.id === "string" && args.id) return wrapText(JSON.stringify(j.jobView(vaultPath, args.id) ?? { error: "no such job" }, null, 2));
+      return wrapText(j.listJobs(vaultPath, 30).map((x) => `${x.status.padEnd(14)} ${x.id}  ${x.domains.owner}  ${x.ask.slice(0, 80)}`).join("\n") || "No jobs yet.");
+    }
+    case "open_decisions": {
+      const d = await import("./decision-records.ts");
+      const open = d.listDecisions(vaultPath).map((r) => `${r.due ?? "no date"}  ${r.domain}/${r.slug}: ${r.question}${r.gut ? ` (gut: ${r.gut})` : ""}${r.recommendation ? ` (recommendation: ${r.recommendation})` : ""}`);
+      return wrapText([...(open.length ? open : ["No open decisions."]), "", "Calibration:", d.calibrationText(vaultPath) || "no retros yet"].join("\n"));
+    }
     case "read_recommendations":
       return wrapText(tReadRecommendations(vaultPath));
     case "read_surface":

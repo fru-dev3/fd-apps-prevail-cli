@@ -143,7 +143,7 @@ describe("metrics, baselines and the glance", () => {
     // Files on disk: daily points, the source registry, metrics.md once.
     expect(readdirSync(join(V, "build", "_meta", "metrics"))).toContain("m-ai-spend.jsonl");
     expect(JSON.parse(readFileSync(join(V, "build", "_meta", "sources.json"), "utf8")).sources.find((s: { id: string }) => s.id === "ai").hosts.sort()).toEqual(["mac-a", "mac-b"]);
-    expect(readRegistry(V).get("m-trips")).toEqual({ status: "tracking", tokens: { id: "m-trips", per: "month", unit: "count", tier: "measured", mode: "documentary", show: "hidden" } });
+    expect(readRegistry(V).get("m-trips")).toMatchObject({ status: "tracking", tokens: { id: "m-trips", per: "month", unit: "count", tier: "measured", mode: "documentary", show: "hidden" } });
 
     const gl = glance(c);
     expect(gl.week).toBe("2026-09-28");

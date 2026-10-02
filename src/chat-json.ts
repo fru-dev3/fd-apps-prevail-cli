@@ -60,7 +60,7 @@ import { APP_SCOPE_PREFIX, appScopeId, resolveDomainDir } from "./path-safety.ts
 import { scanVault, type Domain } from "./vault.ts";
 import { isCliKind } from "./config.ts";
 import { classifyTouches } from "./route.ts";
-import { runTouchStep } from "./linking.ts";
+import { runTouchStep, userText } from "./linking.ts";
 import { decisionLayer } from "./decision-config.ts";
 import { readManifest } from "./manifest.ts";
 import {
@@ -77,7 +77,7 @@ import {
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
   type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route"
-    | "routed" | "app_unavailable" | "app_needs_auth" | "touched";
+    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job";
   thread: string;
   ts: number;
   domain?: string;
@@ -145,6 +145,9 @@ export interface ChatEvent {
   // conversation's own domain.
   domains?: { slug: string; fact: string }[];
   entities?: string[];
+  // job: the chief of staff staffed this message as a job (jobs.ts). The
+  // turn's reply is one line; the card polls `prevail job show <id>`.
+  job?: { id: string; status: string; startsAlone: boolean; askReason?: string; owner: string; consulted: string[]; informed: string[]; team: { step: number; specialists: string[]; gate?: boolean }[]; effort: string; budget: { usd: number; minutes: number }; why: string; mention?: string };
 }
 
 // Options for one JSON chat turn.
@@ -223,6 +226,9 @@ export interface ChatJsonOptions {
     // The touch classifier. When any deps are given (tests) and this is not,
     // the touch step is off, so a test never reaches a model.
     classifyTouches?: typeof classifyTouches;
+    // The chief of staff's dispatch (jobs.ts). Off in tests unless given.
+    dispatch?: typeof import("./jobs.ts").dispatch;
+    startJob?: (vault: string, id: string) => void;
   };
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
@@ -388,6 +394,68 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     // A model id belongs to the engine it was picked for; the routed engine
     // starts on its own default (Auto still routes within it).
     if ((opts.model ?? "").trim() !== "auto") opts = { ...opts, model: "" };
+  }
+
+  // The Compass conversation lives in the chief of staff's chat (General):
+  // "set up my Compass" starts or resumes it, and while it is active each
+  // message is an answer. Code only, no model: the reply is the next question.
+  if (opts.domain === "general" && !scopeApp && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
+    const iv = await import("./interview.ts");
+    const said = userText(message).trim();
+    const trigger = iv.isInterviewTrigger(said);
+    if (trigger || iv.interviewActive(vaultPath)) {
+      const r = trigger ? iv.startInterview(vaultPath) : iv.answerInterview(vaultPath, said);
+      const ts = Date.now();
+      emit({ type: "start", thread, ts, domain: opts.domain, engine: "chief-of-staff" });
+      emit({ type: "user", thread, ts, role: "user", text: message });
+      writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "user", cli: cli.kind, model: "", content: message, ts });
+      emit({ type: "delta", thread, ts, text: r.reply });
+      emit({ type: "assistant", thread, ts, role: "assistant", text: r.reply, engine: "chief-of-staff" });
+      writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "assistant", cli: cli.kind, model: "", content: r.reply, ts });
+      emit({ type: "done", thread, ts: Date.now() });
+      return 0;
+    }
+  }
+
+  // The chief of staff: is this message a job rather than a question? An
+  // "@Researcher ..." hands it to one specialist by hand; a message shaped like
+  // a job (find, compare, plan, draft...) is staffed with a team. The job runs
+  // in its own process; this turn answers in one line and emits a `job` card.
+  // Never on an app or entity chat, incognito, or a local-only turn (dispatch
+  // and specialists run on a cloud model).
+  {
+    const dispatchFn = opts.deps ? opts.deps.dispatch : (await import("./jobs.ts")).dispatch;
+    const said = userText(message);
+    const localTurn = !!opts.localOnly || turnGuard.localOnly;
+    if (dispatchFn && !scopeApp && !uniq(Array.isArray(opts.entity) ? opts.entity : [opts.entity]).length && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !localTurn) {
+      const { readChiefOfStaff } = await import("./chief-of-staff.ts");
+      const mode = readChiefOfStaff(vaultPath).handoff;
+      if (mode !== "off" || said.trim().startsWith("@")) {
+        let d: Awaited<ReturnType<NonNullable<typeof dispatchFn>>> | null = null;
+        try { d = await dispatchFn({ vault: vaultPath, message: said, domain: opts.domain, thread: (opts.threadId ?? "").trim() || sessionId }); } catch { d = null; }
+        if (d?.kind === "job" && d.job) {
+          const jobs = await import("./jobs.ts");
+          const job = d.job;
+          const start = job.startsAlone && (!!d.mention || mode === "auto");
+          jobs.saveJob(vaultPath, job);
+          if (start) { try { (opts.deps?.startJob ?? ((v: string, id: string) => { jobs.startJob(v, id); }))(vaultPath, job.id); } catch { /* the card shows it as proposed */ } }
+          const names = job.team.flatMap((t) => t.specialists).map((x) => x.charAt(0).toUpperCase() + x.slice(1));
+          const reply = start
+            ? `On it. ${names.join(", ")} ${names.length === 1 ? "is" : "are"} on it; the result lands in ${job.domains.owner}.`
+            : `This looks like a job for ${names.join(", ")}. ${job.askReason ? `I am asking first because ${job.askReason}. ` : ""}Start it, adjust it, or say no.`;
+          const ts = Date.now();
+          emit({ type: "start", thread, ts, domain: opts.domain, engine: "chief-of-staff" });
+          emit({ type: "user", thread, ts, role: "user", text: message });
+          writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "user", cli: cli.kind, model: "", content: message, ts });
+          emit({ type: "job", thread, ts, job: { id: job.id, status: start ? "running" : job.status, startsAlone: job.startsAlone, ...(job.askReason ? { askReason: job.askReason } : {}), owner: job.domains.owner, consulted: job.domains.consulted, informed: job.domains.informed, team: job.team, effort: job.effort, budget: job.budget, why: job.why, ...(d.mention ? { mention: d.mention } : {}) } });
+          emit({ type: "delta", thread, ts, text: reply });
+          emit({ type: "assistant", thread, ts, role: "assistant", text: reply, engine: "chief-of-staff" });
+          writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "assistant", cli: cli.kind, model: "", content: `${reply}\n\n[job:${job.id}]`, ts });
+          emit({ type: "done", thread, ts: Date.now() });
+          return 0;
+        }
+      }
+    }
   }
 
   // Resolve the model. The ONLY behavioral change from before is guarded behind
@@ -771,6 +839,13 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
 
   // done
   emit({ type: "done", thread, ts: Date.now() });
+
+  // What the user said, noticed by code: Compass candidates in their own
+  // words (offered in the weekly review) and numbers they mention (content
+  // free events). Never on an incognito turn.
+  if (!opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !scopeApp) {
+    try { (await import("./said.ts")).noteSaid(vaultPath, { text: userText(message), thread: threadId ?? sessionId, domain: opts.domain }); } catch { /* never blocks a turn */ }
+  }
 
   // touched: after the reply is complete, bounded by TOUCH_TIMEOUT_MS.
   const classify = opts.deps?.classifyTouches ?? (opts.deps ? null : classifyTouches);
