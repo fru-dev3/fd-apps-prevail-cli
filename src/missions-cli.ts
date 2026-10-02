@@ -14,6 +14,8 @@ const USAGE = [
   "prevail missions list [--status active|paused|completed|archived|all] --json",
   "prevail missions create --name N [--outcome O] [--target YYYY-MM-DD] [--owner d] [--consult d]... [--inform d]...",
   "        [--app a]... [--specialist s]... [--person id]... [--budget-usd N] [--milestone T]... [--from-prompt-project slug] --json",
+  "prevail missions create --from-draft --json   (stdin: the draft from missions draft; checked again)",
+  "prevail missions draft --json   (stdin: {\"turns\":[{\"role\":\"user\",\"text\":\"...\"}],\"draft\":{...}}; creates nothing)",
   "prevail missions show <slug> --json",
   "prevail missions set <slug> [--name N] [--outcome O] [--target D] [--cadence C] [--ceiling C] [--notes T] [--local-only true|false]",
   "        [--match-calendar a,b] [--match-email-from a,b] [--match-merchants a,b] --json",
@@ -59,6 +61,13 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
       if (args.json) out(l); else for (const v of l) console.log(summary(v));
       return 0;
     }
+    if (sub === "create" && args.has("from-draft")) {
+      let draft: unknown = {};
+      try { draft = JSON.parse(readFileSync(0, "utf8") || "{}"); } catch { return fail("--from-draft reads the draft JSON on stdin"); }
+      const r = await (await import("./mission-draft.ts")).createFromDraft(vault, (draft as { draft?: unknown }).draft ?? draft);
+      if (args.json) out({ ...r.mission, dropped: r.dropped }); else console.log(summary(r.mission));
+      return 0;
+    }
     if (sub === "create") {
       const name = args.get("name");
       if (!name) return fail(`usage:\n${USAGE}`);
@@ -76,6 +85,14 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
         milestones: all(argv, "--milestone").map((t) => ({ title: t })),
         promptProjects: pp ? [pp] : [], from: pp ? `from the prompt project ${pp}` : args.get("from-suggestion") ? `from the suggestion ${args.get("from-suggestion")}` : undefined,
       }));
+    }
+    // Chat-first New mission: the fields from what was said, checked; never creates.
+    if (sub === "draft") {
+      let input: { turns?: unknown; draft?: unknown } = {};
+      try { input = JSON.parse(readFileSync(0, "utf8") || "{}"); } catch { return fail("draft reads JSON on stdin: {turns, draft}"); }
+      const { draftMission } = await import("./mission-draft.ts");
+      out(await draftMission(vault, { turns: Array.isArray(input.turns) ? input.turns as never : [], draft: (input.draft && typeof input.draft === "object" ? input.draft : {}) as never }));
+      return 0;
     }
     if (!slug && sub !== "migrate") return fail(`usage:\n${USAGE}`);
     if (sub === "show") return show(missionView(vault, slug));
