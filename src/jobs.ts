@@ -162,12 +162,17 @@ function alive(vault: string, j: Job): Job {
 
 // ── Dispatch: answer, or a job ──────────────────────────────────────────────
 
-export type Shape = "find" | "plan" | "do" | "understand" | "make" | "act";
+export type Shape = "find" | "plan" | "do" | "understand" | "make" | "act" | "negotiate" | "learn" | "relate" | "reflect";
 
 // A job is something to go and do, not a question to answer. Code reads the
 // shape from the opening verb; anything else is answered as an ordinary turn
 // (no model call is spent on deciding).
 const SHAPES: [Shape, RegExp][] = [
+  // Phase 4: the Negotiator, the Tutor, the Liaison and the Confidant.
+  ["negotiate", /^(please\s+)?(can you\s+|could you\s+)?(help me\s+)?(negotiate|haggle|get (a|the) better (price|deal|rate)|counter(offer)?|prepare (me )?for (a|the|my) (negotiation|salary talk|raise)|ask for a (raise|discount|lower))\b/i],
+  ["learn", /^(please\s+)?(can you\s+|could you\s+)?(teach me|quiz me|help me (learn|study|practice)|make (me )?a (curriculum|lesson plan|study plan)|i want to learn)\b/i],
+  ["relate", /^(please\s+)?(can you\s+|could you\s+)?(who (should|do) i (call|check in with|reach out to|catch up with)|who am i (out of touch|neglecting)|(help me )?(keep|stay) in touch|draft (some )?check-?ins?)\b/i],
+  ["reflect", /^(please\s+)?(can you\s+|could you\s+)?(help me (think through|reflect on|make sense of)|what patterns? (do you see|are there) in my|reflect (on|with me))\b/i],
   ["find", /^(please\s+)?(can you\s+|could you\s+)?(find|compare|research|look into|shop (for|around)|get (me )?(quotes?|options)|what are the best|which .{3,60} (is|are) (the )?best|best .{3,60} for)\b/i],
   ["plan", /^(please\s+)?(can you\s+|could you\s+)?(plan|make (me )?a plan|map out|lay out the steps|put together a plan|figure out how)\b/i],
   ["do", /^(please\s+)?(can you\s+|could you\s+)?(draft|write (an? )?(email|letter|message|note|request)|prepare (an? )?(email|letter|request)|reach out)\b/i],
@@ -192,6 +197,8 @@ export function shapeOf(message: string): Shape | null {
  * Writer (drafts only). Act -> Planner, Steward, then the Operator, whose
  * actions each go through the broker. Make -> Builder, Auditor.
  * Understand my data -> Analyst and Historian side by side, Editor.
+ * Negotiate -> Researcher, Negotiator, Steward. Learn -> Tutor. Keep in
+ * touch -> Liaison. Reflect -> Confidant.
  * Specialists that are off are left out.
  */
 export function teamFor(shape: Shape, on: Set<string>, opts: { openEnded?: boolean; decision?: boolean; money?: boolean; numbers?: boolean } = {}): TeamStep[] {
@@ -211,6 +218,15 @@ export function teamFor(shape: Shape, on: Set<string>, opts: { openEnded?: boole
     steps.push({ specialists: ["planner"] }, { specialists: ["writer"] });
   } else if (shape === "make") {
     steps.push({ specialists: ["builder"] }, { specialists: ["auditor"], gate: true });
+  } else if (shape === "negotiate") {
+    // The facts first, then the strategy and its drafts; nothing is sent.
+    steps.push({ specialists: ["researcher"] }, { specialists: ["negotiator"] }, { specialists: ["steward"], gate: true });
+  } else if (shape === "learn") {
+    steps.push({ specialists: ["tutor"] });
+  } else if (shape === "relate") {
+    steps.push({ specialists: ["liaison"] });
+  } else if (shape === "reflect") {
+    steps.push({ specialists: ["confidant"] });
   } else {
     // Understand my data: the Analyst counts, the Historian dates; without them the Researcher reads the vault.
     const pair = ["analyst", "historian"].filter((x) => on.has(x));
@@ -451,6 +467,7 @@ export function decideStart(vault: string, job: Job, specs: Specialist[], limits
     const s = specs.find((x) => x.id === id);
     if (!s || !s.on) reasons.push(`the ${id} is not available`);
     else if (ceilingRank(s.ceiling) > ceilingRank("act-ask")) reasons.push(`the ${s.name} would act`);
+    else if (s.outside) reasons.push(`it sends your words to ${s.name}, an outside agent`);
     else if (job.mission && ceilingRank(s.ceiling) > ceilingRank(job.mission.ceiling)) reasons.push(`the ${s.name} goes past this mission's ceiling (${job.mission.ceiling})`);
   }
   // Money in a mission: anything that spends asks, and past what is left it says so.
@@ -565,6 +582,18 @@ export interface StepOutput {
   /** Coach: Compass lines in the user's own words (proposed, never written), and if-then plans. */
   candidates?: { kind: string; title: string; quote: string }[];
   plans?: { goal?: string; if_then: string }[];
+  /** Negotiator: leverage on each side, the first ask and the walk-away point. */
+  leverage?: { side: string; what: string; source?: string }[];
+  ask?: string; walkAway?: string;
+  /** Liaison: who is due a note, and why now. */
+  nudges?: { person: string; why: string }[];
+  /** Tutor: the curriculum, a quiz with answers, a review date. */
+  lessons?: { title: string; steps?: string }[];
+  quiz?: { q: string; a: string }[];
+  review?: string;
+  /** Confidant: patterns, each with the user's own words, and one question. */
+  patterns?: { pattern: string; quote: string }[];
+  question?: string;
 }
 
 export function parseStepOutput(raw: string): StepOutput {
@@ -591,6 +620,15 @@ export function parseStepOutput(raw: string): StepOutput {
         ...(Array.isArray(j.risks) ? { risks: (j.risks as { risk?: unknown; sign?: unknown; odds?: unknown }[]).filter((r) => r && typeof r.risk === "string").slice(0, 8).map((r) => ({ risk: String(r.risk).slice(0, 300), ...(typeof r.sign === "string" ? { sign: r.sign.slice(0, 200) } : {}), ...(typeof r.odds === "string" ? { odds: r.odds.slice(0, 20) } : {}) })) } : {}),
         ...(Array.isArray(j.questions) ? { questions: strs(j.questions).map((q) => q.trim().slice(0, 240)).filter(Boolean).slice(0, 5) } : {}),
         ...(Array.isArray(j.candidates) ? { candidates: (j.candidates as { kind?: unknown; title?: unknown; quote?: unknown }[]).filter((c) => c && typeof c.title === "string" && typeof c.quote === "string").slice(0, 6).map((c) => ({ kind: ["goal", "value", "rule"].includes(String(c.kind)) ? String(c.kind) : "goal", title: String(c.title).slice(0, 120), quote: String(c.quote).slice(0, 400) })) } : {}),
+        ...(Array.isArray(j.leverage) ? { leverage: (j.leverage as { side?: unknown; what?: unknown; source?: unknown }[]).filter((x) => x && typeof x.what === "string").slice(0, 8).map((x) => ({ side: String(x.side ?? "").slice(0, 20), what: String(x.what).slice(0, 240), ...(typeof x.source === "string" ? { source: x.source.slice(0, 200) } : {}) })) } : {}),
+        ...(typeof (j as { ask?: unknown }).ask === "string" ? { ask: String((j as { ask: string }).ask).slice(0, 240) } : {}),
+        ...(typeof (j as { walk_away?: unknown }).walk_away === "string" ? { walkAway: String((j as { walk_away: string }).walk_away).slice(0, 240) } : {}),
+        ...(Array.isArray(j.nudges) ? { nudges: (j.nudges as { person?: unknown; why?: unknown }[]).filter((x) => x && typeof x.person === "string" && typeof x.why === "string").slice(0, 5).map((x) => ({ person: String(x.person).slice(0, 80), why: String(x.why).slice(0, 200) })) } : {}),
+        ...(Array.isArray(j.lessons) ? { lessons: (j.lessons as { title?: unknown; steps?: unknown }[]).filter((x) => x && typeof x.title === "string").slice(0, 7).map((x) => ({ title: String(x.title).slice(0, 120), ...(typeof x.steps === "string" ? { steps: x.steps.slice(0, 600) } : {}) })) } : {}),
+        ...(Array.isArray(j.quiz) ? { quiz: (j.quiz as { q?: unknown; a?: unknown }[]).filter((x) => x && typeof x.q === "string" && typeof x.a === "string").slice(0, 12).map((x) => ({ q: String(x.q).slice(0, 240), a: String(x.a).slice(0, 240) })) } : {}),
+        ...(typeof j.review === "string" ? { review: j.review.slice(0, 10) } : {}),
+        ...(Array.isArray(j.patterns) ? { patterns: (j.patterns as { pattern?: unknown; quote?: unknown }[]).filter((x) => x && typeof x.pattern === "string" && typeof x.quote === "string").slice(0, 3).map((x) => ({ pattern: String(x.pattern).slice(0, 200), quote: String(x.quote).slice(0, 300) })) } : {}),
+        ...(typeof j.question === "string" ? { question: j.question.slice(0, 240) } : {}),
         ...(Array.isArray(j.plans) ? { plans: (j.plans as { goal?: unknown; if_then?: unknown }[]).filter((x) => x && typeof x.if_then === "string").slice(0, 8).map((x) => ({ ...(typeof x.goal === "string" ? { goal: x.goal.slice(0, 120) } : {}), if_then: String(x.if_then).slice(0, 300) })) } : {}),
       };
     } catch { /* fall through: prose */ }
@@ -616,6 +654,25 @@ export function codeCheck(s: Specialist, o: StepOutput): string[] {
   if (s.returns === "memory updates" && !(o.questions ?? []).some((q) => q.endsWith("?"))) miss.push("no questions");
   if (s.returns === "goals" && !(o.plans?.length || o.candidates?.length || /\bif\b[\s\S]{2,}?\bthen\b/i.test(o.body))) miss.push("no if-then plan and nothing in the user's words");
   if (s.returns === "repairs" && !(o.filed?.tasks?.length || o.filed?.task) && !/nothing to repair/i.test(o.summary + o.body)) miss.push("no repairs filed and no \"nothing to repair\"");
+  if (s.returns === "strategy") {
+    if (!(o.leverage ?? []).some((l) => /them|other/i.test(l.side)) || !(o.leverage ?? []).some((l) => /you|user|me|us/i.test(l.side))) miss.push("leverage on both sides");
+    if (!o.ask || !o.walkAway) miss.push("a first ask and a walk-away point");
+    if (!o.drafts?.length) miss.push("no script or counteroffer draft");
+  }
+  if (s.returns === "nudges") {
+    if (!(o.nudges ?? []).length) miss.push("nobody named");
+    if ((o.drafts?.length ?? 0) < (o.nudges ?? []).length) miss.push("a check-in draft for each person");
+  }
+  if (s.returns === "lessons") {
+    const n = (o.lessons ?? []).length;
+    if (n < 3 || n > 7) miss.push("three to seven lessons");
+    if ((o.quiz ?? []).length < 3) miss.push("a quiz of at least three questions with answers");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(o.review ?? "")) miss.push("a review date (YYYY-MM-DD)");
+  }
+  if (s.returns === "reflection") {
+    if (!(o.patterns ?? []).length) miss.push("no pattern with the user's own words");
+    if (!(o.question ?? "").trim().endsWith("?")) miss.push("one question to sit with");
+  }
   return miss;
 }
 
@@ -679,7 +736,11 @@ export function specialistPrompt(o: { s: Specialist; notes: string; notebook: st
       : s.returns === "risks" ? ',\n  "risks": [{ "risk": "<one way it fails>", "sign": "<the early sign to watch>", "odds": "low | medium | high" }]'
       : s.returns === "memory updates" ? ',\n  "questions": ["<one short question that fills one gap>"]'
       : s.returns === "goals" ? ',\n  "plans": [{ "goal": "<goal id or title>", "if_then": "If <a cue that happens anyway>, then <one small step>." }],\n  "candidates": [{ "kind": "goal | value | rule", "title": "<in the user\'s own words>", "quote": "<their exact words, copied from the notes>" }]'
-      : s.returns === "repairs" ? `,\n  "filed": { "tasks": [{ "text": "<one repair: what is broken and the fix>", "due": "YYYY-MM-DD" }] }` : "";
+      : s.returns === "repairs" ? `,\n  "filed": { "tasks": [{ "text": "<one repair: what is broken and the fix>", "due": "YYYY-MM-DD" }] }`
+      : s.returns === "strategy" ? ',\n  "leverage": [{ "side": "you | them", "what": "<one source of leverage>", "source": "<where it comes from>" }],\n  "ask": "<the first ask>",\n  "walk_away": "<the walk-away point>",\n  "drafts": [{ "to": "<who>", "subject": "<subject>", "body": "<the opening message or counteroffer>" }]'
+      : s.returns === "nudges" ? ',\n  "nudges": [{ "person": "<a person the notes know>", "why": "<why now>" }],\n  "drafts": [{ "to": "<the same person>", "subject": "", "body": "<a short check-in in the user\'s voice>" }]'
+      : s.returns === "lessons" ? ',\n  "lessons": [{ "title": "<lesson>", "steps": "<what to do in one sitting>" }],\n  "quiz": [{ "q": "<question on the first lesson>", "a": "<answer>" }],\n  "review": "YYYY-MM-DD"'
+      : s.returns === "reflection" ? ',\n  "patterns": [{ "pattern": "<what keeps coming up>", "quote": "<the user\'s exact words, copied from the notes>" }],\n  "question": "<one open question for the user>"' : "";
   return [
     `You are the ${s.name}, one specialist on a team the user's chief of staff put together. You return one result; you never contact anyone, buy anything or change anything.`,
     `## Mandate\n${s.mandate}`,
@@ -699,6 +760,8 @@ export function specialistPrompt(o: { s: Specialist; notes: string; notebook: st
 }
 
 export interface RunDeps {
+  /** An outside agent's call (tests pass a stub; nothing reaches the network). */
+  callOutside?: typeof import("./specialists-custom.ts").callOutside;
   detectClis?: typeof import("./cli-bridge.ts").detectClis;
   runChatTurn?: typeof import("./cli-bridge.ts").runChatTurn;
   now?: () => number;
@@ -763,6 +826,26 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
       if (ceilingRank(spec.ceiling) > ceilingRank("act-ask")) return { ok: false, status: "needs-approval", note: `the ${spec.name} would act on its own; that is never allowed` };
       // A mission's ceiling can only tighten: a read-only mission never drafts.
       if (job!.mission && ceilingRank(spec.ceiling) > ceilingRank(job!.mission.ceiling)) return { ok: false, status: "needs-approval", note: `the ${spec.name} goes past the mission's ceiling (${job!.mission.ceiling}); raise it on the mission's Setup tab to run it` };
+      // An outside agent: only the brief leaves, and only on the user's yes for
+      // exactly this brief (an engine act in the Inbox). Its reply is quoted data.
+      if (spec.outside) {
+        const oc = await import("./specialists-custom.ts");
+        const { gateEngineAct } = await import("./act-gate.ts");
+        const brief = oneLine(st.brief ?? job!.ask, 2000);
+        const host = new URL(spec.outside.endpoint).host;
+        const q = gateEngineAct(vault, spaceKey(job!.domains.owner), oc.OUTSIDE_TOOL, { job: job!.id, agent: spec.id, brief }, `Send to ${spec.name} (${host}): ${brief}`);
+        if (q.state === "declined") return { ok: false, status: "stopped", note: `you said no to sending this to ${spec.name}; nothing was sent` };
+        if (q.state !== "allow") return { ok: false, status: "needs-approval", note: `waiting for your yes to send the brief to ${spec.name} (${host}); nothing was sent` };
+        const t0 = clock();
+        const r = await (deps.callOutside ?? oc.callOutside)(vault, spec, brief, { now: clock(), signal: ac.signal });
+        const rec = { id: `${idx}-${sid}`, specialist: sid, domain: job!.domains.owner, trigger: { kind: job!.origin.kind }, brief, status: r.ok ? "done" : "failed", outside: host, passes: [{ n: 1, check: { ok: r.ok, missing: r.ok ? [] : [r.error] }, usd: 0, ms: clock() - t0 }], result: null as null | { type: string; file: string }, notebook: [] as string[], cost: { usd: 0, minutes: Math.round((clock() - t0) / 600) / 100, estimated: true } };
+        if (!r.ok) { writeStep(dir, idx, sid, rec); return { ok: false, status: "failed", note: r.error }; }
+        const out: StepOutput = { summary: oneLine(r.text.split("\n").find((l) => l.trim()) ?? "", 300), body: oc.quoteOutside(spec, r.text), sources: [`https://${host}`], check: { ok: true, missing: [] }, notebook: [] };
+        writeFileSync(join(dir, "steps", `${idx}-${sid}.result.json`), `${JSON.stringify(out, null, 2)}\n`);
+        rec.result = { type: spec.returns, file: `steps/${idx}-${sid}.result.json` };
+        writeStep(dir, idx, sid, rec);
+        return { ok: true, sid, spec, out };
+      }
       const notebook = readNotebook(vault, job!.domains.owner, sid);
       const { specialistFacts } = await import("./specialist-facts.ts");
       const facts = await specialistFacts(vault, sid, job!.domains.owner, clock());
@@ -1023,6 +1106,26 @@ function fileResults(vault: string, job: Job, last: { returns: string; out: Step
     if (!allowed.has(d) || typeof fact !== "string" || !oneLine(fact)) continue;
     appendJsonl(domainUpdatesPath(vault, d), { ts: now, from_domain: owner, thread: `job:${job.id}`, fact: oneLine(fact), entities: [] });
     add({ domain: d, kind: "note", file: rel(domainUpdatesPath(vault, d)), ref: `job:${job.id}`, text: `note: ${oneLine(fact, 120)}` });
+  }
+  // The Tutor's lesson plan, written by code into the owner's memory/lessons/
+  // (write-vault, its ceiling). A review date becomes a task. Undo moves both.
+  for (const t of all.filter((x) => x.returns === "lessons" && (x.out.lessons ?? []).length)) {
+    const o = t.out;
+    const p = join(resolveDomainDir(vault, owner), "memory", "lessons", `${day}-${slug(job.ask)}.md`);
+    mkdirSync(join(p, ".."), { recursive: true });
+    const quiz = (o.quiz ?? []).map((q, i) => `${i + 1}. ${oneLine(q.q, 240)}\n   Answer: ${oneLine(q.a, 240)}`).join("\n");
+    writeFileSync(p, `# ${oneLine(job.ask, 120)}\n\nA lesson plan from the Tutor on ${day} (job ${job.id}).\n\n## Lessons\n${(o.lessons ?? []).map((l, i) => `${i + 1}. ${oneLine(l.title, 120)}${l.steps ? `\n   ${oneLine(l.steps, 600)}` : ""}`).join("\n")}\n\n## Quiz\n${quiz}\n${o.review ? `\n## Review\n${o.review}\n` : ""}`);
+    add({ domain: owner, kind: "page", file: rel(p), ref: rel(p), text: `lesson plan: ${(o.lessons ?? []).length} lessons, ${(o.quiz ?? []).length} quiz questions` });
+    if (o.review && /^\d{4}-\d{2}-\d{2}$/.test(o.review) && !tasks.some((x) => /^Review:/.test(x.text))) {
+      const tid = `j${(now + 97).toString(36).slice(-6)}`;
+      const cur = readText(bf);
+      const text = `Review: ${oneLine(job.ask, 100)}`;
+      if (!parseTaskTexts(cur).has(text.toLowerCase())) {
+        mkdirSync(join(bf, ".."), { recursive: true });
+        writeFileSync(bf, `${cur ? cur.replace(/\s*$/, "\n") : "# Tasks\n\n"}- [ ] ${text} @${o.review} +${day} ~src:job:${job.id.slice(0, 40)} ~id:${tid}\n`);
+        add({ domain: owner, kind: "task", file: rel(bf), ref: tid, text: `task: ${text}, by ${o.review}` });
+      }
+    }
   }
   // The Interviewer's questions wait in the owner's memory until answered.
   const questions = all.flatMap((x) => (x.returns === "memory updates" ? x.out.questions ?? [] : [])).map((q) => oneLine(q, 240)).filter((q) => q.endsWith("?")).slice(0, 5);

@@ -17,7 +17,7 @@
 // Every block is computed from files, never by a model, and kept short. A
 // failure in one reader drops that block; it never stops a run.
 
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { missionScopeSlug, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
@@ -195,7 +195,40 @@ function interviewerFacts(vault: string, owner: string): string {
   return out.join("\n");
 }
 
+// Phase 4. The Liaison starts from the people the radar finds out of touch
+// (days since against their own normal, computed by code); the Confidant
+// reads the owner's journal; the Tutor sees the lesson plans already filed.
+async function liaisonFacts(vault: string, _owner: string, now: number): Promise<string> {
+  try {
+    const { relationships } = await import("./radar.ts");
+    const due = relationships(vault, now).slice(0, 8);
+    return due.length ? ["People due a note (by code: days since you were in touch against your normal with them):", ...due.map((r) => `- ${r.text} (${r.evidence})`)].join("\n") : "Code finds nobody overdue against their normal.";
+  } catch { return ""; }
+}
+
+function confidantFacts(vault: string, owner: string): string {
+  const dir = resolveDomainDir(vault, owner);
+  const parts: string[] = [];
+  for (const rel of ["memory/journal/decisions.md", "memory/journal/facts.md", "_journal/decisions.md", "_journal/facts.md"]) {
+    const t = readText(join(dir, rel)).trim();
+    if (t) parts.push(`From ${rel.split("/").pop()} (newest last):\n${clip(t.split("\n").slice(-40).join("\n"), 1500)}`);
+  }
+  return parts.length ? parts.join("\n\n") : "No journal here yet; read the notes in the context.";
+}
+
+function tutorFacts(vault: string, owner: string): string {
+  const dir = join(resolveDomainDir(vault, owner), "memory", "lessons");
+  try {
+    const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort().slice(-8);
+    return files.length ? `Lesson plans already filed here (do not repeat them; build on them):\n${files.map((f) => `- ${f.replace(/\.md$/, "")}`).join("\n")}` : "";
+  } catch { return ""; }
+}
+
 const FACTS: Record<string, Facts> = {
+  liaison: liaisonFacts,
+  confidant: (v, o) => confidantFacts(v, o),
+  tutor: (v, o) => tutorFacts(v, o),
+  negotiator: stewardFacts,
   mechanic: mechanicFacts,
   coach: coachFacts,
   interviewer: (v, o) => interviewerFacts(v, o),

@@ -44,9 +44,9 @@ function fakeTurn(log: string[]) {
 
 describe("specialists", () => {
   beforeEach(seed);
-  test("seventeen are on, the rest of the roster is listed off", () => {
+  test("all twenty-one are on (Phase 4 turned on the last four)", () => {
     const all = builtInSpecialists();
-    expect(all.filter((s) => s.on).map((s) => s.id)).toEqual(["researcher", "scout", "planner", "steward", "editor", "writer", "analyst", "historian", "sentinel", "auditor", "builder", "clerk", "operator", "coach", "skeptic", "interviewer", "mechanic"]);
+    expect(all.filter((s) => s.on).map((s) => s.id)).toEqual(["researcher", "scout", "planner", "steward", "editor", "writer", "analyst", "historian", "sentinel", "auditor", "builder", "clerk", "operator", "coach", "skeptic", "interviewer", "mechanic", "negotiator", "liaison", "tutor", "confidant"]);
     expect(all.length).toBe(21);
     expect(getSpecialist(V, "writer")!.ceiling).toBe("draft");
     expect(getSpecialist(V, "editor")!.ceiling).toBe("write-vault");

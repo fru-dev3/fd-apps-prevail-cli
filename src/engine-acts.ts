@@ -7,8 +7,11 @@
 
 import { MISSION_TOOL_PREFIX, OPERATOR_TOOL, type PendingAct } from "./act-gate.ts";
 
+// An outside agent's call (specialists-custom.ts); named here, not imported, to keep this file light.
+const OUTSIDE_TOOL = "mcp__prevail-outside__send";
+
 export function isEngineAct(tool: string): boolean {
-  return tool === OPERATOR_TOOL || tool.startsWith(MISSION_TOOL_PREFIX);
+  return tool === OPERATOR_TOOL || tool === OUTSIDE_TOOL || tool.startsWith(MISSION_TOOL_PREFIX);
 }
 
 export async function afterActAnswer(vault: string, act: PendingAct, answer: "approved" | "denied"): Promise<{ ran?: string; error?: string }> {
@@ -25,6 +28,16 @@ export async function afterActAnswer(vault: string, act: PendingAct, answer: "ap
     const child = spawn(bin!, [...pre, "--vault", vault, "job", "act", job, String(n)], { detached: true, stdio: "ignore", env: process.env });
     child.unref();
     return { ran: `job act ${job} ${n}` };
+  }
+  if (act.tool === OUTSIDE_TOOL) {
+    // Yes: the job runs again and its outside step finds this exact grant.
+    // No: the job stops; nothing was ever sent.
+    const job = String(args.job ?? "");
+    if (!job) return { error: "no job" };
+    const jobs = await import("./jobs.ts");
+    if (answer === "denied") { jobs.stopJob(vault, job); return { ran: "declined" }; }
+    jobs.startJob(vault, job);
+    return { ran: `job run ${job}` };
   }
   if (act.tool.startsWith(MISSION_TOOL_PREFIX)) {
     if (answer === "denied") return { ran: "declined" };

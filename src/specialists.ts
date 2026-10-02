@@ -69,6 +69,16 @@ export interface Specialist {
   builtIn: boolean;
   /** Which file overrode the built-in, if any (vault-relative). */
   source?: string;
+  /** A preset: the built-in it is built on (its ceiling, tools and checks are the ceiling here). */
+  base?: string;
+  /** The vertical pack that installed it. */
+  pack?: string;
+  /**
+   * An outside agent (a remote MCP tool over HTTPS). It gets only the brief,
+   * never the vault; every call waits for the user's yes; at most perDay calls
+   * a day; its ceiling is draft at most. Enforced in jobs.ts and outside-agents.ts.
+   */
+  outside?: { endpoint: string; tool: string; perDay: number };
 }
 
 // ── A tiny frontmatter reader for exactly the keys above ────────────────────
@@ -146,10 +156,15 @@ export function parseSpecialist(text: string, base?: Specialist): Specialist | n
     never: sectionOf(body, "Never") || base?.never || "",
     on: fm.on === undefined ? (base?.on ?? true) : String(fm.on) !== "false",
     builtIn: !!base?.builtIn,
+    ...(typeof fm.base === "string" && fm.base ? { base: fm.base } : base?.base ? { base: base.base } : {}),
+    ...(typeof fm.pack === "string" && fm.pack ? { pack: fm.pack } : {}),
+    ...(typeof fm.endpoint === "string" && fm.endpoint
+      ? { outside: { endpoint: fm.endpoint, tool: String(fm.tool ?? "ask"), perDay: Math.max(1, Math.min(50, Number(fm.calls_per_day ?? 5) || 5)) } }
+      : {}),
   };
 }
 
-// ── The built-in roster (Phase 1 turned six on, Phase 2 six more, Phase 3 five more; the rest are listed, off) ────
+// ── The built-in roster (Phase 1 turned six on, Phase 2 six more, Phase 3 five more, Phase 4 the last four) ────
 
 const spec = (fm: string, mandate: string, method: string, never: string) => `---\n${fm.trim()}\n---\n## Mandate\n${mandate}\n## Method\n${method}\n## Never\n${never}\n`;
 
@@ -438,24 +453,80 @@ done_when:
   "Keeps Prevail itself healthy: connections, failing loops, capture gaps, duplicates.",
   "1. Start from the health report below (computed by code).\n2. One repair per problem: what is broken, since when, the fix.\n3. File each fix as a task for the user; never change a connection or a credential yourself.",
   "Touch a credential, a token or a connection. Delete anything."),
-];
-
-// The rest of the roster, listed so the user can see what is coming. Off.
-const LATER: [string, string, Family, string, Ceiling][] = [
-  ["negotiator", "Negotiator", "decide", "strategy", "draft"],
-  ["liaison", "Liaison", "do", "nudges", "draft"],
-  ["tutor", "Tutor", "grow", "lessons", "write-vault"],
-  ["confidant", "Confidant", "grow", "reflection", "read"],
+  // Phase 4: the last four. Drafts are stored and never sent; the Tutor files
+  // lessons into the domain by code; the Confidant only reads and reflects.
+  spec(`id: negotiator
+name: Negotiator
+icon: scale
+family: decide
+returns: strategy
+ceiling: draft
+tools: [vault-read, web]
+runtime: deep
+budget: { minutes: 5, usd: 0.35, passes: 2 }
+handoff: offer
+done_when:
+  - names the user's leverage and the other side's, each with where it comes from
+  - a walk-away point and a first ask, both as numbers or plain terms
+  - at least one script or counteroffer as a draft, never sent`,
+  "Prepares the user to negotiate: leverage on both sides, a first ask, a walk-away point, and the words to say.",
+  "1. Read what the user has (offers, quotes, prices, dates) in the notes below and the team's results.\n2. Name the user's leverage and the other side's, each with its source.\n3. Set a first ask and a walk-away point; say why each is reasonable.\n4. Write the opening message or a counteroffer as a draft, in the user's voice.",
+  "Send, sign or accept anything. Invent a competing offer. Bluff on the user's behalf."),
+  spec(`id: liaison
+name: Liaison
+icon: heart-handshake
+family: do
+returns: nudges
+ceiling: draft
+tools: [vault-read]
+runtime: standard
+budget: { minutes: 3, usd: 0.15, passes: 1 }
+handoff: offer
+done_when:
+  - at most five people, each with why now (the days since you were in touch, a date, a promise)
+  - a short check-in draft for each, in the user's voice, never sent
+  - nobody the notes do not know`,
+  "Keeps relationships warm: who is due a call or a note, and a check-in drafted for each.",
+  "1. Start from the people code found below (days since last in touch against their normal).\n2. Add anyone the job names, if the notes know them.\n3. One line each on why now, and one short check-in draft each.",
+  "Contact anyone. Add a person the notes do not know. Write anything a person would find creepy (where they were, what they bought)."),
+  spec(`id: tutor
+name: Tutor
+icon: graduation-cap
+family: grow
+returns: lessons
+ceiling: write-vault
+tools: [vault-read, web]
+runtime: deep
+budget: { minutes: 5, usd: 0.30, passes: 2 }
+handoff: offer
+done_when:
+  - a short curriculum: three to seven lessons, each one sitting long
+  - a quiz of at least three questions, each with its answer
+  - a review date for what is easy to forget`,
+  "Teaches: a curriculum for what the user wants to learn, quizzes, and spaced review. The lesson plan is filed into the domain by code.",
+  "1. Read what the user already knows and wants (notes, goals, the mission if there is one).\n2. Break it into three to seven lessons, smallest useful step first.\n3. Write a quiz with answers on the first lesson.\n4. Set a review date a few days out for what fades fastest.",
+  "Pad the curriculum. Pretend to certify anything. Quiz on what was not taught."),
+  spec(`id: confidant
+name: Confidant
+icon: moon-star
+family: grow
+returns: reflection
+ceiling: read
+tools: [vault-read]
+runtime: deep
+budget: { minutes: 4, usd: 0.25, passes: 1 }
+handoff: offer
+done_when:
+  - every pattern quotes the user's own words as its evidence
+  - ends with one question for the user to sit with, not advice
+  - nothing is written anywhere`,
+  "A thinking partner: reads the user's journals and notes for patterns, reflects them back with the user's own words, and asks one good question.",
+  "1. Read the journal and notes below.\n2. Name at most three patterns, each with the user's exact words as evidence.\n3. Reflect, do not prescribe; end with one open question.",
+  "Diagnose, label or give medical or legal advice. Write to the vault. Read a domain the user keeps out of reach."),
 ];
 
 export function builtInSpecialists(): Specialist[] {
-  const on = BUILT_IN_TEXT.map((t) => ({ ...parseSpecialist(t)!, builtIn: true }));
-  const off = LATER.map(([id, name, family, returns, ceiling]) => ({
-    id, name, icon: "circle-dashed", family, returns, ceiling, tools: [], apps: [], runtime: "standard", lens: "off",
-    budget: { minutes: 5, usd: 0.3, passes: 1 }, handoff: "off" as Handoff, doneWhen: [], mandate: "", method: "", never: "",
-    on: false, builtIn: true,
-  }));
-  return [...on, ...off];
+  return BUILT_IN_TEXT.map((t) => ({ ...parseSpecialist(t)!, builtIn: true }));
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────
@@ -469,19 +540,48 @@ export function specialistsDir(vault: string): string { return join(buildRoot(va
 
 /** Built-ins, each overridden by build/specialists/<id>.md if present, plus the user's own. */
 export function loadSpecialists(vault: string): Specialist[] {
-  const all = new Map(builtInSpecialists().map((s) => [s.id, s]));
+  const builtIns = new Map(builtInSpecialists().map((s) => [s.id, s]));
+  const all = new Map(builtIns);
   const dir = specialistsDir(vault);
   if (existsSync(dir)) {
     for (const f of readdirSync(dir).filter((x) => x.endsWith(".md")).sort()) {
-      const base = all.get(f.replace(/\.md$/, ""));
-      // An override of a built-in that is not built yet stays off: there is no method behind it.
-      const s = parseSpecialist(readText(join(dir, f)), base);
+      const text = readText(join(dir, f));
+      const own = all.get(f.replace(/\.md$/, ""));
+      // A preset names the built-in it is built on and inherits what it leaves out.
+      const fmBase = String(parseFrontmatter(text).fm.base ?? "");
+      const preset = !own?.builtIn && fmBase ? builtIns.get(fmBase) : undefined;
+      const s = parseSpecialist(text, own ?? preset);
       if (!s) continue;
-      if (base && !base.mandate && !s.mandate) s.on = false;
-      all.set(s.id, { ...s, builtIn: !!base?.builtIn, source: `build/specialists/${f}` });
+      if (own && !own.mandate && !s.mandate) s.on = false;
+      all.set(s.id, clampCustom({ ...s, builtIn: !!own?.builtIn, source: `build/specialists/${f}` }, preset));
     }
   }
   return [...all.values()];
+}
+
+/**
+ * The limits on a specialist the user (or a pack) made, in code: a preset
+ * never goes past the built-in it is built on (ceiling, tools); a custom one
+ * never acts on its own; an outside agent reads nothing from the vault and
+ * stops at draft.
+ */
+export function clampCustom(s: Specialist, base?: Specialist): Specialist {
+  if (s.builtIn) return s;
+  const out = { ...s };
+  if (base) {
+    if (CEILING_RANK[out.ceiling] > CEILING_RANK[base.ceiling]) out.ceiling = base.ceiling;
+    out.tools = out.tools.filter((t) => base.tools.includes(t));
+  }
+  if (CEILING_RANK[out.ceiling] > CEILING_RANK["act-ask"]) out.ceiling = "act-ask";
+  if (out.outside) {
+    // Quoted text back, nothing filed by it: findings, discoveries or a draft.
+    if (!["findings", "discoveries", "draft"].includes(out.returns)) out.returns = "findings";
+    // It reads nothing and writes nothing here: read, or draft (text the user may send).
+    if (out.ceiling !== "read" && out.ceiling !== "draft") out.ceiling = "read";
+    out.tools = [];
+    out.apps = [];
+  }
+  return out;
 }
 
 export function getSpecialist(vault: string, id: string): Specialist | null {
@@ -583,6 +683,9 @@ export function serializeSpecialist(s: Specialist): string {
     `budget: { minutes: ${s.budget.minutes}, usd: ${s.budget.usd}, passes: ${s.budget.passes} }`, `handoff: ${s.handoff}`,
     ...(s.doneWhen.length ? ["done_when:", ...s.doneWhen.map((d) => `  - ${d}`)] : []),
     ...(s.on ? [] : ["on: false"]),
+    ...(s.base ? [`base: ${s.base}`] : []),
+    ...(s.pack ? [`pack: ${s.pack}`] : []),
+    ...(s.outside ? [`endpoint: ${s.outside.endpoint}`, `tool: ${s.outside.tool}`, `calls_per_day: ${s.outside.perDay}`] : []),
   ];
   return `---\n${fm.join("\n")}\n---\n## Mandate\n${s.mandate}\n## Method\n${s.method}\n## Never\n${s.never}\n`;
 }
@@ -750,6 +853,20 @@ export async function specialistsCommand(argv: string[], vault: string): Promise
     console.log(r.ok ? (r.moved ? `Back to the built-in. Your version is in ${r.moved}.` : "Already the built-in.") : r.error);
     return r.ok ? 0 : 1;
   }
-  console.error("usage: prevail specialists list | show <id> [--domain d] | notebook <id> --domain d | save <id> [--file f|-] [--confirm-raise] | domain-save <id> --domain d [--file f|-] | reset <id> [--json]");
+  if (sub === "draft" || sub === "create") {
+    // Made by talking: draft takes { turns, draft } as JSON; create takes the draft.
+    const file = args.get("file") ?? "-";
+    let body: Record<string, unknown>;
+    try { body = JSON.parse(file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8")) as Record<string, unknown>; }
+    catch (e) { out({ ok: false, error: `not JSON: ${(e as Error).message}` }); return 1; }
+    const c = await import("./specialists-custom.ts");
+    try {
+      if (sub === "draft") { out(await c.draftSpecialist(vault, { turns: (body.turns ?? []) as never, draft: (body.draft ?? {}) as never })); return 0; }
+      const r = await c.createSpecialist(vault, body, { confirmRaise: args.has("confirm-raise") });
+      if (args.json) out({ ok: true, ...r }); else console.log(`Added ${r.spec.name} (${r.path}).`);
+      return 0;
+    } catch (e) { if (args.json) { out({ ok: false, error: (e as Error).message }); return 0; } console.error((e as Error).message); return 1; }
+  }
+  console.error("usage: prevail specialists list | show <id> [--domain d] | notebook <id> --domain d | save <id> [--file f|-] [--confirm-raise] | domain-save <id> --domain d [--file f|-] | reset <id> | draft [--file f|-] | create [--file f|-] [--confirm-raise] [--json]");
   return 1;
 }

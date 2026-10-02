@@ -154,7 +154,10 @@ describe("playbooks with specialist steps", () => {
     expect(log).not.toContain("Editor");
   });
   test("a specialist that is off is never run", async () => {
+    mkdirSync(join(V, "build", "specialists"), { recursive: true });
+    writeFileSync(join(V, "build", "specialists", "negotiator.md"), "---\nid: negotiator\non: false\n---\n");
     const r = await runPlaybook("pb-x", { id: "x", name: "X", goal: "x", steps: [{ kind: "specialist", specialist: "negotiator", brief: "counteroffer" }] }, ctx([]));
+    rmSync(join(V, "build", "specialists", "negotiator.md"));
     expect(r.steps[0]!.decision).toBe("block");
     expect(r.steps[0]!.note).toContain("negotiator");
   });

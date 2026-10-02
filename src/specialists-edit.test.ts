@@ -61,7 +61,7 @@ describe("specialist editing", () => {
     expect(saveSpecialist(V, "researcher", { tools: ["shell"] }).ok).toBe(false);
     expect(saveSpecialist(V, "researcher", { budget: { passes: 9 } }).ok).toBe(false);
     expect(saveSpecialist(V, "researcher", { mandate: "" }).ok).toBe(false);
-    expect(saveSpecialist(V, "negotiator", { mandate: "Foo" }).ok).toBe(false);
+    expect(saveSpecialist(V, "foo-nobody", { mandate: "Foo" }).ok).toBe(false);
     expect(existsSync(SPECS)).toBe(false);
   });
 

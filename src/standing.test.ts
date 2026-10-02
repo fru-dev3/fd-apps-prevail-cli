@@ -45,10 +45,10 @@ function job(team: string[][], ask = "Get the foo things done", owner = "foo"): 
 }
 
 describe("the roster", () => {
-  test("seventeen are on; the Operator may only ask, the Coach never writes the Compass", () => {
+  test("all are on; the Operator may only ask, the Coach never writes the Compass", () => {
     const on = builtInSpecialists().filter((s) => s.on).map((s) => s.id);
     expect(on).toEqual(expect.arrayContaining(["operator", "coach", "skeptic", "interviewer", "mechanic"]));
-    expect(on.length).toBe(17);
+    expect(on.length).toBe(21);
     expect(builtInSpecialists().length).toBe(21);
     expect(getSpecialist(V, "operator")!.ceiling).toBe("act-ask");
     expect(getSpecialist(V, "skeptic")!.returns).toBe("risks");
