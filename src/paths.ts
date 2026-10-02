@@ -388,14 +388,14 @@ export async function choosePath(vault: string, pathId: string, o: { until?: str
     inst.loops.push(setTrigger(vault, id, domain, { cadence: d.cadence }));
   }
   if (inst.playbooks.length) p.fields.push({ key: "playbooks", value: inst.playbooks.join(", ") });
-  // A first task, so the path shows on Today with its thread.
+  // A first task, so the path shows on Today with its thread (~initiative: walks the Compass chain).
   const { boardFile } = await import("./jobs.ts");
   const bf = boardFile(vault, domain);
   const text = `Start the initiative "${p.title}" toward ${g.title}`;
   const cur = existsSync(bf) ? readFileSync(bf, "utf8") : "";
   if (!cur.includes(text)) {
     mkdirSync(join(bf, ".."), { recursive: true });
-    writeFileSync(bf, `${cur ? cur.replace(/\s*$/, "\n") : "# Tasks\n\n"}- [ ] ${text} @${ymd(now + 7 * DAY)} +${ymd(now)} ~src:path:${pathId} ~id:pa${now.toString(36).slice(-5)}\n`);
+    writeFileSync(bf, `${cur ? cur.replace(/\s*$/, "\n") : "# Tasks\n\n"}- [ ] ${text} @${ymd(now + 7 * DAY)} +${ymd(now)} ~src:path:${pathId} ~id:pa${now.toString(36).slice(-5)} ~initiative:${pathId}\n`);
     inst.tasks.push({ domain, text });
   }
   g.dirty = true;

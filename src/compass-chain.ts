@@ -409,18 +409,23 @@ export function proposeCodeLinks(vault: string, now = Date.now()): LinkProposal[
   }
   const inits = tree.nodes.filter((n) => n.level === "initiative" && (n.status === "chosen" || n.status === "trial"));
   if (inits.length) {
-    const tasks = openTasks(vault).filter((t) => !t.initiative && !t.goal);
-    for (const ini of inits) {
-      const g = findById(doc, ini.id);
-      const words = contentWords([ini.title, ...(g.path ? g.path.fields.filter((f) => ["expect", "why"].includes(f.key)).map((f) => f.value) : [])].join(" "));
-      let n = 0;
-      for (const t of tasks) {
-        if (n >= 5) break;
-        if (ini.domain && t.owner !== ini.domain && !t.owner.startsWith("mission/")) continue;
-        if (shared(contentWords(t.text), words) < 2) continue;
-        const r = proposeLink(vault, { kind: "task-initiative", from: `task:${t.owner}:${t.id ?? ""}`, fromTitle: t.text, to: ini.id, quote: t.text, source: `${t.owner} tasks`, by: "code", domain: t.owner, file: t.file }, now, tree);
-        if (r.ok) { out.push(r.link); n++; }
-      }
+    // Each open task goes to at most one initiative: the one whose title it
+    // shares the most of (at least two words and more than half the title), in the same
+    // domain or a mission's board. A task filed by another initiative never.
+    const words = new Map(inits.map((i) => [i.id, contentWords(i.title)]));
+    const per = new Map<string, number>();
+    for (const t of openTasks(vault).filter((x) => !x.initiative && !x.goal)) {
+      const tw = contentWords(t.text);
+      const best = inits
+        .filter((i) => !i.domain || t.owner === i.domain || t.owner.startsWith("mission/"))
+        .map((i) => { const n = shared(tw, words.get(i.id)!); return { i, n, r: n / Math.max(1, words.get(i.id)!.size) }; })
+        .filter((x) => x.n >= 2 && x.r > 0.5)
+        .sort((a, b) => b.r - a.r || b.n - a.n)[0];
+      if (!best || (per.get(best.i.id) ?? 0) >= 5) continue;
+      const src = /~src:path:(\S+)/.exec(readText(t.file).split("\n").find((l) => t.id && l.includes(`~id:${t.id}`)) ?? "")?.[1];
+      if (src && src !== best.i.id) continue;
+      const r = proposeLink(vault, { kind: "task-initiative", from: `task:${t.owner}:${t.id ?? ""}`, fromTitle: t.text, to: best.i.id, quote: t.text, source: `${t.owner} tasks`, by: "code", domain: t.owner, file: t.file }, now, tree);
+      if (r.ok) { out.push(r.link); per.set(best.i.id, (per.get(best.i.id) ?? 0) + 1); }
     }
   }
   return out;
@@ -430,8 +435,8 @@ export function proposeCodeLinks(vault: string, now = Date.now()): LinkProposal[
 
 export interface ChainDraft {
   statements?: { title: string; quote: string; serves?: string[] }[];
-  visions?: { title: string; quote: string }[];
-  objectives?: { title: string; quote: string; metric?: string; target?: string; due?: string }[];
+  visions?: { title: string; quote: string; statement?: string }[];
+  objectives?: { title: string; quote: string; metric?: string; target?: string; due?: string; vision?: string }[];
   links?: { goal: string; objective: string; quote: string }[];
 }
 
@@ -450,14 +455,14 @@ export function chainSources(vault: string): Source[] {
 export function chainPrompt(sources: Source[], ctx: { values: { id: string; title: string }[]; goals: { id: string; title: string }[]; metrics: string[] }): string {
   return [
     "You are drafting three levels of a person's Compass from their own notes. You never invent: every line carries a QUOTE copied word for word from the notes below, and its title reuses words from that quote. Skip a level rather than invent it.",
-    "Levels: a MISSION STATEMENT says what they do, for whom, and the contribution they make (1, at most 2). A VISION says what they aspire to become or create in the long term (1, at most 2). OBJECTIVES are the few measurable outcomes that would show the vision is happening (3 to 6), best from dated, measured lines in the notes (money targets, counts, dates).",
+    "Levels: a MISSION STATEMENT says what they do, for whom, and the contribution they make (one; a second only if the notes clearly hold two). A VISION says what they aspire to become or create in the long term (one; a second only if clearly separate). OBJECTIVES are the few measurable outcomes that would show the vision is happening (3 to 6), best from dated, measured lines in the notes (money targets, counts, dates). Each vision names the statement it grows from and each objective the vision it shows, by the titles you wrote.",
     `Their values (ids): ${ctx.values.map((v) => `${v.id} = ${v.title}`).join("; ") || "none yet"}.`,
     `Their goals (ids): ${ctx.goals.map((g) => `${g.id} = ${g.title}`).join("; ") || "none yet"}.`,
     `Metric ids you may name for an objective (only these): ${ctx.metrics.slice(0, 60).join(", ") || "none"}.`,
     "Return JSON only:",
     '{ "statements": [{ "title": "<from the quote>", "quote": "<exact words>", "serves": ["<value ids>"] }],',
-    '  "visions": [{ "title": "<from the quote>", "quote": "<exact words>" }],',
-    '  "objectives": [{ "title": "<measurable, from the quote>", "quote": "<exact words>", "metric": "<metric id or omit>", "target": "<number or omit>", "due": "YYYY-MM-DD or omit" }],',
+    '  "visions": [{ "title": "<from the quote>", "quote": "<exact words>", "statement": "<the statement title it grows from>" }],',
+    '  "objectives": [{ "title": "<measurable, from the quote>", "quote": "<exact words>", "vision": "<the vision title it shows>", "metric": "<metric id or omit>", "target": "<number or omit>", "due": "YYYY-MM-DD or omit" }],',
     '  "links": [{ "goal": "<goal id>", "objective": "<objective title as you wrote it>", "quote": "<exact words from the notes that tie them>" }] }',
     "",
     ...sources.map((s) => `=== ${s.path} ===\n${s.text}`),
@@ -492,18 +497,22 @@ export function applyChainDraft(vault: string, draft: ChainDraft, sources: Sourc
     if (!titleFromUserWords(title, sources)) { res.rejected.push({ kind, title, why: "title uses words the user never wrote" }); return null; }
     if (have.has(`${kind}:${norm(title)}`)) return null;
     have.add(`${kind}:${norm(title)}`);
-    const it: CompassItem = { kind, id: compassId(kind, title), title: title.replace(/\s+/g, " ").trim(), done: null, tokens: { ...tokens, status: "proposed" }, flags: [], fields: [{ key: "words", value: JSON.stringify(quote.replace(/\s+/g, " ").trim()) }, { key: "from", value: src.path }], paths: [], raw: [] };
+    const it: CompassItem = { kind, id: compassId(kind, title), title: title.replace(/\s*\u2014\s*/g, ", ").replace(/\s+\u2013\s+/g, ", ").replace(/\s+/g, " ").trim(), done: null, tokens: { ...tokens, status: "proposed" }, flags: [], fields: [{ key: "words", value: JSON.stringify(quote.replace(/\s+/g, " ").trim()) }, { key: "from", value: src.path }], paths: [], raw: [] };
     addItem(doc, it);
     res.added.push({ kind, id: it.id, title: it.title, from: src.path });
     return it;
   };
-  const st = (draft.statements ?? []).slice(0, 2).map((s) => put("statement", s.title, s.quote, (s.serves ?? []).filter((v) => valueIds.has(v)).length ? { serves: (s.serves ?? []).filter((v) => valueIds.has(v)).join(",") } : {})).filter(Boolean) as CompassItem[];
-  const vis = (draft.visions ?? []).slice(0, 2).map((v) => put("vision", v.title, v.quote, st.length === 1 ? { statement: st[0]!.id } : {})).filter(Boolean) as CompassItem[];
+  for (const s of (draft.statements ?? []).slice(0, 2)) put("statement", s.title, s.quote, (s.serves ?? []).filter((v) => valueIds.has(v)).length ? { serves: (s.serves ?? []).filter((v) => valueIds.has(v)).join(",") } : {});
+  // A drafted line may name the line above it by title; with only one above, that one. The line is proposed, so the user confirms the link with it.
+  const pick = (list: CompassItem[], title?: string) => list.find((x) => title && norm(x.title) === norm(title)) ?? (list.length === 1 ? list[0] : undefined);
+  const allStatements = () => items(doc, "statement");
+  const vis = (draft.visions ?? []).slice(0, 2).map((v) => { const up = pick(allStatements(), v.statement); return put("vision", v.title, v.quote, up ? { statement: up.id } : {}); }).filter(Boolean) as CompassItem[];
   const objByTitle = new Map<string, string>();
   for (const ob of items(doc, "objective")) objByTitle.set(norm(ob.title), ob.id);
   for (const ob of (draft.objectives ?? []).slice(0, 6)) {
+    const up = pick(items(doc, "vision"), ob.vision);
     const it = put("objective", ob.title, ob.quote, {
-      ...(vis.length === 1 ? { vision: vis[0]!.id } : {}),
+      ...(up ? { vision: up.id } : {}),
       ...(ob.metric && metricOk.has(ob.metric) ? { metric: ob.metric } : {}),
       ...(ob.target && /^[0-9.$%kKmM,]+$/.test(ob.target) ? { target: ob.target.replace(/,/g, "") } : {}),
       ...(ob.due && /^\d{4}-\d{2}-\d{2}$/.test(ob.due) ? { due: ob.due } : {}),

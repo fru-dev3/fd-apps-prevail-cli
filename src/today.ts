@@ -135,14 +135,24 @@ export function candidates(vault: string, date: string, slips: Map<string, OpenC
   };
   // Without a Compass goal for the domain, the thread stops at the domain's own
   // first active goal (source/goals.md) and the item is honestly unlinked.
-  const domainGoal = new Map<string, string | undefined>();
-  const ownGoal = (d: string) => {
-    if (!domainGoal.has(d)) domainGoal.set(d, readDomainGoals(vault, d).find((g) => g.status === "active")?.title);
+  // A domain goal linked to an objective (~objective:) walks up the chain too.
+  const domainGoal = new Map<string, { id: string; title: string } | undefined>();
+  const ownGoalOf = (d: string) => {
+    if (!domainGoal.has(d)) {
+      const gs = readDomainGoals(vault, d).filter((g) => g.status === "active");
+      const g = gs.find((x) => x.objective && walk(x.id).length) ?? gs[0];
+      domainGoal.set(d, g ? { id: g.id, title: g.title } : undefined);
+    }
     return domainGoal.get(d);
   };
   const valueWeight = (domain: string) => {
     const t = byDomain.get(domain);
-    if (!t || !t.values.length) { const g = ownGoal(domain); return { w: 0.15, thread: [label(domain), ...(t?.goal ? [t.goal.title] : g ? [g] : [])], unlinked: true, n: 0 }; }
+    if (!t || !t.values.length) {
+      const g = ownGoalOf(domain);
+      const up = !t?.goal && g ? walk(g.id) : [];
+      if (up.length) return { w: 0.15, thread: [label(domain), g!.title, ...up], unlinked: false, n: 0 };
+      return { w: 0.15, thread: [label(domain), ...(t?.goal ? [t.goal.title] : g ? [g.title] : [])], unlinked: true, n: 0 };
+    }
     const up = walk(t.goal!.id);
     return { w: t.values.reduce((a, v) => a + (weight.get(v.id) ?? 0), 0) || 0.15, thread: [label(domain), t.goal!.title, ...(up.length ? up : t.values.map((v) => v.title))], unlinked: false, n: t.values.length };
   };

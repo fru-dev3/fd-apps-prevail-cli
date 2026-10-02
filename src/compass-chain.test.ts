@@ -174,6 +174,13 @@ describe("the tree", () => {
     const tree = JSON.parse(await tReadCompass({ format: "tree" }, V));
     expect(tree.levels.find((l: { level: string }) => l.level === "goal").notLinked).toBe(1);
     expect(JSON.parse(await tReadCompass({ format: "json" }, V)).tree.nodes.length).toBe(tree.nodes.length);
+    // A task in a domain with no Compass goal walks up through the domain's own goal once that goal is linked.
+    mkdirSync(join(D("family"), "source"), { recursive: true });
+    writeFileSync(join(D("family"), "source", "goals.md"), "# Goals\n\n- [ ] Foo picnic every month ~id:g-picnic ~objective:o-hikes ~status:active\n");
+    writeFileSync(join(D("family"), "memory", "tasks.md"), "# Tasks\n\n- [ ] Book the bar park @2026-10-02 ~id:f1\n");
+    writeFileSync(C(), CHAIN.replace(" ~domain:family", ""));
+    const c2 = composeToday(V, { now: NOW, refresh: true });
+    expect(c2.items.find((x) => x.ref.id === "f1")).toMatchObject({ thread: ["Family", "Foo picnic every month", "Weekly foo hikes with the kids", "A foo home that runs on its own"], unlinked: false });
     expect(jobCompass(V, { ask: "foo", domains: { owner: "money", consulted: [] } }).serves.map((s) => s.title)).toEqual(["Bar cash buffer", "Twelve months of costs in cash", "A foo home that runs on its own", "Peace of mind"]);
   });
 });
@@ -238,6 +245,18 @@ describe("links are proposed with quotes, never forced", () => {
     expect(r.links.map((l) => `${l.from}>${l.to}:${l.status}`)).toEqual([`g-buf>${j.objectives[0]!.id}:proposed`]);
     // Proposed lines never reach a chat until confirmed.
     expect(compassBlock(V)).not.toContain("Twelve months");
+  });
+
+  test("with two statements, a drafted vision names the one it grows from, and an objective its vision", () => {
+    seed("# Compass\n~schema:2\n");
+    const sources = [{ path: "build/user.md", text: "I teach foo to kids. I also build bar tools. A town where every kid can foo. Two hundred kids taught by 2030." }];
+    applyChainDraft(V, {
+      statements: [{ title: "Teach foo to kids", quote: "I teach foo to kids." }, { title: "Build bar tools", quote: "I also build bar tools." }],
+      visions: [{ title: "Every kid can foo", quote: "A town where every kid can foo.", statement: "Teach foo to kids" }],
+      objectives: [{ title: "Two hundred kids taught", quote: "Two hundred kids taught by 2030.", vision: "Every kid can foo" }],
+    }, sources, "model", { now: NOW });
+    const t = compassTree(V);
+    expect(chainText(walkUp(t, t.nodes.find((n) => n.level === "objective")!.id, "statement"))).toBe("Every kid can foo > Teach foo to kids");
   });
 });
 
