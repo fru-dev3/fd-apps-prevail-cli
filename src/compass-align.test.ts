@@ -3,12 +3,12 @@
 // rules checked in code, the broker gate, jobs carrying serves / costs /
 // rules, the cached model pass that needs a quote, and the weekly roll-up.
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseCompass } from "./compass.ts";
 import {
   activePaths, alignmentRollup, answerConflict, computeGraph, conflictLine, detect, evaluateRules, jobCompass, openConflicts, opposed,
-  parseCheck, ruleGate, stateFromPoints, type StateValue,
+  parseCheck, quotedInFile, ruleGate, stateFromPoints, type StateValue,
 } from "./compass-align.ts";
 import { gateAction } from "./broker.ts";
 import { dispatch } from "./jobs.ts";
@@ -170,6 +170,8 @@ describe("the vault: the broker, jobs, the model pass, the roll-up", () => {
     rmSync(join(V, "build", "_meta", "compass", "graph.json"));
     const noQuote = await computeGraph(V, { runner: async () => JSON.stringify({ relation: "--", evidence: "words they never wrote" }), vars: [] });
     expect(noQuote.conflicts).toEqual([]);
+    expect(quotedInFile('"Foo independence" against "Bar cabin far from town"', readFileSync(C(), "utf8"))).toBe(true);
+    expect(quotedInFile('"Foo independence" against "a cabin they never named"', readFileSync(C(), "utf8"))).toBe(false);
   });
   test("the weekly roll-up: matters vs lived, attention, Needs you", async () => {
     writeFileSync(join(V, "data", "domains", "foo", "memory", "tasks.md"), "- [ ] foo\n");

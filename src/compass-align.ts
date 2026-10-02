@@ -333,6 +333,19 @@ export function readGraph(vault: string): GraphFile | null {
   try { return JSON.parse(readFileSync(graphPath(vault), "utf8")) as GraphFile; } catch { return null; }
 }
 
+/**
+ * A model's evidence counts only when it quotes the file: every "quoted"
+ * fragment it gives (8+ characters) must appear verbatim; evidence with no
+ * quote marks must appear whole.
+ */
+export function quotedInFile(evidence: string | undefined, file: string): boolean {
+  if (!evidence?.trim()) return false;
+  const low = file.toLowerCase().replace(/[“”]/g, '"');
+  const frags = [...evidence.replace(/[“”]/g, '"').matchAll(/"([^"]{8,})"/g)].map((m) => m[1]!.trim().toLowerCase());
+  if (frags.length) return frags.every((f) => low.includes(f));
+  return low.includes(evidence.trim().toLowerCase().slice(0, 80));
+}
+
 const itemText = (it: CompassItem) => [it.title, ...it.fields.map((f) => `${f.key}: ${f.value}`), ...it.paths.map((p) => `path: ${p.title}`)].join("\n").slice(0, 600);
 
 /**
@@ -350,7 +363,8 @@ export async function computeGraph(vault: string, opts: { now?: number; runner?:
   const prev = readGraph(vault);
   const { conflicts, edges } = detect(doc, vars);
   const model: GraphFile["model"] = { ...(prev?.model ?? {}) };
-  if (opts.runner) {
+  // Cached answers keep counting without a runner; a runner fills in new pairs.
+  if (opts.runner || Object.keys(model).length) {
     const goals = items(doc, "goal").filter(live).filter((g) => !["achieved", "released"].includes(g.tokens.status ?? "active"));
     let pairs = 0;
     for (let i = 0; i < goals.length && pairs < 15; i++) for (let j = i + 1; j < goals.length && pairs < 15; j++) {
@@ -358,18 +372,22 @@ export async function computeGraph(vault: string, opts: { now?: number; runner?:
       const k = createHash("sha1").update(itemText(a)).update("\n--\n").update(itemText(b)).digest("hex").slice(0, 16);
       pairs++;
       if (!model[k]) {
+        if (!opts.runner) continue;
         try {
-          const r = await opts.runner(pairPrompt({ id: a.id, title: a.title, text: itemText(a) }, { id: b.id, title: b.title, text: itemText(b) }));
+          const r = await opts.runner!(pairPrompt({ id: a.id, title: a.title, text: itemText(a) }, { id: b.id, title: b.title, text: itemText(b) }));
           const j0 = r.indexOf("{"); const j1 = r.lastIndexOf("}");
           const o = JSON.parse(r.slice(j0, j1 + 1)) as { relation?: string; when?: string; evidence?: string; resolution?: string };
           model[k] = { rel: String(o.relation ?? "0"), ...(o.when ? { when: String(o.when).slice(0, 200) } : {}), ...(o.evidence ? { evidence: String(o.evidence).slice(0, 240) } : {}), ...(o.resolution ? { resolution: String(o.resolution).slice(0, 240) } : {}) };
         } catch { continue; }
       }
       const m = model[k]!;
-      const quoted = !!m.evidence && raw.toLowerCase().includes(m.evidence.toLowerCase().replace(/^["']|["']$/g, "").trim().slice(0, 60));
+      const quoted = quotedInFile(m.evidence, raw);
       if (!quoted) continue; // no quote, no conflict
       if (m.rel === "-" || m.rel === "--") {
-        conflicts.push({ key: ckey("model", [a.id, b.id]), kind: "model", a: a.id, b: b.id, aTitle: a.title, bTitle: b.title, confidence: m.rel === "--" ? 0.7 : 0.5, asserted_by: "model", evidence: [`"${m.evidence}"`, ...(m.when ? [`when ${m.when}`] : [])], question: `${a.title} and ${b.title} may pull against each other${m.when ? ` when ${m.when}` : ""}.${m.resolution ? ` One way: ${m.resolution}.` : ""} Is that real for you?` });
+        const tidy = (x?: string) => (x ?? "").trim().replace(/[.\s]+$/, "").replace(/^(when|if)\s+/i, "").replace(/^\w/, (ch) => ch.toLowerCase());
+        const when = tidy(m.when);
+        const ev = /"/.test(m.evidence!) ? m.evidence! : `"${m.evidence}"`;
+        conflicts.push({ key: ckey("model", [a.id, b.id]), kind: "model", a: a.id, b: b.id, aTitle: a.title, bTitle: b.title, confidence: m.rel === "--" ? 0.7 : 0.5, asserted_by: "model", evidence: [ev, ...(when ? [`when ${when}`] : [])], question: `${a.title} and ${b.title} may pull against each other${when ? ` when ${when}` : ""}.${m.resolution ? ` One way: ${tidy(m.resolution).replace(/^\w/, (ch) => ch.toUpperCase())}.` : ""} Is that real for you?` });
         edges.push({ from: a.id, to: b.id, rel: "interferes", weight: m.rel === "--" ? -2 : -1, ...(m.when ? { when: m.when } : {}), evidence: [m.evidence!], confidence: 0.5, asserted_by: "model" });
       } else if (m.rel === "+" || m.rel === "++") {
         edges.push({ from: a.id, to: b.id, rel: "synergy", weight: m.rel === "++" ? 2 : 1, evidence: [m.evidence!], confidence: 0.5, asserted_by: "model" });
