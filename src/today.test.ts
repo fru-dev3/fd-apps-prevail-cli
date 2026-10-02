@@ -83,6 +83,7 @@ describe("Today", () => {
     const home = [...c.items, ...c.alsoDue].find((x) => x.domain === "home" && x.kind === "task");
     expect(home?.unlinked).toBe(true);
     expect(home?.thread).toEqual(["Home"]);
+    // The permit (an admin deadline on the radar) is already among the three, so falling behind is the oldest overdue task.
     expect(c.fallingBehind?.text).toContain("Fix the foo gutter");
     expect(c.decisionDue?.question).toBe("Keep or sell the foo rental?");
     expect(c.yourDay.connected).toBe(false);

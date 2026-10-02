@@ -98,6 +98,8 @@ export interface ReviewCard {
   guardrails: string[];
   /** Today T2: promises found in sent mail or notes that were not sure enough to file alone (Yes files one). */
   commitments?: { src: string; text: string; due?: string; person?: string; quote: string }[];
+  /** Today T3: everything falling behind (the radar), most urgent first. */
+  radar?: { key: string; kind: string; text: string; evidence: string; due?: string }[];
 }
 
 /** When the user last did anything in a domain: a chat, a task change, a note from another domain. */
@@ -170,6 +172,7 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     interruptions: { used: usedThisWeek(vault, now), budget: INTERRUPTION_BUDGET },
     apps: await appsLine(vault, now),
     commitments: await commitmentLines(vault),
+    radar: await radarLines(vault, now),
     ...(await qualitativeLines(vault, c, week, now)),
   };
 }
@@ -180,6 +183,10 @@ async function qualitativeLines(vault: string, c: Awaited<ReturnType<typeof comp
     const h = q.hypotheses(vault, c, week)[0];
     return { asked: q.askedDue(vault, now), hypothesis: h ? { key: h.key, text: h.text } : null, guardrails: q.guardrails(vault, c).filter((g) => g.state === "slipping").map((g) => g.text).slice(0, 2) };
   } catch { return { asked: { ladder: false, who5: false }, hypothesis: null, guardrails: [] }; }
+}
+
+async function radarLines(vault: string, now: number): Promise<NonNullable<ReviewCard["radar"]>> {
+  try { const r = await import("./radar.ts"); const x = r.readRadar(vault, now) ?? (await r.computeRadar(vault, { now })); return x.items.slice(0, 12).map((i) => ({ key: i.key, kind: i.kind, text: i.text, evidence: i.evidence, ...(i.due ? { due: i.due } : {}) })); } catch { return []; }
 }
 
 async function commitmentLines(vault: string): Promise<NonNullable<ReviewCard["commitments"]>> {
@@ -215,6 +222,7 @@ export function reviewText(r: ReviewCard): string {
   if (r.hypothesis) out.push(`${r.hypothesis.text} Reply yes or no.`);
   if (r.asked?.ladder) out.push("Once a quarter: on a ladder from 0 (worst possible life) to 10 (best possible), where do you stand now, and where in five years?");
   if (r.asked?.who5) out.push("This month's WHO-5 is waiting (five quick questions about the last two weeks).");
+  if (r.radar?.length) { out.push("Falling behind:"); for (const x of r.radar) out.push(`- ${x.text} (${x.evidence})`); }
   for (const w of r.waited) out.push(`Waited for this review: ${w.text}`);
   out.push(r.checkin ? `You said calm ${r.checkin.calm} this week.` : "How calm was this week? Reply 1 to 5 (on Telegram: /calm 4).");
   return out.join("\n");

@@ -108,7 +108,7 @@ export function readSignals(vault: string): StateValue[] {
 
 export interface Check { variable: string; op: ">=" | "<=" | ">" | "<" | "==" | "!="; n: number }
 export function parseCheck(s: string | undefined): Check | null {
-  const m = /^([a-z][a-z0-9_.]*)(>=|<=|==|!=|>|<|=)(-?\d+(?:\.\d+)?)$/i.exec((s ?? "").trim());
+  const m = /^([a-z][a-z0-9_.-]*?)(>=|<=|==|!=|>|<|=)(-?\d+(?:\.\d+)?)$/i.exec((s ?? "").trim());
   if (!m) return null;
   return { variable: m[1]!.toLowerCase(), op: (m[2] === "=" ? "==" : m[2]) as Check["op"], n: Number(m[3]) };
 }

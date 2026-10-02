@@ -342,7 +342,9 @@ async function runSpecialistStep(step: Extract<PlaybookStep, { kind: "specialist
   typed.set(sid, out);
   res.ok = done.status === "done";
   res.note = `${done.status}${done.result?.summary ? `: ${done.result.summary}` : done.note ? `: ${done.note}` : ""} (job ${job.id})`;
-  return done.status === "needs-approval" && /stopped at the gate/.test(done.note ?? "");
+  // A gate that did not pass stops the playbook; so does a gate that could not
+  // run (nothing unchecked is filed after it).
+  return step.gate === "stop" ? done.status !== "done" : done.status === "needs-approval" && /stopped at the gate/.test(done.note ?? "");
 }
 
 // A task step files one line on the domain's board (a step for the user).

@@ -50,8 +50,16 @@ async function stewardFacts(vault: string, _owner: string, now: number): Promise
   return out.join("\n");
 }
 
-async function sentinelFacts(vault: string, owner: string, _now: number): Promise<string> {
+async function sentinelFacts(vault: string, owner: string, now: number): Promise<string> {
   const out: string[] = [];
+  try {
+    const { readRadar, computeRadar } = await import("./radar.ts");
+    const r = readRadar(vault, now) ?? (await computeRadar(vault, { now }));
+    const mine = r.items.filter((x) => owner === "general" || x.domain === owner || (missionScopeSlug(owner) && x.mission === missionScopeSlug(owner)));
+    const rows = (mine.length ? mine : r.items).slice(0, 12);
+    if (rows.length) out.push(`The radar (computed by code ${new Date(r.computed).toISOString().slice(0, 10)}):`, ...rows.map((x) => `- [${x.kind}] ${x.text} (${x.evidence})`));
+    else out.push("The radar finds nothing slipping.");
+  } catch { /* radar unavailable */ }
   try {
     const dir = resolveDomainDir(vault, owner);
     const s = JSON.parse(readText(join(dir, "_surface.json"))) as { questions?: string[] };

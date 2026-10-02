@@ -146,6 +146,13 @@ describe("playbooks with specialist steps", () => {
     expect(log).not.toContain("Editor");
     expect(existsSync(join(D("foo"), "memory", "tasks.md")) && readFileSync(join(D("foo"), "memory", "tasks.md"), "utf8").includes("Call the foo office")).toBe(false);
   });
+  test("a gate that cannot run (time out) also stops the playbook: nothing unchecked is filed after it", async () => {
+    const log: string[] = [];
+    const r = await runPlaybook("pb-foo-renewal-3", pb, ctx(log, { Steward: "(cancelled)" }));
+    expect(r.steps.length).toBe(3);
+    expect(r.steps[2]!.ok).toBe(false);
+    expect(log).not.toContain("Editor");
+  });
   test("a specialist that is off is never run", async () => {
     const r = await runPlaybook("pb-x", { id: "x", name: "X", goal: "x", steps: [{ kind: "specialist", specialist: "negotiator", brief: "counteroffer" }] }, ctx([]));
     expect(r.steps[0]!.decision).toBe("block");

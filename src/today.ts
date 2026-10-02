@@ -33,6 +33,7 @@ import { listDecisions, openDecision } from "./decision-records.ts";
 import { listJobs } from "./jobs.ts";
 import { openCommitments, readFiled, type HeaderLite, type OpenCommitment } from "./commitments.ts";
 import { readMailHeaders } from "./source-sync.ts";
+import { computeRadarSync, readRadar } from "./radar.ts";
 import { checkinFor, reviewWeek } from "./review.ts";
 import { dayOf, weekOf } from "./metrics.ts";
 import { parseModArgs } from "./cli-args.ts";
@@ -56,7 +57,8 @@ export interface TodayCard {
   generated: number;
   calm: number | null;
   items: TodayItem[];
-  fallingBehind: { text: string; ref?: TodayItem["ref"] } | null;
+  /** One thing falling behind (Today T3: the top of the radar), with how many more the radar holds. */
+  fallingBehind: { text: string; ref?: TodayItem["ref"]; key?: string; kind?: string; count?: number } | null;
   decisionDue: { question: string; due?: string; domain: string; slug: string; recommendation?: string } | null;
   yourDay: { connected: boolean; note: string };
   alsoDue: TodayItem[];
@@ -217,13 +219,17 @@ export function composeToday(vault: string, opts: { now?: number; refresh?: bool
   const all = candidates(vault, date, slips);
   const three = pickThree(all, date, topValue?.title, handled);
   const rest = all.filter((x) => !three.includes(x) && !handled.has(x.key));
-  const overdue = rest.filter((x) => x.due && daysBetween(date, x.due) < -7).sort((a, b) => (a.due ?? "").localeCompare(b.due ?? ""))[0];
+  // Falling behind: the top of the radar (the Sentinel's one list), else the oldest overdue item.
+  const radar = readRadar(vault, now) ?? computeRadarSync(vault, { now, headers });
+  const onCard = new Set(three.map((x) => x.key));
+  const top = radar.items.find((x) => !onCard.has(`task:${x.domain}:${x.key.split(":").pop()}`) && !onCard.has(x.key) && !handled.has(x.key));
+  const overdue = top ? null : rest.filter((x) => x.due && daysBetween(date, x.due) < -7).sort((a, b) => (a.due ?? "").localeCompare(b.due ?? ""))[0];
   const dec = listDecisions(vault)[0];
   const ck = checkinFor(vault, reviewWeek(now, vault)) ?? checkinFor(vault, weekOf(date));
   const card: TodayCard = {
     date, generated: now, calm: ck?.calm ?? null,
     items: three,
-    fallingBehind: overdue ? { text: `${overdue.title}: ${overdue.why}`, ref: overdue.ref } : null,
+    fallingBehind: top ? { text: `${top.text}: ${top.evidence}`, key: top.key, kind: top.kind, count: radar.items.length } : overdue ? { text: `${overdue.title}: ${overdue.why}`, ref: overdue.ref } : null,
     decisionDue: dec ? { question: dec.question, due: dec.due, domain: dec.domain, slug: dec.slug, ...(dec.recommendation ? { recommendation: dec.recommendation } : {}) } : null,
     yourDay: { connected: false, note: "No calendar is connected yet, so your day is not on the card." },
     alsoDue: rest.filter((x) => x.due && daysBetween(date, x.due) <= 7).slice(0, 12),

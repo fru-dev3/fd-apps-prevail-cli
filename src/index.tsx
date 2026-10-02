@@ -5785,7 +5785,10 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
     if (!args.includes("--no-sources")) {
       try { commitR = await (await import("./commitments.ts")).scanCommitments(vault); } catch (e) { commitR = { error: String(e).slice(0, 200) }; }
     }
-    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, stack: stackR, sources: sourcesR, commitments: commitR })}\n`);
+    // The radar (Today T3): what is falling behind; only what may interrupt spends the weekly budget.
+    let radarR: unknown = null;
+    try { const rd = await import("./radar.ts"); const r = await rd.computeRadar(vault); radarR = { items: r.items.length, interrupts: await rd.radarInterrupts(vault, r) }; } catch (e) { radarR = { error: String(e).slice(0, 200) }; }
+    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, stack: stackR, sources: sourcesR, commitments: commitR, radar: radarR })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {
