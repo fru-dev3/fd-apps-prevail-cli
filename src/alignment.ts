@@ -1,11 +1,15 @@
 // Ideal-state alignment scoring.
 //
 // Answers "how close is life to the defined ideal state, and what's pulling
-// toward or away" by scoring each life PILLAR against ideal-state.md.
+// toward or away" by scoring each real DOMAIN (one with a manifest or an
+// ideal) against the constitution, the domain's own ideal and its goals.
 //
 // Two methods, tagged on the report so callers never mistake one for the other:
-//   - "model"  : an LLM reads ideal-state.md + each domain's state and returns
-//                a 0-100 fit score + rationale per pillar (the real judgment).
+//   - "model"  : the default. An LLM reads ideal-state.md and, per domain, its
+//                goals, ideal and state, and returns a 0-100 fit score and a
+//                rationale per domain (the real judgment). At most one model
+//                call a day: a report is reused while it is under a day old,
+//                or while nothing it read has changed (CACHE_* below).
 //   - "signal" : a deterministic fallback from context-score + open-loop
 //                pressure when no model is available or the LLM output won't
 //                parse. This is a READINESS proxy, NOT semantic ideal-state fit.
@@ -16,6 +20,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { createHash } from "node:crypto";
+import { readDomainGoalsText } from "./goals.ts";
 import { scanVault } from "./vault.ts";
 import { computeContextScore } from "./score.ts";
 import { vreadFile, vappendLine } from "./vault-session.ts";
@@ -31,21 +37,26 @@ export interface PillarScore {
 export interface AlignmentReport {
   ts: number;
   method: "model" | "signal";
+  // Hash of everything the model read; a report whose inputs are unchanged is reused.
+  inputs?: string;
+  // When a model run was last tried and failed (the signal stood in). The
+  // model is not tried again within CACHE_MIN_MS of a failure either.
+  modelTriedAt?: number;
   overall: number;
   pillars: PillarScore[];
   actions: string[];
 }
 
-// Which domains roll up into each life pillar. A domain not listed here is
-// its own pillar, named after the domain, so a vault with its own domain
-// names gets real rows instead of one catch-all bucket.
-const PILLAR_MAP: Record<string, string[]> = {
-  wealth: ["wealth", "tax", "insurance", "benefits", "estate", "real-estate"],
-  revenue: ["business", "career", "content", "brand"],
-  health: ["health"],
-  living: ["homestead", "calendar", "learning", "explore"],
-  relationships: ["social"],
-};
+// A report is reused instead of calling the model again while it is younger
+// than CACHE_MIN_MS, or younger than CACHE_MAX_MS when nothing it read
+// (constitution, goals, ideals, states) has changed. A cost ceiling, in code.
+export const CACHE_MIN_MS = 24 * 3600_000;
+export const CACHE_MAX_MS = 7 * 24 * 3600_000;
+// Each domain's slice of the prompt.
+const GOALS_CHARS = 600;
+const IDEAL_CHARS = 500;
+const STATE_CHARS = 700;
+const MAX_DOMAINS = 30;
 
 function readIdealState(vaultPath: string): string | null {
   for (const p of [join(buildRoot(vaultPath), "ideal-state.md"), join(vaultPath, "ideal-state.md"), join(homedir(), ".prevail", "ideal-state.md")]) {
@@ -55,26 +66,45 @@ function readIdealState(vaultPath: string): string | null {
   return null;
 }
 
-function pillarOf(domain: string): string {
-  for (const [pillar, doms] of Object.entries(PILLAR_MAP)) if (doms.includes(domain)) return pillar;
-  return domain;
+/** The life domains a report scores: real domain folders, not internal ones. */
+export function lifeDomains(vaultPath: string): { name: string; path: string; openLoopCount: number }[] {
+  return scanVault(vaultPath).filter((d) =>
+    !d.name.startsWith("_") && !d.name.startsWith(".") &&
+    (existsSync(join(d.path, "manifest.json")) || existsSync(join(d.path, "ideal-state.md"))));
 }
 
-/** Build the LLM prompt: ideal state + a compact per-domain state digest. */
+function readHead(p: string, max: number): string {
+  if (!existsSync(p)) return "";
+  try { return vreadFile(p).trim().slice(0, max); } catch { try { return readFileSync(p, "utf8").trim().slice(0, max); } catch { return ""; } }
+}
+
+/** What the model reads for one domain: its active goals, its ideal and its state. */
+export function domainDigest(dir: string): string {
+  const goals = readDomainGoalsText(dir)
+    .split("\n").filter((l) => /^\s*[-*]\s+\[ \]/.test(l) && !/~status:(archived|done|released)/.test(l))
+    .map((l) => l.replace(/\s~[a-z_]+:\S+/g, "").trim()).join("\n").slice(0, GOALS_CHARS);
+  const ideal = readHead(join(dir, "ideal-state.md"), IDEAL_CHARS);
+  const state = readHead(join(dir, "memory", "state.md"), STATE_CHARS) || readHead(join(dir, "_state.md"), STATE_CHARS);
+  return [goals && `Goals:\n${goals}`, ideal && `Ideal:\n${ideal}`, state && `State:\n${state}`].filter(Boolean).join("\n");
+}
+
+/** Build the LLM prompt: ideal state + a compact per-domain digest. */
 export function buildAlignmentPrompt(idealState: string, domainDigests: { domain: string; digest: string }[]): string {
-  const blocks = domainDigests.map((d) => `### ${d.domain}\n${d.digest.slice(0, 1200)}`).join("\n\n");
+  const blocks = domainDigests.map((d) => `### ${d.domain}\n${d.digest.slice(0, GOALS_CHARS + IDEAL_CHARS + STATE_CHARS + 40)}`).join("\n\n");
+  const names = domainDigests.map((d) => d.domain).join(", ");
   return [
-    "You score how closely the user's life matches their stated IDEAL STATE.",
+    "You score how closely the user's life matches their stated IDEAL STATE and their goals.",
+    "You are an advisor, not a cheerleader: a domain whose goals show no movement scores low and says so.",
     "",
     "## IDEAL STATE (their constitution)",
     idealState.slice(0, 4000),
     "",
-    "## CURRENT STATE BY DOMAIN",
+    "## EACH DOMAIN: its goals, its own ideal and its current state",
     blocks || "(no domain state yet)",
     "",
     "Return ONLY JSON of this shape (no prose):",
-    `{"pillars":[{"pillar":"wealth","score":0-100,"trend":"up|down|flat","rationale":"<=160 chars"}],"actions":["<=120 chars", "..."]}`,
-    "Pillars: wealth, revenue, health, living, relationships. score = how close to ideal (100 = fully aligned). actions = the top 1-3 corrective moves.",
+    `{"pillars":[{"pillar":"<domain>","score":0-100,"trend":"up|down|flat","rationale":"<=160 chars"}],"actions":["<=120 chars", "..."]}`,
+    `One entry per domain, named exactly: ${names}. score = how close that domain is to the ideal and its goals (100 = fully aligned). actions = the top 1-3 corrective moves.`,
   ].join("\n");
 }
 
@@ -110,12 +140,10 @@ export function parseAlignmentJson(raw: string): { pillars: Omit<PillarScore, "d
 
 /** Deterministic readiness proxy from context completeness + open loops. */
 export function signalAlignment(vaultPath: string): AlignmentReport {
-  const domains = scanVault(vaultPath);
+  const domains = lifeDomains(vaultPath);
   const byPillar: Record<string, { domains: string[]; scores: number[]; openLoops: number }> = {};
   for (const d of domains) {
-    // Internal folders (_log, _meta, dot-dirs) are not life domains.
-    if (d.name.startsWith("_") || d.name.startsWith(".")) continue;
-    const pillar = pillarOf(d.name);
+    const pillar = d.name;
     const bucket = (byPillar[pillar] ??= { domains: [], scores: [], openLoops: 0 });
     bucket.domains.push(d.name);
     bucket.openLoops += d.openLoopCount;
@@ -152,35 +180,47 @@ export function readAlignment(vaultPath: string): AlignmentReport | null {
 }
 
 /** Compute alignment. Uses the model when `opts.run` is provided and an ideal
- *  state exists; otherwise falls back to the deterministic signal. `nowTs` is
- *  injected so the function stays pure/testable (no Date.now in the core). */
+ *  state exists; otherwise falls back to the deterministic signal. A recent
+ *  model report is reused (see CACHE_*) unless `force`. `nowTs` is injected so
+ *  the function stays pure/testable (no Date.now in the core). */
 export async function computeAlignment(
   vaultPath: string,
   nowTs: number,
-  opts?: { run?: (prompt: string) => Promise<string> },
+  opts?: { run?: (prompt: string) => Promise<string>; force?: boolean },
 ): Promise<AlignmentReport> {
   const ideal = readIdealState(vaultPath);
   let report: AlignmentReport;
   if (opts?.run && ideal) {
-    const domains = scanVault(vaultPath);
-    const digests = domains.map((d) => ({ domain: d.name, digest: (() => { try { return vreadFile(existsSync(join(d.path, "memory", "state.md")) ? join(d.path, "memory", "state.md") : join(d.path, "_state.md")); } catch { return ""; } })() }));
+    const domains = lifeDomains(vaultPath).slice(0, MAX_DOMAINS);
+    const digests = domains.map((d) => ({ domain: d.name, digest: domainDigest(d.path) }));
+    const inputs = createHash("sha1").update(JSON.stringify([ideal, digests])).digest("hex").slice(0, 16);
+    const last = readAlignment(vaultPath);
+    if (!opts.force && last?.method === "model" && typeof last.ts === "number") {
+      const age = nowTs - last.ts;
+      if (age >= 0 && (age < CACHE_MIN_MS || (age < CACHE_MAX_MS && last.inputs === inputs))) return last;
+    }
+    if (!opts.force && last?.modelTriedAt && nowTs - last.modelTriedAt >= 0 && nowTs - last.modelTriedAt < CACHE_MIN_MS) {
+      report = { ...signalAlignment(vaultPath), ts: nowTs, modelTriedAt: last.modelTriedAt };
+      writeReport(vaultPath, report);
+      return report;
+    }
     try {
       const raw = await opts.run(buildAlignmentPrompt(ideal, digests));
       const parsed = parseAlignmentJson(raw);
-      if (parsed && parsed.pillars.length) {
-        const dmap: Record<string, string[]> = {};
-        for (const d of domains) (dmap[pillarOf(d.name)] ??= []).push(d.name);
+      const known = new Set(domains.map((d) => d.name));
+      const rows = parsed?.pillars.filter((p) => known.has(p.pillar)) ?? [];
+      if (rows.length) {
         report = {
-          ts: nowTs, method: "model",
-          overall: Math.round(parsed.pillars.reduce((a, p) => a + p.score, 0) / parsed.pillars.length),
-          pillars: parsed.pillars.map((p) => ({ ...p, domains: dmap[p.pillar] ?? [] })),
-          actions: parsed.actions,
+          ts: nowTs, method: "model", inputs,
+          overall: Math.round(rows.reduce((a, p) => a + p.score, 0) / rows.length),
+          pillars: rows.map((p) => ({ ...p, domains: [p.pillar] })),
+          actions: parsed!.actions,
         };
       } else {
-        report = { ...signalAlignment(vaultPath), ts: nowTs };
+        report = { ...signalAlignment(vaultPath), ts: nowTs, modelTriedAt: nowTs };
       }
     } catch {
-      report = { ...signalAlignment(vaultPath), ts: nowTs };
+      report = { ...signalAlignment(vaultPath), ts: nowTs, modelTriedAt: nowTs };
     }
   } else {
     report = { ...signalAlignment(vaultPath), ts: nowTs };

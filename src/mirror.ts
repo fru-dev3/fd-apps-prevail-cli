@@ -14,6 +14,7 @@
 //   repeated_rules  instructions restated across separate sessions and days
 //   open_loops      projects that burst for a week and went quiet
 //   late_night      correction rate late at night vs daytime
+import { writeVersioned } from "./goals.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -864,8 +865,9 @@ export function appendStandingRule(vault: string, rule: string): { path: string;
     text = lines.join("\n");
     if (!text.endsWith("\n")) text += "\n";
   }
-  mkdirSync(join(path, ".."), { recursive: true });
-  vwriteFile(path, text);
+  // The constitution is never overwritten without its prior text kept as a
+  // dated version (build/ideal-state.versions/), like a save in the app.
+  writeVersioned(path, text);
   return { path, added: true };
 }
 

@@ -13,45 +13,42 @@ function seed() {
   rmSync(ROOT, { recursive: true, force: true });
   for (const d of ["wealth", "health", "social"]) {
     mkdirSync(join(VAULT, d), { recursive: true });
-    writeFileSync(join(VAULT, d, "soul.md"), `# ${d}\n`);
+    writeFileSync(join(VAULT, d, "ideal-state.md"), `# ${d}\n`);
     writeFileSync(join(VAULT, d, "_state.md"), `# ${d} state\n- doing fine\n`);
   }
+  mkdirSync(join(VAULT, "wealth", "source"), { recursive: true });
+  writeFileSync(join(VAULT, "wealth", "source", "goals.md"), "- [ ] Save a foo fund ~id:g-1 ~status:active\n- [ ] Old bar ~id:g-2 ~status:archived\n");
   writeFileSync(join(VAULT, "ideal-state.md"), "# Ideal\nWealthy, healthy, connected.\n");
 }
 
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 describe("alignment", () => {
-  test("signalAlignment buckets domains into pillars with bounded scores", () => {
+  test("signalAlignment scores each real domain with bounded scores", () => {
     seed();
     const r = signalAlignment(VAULT);
     expect(r.method).toBe("signal");
-    expect(r.pillars.length).toBeGreaterThan(0);
     for (const p of r.pillars) {
       expect(p.score).toBeGreaterThanOrEqual(0);
       expect(p.score).toBeLessThanOrEqual(100);
     }
-    const pillars = r.pillars.map((p) => p.pillar);
-    expect(pillars).toContain("wealth");
-    expect(pillars).toContain("health");
-    expect(pillars).toContain("relationships"); // social → relationships
+    expect(r.pillars.map((p) => p.pillar).sort()).toEqual(["health", "social", "wealth"]);
     expect(r.overall).toBeGreaterThanOrEqual(0);
     expect(r.overall).toBeLessThanOrEqual(100);
   });
 
-  test("a domain outside the pillar map is its own pillar, never a catch-all", () => {
+  test("internal folders and folders with no manifest or ideal are not domains", () => {
     seed();
     for (const d of ["foo", "_log"]) {
       mkdirSync(join(VAULT, d), { recursive: true });
-      writeFileSync(join(VAULT, d, "soul.md"), `# ${d}\n`);
-      writeFileSync(join(VAULT, d, "_state.md"), `# ${d} state\n`);
+      writeFileSync(join(VAULT, d, "ideal-state.md"), `# ${d}\n`);
     }
-    const r = signalAlignment(VAULT);
-    const pillars = r.pillars.map((p) => p.pillar);
+    mkdirSync(join(VAULT, "stray"), { recursive: true });
+    writeFileSync(join(VAULT, "stray", "notes.md"), "x");
+    const pillars = signalAlignment(VAULT).pillars.map((p) => p.pillar);
     expect(pillars).toContain("foo");
-    expect(pillars).not.toContain("other");
     expect(pillars).not.toContain("_log");
-    for (const p of r.pillars) expect(p.rationale).not.toContain("loop(s)");
+    expect(pillars).not.toContain("stray");
   });
 
   test("parseAlignmentJson extracts pillars + clamps scores from messy model output", () => {
@@ -67,27 +64,52 @@ describe("alignment", () => {
     expect(parseAlignmentJson("no json here")).toBeNull();
   });
 
-  test("computeAlignment uses the model run when it returns valid JSON", async () => {
+  test("computeAlignment uses the model, with each domain's goals in the prompt", async () => {
     seed();
+    let seen = "";
     const fakeRun = async (prompt: string) => {
-      expect(prompt).toContain("IDEAL STATE");
-      return '{"pillars":[{"pillar":"wealth","score":80,"trend":"up","rationale":"good"}],"actions":["save more"]}';
+      seen = prompt;
+      return '{"pillars":[{"pillar":"wealth","score":80,"trend":"up","rationale":"good"},{"pillar":"made-up","score":10}],"actions":["save more"]}';
     };
     const r = await computeAlignment(VAULT, 1234, { run: fakeRun });
+    expect(seen).toContain("IDEAL STATE");
+    expect(seen).toContain("Save a foo fund");
+    expect(seen).not.toContain("Old bar");
     expect(r.method).toBe("model");
     expect(r.ts).toBe(1234);
-    expect(r.pillars[0]!.pillar).toBe("wealth");
-    expect(r.pillars[0]!.domains).toContain("wealth");
-    // persisted + readable
+    expect(r.pillars.map((p) => p.pillar)).toEqual(["wealth"]); // invented domains dropped
+    expect(r.pillars[0]!.domains).toEqual(["wealth"]);
     const back = readAlignment(VAULT)!;
     expect(back.overall).toBe(r.overall);
   });
 
-  test("computeAlignment falls back to signal when the model output is junk", async () => {
+  test("a model report is reused for a day: at most one model call", async () => {
     seed();
-    const r = await computeAlignment(VAULT, 99, { run: async () => "garbage, no json" });
+    let calls = 0;
+    const run = async () => { calls++; return '{"pillars":[{"pillar":"health","score":50}],"actions":[]}'; };
+    await computeAlignment(VAULT, 1_000, { run });
+    await computeAlignment(VAULT, 1_000 + 3600_000, { run });
+    expect(calls).toBe(1);
+    // Past a day with the same inputs it is still reused (up to a week).
+    await computeAlignment(VAULT, 1_000 + 2 * 24 * 3600_000, { run });
+    expect(calls).toBe(1);
+    // A changed goal past the first day calls the model again.
+    writeFileSync(join(VAULT, "health", "ideal-state.md"), "# health\nRun a foo race.\n");
+    await computeAlignment(VAULT, 1_000 + 2 * 24 * 3600_000, { run });
+    expect(calls).toBe(2);
+    await computeAlignment(VAULT, 1_000 + 2 * 24 * 3600_000 + 60_000, { run, force: true });
+    expect(calls).toBe(3);
+  });
+
+  test("computeAlignment falls back to signal when the model output is junk, and waits a day to retry", async () => {
+    seed();
+    let calls = 0;
+    const r = await computeAlignment(VAULT, 99, { run: async () => { calls++; return "garbage, no json"; } });
     expect(r.method).toBe("signal");
     expect(r.ts).toBe(99);
+    const again = await computeAlignment(VAULT, 99 + 3600_000, { run: async () => { calls++; return "garbage"; } });
+    expect(again.method).toBe("signal");
+    expect(calls).toBe(1);
   });
 
   test("buildAlignmentPrompt includes ideal state and domain digests", () => {

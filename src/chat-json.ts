@@ -638,6 +638,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     guard: turnGuard,
     isFirst: opts.fresh === true || !opts.sessionId, // resume → not first (claude uses --continue)
     webAccess: opts.webAccess,
+    incognito: !!opts.incognito,
     googleAccount: googlePick,
     inheritUserMcp: opts.inheritUserMcp || appIds.length > 0,
     // The referenced apps' read tools, pre-allowed (headless Claude refuses

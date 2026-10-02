@@ -10,6 +10,7 @@ import { readResponseFramework, readWebAccess, vaultLockActive } from "./config.
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
 import { APP_SCOPE_PREFIX, APP_SCOPE_SUBDIR, buildRoot, vaultRootForCwd } from "./path-safety.ts";
+import { GOALS_HEADER, domainOfCwd, goalsBlock, readProfile } from "./goals.ts";
 import { buildHarnessArgs } from "./harness-profiles.ts";
 import {
   type BudgetCaps,
@@ -187,6 +188,27 @@ function buildDomainIdealPreamble(s: string): string {
     s.slice(0, 2500) +
     "\n\n---\n\n"
   );
+}
+
+// The profile (build/user.md) and the goals block (this domain's goals, then
+// the life goals) for one turn. The profile is left out when the prompt
+// already carries the desktop's own profile block, the goals when a goals
+// block is already there, so neither is ever doubled.
+export const PROFILE_HEADER = "# WHO YOU'RE HELPING";
+export function buildUserContext(vaultRoot: string, cwd: string, prompt: string): string {
+  const parts: string[] = [];
+  try {
+    if (!prompt.includes(PROFILE_HEADER)) {
+      const profile = readProfile(vaultRoot);
+      if (profile) parts.push(`${PROFILE_HEADER} - the user's profile. Use this as ground truth about them.\n${profile.slice(0, 2500)}`);
+    }
+    if (!prompt.includes(GOALS_HEADER)) {
+      const domain = domainOfCwd(cwd, vaultRoot);
+      const g = domain ? goalsBlock(vaultRoot, domain) : "";
+      if (g) parts.push(g);
+    }
+  } catch { /* context is a nicety; the turn still runs */ }
+  return parts.join("\n\n");
 }
 
 // Wrap Omega in a header that positions it as learned context, explicitly BELOW
@@ -891,6 +913,10 @@ export interface ChatTurn {
   // tools, added to --allowedTools on a chat turn so headless Claude does not
   // refuse them. Never write tools: those still queue at the act gate.
   appReadTools?: string[];
+  // Incognito: none of the user's context (constitution, profile, goals, omega,
+  // domain ideal) is added by the engine. The desktop already leaves its own
+  // blocks out; without this the engine added the constitution back.
+  incognito?: boolean;
   // Claude only (stream-json turns): called with the session's init event, the
   // MCP servers that loaded and each one's live status (connected, failed,
   // needs-auth, pending), so an app turn can report a connector needing sign-in.
@@ -1029,7 +1055,7 @@ export function runChatTurn(turn: ChatTurn): Promise<string> {
   return runChatTurnInner(turn);
 }
 
-async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, onInit }: ChatTurn): Promise<string> {
+async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, onInit, incognito }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1143,19 +1169,31 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
   // via the system channel). Detect the desktop's headers and skip ours.
   const promptHasConstitution = /^# THE USER'S IDEAL STATE/m.test(prompt);
   const promptHasOmega = /^# OMEGA/m.test(prompt);
-  const idealState = promptHasConstitution ? null : findIdealState(vaultPath);
+  // The real vault root. `vaultPath` above is cwd's parent, which on a v4
+  // vault (data/domains/<d>) is data/domains: the constitution lookup missed
+  // build/ideal-state.md there and fell back to ~/.prevail.
+  const vaultRoot = vaultRootForCwd(cwd);
+  const noContext = incognito || process.env.PREVAIL_INCOGNITO === "1";
+  const idealState = promptHasConstitution || noContext ? null : findIdealState(vaultRoot);
   const constitution = idealState ? buildConstitutionPreamble(idealState) : null;
   const promptConstitution = constitution && cli.kind !== "claude" ? constitution : "";
   // Omega — learned app-wide context, injected just below the constitution and
   // above the framework/domain/memory. Applies in every turn, including bare
   // (council) mode, same as the constitution.
-  const omega = promptHasOmega ? null : findOmega(vaultPath);
+  const omega = promptHasOmega || noContext ? null : findOmega(vaultRoot);
   const omegaPreamble = omega ? buildOmegaPreamble(omega) : null;
   const promptOmega = omegaPreamble && cli.kind !== "claude" ? omegaPreamble : "";
   // M6: per-domain ideal, just below the global ideal and above omega/framework.
-  const domainIdeal = findDomainIdeal(cwd, vaultPath);
+  const domainIdeal = noContext ? null : findDomainIdeal(cwd, vaultPath);
   const domainIdealPreamble = domainIdeal ? buildDomainIdealPreamble(domainIdeal) : null;
   const promptDomainIdeal = domainIdealPreamble && cli.kind !== "claude" ? domainIdealPreamble : "";
+  // Who the user is and what they are working toward, on every real chat
+  // path (desktop, CLI, MCP, Telegram). The desktop sends its own profile
+  // block; the goals block is added only here. Skipped for bare calls
+  // (council panelists, classifiers) and incognito.
+  const userBlocks = !bare && !noContext ? buildUserContext(vaultRoot, cwd, prompt) : "";
+  const goalsPreamble = userBlocks ? `${userBlocks}\n\n---\n\n` : null;
+  const promptGoals = goalsPreamble && cli.kind !== "claude" ? goalsPreamble : "";
   // Synced app data: the newest pull per mirrored connector recipe that feeds
   // this domain (<domain>/source/apps/<id>/<date>.json), size-capped. Real turns
   // only (not bare council/classifier calls), and never for General (vault root).
@@ -1171,7 +1209,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
   // channel (in claudeSystem below); CLIs without a system-prompt flag get it
   // prepended to the prompt so it still governs the turn.
   const promptNoEmDash = cli.kind !== "claude" ? buildNoEmDashPreamble() : "";
-  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + promptSyncedApps + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
+  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptGoals + promptOmega + promptSyncedApps + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
   // A prompt that begins with '-' makes the runtime CLI's option parser treat the
   // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
   // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
@@ -1225,7 +1263,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, goalsPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to

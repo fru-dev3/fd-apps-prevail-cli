@@ -2591,7 +2591,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         ["HOW THEY DECIDE — ideal-state constitution", idealCtx],
         ["this domain's ideal state", readCtx("ideal-state.md", 1500)],
         ["state", readCtx("memory/state.md", 3000) || readCtx("_state.md", 3000) || readCtx("state.md", 3000)],
-        ["goals.md", readCtx("goals.md", 1500)],
+        ["goals", readCtx("source/goals.md", 1500) || readCtx("goals.md", 1500)],
         ["config.md", readCtx("config.md", 800)],
         ["soul.md", readCtx("soul.md", 800)],
         ["tasks", readCtx("memory/tasks.md", 800) || readCtx("_tasks.md", 800)],
@@ -4796,7 +4796,22 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
           if (c.moved.length + c.deduped.length + c.conflicts.length + c.merged.length > 0) consolidated.push(c);
         }
       } catch { /* consolidation is best-effort; never fail the migration over it */ }
-      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated, consolidatedLeftovers: consolidated }) + "\n");
+      // One goal store: fold memory/goals.md and manifest goals[] into each
+      // domain's source/goals.md (old files kept as dated backups), and the
+      // old build/_profile.md into build/user.md. Idempotent.
+      const goalsMigrated: { domain: string; added: number; from: string[]; backups: string[] }[] = [];
+      let profile: { merged: boolean; backup?: string } = { merged: false };
+      try {
+        const { migrateLegacyGoals, migrateProfile } = await import("./goals.ts");
+        for (const d of listDomainDirs(targetVault)) {
+          try {
+            const g = migrateLegacyGoals(targetVault, d);
+            if (g.added || g.backups.length) goalsMigrated.push(g);
+          } catch { /* one bad domain never stops the rest */ }
+        }
+        profile = migrateProfile(targetVault);
+      } catch { /* best-effort, like the passes above */ }
+      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated, consolidatedLeftovers: consolidated, goalsMigrated, profile }) + "\n");
       else {
         for (const r of results) console.log(r.already ? `${r.domain}: already clean` : `${r.domain}: moved ${r.ops} entr(ies) into source/·memory/·.system/, archived ${r.archived} original(s)`);
         for (const r of relocated) {
@@ -4808,6 +4823,8 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
           const n = c.moved.length + c.deduped.length + c.conflicts.length + c.merged.length;
           console.log(`${c.domain}: consolidated ${n} leftover(s) into memory/·.system/ (moved ${c.moved.length}, deduped ${c.deduped.length}, merged ${c.merged.length}, kept-both ${c.conflicts.length})`);
         }
+        for (const g of goalsMigrated) console.log(`${g.domain}: ${g.added} goal(s) moved into source/goals.md from ${g.from.join(" and ") || "nothing new"}; backups kept: ${g.backups.length}`);
+        if (profile.merged) console.log(`build/_profile.md folded into build/user.md (backup: ${profile.backup})`);
         console.log("done — vault is on the clean v4 layout. Originals are in each domain's _pre-v4-v4/ backup.");
       }
     } catch (e) {
@@ -6529,11 +6546,12 @@ async function main() {
       } catch { return ""; }
     };
     const idealCtx = readCtx("_ideal-state.md", 1500) || readCtx("ideal-state.md", 1500) || readCtx("soul.md", 800);
+    // v4 homes first (memory/, source/), the flat legacy names as fallbacks.
     const sections = ([
       ["Ideal state", idealCtx],
-      ["Long-term memory", readCtx("_memory.md", 2000)],
-      ["State", readCtx("_state.md", 1500) || readCtx("state.md", 1500)],
-      ["Goals", readCtx("goals.md", 1000)],
+      ["Long-term memory", readCtx("memory/memory.md", 2000) || readCtx("_memory.md", 2000)],
+      ["State", readCtx("memory/state.md", 1500) || readCtx("_state.md", 1500) || readCtx("state.md", 1500)],
+      ["Goals", readCtx("source/goals.md", 1000) || readCtx("goals.md", 1000)],
       ["Decisions already made", readDecisions()],
       ["Recent things the user asked", readIntents()],
     ] as [string, string][]).filter(([, t]) => t);
@@ -6956,18 +6974,24 @@ async function main() {
     const { computeAlignment } = await import("./alignment.ts");
     const vault = args.vaultPath;
     if (!vault) { console.error("alignment: no vault path"); process.exit(1); }
-    const useModel = args.alignmentArgs.includes("--model");
+    // The model method is the default (`--signal` forces the cheap readiness
+    // proxy). computeAlignment reuses a recent model report, so the desktop
+    // card asking on every open costs at most one model call a day.
+    const useModel = !args.alignmentArgs.includes("--signal");
     let run: ((prompt: string) => Promise<string>) | undefined;
     if (useModel) {
       const { detectClis, runChatTurn, defaultModelFor } = await import("./cli-bridge.ts");
-      const { scanVault } = await import("./vault.ts");
-      const clis = await detectClis();
-      // detectClis() returns only available CLIs; take the first as the runner.
-      const cli = clis[0];
-      const dom = scanVault(vault)[0]?.name ?? "chief";
-      if (cli) run = (prompt) => runChatTurn({ prompt, cwd: `${vault}/${dom}`, cli, model: defaultModelFor(cli.kind), isFirst: true, bare: true });
+      const { generalDir } = await import("./decisions.ts");
+      let clis = await detectClis();
+      // Bunker Mode: only local engines may read the vault.
+      if (process.env.PREVAIL_BUNKER === "1") clis = clis.filter((c) => ["ollama", "lmstudio", "mlx"].includes(c.kind));
+      // Prefer a cloud CLI that scores reliably; any detected CLI otherwise.
+      const cli = clis.find((c) => c.kind === "claude") ?? clis.find((c) => c.kind === "codex") ?? clis[0];
+      const cwd = generalDir(vault);
+      try { mkdirSync(cwd, { recursive: true }); } catch { /* exists */ }
+      if (cli) run = (prompt) => runChatTurn({ prompt, cwd, cli, model: defaultModelFor(cli.kind), isFirst: true, bare: true });
     }
-    const report = await computeAlignment(vault, Date.now(), run ? { run } : undefined);
+    const report = await computeAlignment(vault, Date.now(), run ? { run, force: args.alignmentArgs.includes("--force") } : undefined);
     if (args.alignmentArgs.includes("--json")) process.stdout.write(`${JSON.stringify(report)}\n`);
     else {
       console.log(`alignment (${report.method}) — overall ${report.overall}/100`);
