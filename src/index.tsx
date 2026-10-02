@@ -117,6 +117,8 @@ interface Args {
   heartbeatArgs: string[];
   capture: boolean;
   captureArgs: string[];
+  ai: boolean;
+  aiArgs: string[];
   gateway: boolean;
   gatewayArgs: string[];
   domains: boolean;
@@ -254,6 +256,8 @@ function parseArgs(argv: string[]): Args {
   let heartbeatArgs: string[] = [];
   let capture = false;
   let captureArgs: string[] = [];
+  let ai = false;
+  let aiArgs: string[] = [];
   let gateway = false;
   let gatewayArgs: string[] = [];
   let domains = false;
@@ -499,6 +503,10 @@ function parseArgs(argv: string[]): Args {
       capture = true;
       captureArgs = argv.slice(i + 1);
       break;
+    } else if (a === "ai") {
+      ai = true;
+      aiArgs = argv.slice(i + 1);
+      break;
     } else if (a === "gateway") {
       gateway = true;
       gatewayArgs = argv.slice(i + 1);
@@ -699,6 +707,8 @@ function parseArgs(argv: string[]): Args {
     heartbeatArgs,
     capture,
     captureArgs,
+    ai,
+    aiArgs,
     gateway,
     gatewayArgs,
     domains,
@@ -5672,7 +5682,18 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
     if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
     const { handleSync } = await import("./capture-sync.ts");
     const result = handleSync(vault);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    // The same pass reads every AI tool's token and session records into the
+    // per-host usage events (Metrics M0, Apps A1). Best-effort: a failing
+    // adapter never fails the prompt sync.
+    let ai: unknown = null;
+    if (!args.includes("--no-ai")) {
+      try {
+        const { scanAiUsage } = await import("./ai-usage.ts");
+        const r = scanAiUsage(vault);
+        ai = { ms: r.ms, tools: Object.fromEntries(Object.entries(r.tools).map(([k, v]) => [k, { shape: v.shape, events: v.events }])) };
+      } catch (e) { ai = { error: String(e).slice(0, 200) }; }
+    }
+    process.stdout.write(`${JSON.stringify({ ...result, ai })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {
@@ -7011,6 +7032,13 @@ async function main() {
   if (args.capture) {
     const code = await captureCommand(args.captureArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.ai) {
+    const rest = parseJsonSubArgs(args.aiArgs.slice(1), args.vaultPath);
+    const vault = rest.vaultPath ?? resolveVault(args.vaultPath);
+    if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+    const { aiCommand } = await import("./ai-usage-cli.ts");
+    process.exit(await aiCommand(args.aiArgs, vault));
   }
   if (args.gateway) {
     const code = await gatewayCommand(args.gatewayArgs, args.vaultPath);
