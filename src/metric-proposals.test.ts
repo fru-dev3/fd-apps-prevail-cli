@@ -102,8 +102,8 @@ describe("metric proposals", () => {
     expect(cp[0]!.text).toContain("above your normal for three weeks");
     expect(cp[0]!.text).toContain("A change, not a cause");
     expect(cp[0]!.files[0]).toMatch(/events\/git\/.*foo-mac\.jsonl$/);
-    insights(V, c, NOW);
-    insights(V, c, NOW);
+    await insights(V, c, NOW);
+    await insights(V, c, NOW);
     expect(readFileSync(join(V, "build", "_meta", "metrics", "insights.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
     expect(hostSlug()).toBeTruthy();
   });

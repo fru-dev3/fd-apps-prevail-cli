@@ -532,10 +532,14 @@ export interface RegistryLine { status: Lifecycle; tokens: Record<string, string
 export function readRegistry(vault: string): Map<string, RegistryLine> {
   const out = new Map<string, RegistryLine>();
   let status: Lifecycle = "tracking";
+  let skip = false;
   let last: RegistryLine | null = null;
   for (const l of readText(metricsMdPath(vault)).split("\n")) {
     const h = /^##\s+(pinned|tracking|paused|retired)\b/i.exec(l);
-    if (h) { status = h[1]!.toLowerCase() as Lifecycle; last = null; continue; }
+    if (h) { status = h[1]!.toLowerCase() as Lifecycle; last = null; skip = false; continue; }
+    // Any other section (## Seasons) holds no metrics.
+    if (/^##\s+/.test(l)) { skip = true; last = null; continue; }
+    if (skip) continue;
     const sub = /^\s+(from|because):\s*(.*)$/.exec(l);
     if (sub && last) { last[sub[1] as "from" | "because"] = sub[2]!.trim(); continue; }
     if (!/^- \S/.test(l)) { last = null; continue; }
@@ -694,6 +698,8 @@ export function baseline(byWeek: Map<string, number>, week: string): Baseline {
 }
 
 export interface GlanceRow {
+  /** A season (metrics.md ## Seasons, or a week away) pauses this metric this week. */
+  paused?: string;
   id: string; title: string; unit: MetricDef["unit"]; tier: string; family: string;
   value: number; normal: Baseline; spark: number[]; documentary: boolean;
   coverage: string; citations: { file: string; note?: string }[]; record?: string;
@@ -729,7 +735,7 @@ function coverageOf(m: MetricDef, c: Computed, week?: string): { coverage: strin
 }
 
 /** The week at a glance: a few metrics against your own normal, each with its tier, coverage and the files behind it. */
-export function glance(c: Computed, opts: { week?: string; ids?: string[] } = {}): Glance {
+export function glance(c: Computed, opts: { week?: string; ids?: string[]; paused?: (id: string, week: string) => string | null } = {}): Glance {
   const today = dayOf(c.ts);
   const week = opts.week ? weekOf(opts.week) : weekOf(today);
   const rows: GlanceRow[] = [];
@@ -741,7 +747,8 @@ export function glance(c: Computed, opts: { week?: string; ids?: string[] } = {}
     const spark: number[] = [];
     for (let i = 11; i >= 0; i--) spark.push(byWeek.get(addDays(week, -7 * i)) ?? 0);
     const { coverage, citations } = coverageOf(m, c, week);
-    const row: GlanceRow = { id, title: m.title, unit: m.unit, tier: m.tier, family: m.family, value: byWeek.get(week) ?? 0, normal: baseline(byWeek, week), spark, documentary: !!m.documentary, coverage, citations };
+    const pz = opts.paused?.(id, week) ?? null;
+    const row: GlanceRow = { id, title: m.title, unit: m.unit, tier: m.tier, family: m.family, value: byWeek.get(week) ?? 0, normal: baseline(byWeek, week), spark, documentary: !!m.documentary, coverage, citations, ...(pz ? { paused: pz } : {}) };
     if (m.documentary && id === "m-trips") {
       const last = [...c.trips].filter((t) => t.date <= addDays(week, 6)).sort((a, b) => b.date.localeCompare(a.date))[0];
       row.record = last ? `Latest: ${[last.activity, last.region].filter(Boolean).join(", ")} on ${last.date}` : "No trips recorded yet";
@@ -752,7 +759,7 @@ export function glance(c: Computed, opts: { week?: string; ids?: string[] } = {}
   let surprise: string | null = null;
   let best = 0;
   for (const r of rows) {
-    if (r.documentary || r.normal.learning) continue;
+    if (r.documentary || r.normal.learning || r.paused) continue;
     const spread = Math.max(r.normal.hi - r.normal.lo, r.normal.median * 0.25, 1);
     const z = (r.value - r.normal.median) / spread;
     if (Math.abs(z) > 1.5 && Math.abs(z) > best) {
@@ -776,6 +783,7 @@ const TIER_LABEL: Record<string, string> = { measured: "Measured", derived: "Der
 export function glanceMarkdown(g: Glance): string {
   const lines = [`## This week in numbers (week of ${g.week}, through ${g.through})`, ""];
   for (const r of g.rows) {
+    if (r.paused) { lines.push(`- **${r.title}**: paused for ${r.paused}.`); continue; }
     const normal = r.normal.learning ? `learning your normal (${r.normal.learningWeeksLeft} more week${r.normal.learningWeeksLeft === 1 ? "" : "s"})` : `normal ${fmt(r.normal.lo, r.unit)} to ${fmt(r.normal.hi, r.unit)}`;
     const value = r.documentary ? (r.record ?? "") : `${fmt(r.value, r.unit)}, ${normal}`;
     lines.push(`- **${r.title}**: ${value}. ${TIER_LABEL[r.tier] ?? r.tier}${r.documentary ? ", a record, no target" : ""}; ${r.coverage}.`);
@@ -849,7 +857,7 @@ export async function metricsCommand(argv: string[], vault: string): Promise<num
         if (args.json) out({ ok: true, ...r }); else console.log(r.id ? `Tracking ${r.id}.` : "Noted.");
         return 0;
       }
-      if (sub === "insights") { const i = mp.insights(vault, c); if (args.json) out(i); else for (const x of i) console.log(x.text); return 0; }
+      if (sub === "insights") { const i = await mp.insights(vault, c); if (args.json) out(i); else for (const x of i) console.log(x.text); return 0; }
       if (sub === "insight-feedback") { mp.insightFeedback(vault, args.pos[1] ?? "", args.pos[2] !== "down"); if (args.json) out({ ok: true }); return 0; }
       if (sub === "acceptance") { const a = mp.acceptance(vault); if (args.json) out(a); else console.log(`${a.month}: ${a.accepted} of ${a.answered} kept`); return 0; }
       const to = sub === "pin" ? "pinned" : sub === "track" ? "tracking" : sub === "pause" ? "paused" : "retired";
@@ -858,7 +866,13 @@ export async function metricsCommand(argv: string[], vault: string): Promise<num
       return 0;
     } catch (e) { if (args.json) out({ ok: false, error: (e as Error).message }); else console.error((e as Error).message); return 1; }
   }
-  if (sub === "glance") { const g = glance(c, { week: args.get("week"), ids: glanceIds(vault) }); if (args.json) out(g); else process.stdout.write(glanceMarkdown(g)); return 0; }
-  console.error("usage: prevail metrics scan [--backfill] | compute | sources | list | series <id> [--per day|week] | rhythm | glance [--week YYYY-MM-DD] | proposals | answer <key> track|dismiss|edit | pin|track|pause|retire <id> [--serves id] [--because text] | insights | acceptance [--json]");
+  if (["lived", "guardrails", "lags", "proxies", "themes", "hypotheses", "seasons"].includes(sub)) {
+    const q = await import("./qualitative.ts");
+    const r = sub === "lived" ? q.mattersVsLived(vault, c) : sub === "guardrails" ? q.guardrails(vault, c) : sub === "lags" ? q.lagTests(vault, c) : sub === "proxies" ? q.proxies(vault, c) : sub === "themes" ? q.themeTrends(c, vault) : sub === "seasons" ? q.seasons(vault, c) : q.hypotheses(vault, c);
+    if (args.json) out(r); else for (const x of r as { text?: string; title?: string }[]) console.log(x.text ?? JSON.stringify(x));
+    return 0;
+  }
+  if (sub === "glance") { const q = await import("./qualitative.ts"); const ss = q.seasons(vault, c); const g = glance(c, { week: args.get("week"), ids: glanceIds(vault), paused: (id, w) => q.pausedBy(ss, c.defs.find((d) => d.id === id) ?? id, w)?.title ?? null }); if (args.json) out(g); else process.stdout.write(glanceMarkdown(g)); return 0; }
+  console.error("usage: prevail metrics scan [--backfill] | compute | sources | list | series <id> [--per day|week] | rhythm | glance [--week YYYY-MM-DD] | proposals | answer <key> track|dismiss|edit | pin|track|pause|retire <id> [--serves id] [--because text] | insights | acceptance | lived | guardrails | lags | proxies | themes | hypotheses | seasons [--json]");
   return 1;
 }

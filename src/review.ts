@@ -38,7 +38,7 @@ export function readCheckins(vault: string): Checkin[] {
   for (const f of readdirSync(dir)) {
     if (!f.endsWith(".jsonl")) continue;
     for (const l of readFileSync(join(dir, f), "utf8").split("\n")) {
-      try { const e = JSON.parse(l) as { ts: string; attrs: { calm: number; week: string; at: number; note?: string }; host: string }; out.push({ ts: e.attrs.at, week: e.attrs.week, calm: e.attrs.calm, ...(e.attrs.note ? { note: e.attrs.note } : {}), host: e.host }); } catch { /* blank or torn */ }
+      try { const e = JSON.parse(l) as { ts: string; kind?: string; attrs: { calm: number; week: string; at: number; note?: string }; host: string }; if (e.kind && e.kind !== "checkin.calm") continue; out.push({ ts: e.attrs.at, week: e.attrs.week, calm: e.attrs.calm, ...(e.attrs.note ? { note: e.attrs.note } : {}), host: e.host }); } catch { /* blank or torn */ }
     }
   }
   return out.sort((a, b) => a.ts - b.ts);
@@ -90,6 +90,10 @@ export interface ReviewCard {
   interruptions: { used: number; budget: number };
   /** One line about the stack (apps plan A4): what needs you, else what is in use. */
   apps: string | null;
+  /** Metrics M4: the quarterly ladder and the optional monthly WHO-5 when due; one hypothesis to answer yes or no; guards slipping. */
+  asked: { ladder: boolean; who5: boolean };
+  hypothesis: { key: string; text: string } | null;
+  guardrails: string[];
 }
 
 /** When the user last did anything in a domain: a chat, a task change, a note from another domain. */
@@ -118,11 +122,13 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
   const now = opts.now ?? Date.now();
   const week = opts.week ? weekOf(opts.week) : reviewWeek(now, vault);
   const c = await computeMetrics(vault, { now });
-  const g: Glance = glance(c, { week, ids: glanceIds(vault) });
+  const q = await import("./qualitative.ts");
+  const ss = q.seasons(vault, c);
+  const g: Glance = glance(c, { week, ids: glanceIds(vault), paused: (id, w) => q.pausedBy(ss, c.defs.find((d) => d.id === id) ?? id, w)?.title ?? null });
   const moved: string[] = [];
   const drifted: string[] = [];
   for (const r of g.rows) {
-    if (r.documentary || r.normal.learning) continue;
+    if (r.documentary || r.normal.learning || r.paused) continue;
     if (r.value > r.normal.hi) moved.push(`${r.title} ${fmt(r.value, r.unit)}, above your normal of ${fmt(r.normal.lo, r.unit)} to ${fmt(r.normal.hi, r.unit)}`);
     else if (r.value < r.normal.lo) drifted.push(`${r.title} ${fmt(r.value, r.unit)}, below your normal of ${fmt(r.normal.lo, r.unit)} to ${fmt(r.normal.hi, r.unit)}`);
   }
@@ -152,7 +158,16 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     waited: waitedForReview(vault, week).map((w) => ({ kind: w.kind, text: w.text })),
     interruptions: { used: usedThisWeek(vault, now), budget: INTERRUPTION_BUDGET },
     apps: await appsLine(vault, now),
+    ...(await qualitativeLines(vault, c, week, now)),
   };
+}
+
+async function qualitativeLines(vault: string, c: Awaited<ReturnType<typeof computeMetrics>>, week: string, now: number): Promise<Pick<ReviewCard, "asked" | "hypothesis" | "guardrails">> {
+  try {
+    const q = await import("./qualitative.ts");
+    const h = q.hypotheses(vault, c, week)[0];
+    return { asked: q.askedDue(vault, now), hypothesis: h ? { key: h.key, text: h.text } : null, guardrails: q.guardrails(vault, c).filter((g) => g.state === "slipping").map((g) => g.text).slice(0, 2) };
+  } catch { return { asked: { ladder: false, who5: false }, hypothesis: null, guardrails: [] }; }
 }
 
 async function appsLine(vault: string, now: number): Promise<string | null> {
@@ -179,6 +194,10 @@ export function reviewText(r: ReviewCard): string {
   if (r.woop[0]) out.push(`Your goal "${r.woop[0].title}" needs its plan: say "continue my Compass" in chat.`);
   else if (r.question) out.push(`One question: ${r.question.text}`);
   if (r.apps) out.push(r.apps);
+  for (const g of r.guardrails ?? []) out.push(`Guardrail: ${g}`);
+  if (r.hypothesis) out.push(`${r.hypothesis.text} Reply yes or no.`);
+  if (r.asked?.ladder) out.push("Once a quarter: on a ladder from 0 (worst possible life) to 10 (best possible), where do you stand now, and where in five years?");
+  if (r.asked?.who5) out.push("This month's WHO-5 is waiting (five quick questions about the last two weeks).");
   for (const w of r.waited) out.push(`Waited for this review: ${w.text}`);
   out.push(r.checkin ? `You said calm ${r.checkin.calm} this week.` : "How calm was this week? Reply 1 to 5 (on Telegram: /calm 4).");
   return out.join("\n");
@@ -196,6 +215,31 @@ export async function reviewCommand(argv: string[], vault: string): Promise<numb
       if (args.json) out({ ok: true, checkin: c }); else console.log(`Calm ${c.calm} for the week of ${c.week}.`);
       return 0;
     }
+    if (sub === "ladder") {
+      const q = await import("./qualitative.ts");
+      const r = q.recordLadder(vault, Number(args.pos[1]), Number(args.pos[2]));
+      if (args.json) out({ ok: true, ...r }); else console.log(`Ladder recorded for ${r.quarter}.`);
+      return 0;
+    }
+    if (sub === "who5") {
+      const q = await import("./qualitative.ts");
+      if (args.pos[1] === "on" || args.pos[1] === "off") { q.setWho5(vault, args.pos[1] === "on"); if (args.json) out({ ok: true, who5: args.pos[1] === "on" }); else console.log(`WHO-5 ${args.pos[1]}.`); return 0; }
+      const r = q.recordWho5(vault, args.pos.slice(1, 6).map(Number));
+      if (args.json) out({ ok: true, ...r }); else console.log(`WHO-5 score ${r.score} of 100.`);
+      return 0;
+    }
+    if (sub === "hypothesis") {
+      const q = await import("./qualitative.ts");
+      const ans = args.pos[2];
+      if (ans !== "yes" && ans !== "no") return fail("usage: prevail review hypothesis <key> yes|no");
+      const c = await computeMetrics(vault);
+      const key = args.pos[1] ?? "";
+      const h = q.hypotheses(vault, c, key.split(":")[1]).find((x) => x.key === key);
+      if (!h) return fail(`no open hypothesis ${key}`);
+      q.answerHypothesis(vault, h, ans === "yes");
+      if (args.json) out({ ok: true }); else console.log("Noted; that teaches what to ask.");
+      return 0;
+    }
     if (sub === "candidate") {
       const { answerCandidate } = await import("./said.ts");
       const ans = args.pos[2] === "yes" ? "yes" : args.pos[2] === "no" ? "no" : null;
@@ -205,5 +249,5 @@ export async function reviewCommand(argv: string[], vault: string): Promise<numb
       return 0;
     }
   } catch (e) { return fail((e as Error).message); }
-  return fail("usage: prevail review week [--week YYYY-MM-DD] | checkin <1-5> [--note text] | candidate <key> yes|no [--json]");
+  return fail("usage: prevail review week [--week YYYY-MM-DD] | checkin <1-5> [--note text] | candidate <key> yes|no | ladder <now 0-10> <in five years 0-10> | who5 on|off | who5 <a> <b> <c> <d> <e> | hypothesis <key> yes|no [--json]");
 }

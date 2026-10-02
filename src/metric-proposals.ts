@@ -309,7 +309,7 @@ export interface Insight { key: string; week: string; metric: string; title: str
  * band of the eight weeks before them, on the same side. A simple, honest
  * rule (no model); labeled "a change", never a cause.
  */
-export function changePoints(c: Computed): Insight[] {
+export function changePoints(c: Computed, paused: (m: MetricDef, week: string) => boolean = () => false): Insight[] {
   const out: Insight[] = [];
   const thisWeek = weekOf(dayOf(c.ts));
   const lastFull = weekOf(dayOf(new Date(`${thisWeek}T12:00:00`).getTime() - 86_400_000));
@@ -318,6 +318,8 @@ export function changePoints(c: Computed): Insight[] {
     const s = series(c, m.id, "week", 14).filter((p) => p.date <= lastFull);
     if (s.length < 11) continue;
     const recent = s.slice(-3);
+    // A season (a trip, a stated break) pauses the metric: no change is read into it.
+    if (recent.some((p) => paused(m, p.date))) continue;
     const byWeek = new Map(s.map((p) => [p.date, p.value]));
     const b = baseline(byWeek, recent[0]!.date);
     if (b.learning || b.hi === b.lo && b.hi === 0) continue;
@@ -340,9 +342,11 @@ export function changePoints(c: Computed): Insight[] {
 }
 
 /** Record new change points (once per metric and week) and return the open ones. */
-export function insights(vault: string, c: Computed, now = Date.now()): Insight[] {
+export async function insights(vault: string, c: Computed, now = Date.now()): Promise<Insight[]> {
   const have = new Set(readJsonl<{ key: string }>(insightsPath(vault)).map((r) => r.key));
-  const found = changePoints(c);
+  const { seasons, pausedBy } = await import("./qualitative.ts");
+  const ss = seasons(vault, c);
+  const found = changePoints(c, (m, w) => !!pausedBy(ss, m, w));
   for (const i of found) if (!have.has(i.key)) append(insightsPath(vault), { ts: now, ...i });
   return found;
 }
