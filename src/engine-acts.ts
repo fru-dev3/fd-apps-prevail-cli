@@ -2,12 +2,13 @@
 // Allow / Deny as a connector write). A connector act is re-run by the model
 // that asked; an engine act is the engine's own, so the engine carries it out
 // at once: the Operator's action runs in its own process (it can take
-// minutes), behind the broker again; a declined one is marked on its job.
+// minutes), behind the broker again; a declined one is marked on its job. An
+// MCP mission write (create, status, complete) runs at once, exactly as asked.
 
-import { OPERATOR_TOOL, type PendingAct } from "./act-gate.ts";
+import { MISSION_TOOL_PREFIX, OPERATOR_TOOL, type PendingAct } from "./act-gate.ts";
 
 export function isEngineAct(tool: string): boolean {
-  return tool === OPERATOR_TOOL;
+  return tool === OPERATOR_TOOL || tool.startsWith(MISSION_TOOL_PREFIX);
 }
 
 export async function afterActAnswer(vault: string, act: PendingAct, answer: "approved" | "denied"): Promise<{ ran?: string; error?: string }> {
@@ -24,6 +25,10 @@ export async function afterActAnswer(vault: string, act: PendingAct, answer: "ap
     const child = spawn(bin!, [...pre, "--vault", vault, "job", "act", job, String(n)], { detached: true, stdio: "ignore", env: process.env });
     child.unref();
     return { ran: `job act ${job} ${n}` };
+  }
+  if (act.tool.startsWith(MISSION_TOOL_PREFIX)) {
+    if (answer === "denied") return { ran: "declined" };
+    return (await import("./missions-mcp.ts")).runApprovedMissionWrite(vault, act.tool, args);
   }
   return {};
 }

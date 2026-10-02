@@ -300,6 +300,21 @@ export async function runMcpServer(
       inputSchema: { type: "object", properties: { slug: { type: "string" }, text: { type: "string" } }, required: ["slug", "text"] },
     },
     {
+      name: "create_mission",
+      description: "Ask to start a mission (a time-bound effort with an outcome and a target date). A write: it waits for the user's approval in Prevail's Inbox and is done the moment they allow it.",
+      inputSchema: { type: "object", properties: { name: { type: "string" }, outcome: { type: "string" }, target: { type: "string", description: "YYYY-MM-DD" }, owner: { type: "string", description: "the owner domain slug" }, consult: { type: "array", items: { type: "string" } }, inform: { type: "array", items: { type: "string" } } }, required: ["name"] },
+    },
+    {
+      name: "set_mission_status",
+      description: "Ask to pause, resume, archive or reopen a mission. A write behind the user's approval in the Inbox.",
+      inputSchema: { type: "object", properties: { mission: { type: "string" }, op: { type: "string", enum: ["pause", "resume", "archive", "reopen"] } }, required: ["mission", "op"] },
+    },
+    {
+      name: "complete_mission",
+      description: "Ask to complete a mission with its result; the close-out files the summary, lessons, notes and money into the domains, each with Undo for 7 days. A write behind the user's approval in the Inbox.",
+      inputSchema: { type: "object", properties: { mission: { type: "string" }, result: { type: "string", enum: ["met", "partly", "not-met", "changed"] }, note: { type: "string" } }, required: ["mission", "result"] },
+    },
+    {
       name: "read_compass",
       description: "The user's Compass: their mission, ranked values (each with an 'enough'), roles, non-negotiables and life goals, in their own words. Only what the user confirmed is returned as the Compass; format json also lists lines still awaiting their confirmation. Read it before advising on plans, priorities or trade-offs.",
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"], description: "text (default): the confirmed Compass. json: every line with its status." } } },
@@ -755,6 +770,10 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const slug = typeof args.slug === "string" ? args.slug : "";
       try { return wrapText(replayPrompt(vaultPath, slug, args.with_prompts === true)); } catch (e) { return wrapText((e as Error).message); }
     }
+    case "create_mission":
+    case "set_mission_status":
+    case "complete_mission":
+      return wrapText(await (await import("./missions-mcp.ts")).missionWriteTool(vaultPath, name as import("./missions-mcp.ts").MissionWrite, args));
     case "list_missions": {
       const { listMissions } = await import("./missions.ts");
       const st = typeof args.status === "string" ? args.status : "all";

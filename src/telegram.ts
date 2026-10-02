@@ -23,6 +23,8 @@ interface ChatState {
   cli: AvailableCli;
   model: string;
   councilMode: boolean;
+  /** Missions MS5: the mission this chat is pinned to (/m). */
+  mission?: string;
 }
 
 export interface TelegramUpdate {
@@ -234,6 +236,19 @@ async function handleUpdate(
     return;
   }
 
+  // Before any model: open loops, explicit capture, and a mission's practice
+  // or spend are filed by code (Today T6, Missions MS5); a pinned mission
+  // gives the turn its brief and folder.
+  let prompt = text;
+  let cwd = state.domain.path;
+  try {
+    const tc = await import("./telegram-capture.ts");
+    const r = await tc.telegramText(text, vaultPath, state);
+    if ("reply" in r) { await sendLongMessage(cfg.botToken, chatId, r.reply); return; }
+    prompt = r.prompt;
+    if (r.cwd) cwd = r.cwd;
+  } catch (e) { log(`capture: ${(e as Error).message}`); }
+
   // Free-text → prompt. Show typing while the model thinks so the user
   // gets feedback (Telegram shows "..." in the chat header).
   await tgSendChatAction(cfg.botToken, chatId, "typing").catch(() => {});
@@ -244,8 +259,8 @@ async function handleUpdate(
       return;
     }
     const result = await runCouncilOneShot({
-      prompt: text,
-      cwd: state.domain.path,
+      prompt,
+      cwd,
       panelists: panel,
       signal,
       vaultPath,
@@ -265,8 +280,8 @@ async function handleUpdate(
   } else {
     try {
       const reply = await runChatTurn({
-        prompt: text,
-        cwd: state.domain.path,
+        prompt,
+        cwd,
         cli: state.cli,
         model: state.model,
         isFirst: true,
@@ -307,6 +322,13 @@ async function handleCommand(
   const arg = rest.join(" ").trim();
   const chatId = state.chatId;
 
+  // Missions MS5 and Today T6: /m, /tell, /forget.
+  try {
+    const tc = await import("./telegram-capture.ts");
+    const r = await tc.telegramCommand(head!, arg, vaultPath, state);
+    if (r !== null) { states.set(chatId, state); await sendLongMessage(cfg.botToken, chatId, r); return; }
+  } catch (e) { await tgSendMessage(cfg.botToken, chatId, `error: ${(e as Error).message}`); return; }
+
   switch (head) {
     case "/start":
     case "/help": {
@@ -327,6 +349,9 @@ async function handleCommand(
           "/today              the three things that matter today",
           "/review             this week's review card",
           "/calm <1-5>         the weekly check-in: how calm was this week?",
+          "/tell <anything>    file it: a task, a promise, a decision, a note",
+          "/forget             what am I forgetting?",
+          "/m <mission>        pin this chat to a mission (/m off to unpin)",
           "",
           `current: ${state.domain.name} via ${state.cli.label}${state.councilMode ? " · council ON" : ""}`,
           "",
@@ -448,6 +473,7 @@ async function handleCommand(
           `domain:    ${state.domain.name}`,
           `cli:       ${state.cli.label}${state.model ? ` · ${state.model}` : ""}`,
           `council:   ${state.councilMode ? "ON" : "OFF"}`,
+          `mission:   ${state.mission ?? "(none)"}`,
           `framework: ${fw ?? "(none)"}`,
         ].join("\n"),
       );
