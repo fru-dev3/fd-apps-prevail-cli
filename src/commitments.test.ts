@@ -88,6 +88,9 @@ describe("finding promises (the precision eval)", () => {
     expect(resolveWhen("end of the month", NOW)).toBe("2026-10-31");
     expect(resolveWhen("in 3 days", NOW)).toBe("2026-10-04");
     expect(resolveWhen("someday", NOW)).toBeUndefined();
+    expect(resolveWhen("by Thursday", NOW)).toBe("2026-10-01");
+    expect(resolveWhen("next Thursday", NOW)).toBe("2026-10-08");
+    expect(resolveWhen("next Monday", NOW)).toBe("2026-10-12");
   });
   test("a promise with a person and a time is the most sure; the text is the action", () => {
     expect(findPromises("Thanks! I'll send the foo deck by Friday.", NOW, "person/sam")).toEqual([{ kind: "commitment", text: "Send the foo deck by Friday", person: "person/sam", due: "2026-10-02", confidence: 0.9, quote: "I'll send the foo deck by Friday." }]);

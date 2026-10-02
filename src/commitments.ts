@@ -60,9 +60,9 @@ export function resolveWhen(text: string, now: number): string | undefined {
   m = /\b(next )?(mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(day)?\b/.exec(t);
   if (m) {
     const idx = WEEKDAYS.findIndex((w) => w.startsWith(m![2]!.slice(0, 3)));
+    // "by Friday" said on a Friday means today; "next Friday" means a week on.
     let n = (idx - base.getDay() + 7) % 7;
-    if (n === 0) n = 7;
-    if (m[1]) n += n < 7 ? 7 : 0;
+    if (m[1]) n += 7;
     return at(plus(n));
   }
   m = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? (\d{1,2})\b/.exec(t);
