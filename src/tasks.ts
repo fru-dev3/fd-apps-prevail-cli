@@ -34,6 +34,9 @@ export interface Task {
   from?: string;
   // ~mission:<slug>: a domain-owned task that serves a mission (missions-plan.md).
   mission?: string;
+  // The Compass chain (goals-plan.md G1b): ~initiative:<p-id> or ~goal:<g-id>, the line it moves.
+  initiative?: string;
+  goal?: string;
 }
 
 export const VALID_STATUS = ["todo", "doing", "review", "blocked", "done", "icebox"] as const;
@@ -82,6 +85,8 @@ function splitMeta(raw: string): { text: string; meta: Partial<Task> } {
           else if (k === "to") meta.to = v;
           else if (k === "from") meta.from = v;
           else if (k === "mission") meta.mission = v;
+          else if (k === "initiative") meta.initiative = v;
+          else if (k === "goal") meta.goal = v;
           else matched = false;
           if (matched) { text = t.slice(0, idx); continue; }
         }
@@ -109,7 +114,7 @@ export function parseTasks(md: string): Task[] {
     else if (t.startsWith("- [x] ") || t.startsWith("- [X] ")) { done = true; rest = t.slice(t.indexOf("] ") + 2); }
     else continue;
     const { text, meta } = splitMeta(rest);
-    out.push({ text, done, due: meta.due, added: meta.added, source: meta.source, owner: meta.owner, status: meta.status, id: meta.id, trashed: meta.trashed, priority: meta.priority, kind: meta.kind, to: meta.to, from: meta.from, mission: meta.mission });
+    out.push({ text, done, due: meta.due, added: meta.added, source: meta.source, owner: meta.owner, status: meta.status, id: meta.id, trashed: meta.trashed, priority: meta.priority, kind: meta.kind, to: meta.to, from: meta.from, mission: meta.mission, initiative: meta.initiative, goal: meta.goal });
   }
   return out;
 }
@@ -144,6 +149,8 @@ export function renderTasks(tasks: Task[]): string {
     if (t.to) line += ` ~to:${t.to}`;
     if (t.from) line += ` ~from:${t.from}`;
     if (t.mission) line += ` ~mission:${t.mission}`;
+    if (t.initiative) line += ` ~initiative:${t.initiative}`;
+    if (t.goal) line += ` ~goal:${t.goal}`;
     s += `${line}\n`;
   }
   return s;

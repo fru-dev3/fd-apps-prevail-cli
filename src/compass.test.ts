@@ -200,7 +200,7 @@ describe("bootstrap: every line quoted from the user's notes", () => {
     expect(r.rejected.map((x) => x.why)).toEqual(["title uses words the user never wrote", "quote not found in the user's notes"]);
     const body = readFileSync(join(V, "build", "compass.md"), "utf8");
     expect(body).toContain("- Peace of mind ~id:");
-    expect(body).toMatch(/from: build\/ideal-state\.md\n\n## Roles\n\n- Father/);
+    expect(body).toMatch(/## Goals\n\n## Roles\n\n- Father/);
     expect(body).toContain("~rank:1 ~status:proposed\n  words: \"Grow foo while preserving peace of mind.\"\n  from: build/ideal-state.md");
     // Nothing is in a chat turn until confirmed.
     expect(compassBlock(V)).toBe("");

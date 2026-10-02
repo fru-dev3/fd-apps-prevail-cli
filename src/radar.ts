@@ -25,6 +25,7 @@
 // domain ideal's "Habits and routines" section (the user's words, quoted, as
 // proposed lines) and from if-then plans on Compass paths.
 
+import { chainText, compassTree, walkUp } from "./compass-chain.ts";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dataRoot, resolveDomainDir, runtimePath } from "./path-safety.ts";
@@ -47,6 +48,7 @@ export type RadarKind = "commitment" | "waiting" | "routine" | "relationship" | 
 export interface RadarItem {
   key: string; kind: RadarKind; domain: string; mission?: string;
   text: string; evidence: string;
+  chain?: string;          // what it serves, nearest first: goal > objective > vision (Compass chain, G1b)
   due?: string;            // when it becomes a regret (the promise, the renewal...)
   severity: number;        // 1 low .. 5 high, for ordering
   interrupt?: "overdue-promise" | "non-negotiable" | "broken-capture";
@@ -194,6 +196,12 @@ export function computeRadarSync(vault: string, i: RadarInputs = {}): Radar {
       if (st.slipping) out.push({ key: `routine:${r.id}`, kind: "routine", domain: "general", text: r.title, evidence: st.text, severity: 3 });
     }
   }
+  // What a goal or an initiative serves, walked up the Compass chain (confirmed links only).
+  let chainOf = (_id: string): string => "";
+  try {
+    const tree = compassTree(vault, { confirmedOnly: true, tasks: false });
+    chainOf = (id: string) => chainText(walkUp(tree, id));
+  } catch { /* no chain */ }
   // Paths: a chosen path whose expect: line is a metric predicate it is missing (last four weeks' average).
   if (i.weekly) {
     for (const g of items(doc, "goal").filter(live)) for (const p of g.paths.filter((x) => x.tokens.status === "chosen")) {
@@ -203,7 +211,7 @@ export function computeRadarSync(vault: string, i: RadarInputs = {}): Radar {
         const w = i.weekly(c.variable).slice(-4);
         if (w.length < 2) continue;
         const avg = w.reduce((a, b) => a + b, 0) / w.length;
-        if (!holds(c, avg)) out.push({ key: `path:${p.id}:${c.variable}`, kind: "path", domain: g.tokens.domain ?? "general", text: `${p.title} is missing what you expected`, evidence: `${c.variable} averages ${Math.round(avg * 10) / 10} a week over ${w.length} weeks; expected ${c.op} ${c.n}`, severity: 3 });
+        if (!holds(c, avg)) out.push({ key: `path:${p.id}:${c.variable}`, kind: "path", domain: g.tokens.domain ?? "general", text: `${p.title} is missing what you expected`, evidence: `${c.variable} averages ${Math.round(avg * 10) / 10} a week over ${w.length} weeks; expected ${c.op} ${c.n}`, severity: 3, ...(chainOf(p.id) ? { chain: chainOf(p.id) } : {}) });
       }
     }
   }
@@ -212,7 +220,7 @@ export function computeRadarSync(vault: string, i: RadarInputs = {}): Radar {
     const st = g.tokens.status ?? "active";
     if (!["active", "confirmed", "prototyping"].includes(st) || !g.tokens.domain) continue;
     const last = lastTouched(vault, g.tokens.domain);
-    if (last && last < now - 42 * DAY) out.push({ key: `goal:${g.id}`, kind: "goal", domain: g.tokens.domain, text: `${g.title} has gone quiet`, evidence: `nothing in ${g.tokens.domain} since ${ymd(last)}`, severity: 2 });
+    if (last && last < now - 42 * DAY) out.push({ key: `goal:${g.id}`, kind: "goal", domain: g.tokens.domain, text: `${g.title} has gone quiet`, evidence: `nothing in ${g.tokens.domain} since ${ymd(last)}`, severity: 2, ...(chainOf(g.id) ? { chain: chainOf(g.id) } : {}) });
   }
   // Relationships: a Yours person not seen for twice their own cadence.
   for (const p of relationships(vault, now, hs)) out.push(p);

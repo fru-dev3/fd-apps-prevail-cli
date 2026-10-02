@@ -108,7 +108,7 @@ describe("calendar holds and the Compass", () => {
   test("a mission linked to a path writes mission: under it; a chosen path starts a mission", async () => {
     writeFileSync(join(V, "build", "compass.md"), "# Compass\n\n## Goals\n- [ ] Play for the family ~id:g-play ~status:active ~domain:hobbies\n  path: Weekly cello lessons ~id:p-lessons ~status:chosen ~until:2027-06-30\n");
     expect(await linkPath(V, "learn-the-cello", "p-lessons", NOW)).toBe(true);
-    expect(readFileSync(join(V, "build", "compass.md"), "utf8")).toContain("  path: Weekly cello lessons ~id:p-lessons ~status:chosen ~until:2027-06-30\n    mission: learn-the-cello");
+    expect(readFileSync(join(V, "build", "compass.md"), "utf8")).toContain("  initiative: Weekly cello lessons ~id:p-lessons ~status:chosen ~until:2027-06-30\n    mission: learn-the-cello");
     const v = await missionFromPath(V, "p-lessons", NOW);
     expect(v).toMatchObject({ goal: "g-play", path: "p-lessons", target: "2027-06-30" });
     expect(v.domains).toEqual([{ slug: "hobbies", role: "owner" }]);

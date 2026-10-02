@@ -4874,14 +4874,14 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
       // Missions: entity projects move into data/missions/ (backup first, never
       // deleted), and the Compass "## Mission" heading becomes "## Purpose"
       // (snapshot in compass.versions/). Both are no-ops once done.
-      let missions: { migrated: number; backup?: string; purposeRenamed: boolean } = { migrated: 0, purposeRenamed: false };
+      let missions: { migrated: number; backup?: string; purposeRenamed: boolean; compassChain?: boolean; initiatives?: number } = { migrated: 0, purposeRenamed: false };
       try {
         const ms = await import("./missions.ts");
         const { entityThreads, buildIndex } = await import("./entities.ts");
         const r = ms.migrateProjects(targetVault, { threadsOf: (id) => entityThreads(targetVault, id) });
         if (r.migrated.length) { try { buildIndex(targetVault); } catch { /* refresh rebuilds it */ } }
         const pr = await ms.renamePurposeHeading(targetVault);
-        missions = { migrated: r.migrated.length, ...(r.backup ? { backup: r.backup } : {}), purposeRenamed: pr.renamed };
+        missions = { migrated: r.migrated.length, ...(r.backup ? { backup: r.backup } : {}), purposeRenamed: pr.renamed, compassChain: !!pr.migrated, initiatives: pr.initiatives ?? 0 };
       } catch { /* best-effort, like the passes above */ }
       if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated, consolidatedLeftovers: consolidated, goalsMigrated, profile, missions }) + "\n");
       else {
@@ -4899,6 +4899,7 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         if (profile.merged) console.log(`build/_profile.md folded into build/user.md (backup: ${profile.backup})`);
         if (missions.migrated) console.log(`${missions.migrated} project page(s) became missions (backup: ${missions.backup})`);
         if (missions.purposeRenamed) console.log("build/compass.md: ## Mission is now ## Purpose (the prior text is in compass.versions/)");
+        if (missions.compassChain) console.log(`build/compass.md: moved to the Compass chain (~schema:2; ${missions.initiatives} path line(s) now initiative:)`);
         console.log("done — vault is on the clean v4 layout. Originals are in each domain's _pre-v4-v4/ backup.");
       }
     } catch (e) {

@@ -316,8 +316,8 @@ export async function runMcpServer(
     },
     {
       name: "read_compass",
-      description: "The user's Compass: their mission, ranked values (each with an 'enough'), roles, non-negotiables and life goals, in their own words. Only what the user confirmed is returned as the Compass; format json also lists lines still awaiting their confirmation. Read it before advising on plans, priorities or trade-offs.",
-      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"], description: "text (default): the confirmed Compass. json: every line with its status." } } },
+      description: "The user's Compass, the chain in their own words: purpose, ranked values (each with an 'enough'), mission statement, vision, measurable objectives, goals and the initiatives under them, plus roles and non-negotiables. Only what the user confirmed is returned as the Compass text; format json also lists lines awaiting confirmation and the tree (every node with its parents and children, and how many are not linked per level); format tree returns only the tree. Read it before advising on plans, priorities or trade-offs.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json", "tree"], description: "text (default): the confirmed Compass. json: every line with its status, and the tree. tree: the chain as a tree." } } },
     },
     {
       name: "check_alignment",
@@ -1382,7 +1382,10 @@ export async function tMetricSeries(args: Record<string, unknown>, vaultPath: st
 
 export async function tReadCompass(args: Record<string, unknown>, vaultPath: string): Promise<string> {
   const c = await import("./compass.ts");
-  if (args.format === "json") return JSON.stringify(c.compassJson(vaultPath), null, 2);
+  if (args.format === "json" || args.format === "tree") {
+    const tree = (await import("./compass-chain.ts")).compassTree(vaultPath);
+    return JSON.stringify(args.format === "tree" ? tree : { ...c.compassJson(vaultPath), tree }, null, 2);
+  }
   const block = c.compassBlock(vaultPath);
   if (block) return block;
   const n = c.compassJson(vaultPath).proposed;

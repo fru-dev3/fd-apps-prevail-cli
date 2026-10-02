@@ -112,7 +112,7 @@ describe("choose: two initiatives become running playbooks the user only had to 
     const board = readFileSync(join(D("foo"), "memory", "tasks.md"), "utf8");
     expect(board).toContain(`Start the initiative "${survivors[0]!.title}" toward Stay curious about the world`);
     const text = readFileSync(join(V, "build", "compass.md"), "utf8");
-    expect(text).toMatch(new RegExp(`path: ${survivors[0]!.title} ~id:${survivors[0]!.id} ~status:chosen ~kind:low-effort ~until:2026-11-27 ~approval:ask`));
+    expect(text).toMatch(new RegExp(`initiative: ${survivors[0]!.title} ~id:${survivors[0]!.id} ~status:chosen ~kind:low-effort ~until:2026-11-27 ~approval:ask`));
     expect(readLedger(V).filter((l) => l.to === "chosen").length).toBe(2);
     expect(readInstalls(V).length).toBe(2);
     await expect(choosePath(V, survivors[0]!.id, { now: NOW })).rejects.toThrow("already chosen");

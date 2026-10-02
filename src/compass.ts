@@ -1,12 +1,14 @@
-// The Compass: the user's purpose, values, roles, goals and their paths,
-// non-negotiables, negotiables and capacity, in one plain file,
+// The Compass: the user's purpose, values, mission statement, vision,
+// objectives, goals and their initiatives, roles, non-negotiables, negotiables
+// and capacity, in one plain file,
 // build/compass.md. The user owns the what and the why; every line is in the
 // user's own words (a quote from them is kept beside it), and nothing a model
 // drafts counts until the user confirms it.
 //
 //   # Compass
+//   ~schema:2
 //
-//   ## Purpose   (## Mission is read as an alias)
+//   ## Purpose   (in a file without ~schema:2, ## Mission is read as Purpose)
 //   Live fully. Love deeply.
 //   ~status:proposed
 //     words: "Live fully. Love deeply."
@@ -16,14 +18,20 @@
 //   - Peace of mind ~id:v-peace ~rank:2 ~tier:1
 //     words: "Grow wealth while preserving peace of mind."
 //     enough: calm 4 of 5 most weeks
+//   ## Mission statement
+//   - Build calm tools for families ~id:st-x ~serves:v-peace
+//   ## Vision
+//   - A home that runs itself ~id:vi-x ~statement:st-x
+//   ## Objectives
+//   - Twelve months of costs in cash ~id:o-x ~vision:vi-x ~metric:cash_months ~target:12 ~due:2028-12-31
+//   ## Goals
+//   - [ ] Financial independence ~id:g-fi ~objective:o-x ~serves:v-freedom,v-peace ~status:active ~due:2028-12-31
+//     why: "..."
+//     initiative: Cash buffer first ~id:p-buffer ~status:proposed
+//       expect: 12 months of costs in cash by 2027-06
 //   ## Roles
 //   - Father ~id:r-father ~people:person/<slug>
 //     hope: "..."
-//   ## Goals
-//   - [ ] Financial independence ~id:g-fi ~serves:v-freedom,v-peace ~status:active ~due:2028-12-31
-//     why: "..."
-//     path: Cash buffer first ~id:p-buffer ~status:proposed
-//       expect: 12 months of costs in cash by 2027-06
 //   ## Non-negotiables
 //   - Home for dinner 5 nights a week ~id:nn-dinner ~check:dinners_home_wk>=5
 //   ## Negotiables
@@ -34,8 +42,12 @@
 //
 // Grammar: "- " items with ~key:value tokens (a bare ~local marks a line that
 // never goes to a cloud model); indented "key: value" lines belong to the item
-// above; "path:" lines (goals only) are items of their own, with their fields
-// indented one level more. Unknown lines and sections are kept verbatim, and
+// above; "initiative:" lines (goals only; "path:" before ~schema:2, still
+// read) are items of their own, with their fields indented one level more.
+// The chain (goals-plan.md "The Compass chain"): purpose, values, mission
+// statement (~serves: values), vision (~statement:), objectives (~vision:,
+// ~metric:), goals (~objective:), initiatives, tasks. Links are never forced;
+// compass-chain.ts builds the tree and counts what is not linked. Unknown lines and sections are kept verbatim, and
 // an item nobody changed is written back byte for byte.
 //
 // Statuses: a proposed line carries ~status:proposed. Confirming a goal makes
@@ -53,7 +65,7 @@ import { vreadFile } from "./vault-session.ts";
 import { listVersions, writeVersioned } from "./goals.ts";
 import { parseModArgs } from "./cli-args.ts";
 
-export type Kind = "value" | "role" | "goal" | "rule" | "negotiable" | "capacity" | "routine" | "other";
+export type Kind = "value" | "statement" | "vision" | "objective" | "role" | "goal" | "rule" | "negotiable" | "capacity" | "routine" | "other";
 
 export interface Field { key: string; value: string }
 export interface CompassPath { id: string; title: string; tokens: Record<string, string>; fields: Field[] }
@@ -75,19 +87,29 @@ export interface CompassSection { heading: string; kind: Kind | "mission"; block
 export interface CompassDoc { head: string[]; sections: CompassSection[] }
 
 // The life statement is called Purpose (missions-plan.md: "Mission" names the
-// time-bound primitive). `## Mission` is read as an alias forever; groom
-// rewrites the heading (missions.ts renamePurposeHeading, with a snapshot).
-// The kind key stays "mission" on the wire for compatibility.
+// time-bound primitive; the Compass level that says what you do is shown as
+// "Mission statement"). A file without ~schema:2 in its head reads
+// `## Mission` as Purpose and is migrated once (migrateCompass). In a schema 2
+// file `## Mission` is the mission statement. The purpose's kind key stays
+// "mission" on the wire for compatibility.
+export const SCHEMA = 2;
 const SECTION_KIND: Record<string, Kind | "mission"> = {
-  purpose: "mission", mission: "mission", values: "value", roles: "role", goals: "goal",
+  purpose: "mission", "core belief": "mission", values: "value", "mission statement": "statement", vision: "vision",
+  objectives: "objective", "strategic objectives": "objective", roles: "role", goals: "goal",
   "non-negotiables": "rule", rules: "rule", negotiables: "negotiable", capacity: "capacity", routines: "routine",
 };
 export const SECTION_TITLE: Record<Exclude<Kind, "other"> | "mission", string> = {
-  mission: "Purpose", value: "Values", role: "Roles", goal: "Goals", rule: "Non-negotiables",
-  negotiable: "Negotiables", capacity: "Capacity", routine: "Routines",
+  mission: "Purpose", value: "Values", statement: "Mission statement", vision: "Vision", objective: "Objectives",
+  role: "Roles", goal: "Goals", rule: "Non-negotiables", negotiable: "Negotiables", capacity: "Capacity", routine: "Routines",
 };
-const ORDER: (Exclude<Kind, "other"> | "mission")[] = ["mission", "value", "role", "goal", "rule", "negotiable", "capacity", "routine"];
-const PREFIX: Record<Kind, string> = { value: "v", role: "r", goal: "g", rule: "nn", negotiable: "ng", capacity: "c", routine: "rt", other: "x" };
+const ORDER: (Exclude<Kind, "other"> | "mission")[] = ["mission", "value", "statement", "vision", "objective", "goal", "role", "rule", "negotiable", "capacity", "routine"];
+const PREFIX: Record<Kind, string> = { value: "v", statement: "st", vision: "vi", objective: "o", role: "r", goal: "g", rule: "nn", negotiable: "ng", capacity: "c", routine: "rt", other: "x" };
+
+/** The schema a file declares in its head (~schema:N before the first section); 1 when absent. */
+export function schemaOf(head: string[]): number {
+  for (const l of head) { const m = /~schema:(\d+)/.exec(l); if (m) return Number(m[1]); }
+  return 1;
+}
 
 const TOKEN = /\s+~([a-z][a-z0-9_-]*)(?::(\S+))?/g;
 
@@ -112,7 +134,7 @@ function parseItem(kind: Kind, lines: string[]): CompassItem {
   const item: CompassItem = { kind, id: tokens.id ?? compassId(kind, title), title, done, tokens, flags, fields: [], paths: [], raw: lines };
   let path: CompassPath | null = null;
   for (const l of lines.slice(1)) {
-    const pm = /^ {2,3}path:\s*(.*)$/.exec(l);
+    const pm = /^ {2,3}(?:initiative|path):\s*(.*)$/.exec(l);
     if (pm) {
       const t = splitTokens(pm[1]!);
       path = { id: t.tokens.id ?? compassId("other", t.title), title: t.title, tokens: t.tokens, fields: [] };
@@ -152,7 +174,9 @@ export function parseCompass(body: string): CompassDoc {
     const h = /^##\s+(.+?)\s*$/.exec(l);
     if (h) {
       flushMission();
-      sec = { heading: l, kind: SECTION_KIND[h[1]!.toLowerCase()] ?? "other", blocks: [] };
+      const name = h[1]!.toLowerCase();
+      const kind = name === "mission" ? (schemaOf(doc.head) >= SCHEMA ? "statement" : "mission") : SECTION_KIND[name] ?? "other";
+      sec = { heading: l, kind, blocks: [] };
       doc.sections.push(sec);
       continue;
     }
@@ -180,7 +204,7 @@ export function renderItem(it: CompassItem): string[] {
   const out = [`- ${box}${clean(it.title)}${tokenStr({ id: it.id, ...it.tokens }, it.flags)}`];
   for (const f of it.fields) out.push(`  ${f.key}: ${clean(f.value)}`);
   for (const p of it.paths) {
-    out.push(`  path: ${clean(p.title)}${tokenStr({ id: p.id, ...p.tokens })}`);
+    out.push(`  initiative: ${clean(p.title)}${tokenStr({ id: p.id, ...p.tokens })}`);
     for (const f of p.fields) out.push(`    ${f.key}: ${clean(f.value)}`);
   }
   return out;
@@ -245,7 +269,7 @@ export function addItem(doc: CompassDoc, it: CompassItem): void {
 }
 
 export function findById(doc: CompassDoc, id: string): { item?: CompassItem; path?: CompassPath; parent?: CompassItem; mission?: Mission } {
-  if (id === "mission") { const m = mission(doc); return m ? { mission: m } : {}; }
+  if (id === "mission" || id === "purpose") { const m = mission(doc); return m ? { mission: m } : {}; }
   for (const it of items(doc)) {
     if (it.id === id) return { item: it };
     const p = it.paths.find((x) => x.id === id);
@@ -258,7 +282,7 @@ export function findById(doc: CompassDoc, id: string): { item?: CompassItem; pat
 
 export function compassPath(vault: string): string { return join(buildRoot(vault), "compass.md"); }
 export function compassMetaDir(vault: string): string { return join(runtimePath(vault, "_meta"), "compass"); }
-const EMPTY = "# Compass\n\n## Purpose\n\n## Values\n\n## Roles\n\n## Goals\n\n## Non-negotiables\n\n## Negotiables\n";
+const EMPTY = "# Compass\n~schema:2\n\n## Purpose\n\n## Values\n\n## Mission statement\n\n## Vision\n\n## Objectives\n\n## Goals\n\n## Roles\n\n## Non-negotiables\n\n## Negotiables\n";
 
 function readText(p: string): string {
   if (!existsSync(p)) return "";
@@ -269,7 +293,7 @@ export function readCompass(vault: string): CompassDoc {
   return parseCompass(readText(compassPath(vault)) || EMPTY);
 }
 
-export interface LedgerLine { ts: number; id: string; from: string; to: string; reason: string; evidence?: string[]; by: "user" | "model" | "bootstrap" }
+export interface LedgerLine { ts: number; id: string; from: string; to: string; reason: string; evidence?: string[]; by: "user" | "model" | "bootstrap" | "groom" | "code" }
 
 function appendJsonl(p: string, rows: unknown[]): void {
   if (!rows.length) return;
@@ -282,6 +306,43 @@ export function saveCompass(vault: string, doc: CompassDoc, changes: Omit<Ledger
   const kept = writeVersioned(compassPath(vault), serializeCompass(doc), now);
   appendJsonl(join(compassMetaDir(vault), "ledger.jsonl"), changes.map((c) => ({ ts: now, ...c })));
   return kept;
+}
+
+/**
+ * The one-time move to the chain (schema 2). A file without ~schema:2 in its
+ * head: `## Mission` becomes `## Purpose` (unless a Purpose is already there),
+ * `path:` lines under goals become `initiative:` lines (ids kept, so p- ids
+ * stay valid), and `~schema:2` goes under the title. The prior text is kept
+ * in compass.versions/ first. Text-level, so every other byte is unchanged.
+ * Idempotent: a schema 2 file is left alone.
+ */
+export function migrateCompass(vault: string, now = Date.now()): { migrated: boolean; renamedPurpose: boolean; initiatives: number; snapshot?: string | null } {
+  const p = compassPath(vault);
+  const t = readText(p);
+  if (!t.trim()) return { migrated: false, renamedPurpose: false, initiatives: 0 };
+  const lines = t.replace(/\r\n/g, "\n").split("\n");
+  const first = lines.findIndex((l) => /^##\s/.test(l));
+  if (schemaOf(first < 0 ? lines : lines.slice(0, first)) >= SCHEMA) return { migrated: false, renamedPurpose: false, initiatives: 0 };
+  const hasPurpose = lines.some((l) => /^##\s+Purpose\s*$/i.test(l));
+  let renamedPurpose = false;
+  let initiatives = 0;
+  let inGoals = false;
+  const out = lines.map((l) => {
+    const h = /^##\s+(.+?)\s*$/.exec(l);
+    if (h) {
+      inGoals = h[1]!.toLowerCase() === "goals";
+      if (!hasPurpose && !renamedPurpose && h[1]!.toLowerCase() === "mission") { renamedPurpose = true; return "## Purpose"; }
+      return l;
+    }
+    if (inGoals && /^ {2,3}path:/.test(l)) { initiatives++; return l.replace(/^( {2,3})path:/, "$1initiative:"); }
+    return l;
+  });
+  const title = out.findIndex((l, i) => (first < 0 || i < first) && /^#\s/.test(l));
+  out.splice(title >= 0 ? title + 1 : 0, 0, `~schema:${SCHEMA}`);
+  const text = out.join("\n");
+  const snapshot = writeVersioned(p, text.endsWith("\n") ? text : `${text}\n`, now);
+  appendJsonl(join(compassMetaDir(vault), "ledger.jsonl"), [{ ts: now, id: "compass", from: "schema 1", to: `schema ${SCHEMA}`, reason: `the Compass chain: ${renamedPurpose ? "Mission heading to Purpose, " : ""}${initiatives} path line(s) to initiative`, by: "groom" }]);
+  return { migrated: true, renamedPurpose, initiatives, snapshot };
 }
 
 export function readLedger(vault: string): LedgerLine[] {
@@ -403,23 +464,36 @@ export function compassBlock(vault: string, opts: { local?: boolean } = {}): str
     parts.push("Values, most important first:");
     values.slice(0, 8).forEach((v, i) => parts.push(`${i + 1}. ${v.title}${field(v, "enough") ? ` (enough: ${field(v, "enough")})` : ""}`));
   }
+  // The chain above the goals (G1b): what they do, what they aspire to, and the
+  // measurable outcomes that show it. Only confirmed lines; links shown when made.
+  const statements = items(doc, "statement").filter(ok);
+  if (statements.length) parts.push(`Mission statement: ${statements.map((x) => x.title).join("; ")}`);
+  const visions = items(doc, "vision").filter(ok);
+  if (visions.length) parts.push(`Vision: ${visions.map((x) => x.title).join("; ")}`);
+  const objectives = items(doc, "objective").filter(ok);
+  if (objectives.length) {
+    parts.push("Objectives (the measurable outcomes that show the vision is happening):");
+    for (const o of objectives.slice(0, 6)) parts.push(`- ${o.title}${o.tokens.target ? ` (target ${o.tokens.target}${o.tokens.metric ? ` ${o.tokens.metric}` : ""})` : ""}${o.tokens.due ? ` by ${o.tokens.due}` : ""}`);
+  }
   const rules = items(doc, "rule").filter(ok);
   if (rules.length) { parts.push("Non-negotiables (never trade these away):"); for (const r of rules.slice(0, 8)) parts.push(`- ${r.title}`); }
   const byId = new Map(values.map((v) => [v.id, v.title]));
+  const objectiveTitle = new Map(items(doc, "objective").filter(ok).map((o) => [o.id, o.title]));
   const goals = items(doc, "goal").filter((g) => ok(g) && (g.tokens.status ?? "active") === "active");
   if (goals.length) {
     parts.push("Life goals:");
     for (const g of goals.slice(0, 8)) {
       const serves = (g.tokens.serves ?? "").split(",").map((s) => byId.get(s)).filter(Boolean);
-      parts.push(`- ${g.title}${serves.length ? ` (serves ${serves.join(", ")})` : ""}${g.tokens.due ? ` by ${g.tokens.due}` : ""}`);
+      const toward = (g.tokens.objective ?? "").split(",").map((id) => objectiveTitle.get(id)).filter(Boolean);
+      parts.push(`- ${g.title}${serves.length ? ` (serves ${serves.join(", ")})` : ""}${g.tokens.due ? ` by ${g.tokens.due}` : ""}${toward.length ? `, toward the objective ${toward.join(", ")}` : ""}`);
     }
   }
   const shaping = items(doc, "goal").filter((g) => ok(g) && (g.tokens.status === "confirmed" || g.tokens.status === "prototyping"));
-  if (shaping.length) parts.push(`Goals they confirmed but have not started (no plan yet, or a small trial): ${shaping.slice(0, 6).map((g) => g.title).join("; ")}`);
+  if (shaping.length) parts.push(`Goals they confirmed but have not started (no plan yet, or a small trial): ${shaping.slice(0, 6).map((g) => { const t = (g.tokens.objective ?? "").split(",").map((id) => objectiveTitle.get(id)).filter(Boolean); return t.length ? `${g.title} (toward ${t.join(", ")})` : g.title; }).join("; ")}`);
   const roles = items(doc, "role").filter(ok);
   if (roles.length) parts.push(`Roles: ${roles.map((r) => r.title).join(", ")}`);
   if (!parts.length) return "";
-  return [`${COMPASS_HEADER}: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.`, ...parts].join("\n").slice(0, 2500);
+  return [`${COMPASS_HEADER}: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.`, ...parts].join("\n").slice(0, 3200);
 }
 
 // ── Bootstrap: a first Compass drafted from the vault, every line quoted ─────
@@ -595,7 +669,11 @@ export function compassJson(vault: string) {
   return {
     path: compassPath(vault),
     exists: existsSync(compassPath(vault)),
+    schema: schemaOf(doc.head),
     mission: m && m.text ? { text: m.text, status: statusOf(m, "mission"), fields: Object.fromEntries(m.fields.map((f) => [f.key, f.value.replace(/^"(.*)"$/, "$1")])) } : null,
+    statements: all.filter((i) => i.kind === "statement").map(view),
+    visions: all.filter((i) => i.kind === "vision").map(view),
+    objectives: all.filter((i) => i.kind === "objective").map(view),
     values: all.filter((i) => i.kind === "value").sort((a, b) => Number(a.tokens.rank ?? 99) - Number(b.tokens.rank ?? 99)).map(view),
     roles: all.filter((i) => i.kind === "role").map(view),
     goals: all.filter((i) => i.kind === "goal").map(view),
@@ -619,6 +697,8 @@ export async function compassCommand(argv: string[], vault: string): Promise<num
   if (["signals", "rules", "conflicts", "conflict", "align"].includes(sub)) return (await import("./compass-align.ts")).alignCommand(sub, argv, vault);
   // Initiatives (the plan's paths, Goals G4) live in paths.ts.
   if (sub === "paths" || sub === "path") return (await import("./paths.ts")).pathsCommand(sub, argv, vault);
+  // The chain (G1b): the tree, proposed links, linking.
+  if (sub === "tree" || sub === "links" || sub === "link") return (await import("./compass-chain.ts")).chainCommand(sub, argv, vault);
   if (sub === "show") {
     const j = compassJson(vault);
     if (args.json) out(j);
@@ -627,6 +707,8 @@ export async function compassCommand(argv: string[], vault: string): Promise<num
   }
   if (sub === "block") { process.stdout.write(`${compassBlock(vault)}\n`); return 0; }
   if (sub === "bootstrap") {
+    // --chain: draft only the mission statement, vision and objectives (and propose links).
+    const chain = args.has("chain");
     let run: ((p: string) => Promise<string>) | undefined;
     if (!args.has("no-model")) {
       const { detectClis, runChatTurn, defaultModelFor } = await import("./cli-bridge.ts");
@@ -636,6 +718,12 @@ export async function compassCommand(argv: string[], vault: string): Promise<num
       const cwd = resolveDomainDir(vault, "general");
       try { mkdirSync(cwd, { recursive: true }); } catch { /* exists */ }
       if (cli) run = (prompt) => runChatTurn({ prompt, cwd, cli, model: defaultModelFor(cli.kind), isFirst: true, bare: true });
+    }
+    if (chain) {
+      const r = await (await import("./compass-chain.ts")).bootstrapChain(vault, run);
+      if (args.json) out(r);
+      else { console.log(`Drafted ${r.added.length} chain lines (${r.method}), proposed ${r.links.length} links; rejected ${r.rejected.length}.`); for (const a of r.added) console.log(`  + ${a.kind} ${a.title}  (${a.from})`); for (const l of r.links) console.log(`  ~ ${l.fromTitle} > ${l.toTitle}`); for (const x of r.rejected) console.log(`  - ${x.kind} ${x.title}: ${x.why}`); }
+      return 0;
     }
     const r = await bootstrapCompass(vault, run);
     if (args.json) out(r);

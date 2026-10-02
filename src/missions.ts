@@ -202,7 +202,8 @@ export function parseMission(md: string, slug: string): Mission {
       lines: Array.isArray(b.lines) ? b.lines.filter((l) => l && typeof l.id === "string").map((l) => ({ id: l.id, label: String(l.label ?? l.id), usd: Number(l.usd) || 0 })) : [],
     },
     ...(s("goal") ? { goal: s("goal") } : {}),
-    ...(s("path") ? { path: s("path") } : {}),
+    // The Compass initiative this mission carries out (data key `path`; `initiative` is read too).
+    ...(s("path") || s("initiative") ? { path: s("path") || s("initiative") } : {}),
     serves: strs(f.serves), metrics: strs(f.metrics),
     match: (f.match && typeof f.match === "object" ? f.match : {}) as MissionMatch,
     prompt_projects: strs(f.prompt_projects), repos: strs(f.repos),
@@ -777,15 +778,11 @@ export function migrateProjects(vault: string, o: { dryRun?: boolean; now?: numb
 
 // ── The Compass statement is called Purpose ─────────────────────────────────
 
-/** Rewrite `## Mission` in build/compass.md to `## Purpose` (the prior text kept in compass.versions/). */
-export async function renamePurposeHeading(vault: string, now = Date.now()): Promise<{ renamed: boolean; snapshot?: string | null }> {
-  const { compassPath } = await import("./compass.ts");
-  const { writeVersioned } = await import("./goals.ts");
-  const p = compassPath(vault);
-  const t = readText(p);
-  if (!/^##\s+Mission\s*$/m.test(t)) return { renamed: false };
-  const snapshot = writeVersioned(p, t.replace(/^##\s+Mission\s*$/m, "## Purpose"), now);
-  return { renamed: true, snapshot };
+/** The Compass's one-time move to the chain (compass.ts migrateCompass): `## Mission` to `## Purpose`, path: to initiative:, ~schema:2. */
+export async function renamePurposeHeading(vault: string, now = Date.now()): Promise<{ renamed: boolean; snapshot?: string | null; migrated?: boolean; initiatives?: number }> {
+  const { migrateCompass } = await import("./compass.ts");
+  const r = migrateCompass(vault, now);
+  return { renamed: r.renamedPurpose, migrated: r.migrated, initiatives: r.initiatives, ...(r.migrated ? { snapshot: r.snapshot } : {}) };
 }
 
 // ── The tasks a mission sees: its own board and ~mission:<slug> lines anywhere ─

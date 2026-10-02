@@ -34,6 +34,9 @@ export interface DomainGoal {
   due?: string;
   why?: string;
   domain: string;
+  // The Compass chain: the objective this domain goal moves (~objective:o-x) and the values it serves.
+  objective?: string;
+  serves?: string;
 }
 
 export const GOALS_REL = join("source", "goals.md");
@@ -62,6 +65,8 @@ export function parseGoals(domain: string, body: string): DomainGoal[] {
       ...(g.tokens.due ? { due: g.tokens.due } : {}),
       ...(why ? { why } : {}),
       domain,
+      ...(g.tokens.objective ? { objective: g.tokens.objective } : {}),
+      ...(g.tokens.serves ? { serves: g.tokens.serves } : {}),
     });
   }
   return out;

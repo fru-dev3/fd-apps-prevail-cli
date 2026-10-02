@@ -38,6 +38,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFil
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { compassMetaDir, compassPath, items, readCompass, type CompassDoc, type CompassItem, type CompassPath } from "./compass.ts";
+import { compassTree, walkUp } from "./compass-chain.ts";
 import { resolveDomainDir } from "./path-safety.ts";
 import { parseModArgs } from "./cli-args.ts";
 
@@ -433,8 +434,12 @@ export function jobCompass(vault: string, job: { ask: string; domains: { owner: 
   const doc = readCompass(vault);
   const values = new Map(items(doc, "value").filter(live).map((v) => [v.id, v.title]));
   const goals = items(doc, "goal").filter(live).filter((g) => (missionGoal ? g.id === missionGoal : g.tokens.domain === job.domains.owner) && !["released", "achieved"].includes(g.tokens.status ?? "active"));
+  // The Compass chain (G1b): a goal also serves the objective and vision above it.
+  let up = (_id: string): { id: string; title: string }[] => [];
+  try { const tree = compassTree(vault, { confirmedOnly: true, tasks: false }); up = (id) => walkUp(tree, id).map((n) => ({ id: n.id, title: n.title })); } catch { /* no chain */ }
   for (const g of goals.slice(0, 2)) {
     out.serves.push({ id: g.id, title: g.title });
+    for (const n of up(g.id)) if (!out.serves.some((s) => s.id === n.id)) out.serves.push(n);
     for (const v of (g.tokens.serves ?? "").split(",").filter((x) => values.has(x))) if (!out.serves.some((s) => s.id === v)) out.serves.push({ id: v, title: values.get(v)! });
   }
   const g = readGraph(vault);

@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { readLinks } from "./compass-chain.ts";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { answerCandidate, compassCandidates, noteSaid, statedNumbers, topCandidates } from "./said.ts";
@@ -102,8 +103,20 @@ describe("the Compass conversation", () => {
     expect(g).toMatchObject({ title: "Hike the foo ridge with my brother", status: "active" });
     expect(g.fields.plan).toContain("if a weekend is free");
     expect(compassJson(V).values[0]!.fields.enough).toBe("calm 4 of 5 most weeks");
-    expect(answerInterview(V, "Live calmly and show up for the people I love", 18).reply).toContain("whole Compass conversation");
+    expect(answerInterview(V, "Live calmly and show up for the people I love", 18).reply).toContain("What do you do, and for whom");
     expect(compassJson(V).mission?.text).toBe("Live calmly and show up for the people I love");
+    // The chain (G1b): mission statement, vision and one objective, each said by the user and so theirs.
+    expect(answerInterview(V, "I build calm foo tools for families", 19).reply).toContain("hope to become");
+    expect(answerInterview(V, "A family that runs on its own foo", 20).reply).toContain("one number");
+    expect(answerInterview(V, "Twelve foo hikes a year by 2027", 21).reply).toContain("whole Compass conversation");
+    const j = compassJson(V);
+    expect(j.statements.map((x) => `${x.title}:${x.status}`)).toEqual(["I build calm foo tools for families:confirmed"]);
+    expect(j.visions[0]!.tokens.statement).toBe(j.statements[0]!.id);
+    expect(j.objectives[0]).toMatchObject({ title: "Twelve foo hikes a year by 2027", tokens: { vision: j.visions[0]!.id, due: "2027-12-31" } });
+    // The goal said earlier is proposed as moving the objective, with the user's words; it is not linked until accepted.
+    const links = readLinks(V);
+    expect(links).toMatchObject([{ kind: "goal-objective", from: g.id, to: j.objectives[0]!.id, quote: "Twelve foo hikes a year by 2027", by: "conversation", status: "proposed" }]);
+    expect(compassJson(V).goals[0]!.tokens.objective).toBeUndefined();
   });
   test("phrases keep the user's words and drop filler", () => {
     expect(phrases("I'm a father and a brother; also a builder.")).toEqual(["Father", "Brother", "Builder"]);

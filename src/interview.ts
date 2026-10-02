@@ -17,8 +17,9 @@ import {
   addItem, compassId, compassMetaDir, confirm, drop, findById, items, mission, readCompass, saveCompass, setWoop,
   type CompassItem, type Field, type Kind,
 } from "./compass.ts";
+import { proposeFromConversation } from "./compass-chain.ts";
 
-type Step = "roles" | "hope" | "fear" | "values" | "rules" | "confirm" | "enough" | "missing" | "goal" | "outcome" | "obstacle" | "plan" | "expect" | "mission";
+type Step = "roles" | "hope" | "fear" | "values" | "rules" | "confirm" | "enough" | "missing" | "goal" | "outcome" | "obstacle" | "plan" | "expect" | "mission" | "statement" | "vision" | "objective";
 interface Q { id: Step; sitting: 1 | 2; text: (ctx: Ctx) => string }
 interface Ctx { role?: string; value?: string; goal?: string; proposed: { id: string; kind: string; title: string }[] }
 
@@ -38,7 +39,11 @@ const QUESTIONS: Q[] = [
   { id: "obstacle", sitting: 2, text: () => "What in you is most likely to get in the way?" },
   { id: "plan", sitting: 2, text: () => "So when that happens, what will you do? Say it as: if (that happens), then I (will do this)." },
   { id: "expect", sitting: 2, text: () => "How sure are you that you will get there, 1 to 5?" },
-  { id: "mission", sitting: 2, text: () => "Last one. In one sentence, what is your life about? Rough is fine; it is yours to change." },
+  { id: "mission", sitting: 2, text: () => "In one sentence, what is your life about? Rough is fine; it is yours to change." },
+  // The Compass chain (G1b): mission statement, vision, one measurable objective.
+  { id: "statement", sitting: 2, text: () => "What do you do, and for whom? One sentence about the contribution you make." },
+  { id: "vision", sitting: 2, text: () => "Looking far ahead, what do you hope to become, or to have built?" },
+  { id: "objective", sitting: 2, text: () => "Last one. What is one number that would show that is happening, and by when? An amount, a count or a date." },
 ];
 
 export interface InterviewState {
@@ -128,6 +133,7 @@ function settle(vault: string, s: InterviewState): void {
     if ((q.id === "outcome" || q.id === "obstacle" || q.id === "plan" || q.id === "expect") && !s.goal) { s.next++; continue; }
     if (q.id === "mission" && mission(readCompass(vault))?.text) { s.next++; continue; }
     if (q.id === "enough" && !c.value) { s.next++; continue; }
+    if ((q.id === "statement" || q.id === "vision" || q.id === "objective") && items(readCompass(vault), q.id).length) { s.next++; continue; }
     return;
   }
 }
@@ -223,6 +229,24 @@ function applyAnswer(vault: string, s: InterviewState, id: Step, t: string, now:
     if (!g) return;
     if (id === "expect") { const n = Number(/[1-5]/.exec(t)?.[0]); if (n) setWoop(vault, g.id, { expect: n }, now); }
     else setWoop(vault, g.id, { [id]: t }, now);
+  } else if (id === "statement" || id === "vision" || id === "objective") {
+    // Said by the user, so theirs: added confirmed, title in their words, the whole answer kept as the quote.
+    const title = t.replace(/\s+/g, " ").replace(/[.!]+$/, "").trim().slice(0, 160);
+    const doc0 = readCompass(vault);
+    const up = id === "vision" ? items(doc0, "statement") : id === "objective" ? items(doc0, "vision") : [];
+    const due = id === "objective" ? /\b(20\d\d)(?:-(\d\d)-(\d\d))?\b/.exec(t) : null;
+    const tokens: Record<string, string> = {
+      ...(up.length === 1 ? { [id === "vision" ? "statement" : "vision"]: up[0]!.id } : {}),
+      ...(due ? { due: due[2] ? `${due[1]}-${due[2]}-${due[3]}` : `${due[1]}-12-31` } : {}),
+    };
+    const added = propose(vault, s, id, [title], t, [], tokens, now);
+    if (added[0]) {
+      confirm(vault, added, "said in the Compass conversation", now);
+      s.proposed = s.proposed.filter((x) => x !== added[0]);
+      // A goal said earlier in the conversation may move this objective: proposed, with these words, never linked silently.
+      const g = id === "objective" && s.goal ? items(readCompass(vault), "goal").find((x) => x.title === s.goal) : undefined;
+      if (g) proposeFromConversation(vault, g.id, added[0], t, now);
+    }
   } else if (id === "mission") {
     const doc = readCompass(vault);
     const m = mission(doc);

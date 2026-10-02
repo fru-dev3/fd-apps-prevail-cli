@@ -28,6 +28,7 @@ import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { parseTasks } from "./tasks.ts";
 import { items, readCompass, type CompassItem } from "./compass.ts";
+import { compassTree, walkUp, type ChainTree } from "./compass-chain.ts";
 import { readDomainGoals } from "./goals.ts";
 import { listDecisions, openDecision } from "./decision-records.ts";
 import { listJobs } from "./jobs.ts";
@@ -118,6 +119,20 @@ export function candidates(vault: string, date: string, slips: Map<string, OpenC
   const { byDomain, weight } = threadsFor(vault);
   const learned = readWeights(vault);
   const out: TodayItem[] = [];
+  // The Compass chain (G1b): a line's walk up, confirmed links only: initiative, goal, objective, vision.
+  let tree: ChainTree | null = null;
+  try { tree = compassTree(vault, { confirmedOnly: true, tasks: false }); } catch { tree = null; }
+  const nodeTitle = (id: string) => tree?.nodes.find((n) => n.id === id)?.title;
+  const walk = (id: string) => (tree ? walkUp(tree, id).map((n) => n.title) : []);
+  /** A task's own link (~initiative:, ~goal:, ~mission:), walked up; null when it has none the Compass knows. */
+  const ownChain = (t: { initiative?: string; goal?: string; mission?: string }): string[] | null => {
+    for (const id of [t.initiative, t.goal, t.mission ? `mission/${t.mission}` : undefined]) {
+      if (!id) continue;
+      const title = nodeTitle(id);
+      if (title) return [title, ...walk(id)];
+    }
+    return null;
+  };
   // Without a Compass goal for the domain, the thread stops at the domain's own
   // first active goal (source/goals.md) and the item is honestly unlinked.
   const domainGoal = new Map<string, string | undefined>();
@@ -128,7 +143,8 @@ export function candidates(vault: string, date: string, slips: Map<string, OpenC
   const valueWeight = (domain: string) => {
     const t = byDomain.get(domain);
     if (!t || !t.values.length) { const g = ownGoal(domain); return { w: 0.15, thread: [label(domain), ...(t?.goal ? [t.goal.title] : g ? [g] : [])], unlinked: true, n: 0 }; }
-    return { w: t.values.reduce((a, v) => a + (weight.get(v.id) ?? 0), 0) || 0.15, thread: [label(domain), t.goal!.title, ...t.values.map((v) => v.title)], unlinked: false, n: t.values.length };
+    const up = walk(t.goal!.id);
+    return { w: t.values.reduce((a, v) => a + (weight.get(v.id) ?? 0), 0) || 0.15, thread: [label(domain), t.goal!.title, ...(up.length ? up : t.values.map((v) => v.title))], unlinked: false, n: t.values.length };
   };
   const urgency = (due?: string) => {
     if (!due) return 0.1;
@@ -159,9 +175,10 @@ export function candidates(vault: string, date: string, slips: Map<string, OpenC
       if (!r) continue;
       const late = -daysBetween(date, t.due);
       const person = t.to ?? t.from;
+      const own = ownChain(t);
       out.push({
         key: `task:${domain}:${t.id ?? `t-${createHash("sha1").update(t.text).digest("hex").slice(0, 8)}`}`, kind, title: t.text.replace(/\s+~\S+/g, "").replace(/\s*\([^)]*\)\s*$/, "").slice(0, 140), domain, due: t.due, ...(person ? { person } : {}),
-        thread: r.v.thread, unlinked: r.v.unlinked, score: r.s, ref: { domain, ...(t.id ? { id: t.id } : { text: t.text }) },
+        thread: own ?? r.v.thread, unlinked: own ? false : r.v.unlinked, score: r.s, ref: { domain, ...(t.id ? { id: t.id } : { text: t.text }) },
         why: `${late > 0 ? `${late} day${late === 1 ? "" : "s"} overdue` : late === 0 ? "due today" : `due in ${-late} day${late === -1 ? "" : "s"}`}${kind === "commitment" ? ", a promise to someone" : kind === "waiting" ? ", someone owes you this" : ""}${slip?.slipping && late <= 0 && !slip.activity ? ", nothing done on it yet" : ""}`,
       });
     }
@@ -184,7 +201,8 @@ export function candidates(vault: string, date: string, slips: Map<string, OpenC
       if (!r) continue;
       const g = goalTitle(x.goal);
       const vs = valueTitles(x.serves);
-      out.push({ key: x.key, kind: "mission", title: x.title, domain: dom, ...(x.due ? { due: x.due } : {}), thread: [...vs.slice(0, 1), ...(g ? [g] : []), x.name], unlinked: !g && !vs.length, score: r.s, ref: { domain: dom, mission: x.slug }, why: x.why });
+      const up = walk(dom);
+      out.push({ key: x.key, kind: "mission", title: x.title, domain: dom, ...(x.due ? { due: x.due } : {}), thread: up.length ? [x.name, ...up] : [...vs.slice(0, 1), ...(g ? [g] : []), x.name], unlinked: !up.length && !g && !vs.length, score: r.s, ref: { domain: dom, mission: x.slug }, why: x.why });
     }
   } catch { /* no missions */ }
   for (const j of listJobs(vault, 30)) {

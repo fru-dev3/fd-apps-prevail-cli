@@ -192,6 +192,7 @@ async function resolveMission(vault: string, slug: string, i: ScopeInput): Promi
   // Who is speaking and what this is. One voice: the user's chief of staff,
   // speaking from inside the mission; the scope decides context and authority.
   const role = (r: string) => domainsWith(v, r as "owner").join(", ") || "none";
+  const chain = (await import("./compass-chain.ts")).missionChainText(vault, v.slug);
   blocks.push({ source: "mission", text: clip([
     `# MISSION: ${v.name}`,
     `This conversation is the mission ${v.name} (mission/${v.slug}), ${v.status}. You are the user's chief of staff, speaking from inside this mission: bring in its domains, apps and people on your own; the user never has to staff it.`,
@@ -201,7 +202,7 @@ async function resolveMission(vault: string, slug: string, i: ScopeInput): Promi
     `Owner domain: ${role("owner")}. Reads: ${role("consulted")}. Tells: ${role("informed")}.`,
     v.apps.length ? `Apps: ${v.apps.join(", ")}.` : "",
     v.specialists.length ? `Specialists: ${v.specialists.join(", ")}.` : "",
-    v.goal || v.path ? `Carries out: ${[v.goal, v.path].filter(Boolean).join(" > ")}.` : "Unlinked to the Compass.",
+    chain ? `Carries out (the Compass chain, nearest first): ${chain}.` : v.goal || v.path ? `Carries out: ${[v.goal, v.path].filter(Boolean).join(" > ")}.` : "Unlinked to the Compass.",
     `Anything outside these domains needs the user's yes before you read it. Acting, sending, spending and anything touching other people always ask.`,
     owner ? `\n## Owner domain ideal (${owner})\n${clip(readText(join(ownerDir, "ideal-state.md")).trim(), 1000) || "none written"}` : "",
   ].filter(Boolean).join("\n"), 2600) });
