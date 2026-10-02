@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 // Top-level commands whose module parses its own arguments (module-commands.ts).
-const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources", "commitments", "radar", "whereis", "time"];
+const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources", "commitments", "radar", "whereis", "time", "tell", "forgetting"];
 
 interface Args {
   vaultPath: string | null;
@@ -5791,6 +5791,8 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
     if (!args.includes("--no-sources")) {
       try { commitR = await (await import("./commitments.ts")).scanCommitments(vault); } catch (e) { commitR = { error: String(e).slice(0, 200) }; }
     }
+    // Mail you sent yourself ("tell:", "todo:" ...) is filed once (Today T6).
+    try { if (!args.includes("--no-sources")) await (await import("./tell.ts")).tellFromMail(vault); } catch { /* best effort */ }
     // Missions (MS4): match calendar, mail and charges to active missions; milestones that check themselves; nudges within the budget.
     let missionsR: unknown = null;
     try {

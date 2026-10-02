@@ -325,6 +325,16 @@ export async function runMcpServer(
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
     },
     {
+      name: "tell",
+      description: "Tell the user's chief of staff anything to keep: a promise, something someone owes them, a decision to make, a task (\"remind me to ...\"), a goal or value in their words, a number (\"ran 5 km\"), practice or a spend for a mission, or a note. Filed by code into the right domain or mission with a receipt; returns where it went and an id for Undo. Never sends anything.",
+      inputSchema: { type: "object", properties: { text: { type: "string" }, domain: { type: "string" }, mission: { type: "string" } }, required: ["text"] },
+    },
+    {
+      name: "what_am_i_forgetting",
+      description: "Every open loop across the user's vault: promises due, people they are waiting on, decisions to make, what the radar sees slipping (goals, routines, initiatives, missions, relationships, deadlines), overdue tasks, and actions waiting for their yes.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
+    },
+    {
       name: "read_time",
       description: "Time against values (Today T5): this week's calendar hours by Compass value against each value's rank, meetings, focus and after-hours, next week against the user's capacity (a warning when over), protected blocks waiting for a yes and drafted declines (never sent). Says plainly when no calendar is connected.",
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
@@ -814,6 +824,18 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const t = await import("./today.ts");
       const c = t.composeToday(vaultPath);
       return wrapText(args.format === "json" ? JSON.stringify(c, null, 2) : t.todayText(c));
+    }
+    case "tell": {
+      const t = await import("./tell.ts");
+      const text = String(args.text ?? "").trim();
+      if (!text) throw new Error("text is required");
+      const r = await t.tell(vaultPath, text, { surface: "mcp", ...(typeof args.domain === "string" && args.domain ? { domain: args.domain } : {}), ...(typeof args.mission === "string" && args.mission ? { mission: args.mission } : {}) });
+      return wrapText(`${t.toldReply(r)} (id ${r.id}; undo with: prevail tell undo ${r.id})`);
+    }
+    case "what_am_i_forgetting": {
+      const t = await import("./tell.ts");
+      const f = await t.forgetting(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(f, null, 2) : t.forgettingText(f));
     }
     case "read_time": {
       const t = await import("./time.ts");

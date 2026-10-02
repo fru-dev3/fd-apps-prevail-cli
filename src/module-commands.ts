@@ -17,6 +17,8 @@ export async function runModuleCommand(name: string, args: string[], vault: stri
   if (name === "sources") return (await import("./sources.ts")).sourcesCommand(args, vault);
   if (name === "decide") return (await import("./decision-records.ts")).decideCommand(args, vault);
   if (name === "commitments") return (await import("./commitments.ts")).commitmentsCommand(args, vault);
+  if (name === "tell") return (await import("./tell.ts")).tellCommand(args, vault);
+  if (name === "forgetting") return (await import("./tell.ts")).tellCommand(args, vault, "forgetting");
   if (name === "time") return (await import("./time.ts")).timeCommand(args, vault);
   if (name === "radar") return (await import("./radar.ts")).radarCommand(args, vault);
   console.error(`unknown command: ${name}`);

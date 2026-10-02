@@ -72,7 +72,7 @@ import {
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
   type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route"
-    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start" | "filed" | "decision_offer";
+    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start" | "filed" | "decision_offer" | "told";
   thread: string;
   ts: number;
   domain?: string;
@@ -150,6 +150,8 @@ export interface ChatEvent {
   missionDraft?: { name: string; outcome: string; owner?: string; consulted: string[]; specialists: string[]; target?: string };
   /** A commitment or waiting-for filed from what the user said (Today T2), with its id for Undo. */
   filed?: { id: string; kind: "commitment" | "waiting"; domain: string; text: string; due?: string; person?: string };
+  /** Today T6: anything told to the chief of staff and filed by code (a task, a note, a decision...), with its id for Undo. */
+  told?: { id: string; kind: string; text: string; where: string; due?: string };
   /** A deliberation noticed in chat (Today T4): offer to open a decision record. */
   decisionOffer?: { question: string; domain: string; due: string };
   job?: { id: string; status: string; startsAlone: boolean; askReason?: string; owner: string; consulted: string[]; informed: string[]; team: { step: number; specialists: string[]; gate?: boolean }[]; effort: string; budget: { usd: number; minutes: number }; why: string; mention?: string };
@@ -430,6 +432,39 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         emit({ type: "delta", thread, ts, text: reply });
         emit({ type: "assistant", thread, ts, role: "assistant", text: reply, engine: "chief-of-staff" });
         writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "assistant", cli: cli.kind, model: "", content: `${reply}\n\n[filed:${r.id}]`, ts });
+        emit({ type: "done", thread, ts: Date.now() });
+        return 0;
+      }
+    }
+  }
+
+  // Today T6: "What am I forgetting?" lists every open loop, and an explicit
+  // "remind me to / note that / todo" is filed at once with a receipt and
+  // Undo. Code only, no model call.
+  if (!scopeApp && scope.kind !== "entity" && scope.kind !== "app" && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
+    const said = userText(message).trim();
+    const tl = await import("./tell.ts");
+    const isForget = tl.FORGETTING.test(said) && said.length < 140;
+    if (isForget || tl.CAPTURE.test(said)) {
+      let reply = "";
+      let told: Awaited<ReturnType<typeof tl.tell>> | null = null;
+      try {
+        if (isForget) reply = tl.forgettingText(await tl.forgetting(vaultPath));
+        else {
+          const ms = scope.kind === "mission" ? scope.mission!.slug : undefined;
+          told = await tl.tell(vaultPath, said, { surface: "chat", ...(ms ? { mission: ms } : opts.domain && opts.domain !== "general" ? { domain: opts.domain } : {}), thread: ((opts.threadId ?? "").trim() || sessionId).slice(0, 40) });
+          reply = tl.toldReply(told);
+        }
+      } catch (e) { reply = ""; void e; }
+      if (reply) {
+        const ts = Date.now();
+        emit({ type: "start", thread, ts, domain: opts.domain, engine: "chief-of-staff" });
+        emit({ type: "user", thread, ts, role: "user", text: message });
+        writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "user", cli: cli.kind, model: "", content: message, ts });
+        if (told) emit({ type: "told", thread, ts, told: { id: told.id, kind: told.kind, text: told.text, where: told.where, ...(told.due ? { due: told.due } : {}) } });
+        emit({ type: "delta", thread, ts, text: reply });
+        emit({ type: "assistant", thread, ts, role: "assistant", text: reply, engine: "chief-of-staff" });
+        writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "assistant", cli: cli.kind, model: "", content: told ? `${reply}\n\n[told:${told.id}]` : reply, ts });
         emit({ type: "done", thread, ts: Date.now() });
         return 0;
       }
