@@ -11,6 +11,8 @@ import { existsSync, readdirSync, readFileSync, renameSync, mkdirSync, rmdirSync
 import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
+// Top-level commands whose module parses its own arguments (module-commands.ts).
+const MODULE_COMMANDS = ["chief", "fold"];
 
 interface Args {
   vaultPath: string | null;
@@ -119,6 +121,8 @@ interface Args {
   captureArgs: string[];
   ai: boolean;
   aiArgs: string[];
+  moduleCmd: string | null;
+  moduleArgs: string[];
   gateway: boolean;
   gatewayArgs: string[];
   domains: boolean;
@@ -258,6 +262,10 @@ function parseArgs(argv: string[]): Args {
   let captureArgs: string[] = [];
   let ai = false;
   let aiArgs: string[] = [];
+  // Commands owned by their own module (chief, fold, compass, metrics):
+  // `prevail <name> ...` hands the rest of argv to it.
+  let moduleCmd: string | null = null;
+  let moduleArgs: string[] = [];
   let gateway = false;
   let gatewayArgs: string[] = [];
   let domains = false;
@@ -507,6 +515,10 @@ function parseArgs(argv: string[]): Args {
       ai = true;
       aiArgs = argv.slice(i + 1);
       break;
+    } else if (MODULE_COMMANDS.includes(a)) {
+      moduleCmd = a;
+      moduleArgs = argv.slice(i + 1);
+      break;
     } else if (a === "gateway") {
       gateway = true;
       gatewayArgs = argv.slice(i + 1);
@@ -709,6 +721,8 @@ function parseArgs(argv: string[]): Args {
     captureArgs,
     ai,
     aiArgs,
+    moduleCmd,
+    moduleArgs,
     gateway,
     gatewayArgs,
     domains,
@@ -781,6 +795,11 @@ USAGE
                               (bench list --json for the machine question list)
   prevail vault [...]         prune old logs, snapshot/restore the vault
                               archive/restore/list-archived domains (--json)
+  prevail chief show|set-name <name> --json
+                              the user's chief of staff (build/chief-of-staff.md)
+  prevail fold plan|apply [--routes F] --json
+                              fold the coordinator domains (chief, vision, intel)
+                              into General, the chief of staff's home
   prevail manifest get|set <domain> --json
                               read/merge a domain's manifest (engine JSON API)
   prevail chat --domain <d> --json
@@ -7032,6 +7051,13 @@ async function main() {
   if (args.capture) {
     const code = await captureCommand(args.captureArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.moduleCmd) {
+    const rest = parseJsonSubArgs(args.moduleArgs, args.vaultPath);
+    const vault = rest.vaultPath ?? resolveVault(args.vaultPath);
+    if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+    const { runModuleCommand } = await import("./module-commands.ts");
+    process.exit(await runModuleCommand(args.moduleCmd, args.moduleArgs, vault));
   }
   if (args.ai) {
     const rest = parseJsonSubArgs(args.aiArgs.slice(1), args.vaultPath);

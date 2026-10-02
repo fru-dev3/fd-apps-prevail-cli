@@ -11,6 +11,7 @@ import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
 import { APP_SCOPE_PREFIX, APP_SCOPE_SUBDIR, buildRoot, vaultRootForCwd } from "./path-safety.ts";
 import { GOALS_HEADER, domainOfCwd, goalsBlock, readProfile } from "./goals.ts";
+import { CHIEF_HEADER, chiefOfStaffBlock } from "./chief-of-staff.ts";
 import { buildHarnessArgs } from "./harness-profiles.ts";
 import {
   type BudgetCaps,
@@ -202,8 +203,12 @@ export function buildUserContext(vaultRoot: string, cwd: string, prompt: string)
       const profile = readProfile(vaultRoot);
       if (profile) parts.push(`${PROFILE_HEADER} - the user's profile. Use this as ground truth about them.\n${profile.slice(0, 2500)}`);
     }
+    const domain = domainOfCwd(cwd, vaultRoot);
+    if (domain === "general" && !prompt.includes(CHIEF_HEADER)) {
+      const c = chiefOfStaffBlock(vaultRoot);
+      if (c) parts.push(c);
+    }
     if (!prompt.includes(GOALS_HEADER)) {
-      const domain = domainOfCwd(cwd, vaultRoot);
       const g = domain ? goalsBlock(vaultRoot, domain) : "";
       if (g) parts.push(g);
     }

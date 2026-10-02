@@ -262,7 +262,7 @@ describe("structure suggestions: accept and dismiss", () => {
       expect(r).toMatchObject({ ok: true, kind: "archive_domain", domain: "hobbies" });
       backup = r.kind === "archive_domain" ? r.backup : "";
       expect(existsSync(join(home, "data", "domains", "hobbies"))).toBe(false);
-      expect(readFileSync(join(home, "_archive", "hobbies", "memory", "memory.md"), "utf8")).toBe("keep me\n");
+      expect(readFileSync(join(home, "data", "domains", "_archive", "hobbies", "memory", "memory.md"), "utf8")).toBe("keep me\n");
       expect(existsSync(backup)).toBe(true);
     } finally {
       if (backup) rmSync(backup, { force: true });

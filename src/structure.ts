@@ -81,7 +81,8 @@ function updateDecisions(vault: string, fn: (d: SuggestionsFile) => void): void 
 
 // ── The rules ───────────────────────────────────────────────────────────
 
-const archivedDomain = (vault: string, slug: string) => existsSync(join(vault, "_archive", slug));
+// Archived domains: data/domains/_archive/<d> (v4), or <vault>/_archive/<d> (older).
+const archivedDomain = (vault: string, slug: string) => existsSync(join(dataRoot(vault), "domains", "_archive", slug)) || existsSync(join(vault, "_archive", slug));
 
 function fromUnhomed(vault: string, domains: Set<string>, projects: Set<string>, now: number): RankedSuggestion[] {
   const groups = new Map<string, { thread: string; ts: number; home: string; fact: string; effort?: boolean }[]>();

@@ -1,0 +1,9 @@
+// Top-level commands that live in their own module. index.tsx hands them the
+// arguments after the command name; each module is imported only when used.
+
+export async function runModuleCommand(name: string, args: string[], vault: string): Promise<number> {
+  if (name === "chief") return (await import("./chief-of-staff.ts")).chiefCommand(args, vault);
+  if (name === "fold") return (await import("./fold.ts")).foldCommand(args, vault);
+  console.error(`unknown command: ${name}`);
+  return 1;
+}

@@ -16,8 +16,10 @@
 //   - synthesize : an agent turn that reads the run's collected data and WRITES a
 //                  summary doc into a domain.
 //
-// Outputs of every step are collected under <vault>/_runs/<runId>/ so later steps
-// (and the user) can see exactly what was produced.
+// Outputs of every step are collected under build/_meta/jobs/<runId>/ so later
+// steps (and the user) can see exactly what was produced. (Runs once went to
+// <vault>/_runs/, which broke the rule that the vault root holds only build/
+// and data/.)
 
 import { join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
@@ -30,11 +32,13 @@ import { gateAction, parseAmountUsd, type GateDecision } from "./broker.ts";
 import { isPaused, recordSpend } from "./autonomy.ts";
 import { auditAction, type ActionOutcome } from "./action-audit.ts";
 import { logActivity } from "./activity.ts";
-import { resolveDomainDir } from "./path-safety.ts";
+import { buildRoot, resolveDomainDir, runtimePath } from "./path-safety.ts";
 
 export type PlaybookStep =
   | { kind: "skill"; app: string; skill: string; inputs?: Record<string, unknown>; label?: string }
-  | { kind: "agent"; goal: string; domain?: string; web?: boolean; label?: string }
+  // output: the file (in its domain, {date} allowed) the step must write; it
+  // then counts as done only when that file exists, and later steps read it.
+  | { kind: "agent"; goal: string; domain?: string; web?: boolean; label?: string; output?: string }
   | { kind: "synthesize"; domain: string; output: string; instruction: string; label?: string };
 
 export interface Playbook {
@@ -91,7 +95,7 @@ export async function runPlaybook(
   playbook: Playbook,
   ctx: OrchestratorCtx,
 ): Promise<PlaybookRunResult> {
-  const runDir = join(ctx.vault, "_runs", runId);
+  const runDir = jobsDir(ctx.vault, runId);
   mkdirSync(runDir, { recursive: true });
   const steps: StepResult[] = [];
   const collected: string[] = []; // all output paths so far, for synthesize steps
@@ -126,6 +130,7 @@ export async function runPlaybook(
         collected.push(...res.outputs);
       } else if (step.kind === "agent") {
         await runAgentStep(step, ctx, cli, runDir, collected, res);
+        collected.push(...res.outputs);
       } else {
         await runSynthesizeStep(step, ctx, cli, collected, res);
         collected.push(...res.outputs);
@@ -190,10 +195,20 @@ async function runAgentStep(step: Extract<PlaybookStep, { kind: "agent" }>, ctx:
   if (!cli) { res.note = "no AI CLI available"; return; }
   const cwd = step.domain ? safeDomainDir(ctx.vault, step.domain) : runDir;
   const context = collected.length ? `\n\nData gathered so far in this run (read these as needed):\n${collected.map((p) => `- ${p}`).join("\n")}` : "";
-  const prompt = `You are executing one step of an autonomous playbook on the user's behalf.\n\nGoal: ${step.goal}${context}\n\nWork in: ${cwd}. Use your tools. Stay strictly within this goal — do not take consequential actions (money, sends, deletes) and do not go beyond what was asked.`;
+  const output = step.output ? expandOutput(step.output) : "";
+  const outAbs = output ? resolve(cwd, output.replace(/^\/+/, "")) : "";
+  if (outAbs && !outAbs.startsWith(cwd)) { res.note = "refusing to write outside the domain"; return; }
+  const deliver = outAbs ? `\n\nWrite your result to: ${outAbs} (create folders as needed). The step counts as done only when that file exists.` : "";
+  const prompt = `You are executing one step of an autonomous playbook on the user's behalf.\n\nGoal: ${expandOutput(step.goal)}${context}${deliver}\n\nWork in: ${cwd}. Use your tools. Stay strictly within this goal: do not take consequential actions (money, sends, deletes) and do not go beyond what was asked.`;
   const out = await runChatTurn({ prompt, cwd, cli, model: ctx.model || "", isFirst: true, bare: false, act: true, webAccess: step.web ? "allow" : "deny", signal: ctx.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS), maxOutputChars: 8000 });
-  res.ok = true;
-  res.note = (out || "").trim().slice(0, 400) || "done";
+  if (outAbs) {
+    res.ok = existsSync(outAbs);
+    if (res.ok) res.outputs.push(outAbs);
+    res.note = res.ok ? `wrote ${output}` : `no file at ${output}: ${(out || "").trim().slice(0, 300)}`;
+  } else {
+    res.ok = true;
+    res.note = (out || "").trim().slice(0, 400) || "done";
+  }
   // A financial action that actually ran counts against the monthly cap.
   if (gate.cls === "financial") { const amt = parseAmountUsd(step.goal); if (amt) recordSpend(ctx.vault, amt); }
 }
@@ -206,12 +221,13 @@ async function runSynthesizeStep(step: Extract<PlaybookStep, { kind: "synthesize
   if (gate.decision !== "auto") { res.note = gate.reason ?? gate.decision; return; }
   if (!cli) { res.note = "no AI CLI available"; return; }
   const domainDir = safeDomainDir(ctx.vault, step.domain);
-  const outAbs = resolve(domainDir, step.output.replace(/^\/+/, ""));
+  const output = expandOutput(step.output);
+  const outAbs = resolve(domainDir, output.replace(/^\/+/, ""));
   if (!outAbs.startsWith(domainDir)) { res.note = "refusing to write outside the domain"; return; }
   const sources = collected.length ? collected.map((p) => `- ${p}`).join("\n") : "(no prior data — note what's missing)";
   const prompt = `You are the synthesis step of an autonomous playbook. Read the data files below and write a single clear markdown summary to: ${outAbs}\n\nData files:\n${sources}\n\nInstruction: ${step.instruction}\n\nWrite the file with your file tool. Be concise and concrete; cite the numbers. Do not take any other action.`;
   await runChatTurn({ prompt, cwd: domainDir, cli, model: ctx.model || "", isFirst: true, bare: false, act: true, webAccess: "deny", signal: ctx.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS), maxOutputChars: 4000 });
-  if (existsSync(outAbs)) { res.ok = true; res.outputs.push(outAbs); res.note = `wrote ${step.output}`; }
+  if (existsSync(outAbs)) { res.ok = true; res.outputs.push(outAbs); res.note = `wrote ${output}`; }
   else { res.note = "synthesis produced no file"; }
 }
 
@@ -221,7 +237,22 @@ function safeDomainDir(vault: string, domain: string): string {
 }
 
 // Bundled playbooks ship beside the binary (like skill-packs); a user can
-// override or add their own under <vault>/_playbooks/<id>.json.
+// override or add their own under build/playbooks/<id>.json (the older
+// <vault>/_playbooks/ is still read).
+export function jobsDir(vault: string, runId: string): string {
+  return join(runtimePath(vault, "_meta"), "jobs", runId);
+}
+
+// A synthesize step's output may carry {date} (today, YYYY-MM-DD), so a
+// scheduled playbook writes one file per run instead of overwriting one.
+export function expandOutput(output: string, now = new Date()): string {
+  const d = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return output.replace(/\{date\}/g, d);
+}
+
+export function userPlaybookDirs(vault: string): string[] {
+  return [join(buildRoot(vault), "playbooks"), join(vault, "_playbooks")];
+}
 function playbooksDirs(): string[] {
   const dirs: string[] = [];
   if (process.env.PREVAIL_PLAYBOOKS_DIR) dirs.push(process.env.PREVAIL_PLAYBOOKS_DIR);
@@ -243,9 +274,7 @@ export function loadPlaybook(vault: string, id: string): Playbook | null {
   // The id arrives from MCP run_playbook. `../../x` would load (and run) any
   // JSON file on disk shaped like a playbook; ids are plain slugs.
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(id)) return null;
-  const userP = join(vault, "_playbooks", `${id}.json`);
-  if (existsSync(userP)) { const p = parsePlaybook(userP); if (p) return p; }
-  for (const d of playbooksDirs()) {
+  for (const d of [...userPlaybookDirs(vault), ...playbooksDirs()]) {
     const p = join(d, `${id}.json`);
     if (existsSync(p)) { const pb = parsePlaybook(p); if (pb) return pb; }
   }
@@ -255,7 +284,7 @@ export function loadPlaybook(vault: string, id: string): Playbook | null {
 export function listPlaybooks(vault: string): { id: string; name: string; goal: string }[] {
   const seen = new Set<string>();
   const out: { id: string; name: string; goal: string }[] = [];
-  const dirs = [join(vault, "_playbooks"), ...playbooksDirs()];
+  const dirs = [...userPlaybookDirs(vault), ...playbooksDirs()];
   for (const d of dirs) {
     if (!existsSync(d)) continue;
     for (const f of readdirSync(d)) {
