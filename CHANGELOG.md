@@ -7,6 +7,12 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.10.5] - 2026-10-02 · Every conversation has a home domain
+
+### Added
+- **Generous filing**: `prevail route` now always names a home domain when any of your domains is plausibly related, plus up to three linked domains, and only reports a conversation as unfiled (with three candidates) when nothing fits. It re-checks on turns 1, 3, 5, 10, 15 and so on, adding domains but never overriding your corrections; a domain you removed never returns. Incognito and Bunker Mode turns are skipped.
+- **Filing plan**: `prevail file plan` proposes a home and linked domains for conversations that were never filed. It only reads, skips incognito, local-only and Bunker Mode conversations, and caches results so a re-run is cheap.
+
 ## [1.10.4] - 2026-09-28 · Projects, structure suggestions, app fixes and several Google accounts
 
 ### Added
