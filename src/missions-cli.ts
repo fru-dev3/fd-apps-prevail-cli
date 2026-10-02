@@ -27,6 +27,8 @@ const USAGE = [
   "prevail missions log <slug> --text T --json",
   "prevail missions context <slug> [--message M] --json",
   "prevail missions migrate [--dry-run] --json",
+  "prevail missions sync | radar | metrics <slug> | track <slug> <key> | events-pending <slug> | event-approve <slug> <id>",
+  "prevail missions link-path <slug> <path-id> | from-path <path-id> --json",
 ].join("\n");
 
 /** Every value of a repeatable flag. */
@@ -47,6 +49,8 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
   const fail = (msg: string) => { if (args.json) out({ ok: false, error: msg }); else console.error(`prevail missions: ${msg}`); return 1; };
   const show = (v: MissionView | null) => { if (!v) return fail(`no mission "${slug}"`); if (args.json) out(v); else console.log(summary(v)); return 0; };
   const num = (k: string) => { const v = args.get(k); if (v === undefined) return undefined; const n = Number(v); if (!Number.isFinite(n)) throw new Error(`--${k} must be a number`); return n; };
+  // Missions MS4: progress without data entry (mission-progress.ts).
+  if (["sync", "metrics", "track", "event-create", "event-approve", "events-pending", "link-path", "from-path", "radar"].includes(sub)) return (await import("./mission-progress.ts")).progressCommand(sub, argv, vault);
   try {
     if (sub === "list") {
       const status = (args.get("status") ?? "all") as MissionStatus | "all";
@@ -112,9 +116,10 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
     if (sub === "event") {
       const op = args.pos[2];
       if (op !== "link" && op !== "create") return fail("usage: prevail missions event <slug> link|create --title T --start ISO");
-      const l = linkEvent(vault, slug, { title: args.get("title") ?? "", start: args.get("start") ?? "", event: args.get("event"), app: args.get("app"), kind: args.get("kind"), milestone: args.get("milestone"), create: op === "create" });
-      // A created event is a hold the user approves; it is referenced here and drafted, never placed on anyone's calendar by this command.
-      if (args.json) out({ ok: true, links: l, ...(op === "create" ? { note: "queued as a hold; nothing was added to a calendar" } : {}) }); else console.log(`${l.calendar.length} event(s) linked`);
+      // Create is a hold that asks (or, with other people, a draft invite): mission-progress createEvent.
+      if (op === "create") { const e = (await import("./mission-progress.ts")).createEvent(vault, slug, { title: args.get("title") ?? "", start: args.get("start") ?? "", end: args.get("end"), attendees: args.get("attendees")?.split(",").map((x) => x.trim()).filter(Boolean), milestone: args.get("milestone") }); if (args.json) out({ ok: true, pending: e, note: e.status === "draft" ? "a draft invite; Prevail never sends it" : "a hold that waits for your yes; nothing was added to a calendar" }); else console.log(e.status === "draft" ? "Drafted." : "A hold waits for your yes."); return 0; }
+      const l = linkEvent(vault, slug, { title: args.get("title") ?? "", start: args.get("start") ?? "", event: args.get("event"), app: args.get("app"), kind: args.get("kind"), milestone: args.get("milestone") });
+      if (args.json) out({ ok: true, links: l }); else console.log(`${l.calendar.length} event(s) linked`);
       return 0;
     }
     if (sub === "pause" || sub === "resume" || sub === "archive" || sub === "reopen") return show(transition(vault, slug, sub, { target: args.get("target") }));

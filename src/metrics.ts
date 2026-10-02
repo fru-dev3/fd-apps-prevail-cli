@@ -430,6 +430,8 @@ export interface MetricDef {
   distinct?: boolean;
   /** Learned from the user (a metrics.md line with ~kind:), not built in. */
   learned?: boolean;
+  /** A mission's metric (~mission:<slug>): only events carrying attrs.mission === slug count. */
+  mission?: string;
 }
 
 const usdApi = (e: MetricEvent) => Number(e.attrs.usd_api ?? 0);
@@ -505,6 +507,7 @@ export function learnedDefs(vault: string): MetricDef[] {
       tier: (["measured", "derived", "asked", "inferred"].includes(t.tier ?? "") ? t.tier : "derived") as MetricDef["tier"],
       srcs: [t.src ?? "stated"], kinds: t.kind.split(","), from: r.from || `learned: ${t.kind}`,
       ...(attr ? { value: (e: MetricEvent) => Number(e.attrs[attr] ?? 0) } : {}),
+      ...(t.mission ? { mission: t.mission } : {}),
       learned: true,
     });
   }
@@ -569,7 +572,7 @@ export interface Computed {
   trips: { date: string; region: string; activity: string; file: string }[];
 }
 
-const matches = (m: MetricDef, e: MetricEvent) => m.kinds.includes(e.kind) && (m.srcs.includes("*") ? AI_SRCS.has(e.src) : m.srcs.includes(e.src));
+const matches = (m: MetricDef, e: MetricEvent) => m.kinds.includes(e.kind) && (m.srcs.includes("*") ? AI_SRCS.has(e.src) : m.srcs.includes(e.src)) && (!m.mission || e.attrs.mission === m.mission);
 
 export function dailyPoints(m: MetricDef, events: MetricEvent[]): Point[] {
   const by = new Map<string, Point>();

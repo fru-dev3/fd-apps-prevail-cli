@@ -11,6 +11,7 @@
 // user saw); the Compass is never written here; closing never deletes; every
 // write can be undone for 7 days (undoCloseout), restoring the prior bytes.
 
+import { routineDrafts } from "./mission-progress.ts";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
@@ -82,6 +83,8 @@ export function planCloseout(vault: string, ref: string, o: { result?: MissionRe
   if (existsSync(filesDir)) {
     for (const f of readdirSync(filesDir)) if (!f.startsWith(".")) add({ kind: "file", domain: owner, text: `files/${f}`, ref: f });
   }
+  // Routines the mission built (MS4): drafted for the owner's Habits and routines, unticked until the user keeps them.
+  for (const r of routineDrafts(vault, v.slug, now)) add({ kind: "routine", domain: owner, text: r, apply: false });
   // Open mission tasks: move to the owner's board by default.
   for (const l of readText(join(missionDir(vault, v.slug), "memory", "tasks.md")).split("\n")) {
     const t = /^\s*-\s+\[ \]\s+(.+)$/.exec(l);

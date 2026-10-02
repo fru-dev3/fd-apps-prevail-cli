@@ -319,7 +319,9 @@ export async function computeRadar(vault: string, opts: { now?: number } = {}): 
     const c = await m.computeMetrics(vault, { now });
     weekly = (id) => { const def = c.defs.find((d) => d.id === id); const w = m.weekly(c.points[id] ?? [], def?.days, def?.avg); return [...w.keys()].sort().slice(0, -1).map((k) => w.get(k) ?? 0); };
   } catch { /* no metrics */ }
-  const r = computeRadarSync(vault, { now, headers, weekly, extra: [] });
+  let extra: RadarItem[] = [];
+  try { extra = (await import("./mission-progress.ts")).missionRadar(vault, now); } catch { /* no missions */ }
+  const r = computeRadarSync(vault, { now, headers, weekly, extra });
   try { mkdirSync(runtimePath(vault, "_meta"), { recursive: true }); writeFileSync(radarPath(vault), `${JSON.stringify(r, null, 2)}\n`); } catch { /* read-only */ }
   return r;
 }

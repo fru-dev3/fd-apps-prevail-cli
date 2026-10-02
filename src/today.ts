@@ -34,11 +34,12 @@ import { listJobs } from "./jobs.ts";
 import { openCommitments, readFiled, type HeaderLite, type OpenCommitment } from "./commitments.ts";
 import { readMailHeaders } from "./source-sync.ts";
 import { computeRadarSync, readRadar } from "./radar.ts";
+import { missionToday } from "./mission-progress.ts";
 import { checkinFor, reviewWeek } from "./review.ts";
 import { dayOf, weekOf } from "./metrics.ts";
 import { parseModArgs } from "./cli-args.ts";
 
-export type ItemKind = "task" | "commitment" | "waiting" | "decision" | "job";
+export type ItemKind = "task" | "commitment" | "waiting" | "decision" | "job" | "mission";
 export interface TodayItem {
   key: string;
   kind: ItemKind;
@@ -50,7 +51,7 @@ export interface TodayItem {
   unlinked: boolean;
   why: string;
   score: number;
-  ref: { domain: string; id?: string; text?: string; slug?: string; job?: string };
+  ref: { domain: string; id?: string; text?: string; slug?: string; job?: string; mission?: string };
 }
 export interface TodayCard {
   date: string;
@@ -169,6 +170,22 @@ export function candidates(vault: string, date: string, slips: Map<string, OpenC
     if (!r) continue;
     out.push({ key: `decision:${d.domain}:${d.slug}`, kind: "decision", title: `Decide: ${d.question}`, domain: d.domain, due: d.due, thread: r.v.thread, unlinked: r.v.unlinked, score: r.s, ref: { domain: d.domain, slug: d.slug }, why: d.recommendation ? "a recommendation is ready" : "an open decision" });
   }
+  // Missions (MS4): each active mission's next milestone, due tasks and today's
+  // events. At most one mission item a day unless it is due or late (pickThree
+  // already keeps one per "domain"; each mission is its own).
+  try {
+    const doc = readCompass(vault);
+    const goalTitle = (id?: string) => (id ? items(doc, "goal").find((g) => g.id === id)?.title : undefined);
+    const valueTitles = (ids: string[]) => ids.map((id) => items(doc, "value").find((v) => v.id === id)?.title).filter((x): x is string => !!x);
+    for (const x of missionToday(vault, date)) {
+      const dom = `mission/${x.slug}`;
+      const r = score(dom, "mission", x.due ?? date, 1.1);
+      if (!r) continue;
+      const g = goalTitle(x.goal);
+      const vs = valueTitles(x.serves);
+      out.push({ key: x.key, kind: "mission", title: x.title, domain: dom, ...(x.due ? { due: x.due } : {}), thread: [...vs.slice(0, 1), ...(g ? [g] : []), x.name], unlinked: !g && !vs.length, score: r.s, ref: { domain: dom, mission: x.slug }, why: x.why });
+    }
+  } catch { /* no missions */ }
   for (const j of listJobs(vault, 30)) {
     if (j.status !== "proposed" && j.status !== "needs-approval") continue;
     if (j.created < Date.now() - 14 * 86_400_000) continue;

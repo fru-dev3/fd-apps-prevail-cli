@@ -65,6 +65,8 @@ const NUMBERS: [RegExp, (m: RegExpExecArray) => Stated | null][] = [
   [/\b(slept)\s+(?:about\s+)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|h)\b/i, (m) => ({ what: "slept", value: Number(m[2]), unit: "hours" })],
   [/\b(read|wrote|published)\s+(\d+)\s+(pages?|words?|books?|posts?|articles?|chapters?|videos?)\b/i, (m) => ({ what: `${m[1]!.toLowerCase()}-${m[3]!.toLowerCase().replace(/s$/, "")}`, value: Number(m[2]), unit: "count" })],
   [/\b(applied (?:to|for))\s+(\d+)\s+(jobs?|roles?|positions?)\b/i, (m) => ({ what: "applied", value: Number(m[2]), unit: "count" })],
+  // A session of practice (a mission's "practiced 30 min"): one session, its minutes.
+  [/\b(practiced|practised|studied|trained|rehearsed|played)\s+(?:for\s+)?(?:about\s+)?(\d+(?:\.\d+)?)\s*(min(?:ute)?s?|h(?:ours?|rs?)?)\b/i, (m) => ({ what: "practiced", value: /^h/i.test(m[3]!) ? Number(m[2]) * 60 : Number(m[2]), unit: "minutes" })],
 ];
 
 export function statedNumbers(text: string): Stated[] {
@@ -80,7 +82,7 @@ export function statedNumbers(text: string): Stated[] {
 const proposalsPath = (vault: string) => join(compassMetaDir(vault), "proposals.jsonl");
 
 /** Note what one user message said. Returns what was written. */
-export function noteSaid(vault: string, i: { text: string; thread?: string; domain?: string; now?: number }): { candidates: Candidate[]; stated: Stated[] } {
+export function noteSaid(vault: string, i: { text: string; thread?: string; domain?: string; now?: number; mission?: string }): { candidates: Candidate[]; stated: Stated[] } {
   const now = i.now ?? Date.now();
   const candidates = compassCandidates(i.text);
   const stated = statedNumbers(i.text);
@@ -93,7 +95,9 @@ export function noteSaid(vault: string, i: { text: string; thread?: string; doma
     const dir = join(eventsRoot(vault), "stated");
     mkdirSync(dir, { recursive: true });
     const host = hostSlug();
-    appendFileSync(join(dir, `${day.slice(0, 7)}.${host}.jsonl`), stated.map((s) => JSON.stringify({ ts: day, src: "stated", kind: `stated.${s.what}`, n: 1, host, tier: "asked", attrs: { value: s.value, unit: s.unit } })).join("\n") + "\n");
+    // Said inside a mission's chat: the event carries the mission, so its metrics count it.
+    const mission = i.mission ?? (/^_mission-(.+)$/.exec(i.domain ?? "")?.[1]);
+    appendFileSync(join(dir, `${day.slice(0, 7)}.${host}.jsonl`), stated.map((s) => JSON.stringify({ ts: day, src: "stated", kind: `stated.${s.what}`, n: 1, host, tier: "asked", attrs: { value: s.value, unit: s.unit, ...(mission ? { mission } : {}) } })).join("\n") + "\n");
   }
   return { candidates, stated };
 }

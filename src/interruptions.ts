@@ -14,7 +14,7 @@ import { weekOf, dayOf } from "./metrics.ts";
 
 export const INTERRUPTION_BUDGET = 3;
 // What may interrupt at all (goals-plan "quiet by default"; today-plan radar).
-export const INTERRUPT_KINDS = ["non-negotiable", "conflict", "path-miss", "stalled-goal", "fresh-start", "overdue-promise", "broken-capture"] as const;
+export const INTERRUPT_KINDS = ["non-negotiable", "conflict", "path-miss", "stalled-goal", "fresh-start", "overdue-promise", "broken-capture", "mission-nudge"] as const;
 export type InterruptKind = (typeof INTERRUPT_KINDS)[number];
 
 export interface Interruption { ts: number; kind: string; text: string; key?: string; sent: boolean }

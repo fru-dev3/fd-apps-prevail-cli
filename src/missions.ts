@@ -465,7 +465,7 @@ export function createMission(vault: string, i: CreateMissionInput): MissionView
   return missionView(vault, slug, now)!;
 }
 
-export interface MissionPatch { name?: string; outcome?: string; why?: string; target?: string; cadence?: string; ceiling?: string; goal?: string; path?: string; notes?: string; localOnly?: boolean; nudgesPerWeek?: number; muted?: boolean; budgetUsd?: number; hoursWk?: number; match?: MissionMatch }
+export interface MissionPatch { name?: string; outcome?: string; why?: string; target?: string; cadence?: string; ceiling?: string; goal?: string; path?: string; notes?: string; localOnly?: boolean; nudgesPerWeek?: number; muted?: boolean; budgetUsd?: number; hoursWk?: number; match?: MissionMatch; metrics?: string[] }
 
 export function setMission(vault: string, ref: string, p: MissionPatch, now = Date.now()): MissionView {
   const m = readMission(vault, ref);
@@ -485,6 +485,7 @@ export function setMission(vault: string, ref: string, p: MissionPatch, now = Da
   if (p.budgetUsd !== undefined) m.budget.total_usd = p.budgetUsd;
   if (p.hoursWk !== undefined) m.budget.hours_wk = p.hoursWk;
   if (p.match !== undefined) m.match = { ...m.match, ...p.match };
+  if (p.metrics !== undefined) m.metrics = [...new Set(p.metrics.filter((x) => /^m-[a-z0-9-]+$/.test(x)))];
   save(vault, m, now);
   return missionView(vault, m.slug, now)!;
 }

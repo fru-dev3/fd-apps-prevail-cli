@@ -863,7 +863,9 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // words (offered in the weekly review) and numbers they mention (content
   // free events). Never on an incognito turn.
   if (!opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !scopeApp) {
-    try { (await import("./said.ts")).noteSaid(vaultPath, { text: userText(message), thread: threadId ?? sessionId, domain: opts.domain }); } catch { /* never blocks a turn */ }
+    try { (await import("./said.ts")).noteSaid(vaultPath, { text: userText(message), thread: threadId ?? sessionId, domain: opts.domain, ...(scope.mission ? { mission: scope.mission.slug } : {}) }); } catch { /* never blocks a turn */ }
+    // In a mission's chat, "paid $120 for the term fee" is a ledger line (MS4).
+    if (scope.mission) { try { (await import("./mission-progress.ts")).missionSaid(vaultPath, scope.mission.slug, userText(message), threadId ?? sessionId); } catch { /* never blocks a turn */ } }
   }
 
   // touched: after the reply is complete, bounded by TOUCH_TIMEOUT_MS.

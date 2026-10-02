@@ -3183,6 +3183,12 @@ async function appsCommand(a: string[], vaultPath?: string | null): Promise<void
   }
 }
 
+async function missionCouncilFallbacks(key: string | undefined): Promise<string[]> {
+  const m = /^_mission-(.+)$/.exec(key ?? "");
+  if (!m) return [];
+  try { const ms = await import("./missions.ts"); const v = ms.readMission(resolveVault(null), m[1]!); const owner = v ? ms.ownerOf(v) : undefined; return owner ? [owner] : []; } catch { return []; }
+}
+
 async function resolveVaultFromArgs(args: string[]): Promise<string> {
   return vaultFlagOrDefault(args, process.env.PREVAIL_VAULT_ROOT);
 }
@@ -5785,12 +5791,27 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
     if (!args.includes("--no-sources")) {
       try { commitR = await (await import("./commitments.ts")).scanCommitments(vault); } catch (e) { commitR = { error: String(e).slice(0, 200) }; }
     }
+    // Missions (MS4): match calendar, mail and charges to active missions; milestones that check themselves; nudges within the budget.
+    let missionsR: unknown = null;
+    try {
+      const mp = await import("./mission-progress.ts");
+      const synced = await mp.syncMissions(vault);
+      const mm = await import("./missions.ts");
+      const metr = await import("./metrics.ts");
+      let reached = 0;
+      const msFile = (slug: string) => join(mm.missionDir(vault, slug), "milestones.md");
+      if (mm.activeMissions(vault).some((x) => existsSync(msFile(x.slug)) && readFileSync(msFile(x.slug), "utf8").includes("~check:"))) {
+        const c = await metr.computeMetrics(vault);
+        for (const x of mm.activeMissions(vault)) reached += mm.checkMilestones(vault, x.slug, (id) => mp.totalSince(c.points, id, x.start || "0000")).length;
+      }
+      missionsR = { synced: synced.length, reached, nudges: await mp.missionNudges(vault, mp.missionRadar(vault)) };
+    } catch (e) { missionsR = { error: String(e).slice(0, 200) }; }
     // Tasks phrased as decisions open a decision record each, once (Today T4).
     try { (await import("./decisions-open.ts")).decisionsFromTasks(vault); } catch { /* best effort */ }
     // The radar (Today T3): what is falling behind; only what may interrupt spends the weekly budget.
     let radarR: unknown = null;
     try { const rd = await import("./radar.ts"); const r = await rd.computeRadar(vault); radarR = { items: r.items.length, interrupts: await rd.radarInterrupts(vault, r) }; } catch (e) { radarR = { error: String(e).slice(0, 200) }; }
-    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, stack: stackR, sources: sourcesR, commitments: commitR, radar: radarR })}\n`);
+    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, stack: stackR, sources: sourcesR, commitments: commitR, radar: radarR, missions: missionsR })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {
@@ -6115,7 +6136,8 @@ async function modesCommand(args: string[], vaultOverride: string | null): Promi
     web: cfg.readWebAccess(),
     save: cfg.readCheckpoint(domainKey),
     serendipity: cfg.readSerendipity(domainKey),
-    auto: cfg.readAutoCouncil(domainKey),
+    // A mission resolves its own mode, then its owner domain's, then the global one (MS4).
+    auto: cfg.readAutoCouncil(domainKey, await missionCouncilFallbacks(domainKey)),
     framework: cfg.resolveResponseFramework(domainKey),
     lens: cfg.resolveResponseLens(domainKey),
   };

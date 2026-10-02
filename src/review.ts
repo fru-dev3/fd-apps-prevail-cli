@@ -98,6 +98,8 @@ export interface ReviewCard {
   guardrails: string[];
   /** Today T2: promises found in sent mail or notes that were not sure enough to file alone (Yes files one). */
   commitments?: { src: string; text: string; due?: string; person?: string; quote: string }[];
+  /** Missions MS4: one line per active mission. */
+  missions?: string[];
   /** Today T3: everything falling behind (the radar), most urgent first. */
   radar?: { key: string; kind: string; text: string; evidence: string; due?: string }[];
 }
@@ -173,6 +175,7 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     apps: await appsLine(vault, now),
     commitments: await commitmentLines(vault),
     radar: await radarLines(vault, now),
+    missions: await (async () => { try { return (await import("./mission-progress.ts")).missionReviewLines(vault, now); } catch { return []; } })(),
     ...(await qualitativeLines(vault, c, week, now)),
   };
 }
@@ -222,6 +225,7 @@ export function reviewText(r: ReviewCard): string {
   if (r.hypothesis) out.push(`${r.hypothesis.text} Reply yes or no.`);
   if (r.asked?.ladder) out.push("Once a quarter: on a ladder from 0 (worst possible life) to 10 (best possible), where do you stand now, and where in five years?");
   if (r.asked?.who5) out.push("This month's WHO-5 is waiting (five quick questions about the last two weeks).");
+  for (const m of r.missions ?? []) out.push(`Mission: ${m}`);
   if (r.radar?.length) { out.push("Falling behind:"); for (const x of r.radar) out.push(`- ${x.text} (${x.evidence})`); }
   for (const w of r.waited) out.push(`Waited for this review: ${w.text}`);
   out.push(r.checkin ? `You said calm ${r.checkin.calm} this week.` : "How calm was this week? Reply 1 to 5 (on Telegram: /calm 4).");
