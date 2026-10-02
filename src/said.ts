@@ -65,6 +65,9 @@ const NUMBERS: [RegExp, (m: RegExpExecArray) => Stated | null][] = [
   [/\b(slept)\s+(?:about\s+)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|h)\b/i, (m) => ({ what: "slept", value: Number(m[2]), unit: "hours" })],
   [/\b(read|wrote|published)\s+(\d+)\s+(pages?|words?|books?|posts?|articles?|chapters?|videos?)\b/i, (m) => ({ what: `${m[1]!.toLowerCase()}-${m[3]!.toLowerCase().replace(/s$/, "")}`, value: Number(m[2]), unit: "count" })],
   [/\b(applied (?:to|for))\s+(\d+)\s+(jobs?|roles?|positions?)\b/i, (m) => ({ what: "applied", value: Number(m[2]), unit: "count" })],
+  // Fresh starts (Goals G5): a move or a new job, said in passing. Content free: the kind only.
+  [/\bI (?:just |finally |have |'ve )?(?:moved|relocated) (?:to|into|house|home)\b/i, () => ({ what: "life.move", value: 1, unit: "count" })],
+  [/\bI (?:just |finally |have |'ve )?(?:started (?:a |my )?new job|started at a new|accepted (?:a|the) (?:job|offer|role))\b/i, () => ({ what: "life.job", value: 1, unit: "count" })],
   // A session of practice (a mission's "practiced 30 min"): one session, its minutes.
   [/\b(practiced|practised|studied|trained|rehearsed|played)\s+(?:for\s+)?(?:about\s+)?(\d+(?:\.\d+)?)\s*(min(?:ute)?s?|h(?:ours?|rs?)?)\b/i, (m) => ({ what: "practiced", value: /^h/i.test(m[3]!) ? Number(m[2]) * 60 : Number(m[2]), unit: "minutes" })],
 ];
@@ -102,7 +105,7 @@ export function noteSaid(vault: string, i: { text: string; thread?: string; doma
   return { candidates, stated };
 }
 
-interface Row { ts: number; src?: string; kind: string; title?: string; text: string; status: string; key?: string; source?: { thread?: string | null; domain?: string | null } }
+interface Row { ts: number; src?: string; pack?: string; kind: string; title?: string; text: string; status: string; key?: string; source?: { thread?: string | null; domain?: string | null } }
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const candidateKey = (kind: string, title: string) => `${kind}:${norm(title)}`;
 
@@ -112,11 +115,12 @@ function readRows(vault: string): Row[] {
   return readFileSync(p, "utf8").split("\n").flatMap((l) => { try { return l.trim() ? [JSON.parse(l) as Row] : []; } catch { return []; } });
 }
 
-export interface TopCandidate { key: string; kind: Candidate["kind"]; title: string; quote: string; count: number; lastTs: number; threads: number }
+export interface TopCandidate { key: string; kind: Candidate["kind"]; title: string; quote: string; count: number; lastTs: number; threads: number; pack?: string }
 
 /** The candidates heard most often, not already in the Compass and not answered. */
 export function topCandidates(vault: string, n = 3): TopCandidate[] {
-  const rows = readRows(vault).filter((r) => r.src === "chat" || r.src === "coach" || r.key);
+  // A pack's suggestions (G5) come after anything the user said themselves.
+  const rows = readRows(vault).filter((r) => r.src === "chat" || r.src === "coach" || r.src === "pack" || r.key);
   const answered = new Set(rows.filter((r) => r.key && (r.status === "accepted" || r.status === "dismissed")).map((r) => r.key!));
   const have = new Set(items(readCompass(vault)).map((it) => candidateKey(it.kind, it.title)));
   const by = new Map<string, TopCandidate & { th: Set<string> }>();
@@ -124,13 +128,18 @@ export function topCandidates(vault: string, n = 3): TopCandidate[] {
     if (r.status !== "candidate" || !r.title) continue;
     const k = candidateKey(r.kind, r.title);
     if (answered.has(k) || have.has(k)) continue;
-    const c = by.get(k) ?? { key: k, kind: r.kind as Candidate["kind"], title: r.title, quote: r.text, count: 0, lastTs: 0, threads: 0, th: new Set<string>() };
-    c.count++;
+    const c = by.get(k) ?? { key: k, kind: r.kind as Candidate["kind"], title: r.title, quote: r.text, count: 0, lastTs: 0, threads: 0, th: new Set<string>(), ...(r.src === "pack" && r.pack ? { pack: r.pack } : {}) };
+    if (r.src !== "pack") { c.count++; delete c.pack; }
     if (r.ts > c.lastTs) { c.lastTs = r.ts; c.quote = r.text; }
     c.th.add(r.source?.thread ?? String(r.ts));
     by.set(k, c);
   }
   return [...by.values()].map(({ th, ...c }) => ({ ...c, threads: th.size })).sort((a, b) => b.count - a.count || b.lastTs - a.lastTs).slice(0, n);
+}
+
+/** A pack's suggestion is the pack's words, not the user's: it says so on the line. */
+function fieldsFor(c: TopCandidate): CompassItem["fields"] {
+  return c.pack ? [{ key: "from", value: `the ${c.pack} pack, chosen by you` }] : [{ key: "words", value: JSON.stringify(c.quote) }, { key: "from", value: `chat, heard ${c.count} time${c.count === 1 ? "" : "s"}` }];
 }
 
 /** Yes adds the line to the Compass, confirmed, in the user's own words. Not now dismisses it. */
@@ -143,9 +152,9 @@ export function answerCandidate(vault: string, key: string, answer: "yes" | "no"
   const doc = readCompass(vault);
   const kind = c.kind as Kind;
   const id = compassId(kind, c.title);
-  const it: CompassItem = { kind, id, title: c.title, done: kind === "goal" ? false : null, tokens: kind === "goal" ? { status: "confirmed" } : kind === "value" ? { rank: String(items(doc, "value").length + 1) } : {}, flags: [], fields: [{ key: "words", value: JSON.stringify(c.quote) }, { key: "from", value: `chat, heard ${c.count} time${c.count === 1 ? "" : "s"}` }], paths: [], raw: [] };
+  const it: CompassItem = { kind, id, title: c.title, done: kind === "goal" ? false : null, tokens: kind === "goal" ? { status: "confirmed" } : kind === "value" ? { rank: String(items(doc, "value").length + 1) } : {}, flags: [], fields: fieldsFor(c), paths: [], raw: [] };
   addItem(doc, it);
-  saveCompass(vault, doc, [{ id, from: "candidate", to: kind === "goal" ? "confirmed" : "confirmed", reason: "yes in the weekly review", evidence: [c.quote], by: "user" }], now);
+  saveCompass(vault, doc, [{ id, from: "candidate", to: kind === "goal" ? "confirmed" : "confirmed", reason: c.pack ? `yes to a ${c.pack} pack suggestion` : "yes in the weekly review", evidence: [c.quote], by: "user" }], now);
   return { added: id };
 }
 

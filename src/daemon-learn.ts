@@ -435,6 +435,20 @@ async function dailyMetrics(root: string, now = Date.now()): Promise<void> {
   const c = await computeMetrics(root, { now });
   // Metrics M5: last month's recap once, the year page through December.
   try { await (await import("./stories.ts")).storiesPass(root, c); } catch { /* non-fatal */ }
+  // Goals G5: a fresh start (new year, birthday, a new quarter, a move or a
+  // new job) is offered once, inside the interruption budget; on a new year
+  // or a birthday Your Year is written fresh for it.
+  try {
+    const lt = await import("./lifetime.ts");
+    const fs = lt.freshStarts(root, now);
+    await lt.freshStartPass(root, now);
+    if (fs.some((f) => f.kind === "new-year" || f.kind === "birthday")) {
+      const st = await import("./stories.ts");
+      // On a new year, the year that just ended; on a birthday, this year so far.
+      const y = new Date(now).getFullYear();
+      st.writeYear(root, await st.yearStory(root, c, String(fs.some((f) => f.kind === "new-year") ? y - 1 : y)));
+    }
+  } catch { /* non-fatal */ }
 }
 
 // The daemon loop: distill on an interval until SIGINT.

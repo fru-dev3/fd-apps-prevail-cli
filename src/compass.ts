@@ -699,6 +699,10 @@ export async function compassCommand(argv: string[], vault: string): Promise<num
   if (sub === "paths" || sub === "path") return (await import("./paths.ts")).pathsCommand(sub, argv, vault);
   // The chain (G1b): the tree, proposed links, linking.
   if (sub === "tree" || sub === "links" || sub === "link") return (await import("./compass-chain.ts")).chainCommand(sub, argv, vault);
+  // Over a lifetime (G5): the yearly review, fresh starts, history, export.
+  { const lt = await import("./lifetime.ts"); if (lt.LIFETIME_SUBCOMMANDS.includes(sub)) return lt.lifetimeCommand(sub, argv, vault); }
+  // Beyond one person (G5): the household, consent per person, shared goals.
+  if (sub === "household") return (await import("./household.ts")).householdCommand(argv.slice(1), vault);
   if (sub === "show") {
     const j = compassJson(vault);
     if (args.json) out(j);
