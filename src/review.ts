@@ -249,7 +249,7 @@ export function reviewText(r: ReviewCard): string {
   if (r.time) {
     if (!r.time.thisWeek.connected) out.push(`Time: ${r.time.thisWeek.note}`);
     else { out.push(`Time: ${r.time.thisWeek.hours} h on the calendar, ${r.time.thisWeek.meetings} in meetings, ${r.time.thisWeek.focus} focus.`); for (const l of r.time.thisWeek.lines) out.push(`- ${l}`); }
-    if (r.time.warning) out.push(`Next week: ${r.time.warning}`);
+    if (r.time.warning) out.push(r.time.warning);
     if (r.time.holds.length) out.push(`${r.time.holds.length} protected block${r.time.holds.length === 1 ? "" : "s"} for next week wait for your yes.`);
   }
   if (r.quarterly) out.push("The quarterly initiative review is due: keep, switch or drop each one (prevail compass paths review).");

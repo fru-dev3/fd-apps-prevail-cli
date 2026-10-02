@@ -820,7 +820,7 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const r = await t.timeReview(vaultPath);
       if (args.format === "json") return wrapText(JSON.stringify(r, null, 2));
       const w = r.thisWeek;
-      return wrapText([w.connected ? `This week: ${w.hours} h on the calendar, ${w.meetings} h of meetings, ${w.focus} h focus, ${w.afterHours} h after hours.` : w.note ?? "", ...w.byValue.map((v) => `- ${v.title}: ${v.hours} h (${v.share}%, rank ${v.rank})`), ...w.lines, r.warning ? `Next week: ${r.warning}` : "", ...r.holds.map((h) => `Waiting for a yes: ${h.title}, ${h.start}`), ...r.declines.map((d) => `Drafted, yours to send: ${d.body}`)].filter(Boolean).join("\n"));
+      return wrapText([w.connected ? `This week: ${w.hours} h on the calendar, ${w.meetings} h of meetings, ${w.focus} h focus, ${w.afterHours} h after hours.` : w.note ?? "", ...w.byValue.map((v) => `- ${v.title}: ${v.hours} h (${v.share}%, rank ${v.rank})`), ...w.lines, r.warning ?? "", ...r.holds.map((h) => `Waiting for a yes: ${h.title}, ${h.start}`), ...r.declines.map((d) => `Drafted, yours to send: ${d.body}`)].filter(Boolean).join("\n"));
     }
     case "weekly_review": {
       const r = await import("./review.ts");
