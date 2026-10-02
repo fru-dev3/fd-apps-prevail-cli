@@ -847,6 +847,15 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     model: ranModel,
   });
 
+  // A message that deliberates ("should I...?") gets a one-tap offer to open
+  // a decision record (Today T4); nothing is opened without the user's yes.
+  if (!opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !scopeApp && scope.kind !== "entity") {
+    try {
+      const offer = (await import("./decisions-open.ts")).decisionOffer(vaultPath, userText(message), opts.domain);
+      if (offer) emit({ type: "decision_offer", thread, ts: Date.now(), decisionOffer: offer });
+    } catch { /* never blocks a turn */ }
+  }
+
   // done
   emit({ type: "done", thread, ts: Date.now() });
 

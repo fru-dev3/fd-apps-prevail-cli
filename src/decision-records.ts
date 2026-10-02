@@ -100,11 +100,13 @@ function write(r: DecisionRecord): void {
 export function openDecision(vault: string, i: { question: string; domain: string; due?: string; consulted?: string[]; serves?: string[]; context?: string; options?: string[] }): DecisionRecord {
   if (!i.question.trim()) throw new Error("a decision needs a question");
   if (i.due && !/^\d{4}-\d{2}-\d{2}$/.test(i.due)) throw new Error("due is YYYY-MM-DD");
+  // Every open decision has a due date (Today T4): two weeks when none is given.
+  const due = i.due ?? new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10);
   let slug = slugOf(i.question);
   const dir = decisionsDir(vault, i.domain);
   for (let n = 2; existsSync(join(dir, `${slug}.md`)); n++) slug = `${slugOf(i.question)}-${n}`;
   const r: DecisionRecord = {
-    slug, domain: i.domain, file: join(dir, `${slug}.md`), question: i.question.trim(), status: "open", due: i.due, owner: i.domain,
+    slug, domain: i.domain, file: join(dir, `${slug}.md`), question: i.question.trim(), status: "open", due, owner: i.domain,
     consulted: i.consulted ?? [], serves: i.serves ?? [],
     sections: { Context: i.context ?? "", Options: (i.options ?? []).map((o) => `- ${o}`).join("\n") },
   };
@@ -200,14 +202,17 @@ export async function decideCommand(argv: string[], vault: string): Promise<numb
   const fail = (m: string) => { if (args.json) out({ ok: false, error: m }); else console.error(m); return 1; };
   const [domain, slug] = (args.pos[1] ?? "").split("/");
   try {
-    if (sub === "list") { const l = listDecisions(vault, { all: args.has("all") }); if (args.json) out(l); else for (const r of l) console.log(`${(r.due ?? "no date").padEnd(10)} ${r.domain}/${r.slug}  ${r.question}`); return 0; }
+    if (sub === "list") { const { decisionView } = await import("./decisions-open.ts"); const l = listDecisions(vault, { all: args.has("all") }).map(decisionView); if (args.json) out(l); else for (const r of l) console.log(`${(r.due ?? "no date").padEnd(10)} ${r.domain}/${r.slug}  ${r.question}`); return 0; }
     if (sub === "open") {
       const r = openDecision(vault, { question: args.pos.slice(1).join(" ") || args.get("question") || "", domain: args.get("domain") ?? "general", due: args.get("due"), consulted: args.get("consulted")?.split(","), serves: args.get("serves")?.split(","), options: args.get("options")?.split("|") });
       if (args.json) out(r); else console.log(`Opened ${r.domain}/${r.slug}`);
       return 0;
     }
+    if (sub === "scan") { const { decisionsFromTasks } = await import("./decisions-open.ts"); const r = decisionsFromTasks(vault); if (args.json) out({ ok: true, opened: r }); else console.log(`Opened ${r.length} decision record${r.length === 1 ? "" : "s"} from tasks.`); return 0; }
+    if (sub === "from-conflict") { const { decisionFromConflict } = await import("./decisions-open.ts"); const r = await decisionFromConflict(vault, args.pos[1] ?? ""); if (args.json) out(r); else console.log(`Opened ${r.domain}/${r.slug}`); return 0; }
     if (!domain || !slug) return fail("name the decision as <domain>/<slug>");
-    if (sub === "show") { const r = readRecord(vault, domain, slug); if (!r) return fail("not found"); if (args.json) out(r); else console.log(renderRecord(r)); return 0; }
+    if (sub === "show") { const { decisionView } = await import("./decisions-open.ts"); const r = readRecord(vault, domain, slug); if (!r) return fail("not found"); if (args.json) out(decisionView(r)); else console.log(renderRecord(decisionView(r))); return 0; }
+    if (sub === "recommend" && !args.pos[2]) { const { recommend, decisionView } = await import("./decisions-open.ts"); const r = await recommend(vault, domain, slug); if (args.json) out({ ok: true, by: r.by, record: decisionView(r.record) }); else console.log(`A recommendation is ready (${r.by}). Give your gut call first: prevail decide gut ${domain}/${slug} <one line>`); return 0; }
     if (sub === "gut") { const r = setGut(vault, domain, slug, args.pos.slice(2).join(" ")); if (args.json) out(r); else console.log("Gut call noted."); return 0; }
     if (sub === "recommend") { const r = setRecommendation(vault, domain, slug, { line: args.pos.slice(2).join(" "), confidence: args.get("confidence"), body: args.get("body") }); if (args.json) out(r); return 0; }
     if (sub === "decide") { const r = decide(vault, domain, slug, args.pos.slice(2).join(" "), args.get("why") ?? ""); if (args.json) out(r); else console.log(`Decided. Retro due ${r.retroDue}.`); return 0; }
@@ -218,7 +223,7 @@ export async function decideCommand(argv: string[], vault: string): Promise<numb
       if (args.json) out(r); return 0;
     }
   } catch (e) { return fail((e as Error).message); }
-  return fail("usage: prevail decide list [--all] | open <question> --domain d [--due YYYY-MM-DD] | show|gut|recommend|decide|retro <domain>/<slug> ... [--json]");
+  return fail("usage: prevail decide list [--all] | open <question> --domain d [--due YYYY-MM-DD] | scan | from-conflict <key> | recommend <domain>/<slug> | show|gut|decide|retro <domain>/<slug> ... [--json]");
 }
 
 export function calibrationText(vault: string): string {

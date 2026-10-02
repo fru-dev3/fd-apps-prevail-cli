@@ -840,7 +840,9 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
     }
     case "open_decisions": {
       const d = await import("./decision-records.ts");
-      const open = d.listDecisions(vaultPath).map((r) => `${r.due ?? "no date"}  ${r.domain}/${r.slug}: ${r.question}${r.gut ? ` (gut: ${r.gut})` : ""}${r.recommendation ? ` (recommendation: ${r.recommendation})` : ""}`);
+      // Gut first: a recommendation is shown only after the user's gut call (decisionView).
+      const { decisionView } = await import("./decisions-open.ts");
+      const open = d.listDecisions(vaultPath).map(decisionView).map((r) => `${r.due ?? "no date"}  ${r.domain}/${r.slug}: ${r.question}${r.gut ? ` (gut: ${r.gut})` : ""}${r.recommendation ? ` (recommendation: ${r.recommendation}, ${r.confidence ?? "medium"} confidence)` : r.recommendationReady ? " (a recommendation is ready once they give a gut call)" : ""}`);
       return wrapText([...(open.length ? open : ["No open decisions."]), "", "Calibration:", d.calibrationText(vaultPath) || "no retros yet"].join("\n"));
     }
     case "read_recommendations":
