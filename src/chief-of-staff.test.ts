@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { chiefOfStaffBlock, cleanName, parseChiefOfStaff, readChiefOfStaff, setChiefOfStaffName } from "./chief-of-staff.ts";
 import { buildUserContext } from "./cli-bridge.ts";
-import { expandOutput, jobsDir, listPlaybooks, loadPlaybook } from "./orchestrator.ts";
+import { expandOutput, jobsDir, listPlaybooks, loadPlaybook, runPlaybook } from "./orchestrator.ts";
 
 const ROOT = join("/tmp", `prevail-cos-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -73,5 +73,13 @@ describe("playbooks live under build/", () => {
     expect(jobsDir(V, "r1")).toBe(join(V, "build", "_meta", "jobs", "r1"));
     expect(expandOutput("memory/briefs/intel-{date}.md", new Date(2026, 9, 2))).toBe("memory/briefs/intel-2026-10-02.md");
     expect(existsSync(join(V, "_runs"))).toBe(false);
+  });
+
+  test("a run leaves its record in build/_meta/jobs and nothing at the vault root", async () => {
+    seed();
+    const r = await runPlaybook("t1", { id: "t", name: "T", goal: "read foo", steps: [{ kind: "skill", app: "nope", skill: "x" }] }, { vault: V, provider: "claude", model: "", autonomousActs: false });
+    expect(r.runDir).toBe(join(V, "build", "_meta", "jobs", "t1"));
+    expect(existsSync(join(r.runDir, "run.json"))).toBe(true);
+    expect(readdirSync(V).sort()).toEqual(["build", "data"]);
   });
 });
