@@ -22,7 +22,7 @@ import { generalDir } from "./decisions.ts";
 import { entityChatBlock } from "./entities.ts";
 import { GOOGLE_APP_RE } from "./gws-gateway.ts";
 import {
-  activeMissions, budgetLeft, domainsWith, missionLocalOnly, missionPointer, missionTasks, missionView, ownerOf,
+  activeMissions, budgetLeft, domainsWith, missionBrief, missionLocalOnly, missionPointer, missionTasks, missionView, ownerOf,
   type Mission, type MissionDomain,
 } from "./missions.ts";
 import { APP_SCOPE_PREFIX, appScopeId, MISSION_SCOPE_PREFIX, missionScopeSlug, resolveDomainDir } from "./path-safety.ts";
@@ -141,6 +141,8 @@ async function namedBlocks(vault: string, o: { entityIds: string[]; appIds: stri
   const perEntity = o.entityIds.length ? Math.min(6000, Math.floor(o.entityBudget / o.entityIds.length)) : 0;
   // A broken entity lookup never blocks the turn; it just runs unscoped.
   for (const id of o.entityIds) {
+    // @ a mission: a short brief of it, never the whole mission.
+    if (id.startsWith("mission/")) { const b = missionBrief(vault, id); if (b) blocks.push({ source: `mission-ref:${id}`, text: b }); continue; }
     try { blocks.push({ source: `entity:${id}`, text: entityChatBlock(vault, id, perEntity) }); } catch { /* unscoped */ }
   }
   for (const id of o.appIds) {

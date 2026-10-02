@@ -233,6 +233,9 @@ describe("chat: one scope resolver", () => {
     const s = await resolveScope(V, { domain: "money", message: "Can I afford Learn the cello this month?" });
     expect(s.blocks.map((b) => b.text).join("\n")).toContain("Active mission: Learn the cello (mission/learn-the-cello), next: Instrument at home by 2026-10-05");
     expect((await resolveScope(V, { domain: "money", message: "What is my balance?" })).blocks).toEqual([]);
+    // @ a mission in any chat: a short brief.
+    const at = await resolveScope(V, { domain: "money", entity: ["mission/learn-the-cello"] });
+    expect(at.blocks[0]!.text).toStartWith("# MISSION REFERENCED: Learn the cello (mission/learn-the-cello), active");
   });
 });
 

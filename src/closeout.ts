@@ -31,7 +31,7 @@ export interface CloseoutReceipt { n: number; ts: number; kind: FilingKind; doma
 const UNDO_DAYS = 7;
 const DAY = 86_400_000;
 const ymd = (ts: number) => new Date(ts).toISOString().slice(0, 10);
-const oneLine = (s: string, n = 300) => s.replace(/\s+/g, " ").replace(/\s*—\s*/g, ", ").trim().slice(0, n);
+const oneLine = (s: string, n = 300) => s.replace(/\s+/g, " ").replace(/\s*\u2014\s*/g, ", ").trim().slice(0, n);
 
 function readText(p: string): string {
   if (!existsSync(p)) return "";

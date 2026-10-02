@@ -22,7 +22,7 @@
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -95,7 +95,8 @@ export interface Progress {
   days: { day: number; total: number; left: number };
 }
 
-export type MissionView = Mission & { progress: Progress; milestones: Milestone[]; links: Links; localOnly: boolean };
+export interface Artifact { path: string; name: string; kind: "artifact" | "file" | "brief"; mtime: number }
+export type MissionView = Mission & { progress: Progress; milestones: Milestone[]; links: Links; localOnly: boolean; artifacts: Artifact[]; log: string[]; closed: boolean };
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ export function missionDir(vault: string, slug: string): string {
 const missionFile = (vault: string, slug: string) => join(missionDir(vault, slug), "mission.md");
 
 export function missionSlugify(name: string): string {
-  return name.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
+  return name.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48).replace(/-+$/, "");
 }
 
 /** mission/<slug>, project/<slug> (the retired kind), _mission-<slug> or a bare slug, to a slug. */
@@ -135,7 +136,7 @@ function readJson<T>(p: string, fallback: T): T {
 const iso = (ts: number) => new Date(ts).toISOString().replace(/\.\d{3}Z$/, "Z");
 const ymd = (ts: number) => new Date(ts).toISOString().slice(0, 10);
 const isYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
-const oneLine = (s: string, n = 300) => s.replace(/\s+/g, " ").replace(/\s*—\s*/g, ", ").trim().slice(0, n);
+const oneLine = (s: string, n = 300) => s.replace(/\s+/g, " ").replace(/\s*\u2014\s*/g, ", ").trim().slice(0, n);
 const uniq = (xs: string[]) => [...new Set(xs.map((x) => x.trim()).filter(Boolean))];
 
 // ── mission.md ──────────────────────────────────────────────────────────────
@@ -277,7 +278,19 @@ export function missionView(vault: string, ref: string, now = Date.now()): Missi
   const m = readMission(vault, ref);
   if (!m) return null;
   const milestones = readMilestones(vault, m.slug);
-  return { ...m, milestones, links: readLinks(vault, m.slug), progress: progressOf(m, milestones, readLedger(vault, m.slug), now), localOnly: missionLocalOnly(vault, m) };
+  const dir = missionDir(vault, m.slug);
+  const artifacts: Artifact[] = [];
+  for (const [sub, kind] of [["artifacts", "artifact"], ["files", "file"], ["memory/briefs", "brief"]] as const) {
+    const d = join(dir, sub);
+    if (!existsSync(d)) continue;
+    for (const n of readdirSync(d)) {
+      if (n.startsWith(".")) continue;
+      try { const st = statSync(join(d, n)); if (st.isFile()) artifacts.push({ path: `data/missions/${m.slug}/${sub}/${n}`, name: n, kind, mtime: st.mtimeMs }); } catch { /* gone */ }
+    }
+  }
+  artifacts.sort((a, b) => b.mtime - a.mtime);
+  const log = readText(join(dir, "memory", "log.md")).split("\n").filter((l) => /^-\s/.test(l)).map((l) => l.replace(/^-\s+/, "")).slice(0, 60);
+  return { ...m, milestones, links: readLinks(vault, m.slug), progress: progressOf(m, milestones, readLedger(vault, m.slug), now), localOnly: missionLocalOnly(vault, m), artifacts, log, closed: existsSync(join(dir, "closeout.md")) };
 }
 
 // ── Milestones ──────────────────────────────────────────────────────────────
@@ -812,6 +825,19 @@ export function missionPointer(vault: string, domain: string, message: string): 
     lines.push(`Active mission: ${m.name} (mission/${m.slug})${next ? `, next: ${next.title}${next.due ? ` by ${next.due}` : ""}` : ""}${m.domains.some((d) => d.slug === domain) ? "" : ". This domain is not part of it."}`);
   }
   return lines.length ? `# ACTIVE MISSIONS\n${lines.join("\n")}` : "";
+}
+
+/** A few lines about one mission, for a chat that @-references it. */
+export function missionBrief(vault: string, ref: string): string {
+  const v = missionView(vault, ref);
+  if (!v) return "";
+  const p = v.progress;
+  return [
+    `# MISSION REFERENCED: ${v.name} (${v.id}), ${v.status}`,
+    `Outcome: ${v.outcome || "not written"}. Target ${v.target || "none"}, ${p.days.left} days left.`,
+    `Milestones ${p.milestones.done} of ${p.milestones.total}${p.milestones.next ? `; next: ${p.milestones.next.title}${p.milestones.next.due ? ` by ${p.milestones.next.due}` : ""}` : ""}.${p.budget.planned ? ` Budget $${p.budget.used} of $${p.budget.planned}.` : ""}`,
+    `Domains: ${v.domains.map((d) => `${d.slug} (${d.role})`).join(", ") || "none"}.`,
+  ].join("\n");
 }
 
 /** The mission an app event, charge or message belongs to, by its match rules (MS4 uses this). */
