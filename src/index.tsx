@@ -3188,10 +3188,10 @@ async function resolveVaultFromArgs(args: string[]): Promise<string> {
 }
 
 // prevail autonomy status|pause|resume|policy <class> <allow|ask|never>|cap <usd|off>
-async function autonomyCommand(args: string[]): Promise<void> {
+async function autonomyCommand(args: string[], vaultPath?: string | null): Promise<void> {
   const sub = args[0];
   const json = args.includes("--json");
-  const vault = await resolveVaultFromArgs(args);
+  const vault = vaultPath ? resolveVault(vaultPath) : await resolveVaultFromArgs(args);
   const A = await import("./autonomy.ts");
   if (!sub || sub === "status") {
     const r = { state: A.getAutonomyState(vault), policy: A.getActionPolicy(vault), monthlyFinancialCapUsd: A.getMonthlyFinancialCap(vault) };
@@ -3238,13 +3238,18 @@ async function autonomyCommand(args: string[]): Promise<void> {
 }
 
 // prevail playbooks  |  prevail playbook list  |  prevail run-playbook <id> [--auto] [--stream] [--json]
-async function playbookCommand(args: string[]): Promise<void> {
+async function playbookCommand(args: string[], vaultPath?: string | null): Promise<void> {
   const json = args.includes("--json");
   const stream = args.includes("--stream");
-  const vault = await resolveVaultFromArgs(args);
+  const vault = vaultPath ? resolveVault(vaultPath) : await resolveVaultFromArgs(args);
   const { loadPlaybook, listPlaybooks, runPlaybook } = await import("./orchestrator.ts");
   // `prevail playbooks` (list) or `prevail playbook list`
   const first = args[0];
+  // Groups, one playbook's steps, Save as playbook, adopt a draft (playbooks.ts).
+  if (first === "rows" || first === "show" || first === "save" || first === "adopt") {
+    const { playbooksCommand } = await import("./playbooks.ts");
+    process.exit(await playbooksCommand(args.filter((a, i) => !(a === "--vault" || args[i - 1] === "--vault")), vault));
+  }
   if (!first || first === "list" || first.startsWith("--")) {
     const list = listPlaybooks(vault);
     if (json) { process.stdout.write(`${JSON.stringify(list)}\n`); return; }
@@ -3271,6 +3276,7 @@ async function playbookCommand(args: string[]): Promise<void> {
     model: "",
     autonomousActs,
     onProgress,
+    ...(args.includes("--domain") && args[args.indexOf("--domain") + 1] ? { domain: args[args.indexOf("--domain") + 1] } : {}),
   });
   if (stream) { process.stdout.write(`${JSON.stringify({ phase: result.ok ? "complete" : "error", ...result })}\n`); return; }
   if (json) { process.stdout.write(`${JSON.stringify(result)}\n`); return; }
@@ -6419,11 +6425,13 @@ async function main() {
     return;
   }
   if (args.autonomy) {
-    await autonomyCommand(args.autonomyArgs);
+    await autonomyCommand(args.autonomyArgs, args.vaultPath);
     return;
   }
   if (args.playbook) {
-    await playbookCommand(args.playbookArgs);
+    // A --vault given before the command must win (it was dropped, so a run
+    // meant for a copy of the vault ran against the configured one).
+    await playbookCommand(args.playbookArgs, args.vaultPath);
     return;
   }
   if (args.projects) {

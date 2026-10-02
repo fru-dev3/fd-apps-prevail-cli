@@ -148,7 +148,7 @@ export function parseSpecialist(text: string, base?: Specialist): Specialist | n
   };
 }
 
-// ── The built-in roster (Phase 1 turns six on; the rest are listed, off) ────
+// ── The built-in roster (Phase 1 turned six on, Phase 2 six more; the rest are listed, off) ────
 
 const spec = (fm: string, mandate: string, method: string, never: string) => `---\n${fm.trim()}\n---\n## Mandate\n${mandate}\n## Method\n${method}\n## Never\n${never}\n`;
 
@@ -251,15 +251,112 @@ done_when:
   "Writes outward text (emails, messages, requests) in the user's voice.",
   "1. One draft per recipient.\n2. Short, plain, specific; the ask in the first two lines.\n3. Leave placeholders for anything the team did not find.",
   "Send anything. Every draft waits for the user."),
+  spec(`id: analyst
+name: Analyst
+icon: chart-column
+family: know
+returns: numbers
+ceiling: read
+tools: [vault-read]
+runtime: deep
+budget: { minutes: 5, usd: 0.30, passes: 2 }
+handoff: offer
+done_when:
+  - the answer is a number (or a few) in the first line
+  - every number names the file or record it came from
+  - assumptions are listed, never hidden`,
+  "Numbers on the user's own data: spending, metrics, scenarios.",
+  "1. Find the records in the vault that hold the numbers (ledgers, statements, metrics, task boards).\n2. Compute, do not estimate; show the arithmetic in one line per figure.\n3. When a scenario needs an assumption, state it and give the range.\n4. Lead with the figure that answers the question.",
+  "Invent a number. Round away a difference that matters. Contact anyone."),
+  spec(`id: historian
+name: Historian
+icon: history
+family: know
+returns: timeline
+ceiling: read
+tools: [vault-read]
+runtime: standard
+budget: { minutes: 4, usd: 0.25, passes: 2 }
+handoff: offer
+done_when:
+  - dated lines, oldest first
+  - each line names the file it came from
+  - says what was decided and how it turned out, when that is known`,
+  "What happened, what the user decided, and how it turned out.",
+  "1. Read the decisions, decision records, logs and threads below and in the vault.\n2. Write a dated timeline, one line per event, oldest first.\n3. For each decision, add how it turned out when the record says so (the retro).\n4. End with one lesson the timeline shows.",
+  "Fill a gap with a guess. Change any record."),
+  spec(`id: sentinel
+name: Sentinel
+icon: radar
+family: know
+returns: alerts
+ceiling: read
+tools: [vault-read]
+runtime: standard
+budget: { minutes: 3, usd: 0.15, passes: 1 }
+handoff: offer
+done_when:
+  - each alert says what is slipping, by when, and the evidence
+  - nothing on the list is already done
+  - says "nothing slipping" when that is true`,
+  "Deadlines, risk, neglect and change: what is falling behind before it becomes a regret.",
+  "1. Start from the radar below (computed by code).\n2. Add what the files show that the radar cannot: a renewal in a document, a promise in a note.\n3. One line per alert: what, by when, the evidence, the smallest next step.\n4. Most urgent first.",
+  "Raise an alarm without evidence. Nag about what the user chose to let go."),
+  spec(`id: auditor
+name: Auditor
+icon: badge-check
+family: decide
+returns: verified
+ceiling: read
+tools: [web, vault-read]
+runtime: deep
+budget: { minutes: 4, usd: 0.30, passes: 1 }
+handoff: offer
+done_when:
+  - a verdict in the first line: verified, or flagged
+  - each flag names the claim, what is wrong and the source that shows it`,
+  "Checks the other specialists' claims, numbers and sources before anything is filed.",
+  "1. Re-check every number against its source (open the file or the link).\n2. Re-check that each source says what the claim says.\n3. Verified only when nothing material is wrong; otherwise flagged, with each problem.\n4. Never fix the work yourself; say what is wrong.",
+  "Pass a number you could not check. Add new claims."),
+  spec(`id: builder
+name: Builder
+icon: hammer
+family: do
+returns: build
+ceiling: write-vault
+tools: [web, vault-read]
+runtime: deep
+budget: { minutes: 8, usd: 0.60, passes: 2 }
+handoff: offer
+done_when:
+  - every file is a fenced block whose first line is "path: <relative file name>"
+  - says how to run it and how to undo it`,
+  "Code, sites, tools and automations, built as files the user reviews before anything runs.",
+  "1. Plan the smallest thing that does the job.\n2. Write each file in full as a fenced block starting with its path line.\n3. Say how to run it, what it touches, and how to remove it.\n4. Nothing runs and nothing is installed: the files wait in the job folder.",
+  "Run, install or deploy anything. Touch files outside the job folder."),
+  spec(`id: clerk
+name: Clerk
+icon: folder-input
+family: do
+returns: vault changes
+ceiling: write-vault
+tools: [vault-read]
+runtime: standard
+budget: { minutes: 3, usd: 0.15, passes: 1 }
+handoff: offer
+done_when:
+  - each change is a task for the owner, or a one-line note for a domain the job tells
+  - nothing is filed twice (check the boards first)`,
+  "Files and organizes: renewals, inbox items and loose notes go to the domain they belong to.",
+  "1. Read what the team found.\n2. Turn each thing that needs doing into one task with a date, for the owner.\n3. Turn each fact another domain should know into one line for that domain.\n4. Skip anything already on a board.",
+  "Delete or move a file. File anything to a domain the job does not tell."),
 ];
 
 // The rest of the roster, listed so the user can see what is coming. Off.
 const LATER: [string, string, Family, string, Ceiling][] = [
-  ["analyst", "Analyst", "know", "numbers", "read"], ["historian", "Historian", "know", "timeline", "read"],
-  ["sentinel", "Sentinel", "know", "alerts", "read"], ["interviewer", "Interviewer", "know", "memory updates", "write-vault"],
-  ["skeptic", "Skeptic", "decide", "risks", "read"], ["auditor", "Auditor", "decide", "verified", "read"],
+  ["interviewer", "Interviewer", "know", "memory updates", "write-vault"],
+  ["skeptic", "Skeptic", "decide", "risks", "read"],
   ["negotiator", "Negotiator", "decide", "strategy", "draft"], ["operator", "Operator", "do", "action", "act-ask"],
-  ["builder", "Builder", "do", "build", "write-vault"], ["clerk", "Clerk", "do", "vault changes", "write-vault"],
   ["liaison", "Liaison", "do", "nudges", "draft"], ["mechanic", "Mechanic", "do", "repairs", "write-vault"],
   ["coach", "Coach", "grow", "goals", "write-vault"], ["tutor", "Tutor", "grow", "lessons", "write-vault"],
   ["confidant", "Confidant", "grow", "reflection", "read"],

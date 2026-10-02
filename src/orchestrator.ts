@@ -15,6 +15,13 @@
 //                  gated by the action class of its goal.
 //   - synthesize : an agent turn that reads the run's collected data and WRITES a
 //                  summary doc into a domain.
+//   - specialist : one specialist (or several side by side) runs as a job
+//                  (jobs.ts), with every ceiling, budget and Undo a chat job has.
+//                  Its typed result (findings, numbers, verdict, page...) feeds
+//                  the steps that `uses` it; a gate that says "does not fit" or
+//                  "flagged" stops the playbook; an ASK step waits for the user.
+//   - task       : a task for the user on the domain's board (a Planner step no
+//                  specialist can do). Reversible: it is one line.
 //
 // Outputs of every step are collected under build/_meta/jobs/<runId>/ so later
 // steps (and the user) can see exactly what was produced. (Runs once went to
@@ -42,7 +49,9 @@ export type PlaybookStep =
   | { kind: "synthesize"; domain: string; output: string; instruction: string; label?: string }
   // The week's metrics glance, computed by code (never written by a model),
   // to `output`; with appendTo, also added to the end of that file.
-  | { kind: "glance"; domain: string; output: string; appendTo?: string; label?: string };
+  | { kind: "glance"; domain: string; output: string; appendTo?: string; label?: string }
+  | { kind: "specialist"; id?: string; specialist?: string; specialists?: string[]; brief: string; domain?: string; uses?: string[]; gate?: "stop" | null; approval?: "ask" | null; label?: string }
+  | { kind: "task"; id?: string; text: string; domain?: string; due?: string; label?: string };
 
 export interface Playbook {
   id: string;
@@ -50,6 +59,13 @@ export interface Playbook {
   goal: string;
   domain?: string;     // home domain (where the result usually lands)
   steps: PlaybookStep[];
+  /** Saved from chat (a Planner draft or "Save as playbook"), not yet adopted. */
+  draft?: boolean;
+  /** Compass links (goals-plan): the goal and path this playbook serves. */
+  goalId?: string;
+  pathId?: string;
+  /** Where it came from: a job id, when saved from one. */
+  from?: string;
 }
 
 export interface StepResult {
@@ -78,6 +94,10 @@ export interface OrchestratorCtx {
   autonomousActs: boolean;   // global opt-in (a step gated "auto" only runs when true)
   signal?: AbortSignal;
   onProgress?: (event: Record<string, unknown>) => void;
+  /** The domain a domain-free playbook runs in (built-in playbooks name none). */
+  domain?: string;
+  /** Test seams for specialist steps (the model call). */
+  runDeps?: import("./jobs.ts").RunDeps;
 }
 
 const STEP_TIMEOUT_MS = 10 * 60_000;
@@ -91,6 +111,8 @@ function stepLabel(step: PlaybookStep, i: number): string {
   if (step.kind === "skill") return `${step.app}:${step.skill}`;
   if (step.kind === "agent") return `agent: ${step.goal.slice(0, 48)}`;
   if (step.kind === "glance") return `glance → ${step.domain}/${step.output}`;
+  if (step.kind === "specialist") return `${(step.specialists ?? [step.specialist ?? "?"]).join(" + ")}: ${step.brief.slice(0, 48)}`;
+  if (step.kind === "task") return `task: ${step.text.slice(0, 48)}`;
   return `synthesize → ${step.domain}/${step.output}`;
 }
 
@@ -103,6 +125,7 @@ export async function runPlaybook(
   mkdirSync(runDir, { recursive: true });
   const steps: StepResult[] = [];
   const collected: string[] = []; // all output paths so far, for synthesize steps
+  const typed = new Map<string, { name: string; returns: string; body: string }[]>(); // specialist results by step id
 
   emit(ctx, { phase: "started", runId, playbook: playbook.id, steps: playbook.steps.length });
   logActivity(ctx.vault, { type: "playbook", domain: playbook.domain, title: `Playbook: ${playbook.name}`, detail: playbook.goal, status: "pending", ref: runId });
@@ -138,6 +161,18 @@ export async function runPlaybook(
       } else if (step.kind === "glance") {
         await runGlanceStep(step, ctx, res);
         collected.push(...res.outputs);
+      } else if (step.kind === "specialist") {
+        const stop = await runSpecialistStep(step, i, runId, playbook, ctx, typed, res);
+        collected.push(...res.outputs);
+        if (stop) {
+          auditAction(auditRoot(ctx.vault), { ts: Date.now(), domain: playbook.domain ?? "", action: `${label}: ${res.note}`.slice(0, 280), outcome: "proposed", provider: ctx.provider, model: ctx.model || undefined });
+          emit(ctx, { phase: "step_done", index: i, ok: res.ok, decision: res.decision, note: res.note, outputs: res.outputs });
+          steps.push(res);
+          emit(ctx, { phase: "gated", index: i, note: res.note });
+          break;
+        }
+      } else if (step.kind === "task") {
+        runTaskStep(step, playbook, ctx, res);
       } else {
         await runSynthesizeStep(step, ctx, cli, collected, res);
         collected.push(...res.outputs);
@@ -258,6 +293,73 @@ async function runGlanceStep(step: Extract<PlaybookStep, { kind: "glance" }>, ct
   }
   res.ok = true;
   res.note = `wrote ${output}${appendAbs && existsSync(appendAbs) ? `, added to ${expandOutput(step.appendTo!)}` : ""}`;
+}
+
+// A specialist step is a job (origin playbook) so it has the job's ceilings,
+// budget, records and Undo. Returns true when the playbook must stop here (a
+// gate that did not pass).
+async function runSpecialistStep(step: Extract<PlaybookStep, { kind: "specialist" }>, i: number, runId: string, playbook: Playbook, ctx: OrchestratorCtx, typed: Map<string, { name: string; returns: string; body: string }[]>, res: StepResult): Promise<boolean> {
+  const jobs = await import("./jobs.ts");
+  const { loadSpecialists } = await import("./specialists.ts");
+  const { readChiefOfStaff } = await import("./chief-of-staff.ts");
+  const ids = (step.specialists ?? (step.specialist ? [step.specialist] : [])).map((x) => x.toLowerCase());
+  const specs = loadSpecialists(ctx.vault);
+  const missing = ids.filter((x) => !specs.some((s) => s.id === x && s.on));
+  if (!ids.length || missing.length) { res.decision = "block"; res.note = `not available: ${missing.join(", ") || "no specialist named"}`; return false; }
+  const owner = step.domain ?? playbook.domain ?? ctx.domain ?? "general";
+  const sid = step.id ?? `s${i + 1}`;
+  const uses = step.uses ?? [...typed.keys()];
+  const inputs = uses.flatMap((u) => typed.get(u) ?? []);
+  const chief = readChiefOfStaff(ctx.vault);
+  const job: import("./jobs.ts").Job = {
+    id: `${runId}-${sid}`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 120), ask: step.brief, origin: { kind: "playbook", domain: owner },
+    domains: { owner, consulted: [], informed: [] }, entities: [], team: [{ step: 1, specialists: ids, ...(step.gate === "stop" ? { gate: true } : {}), brief: step.brief }],
+    effort: "standard", budget: { usd: Math.min(jobs.EFFORT_BUDGET.standard.usd, chief.limits.usd), minutes: Math.min(jobs.EFFORT_BUDGET.standard.minutes, chief.limits.minutes) },
+    why: `step ${i + 1} of the playbook ${playbook.name}`, playbook: playbook.id, status: "proposed", startsAlone: false, created: Date.now(), inputs,
+  };
+  jobs.decideStart(ctx.vault, job, specs, chief.limits, true);
+  jobs.saveJob(ctx.vault, job);
+  // ASK steps, and anything that may not start alone (money, people, a
+  // ceiling past draft), wait for the user: the job is kept, offered, not run.
+  if (step.approval === "ask" || !job.startsAlone) {
+    res.decision = "ask";
+    res.note = `waits for your yes (job ${job.id})${job.askReason ? `: ${job.askReason}` : ""}`;
+    return false;
+  }
+  res.decision = "auto";
+  const done = await jobs.runJob(ctx.vault, job.id, ctx.runDeps ?? {});
+  const resultFile = join(jobs.jobDir(ctx.vault, job.id), "result.json");
+  if (existsSync(resultFile)) res.outputs.push(resultFile);
+  const steps = jobs.jobView(ctx.vault, job.id)?.steps as { specialist: string; result?: { type: string; file: string } }[] | undefined;
+  const out: { name: string; returns: string; body: string }[] = [];
+  for (const st of steps ?? []) {
+    if (!st.result) continue;
+    try {
+      const body = (JSON.parse(vreadFile(join(jobs.jobDir(ctx.vault, job.id), st.result.file))) as { body?: string }).body ?? "";
+      out.push({ name: specs.find((s) => s.id === st.specialist)?.name ?? st.specialist, returns: st.result.type, body });
+    } catch { /* unreadable step result */ }
+  }
+  typed.set(sid, out);
+  res.ok = done.status === "done";
+  res.note = `${done.status}${done.result?.summary ? `: ${done.result.summary}` : done.note ? `: ${done.note}` : ""} (job ${job.id})`;
+  return done.status === "needs-approval" && /stopped at the gate/.test(done.note ?? "");
+}
+
+// A task step files one line on the domain's board (a step for the user).
+function runTaskStep(step: Extract<PlaybookStep, { kind: "task" }>, playbook: Playbook, ctx: OrchestratorCtx, res: StepResult): void {
+  const domain = step.domain ?? playbook.domain ?? ctx.domain ?? "general";
+  const dir = safeDomainDir(ctx.vault, domain);
+  const board = existsSync(join(dir, "memory")) ? join(dir, "memory", "tasks.md") : join(dir, "_tasks.md");
+  const cur = existsSync(board) ? vreadFile(board) : "";
+  const text = step.text.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (cur.split("\n").some((l) => l.includes(text))) { res.ok = true; res.note = "already on the board"; return; }
+  const due = step.due && /^\d{4}-\d{2}-\d{2}$/.test(step.due) ? ` @${step.due}` : "";
+  const day = expandOutput("{date}");
+  mkdirSync(dirname(board), { recursive: true });
+  vwriteFile(board, `${cur ? cur.replace(/\s*$/, "\n") : "# Tasks\n\n"}- [ ] ${text}${due} +${day} ~src:playbook:${playbook.id} ~id:pb${Date.now().toString(36).slice(-5)}\n`);
+  res.ok = true;
+  res.note = `task on ${domain}'s board`;
+  res.outputs.push(board);
 }
 
 function safeDomainDir(vault: string, domain: string): string {

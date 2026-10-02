@@ -446,6 +446,7 @@ export async function runOneLoop(
     const autonomousActs = loop.autonomy === "auto" || cfg.autonomousActs === true || isAuto(root);
     const pr = await runPlaybook(`loop-${loop.id}-${now}`, pb, {
       vault: root, provider: cfg.provider, model: runModel, autonomousActs,
+      domain: domainDir.split("/").filter(Boolean).pop(),
       onProgress: (e) => onPhase("playbook", String(e.label ?? e.phase ?? "")),
     });
     loop.lastRunTs = now;

@@ -482,7 +482,7 @@ export async function runMcpServer(
       description: "Run a playbook NOW (by id from list_playbooks). It executes each step through Prevail's safety gate (global pause + per-action-class policy + audit); read-only/allowed steps run, anything needing consent is recorded as 'ask' and skipped. Returns the per-step outcome and the run directory. Use for composite jobs like building a net-worth picture.",
       inputSchema: {
         type: "object",
-        properties: { id: { type: "string", description: "Playbook id from list_playbooks." } },
+        properties: { id: { type: "string", description: "Playbook id from list_playbooks." }, domain: { type: "string", description: "The domain a built-in playbook runs in (optional)." } },
         required: ["id"],
       },
     },
@@ -1355,10 +1355,10 @@ async function tSyncApp(args: Record<string, unknown>, vaultPath: string): Promi
 }
 
 async function tListPlaybooks(vaultPath: string): Promise<string> {
-  const { listPlaybooks } = await import("./orchestrator.ts");
-  const list = listPlaybooks(vaultPath);
+  const { playbookRows } = await import("./playbooks.ts");
+  const list = playbookRows(vaultPath);
   if (list.length === 0) return "No playbooks available.";
-  return list.map((p) => `- ${p.id}: ${p.name} — ${p.goal}`).join("\n");
+  return list.map((p) => `- ${p.id} (${p.group}${p.domain ? `, ${p.domain}` : ""}): ${p.name}: ${p.goal}`).join("\n");
 }
 
 async function tRunPlaybook(args: Record<string, unknown>, vaultPath: string): Promise<string> {
@@ -1368,7 +1368,8 @@ async function tRunPlaybook(args: Record<string, unknown>, vaultPath: string): P
   const { isAuto } = await import("./autonomy.ts");
   const pb = loadPlaybook(vaultPath, id);
   if (!pb) throw new Error(`no playbook "${id}" (see list_playbooks)`);
-  const result = await runPlaybook(`mcp-${id}-${Date.now()}`, pb, { vault: vaultPath, provider: "claude", model: "", autonomousActs: isAuto(vaultPath) });
+  const domain = typeof args.domain === "string" && /^[a-z0-9][a-z0-9_-]{0,60}$/.test(args.domain) ? args.domain : undefined;
+  const result = await runPlaybook(`mcp-${id}-${Date.now()}`, pb, { vault: vaultPath, provider: "claude", model: "", autonomousActs: isAuto(vaultPath), ...(domain ? { domain } : {}) });
   const lines = result.steps.map((s) => `  [${s.decision}] ${s.ok ? "✓" : "·"} ${s.label} — ${s.note}`);
   return `${result.ok ? "✓" : "✗"} ${pb.name}: ${result.note}\n${lines.join("\n")}\nRun dir: ${result.runDir}`;
 }

@@ -80,9 +80,11 @@ export interface Job {
   pid?: number;
   /** A job a mission started: its ceiling (the lowest wins) and money left. */
   mission?: { slug: string; ceiling: Ceiling; budgetLeftUsd: number | null };
+  /** Results handed in from outside the job (earlier playbook steps): the team reads them first. */
+  inputs?: { name: string; returns: string; body: string }[];
 }
 
-export interface Receipt { n: number; ts: number; domain: string; kind: "decision" | "task" | "note" | "page" | "draft"; file: string; ref: string; text: string; undone?: number }
+export interface Receipt { n: number; ts: number; domain: string; kind: "decision" | "task" | "note" | "page" | "draft" | "build"; file: string; ref: string; text: string; undone?: number }
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
@@ -142,7 +144,7 @@ function alive(vault: string, j: Job): Job {
 
 // ── Dispatch: answer, or a job ──────────────────────────────────────────────
 
-export type Shape = "find" | "plan" | "do" | "understand";
+export type Shape = "find" | "plan" | "do" | "understand" | "make";
 
 // A job is something to go and do, not a question to answer. Code reads the
 // shape from the opening verb; anything else is answered as an ordinary turn
@@ -152,6 +154,7 @@ const SHAPES: [Shape, RegExp][] = [
   ["plan", /^(please\s+)?(can you\s+|could you\s+)?(plan|make (me )?a plan|map out|lay out the steps|put together a plan|figure out how)\b/i],
   ["do", /^(please\s+)?(can you\s+|could you\s+)?(draft|write (an? )?(email|letter|message|note|request)|prepare (an? )?(email|letter|request)|reach out)\b/i],
   ["understand", /^(please\s+)?(can you\s+|could you\s+)?(analy[sz]e my|go through my|review my|summari[sz]e my)\b/i],
+  ["make", /^(please\s+)?(can you\s+|could you\s+)?(build (me )?(a|an)|make (me )?(a|an) (script|tool|site|page|automation|app)|write (a|an) (script|tool|automation)|code (me )?(a|an))\b/i],
 ];
 
 export function shapeOf(message: string): Shape | null {
@@ -163,23 +166,30 @@ export function shapeOf(message: string): Shape | null {
 
 /**
  * Staffing shapes (built in): find/compare/choose -> Researcher (+ Scout when
- * open-ended), Steward when it is a decision, Editor to deliver. Plan ->
- * Planner, Steward, Editor. Do -> Planner then Writer (drafts only).
- * Understand my data -> Researcher reading the vault, Editor. Specialists that
- * are off are left out (Analyst, Auditor and Historian come in a later phase).
+ * open-ended), Analyst when money is involved, Steward when it is a decision,
+ * Auditor when numbers drive it, Editor to deliver. Plan -> Planner, Steward,
+ * Editor. Do -> Planner then Writer (drafts only). Make -> Builder, Auditor.
+ * Understand my data -> Analyst and Historian side by side, Editor.
+ * Specialists that are off are left out.
  */
-export function teamFor(shape: Shape, on: Set<string>, opts: { openEnded?: boolean; decision?: boolean } = {}): TeamStep[] {
+export function teamFor(shape: Shape, on: Set<string>, opts: { openEnded?: boolean; decision?: boolean; money?: boolean; numbers?: boolean } = {}): TeamStep[] {
   const steps: { specialists: string[]; gate?: boolean }[] = [];
   if (shape === "find") {
     steps.push({ specialists: ["researcher", ...(opts.openEnded !== false ? ["scout"] : [])] });
+    if (opts.money) steps.push({ specialists: ["analyst"] });
     if (opts.decision !== false) steps.push({ specialists: ["steward"], gate: true });
+    if (opts.numbers || opts.money) steps.push({ specialists: ["auditor"], gate: true });
     steps.push({ specialists: ["editor"] });
   } else if (shape === "plan") {
     steps.push({ specialists: ["planner"] }, { specialists: ["steward"], gate: true }, { specialists: ["editor"] });
   } else if (shape === "do") {
     steps.push({ specialists: ["planner"] }, { specialists: ["writer"] });
+  } else if (shape === "make") {
+    steps.push({ specialists: ["builder"] }, { specialists: ["auditor"], gate: true });
   } else {
-    steps.push({ specialists: ["researcher"] }, { specialists: ["editor"] });
+    // Understand my data: the Analyst counts, the Historian dates; without them the Researcher reads the vault.
+    const pair = ["analyst", "historian"].filter((x) => on.has(x));
+    steps.push({ specialists: pair.length ? pair : ["researcher"] }, { specialists: ["editor"] });
   }
   return steps
     .map((s) => ({ ...s, specialists: s.specialists.filter((id) => on.has(id)) }))
@@ -187,7 +197,7 @@ export function teamFor(shape: Shape, on: Set<string>, opts: { openEnded?: boole
     .map((s, i) => ({ step: i + 1, specialists: s.specialists, ...(s.gate ? { gate: true } : {}) }));
 }
 
-export interface DispatchModel { owner?: string; consulted?: string[]; informed?: string[]; entities?: string[]; effort?: Effort; why?: string; open_ended?: boolean; decision?: boolean }
+export interface DispatchModel { owner?: string; consulted?: string[]; informed?: string[]; entities?: string[]; effort?: Effort; why?: string; open_ended?: boolean; decision?: boolean; money?: boolean; numbers?: boolean }
 
 export function buildDispatchPrompt(message: string, here: string, domains: { slug: string; goals: string[] }[], learned: string[]): { system: string; prompt: string } {
   const system = "You staff jobs for a person's chief of staff. You pick which life domains a job belongs to. Reply with JSON only.";
@@ -206,6 +216,8 @@ export function buildDispatchPrompt(message: string, here: string, domains: { sl
     '  "effort": "quick | standard | deep",',
     '  "open_ended": <true when it helps to look beyond the question>,',
     '  "decision": <true when the person must choose between options>,',
+    '  "money": <true when money is involved: prices, costs, budgets>,',
+    '  "numbers": <true when numbers drive the answer and should be checked>,',
     '  "why": "<one short line: the shape of the job>" }',
     `Asking inside a domain makes it the default owner${here !== "general" ? ` (${here})` : ""}; pick another only when it clearly fits better.`,
   ].join("\n");
@@ -227,6 +239,8 @@ export function parseDispatchReply(raw: string, known: string[]): DispatchModel 
       why: typeof j.why === "string" ? j.why.slice(0, 160) : undefined,
       open_ended: j.open_ended !== false,
       decision: j.decision !== false,
+      money: j.money === true,
+      numbers: j.numbers === true,
     };
   } catch { return null; }
 }
@@ -380,8 +394,9 @@ export async function dispatch(i: DispatchInput): Promise<Dispatch> {
   const informed = [...new Set([...(dm?.informed ?? []), ...scInformed])].filter((d) => keep(d) && !consulted.includes(d)).slice(0, 3);
   // A mission's own specialists staff it when it named any.
   const pool = sc && sc.specialists.length ? new Set([...on].filter((x) => sc.specialists.includes(x) || x === "editor" || x === "steward")) : on;
-  let team = teamFor(shape, pool, { openEnded: dm?.open_ended, decision: dm?.decision });
-  if (!team.length && sc) team = teamFor(shape, on, { openEnded: dm?.open_ended, decision: dm?.decision });
+  const teamOpts = { openEnded: dm?.open_ended, decision: dm?.decision, money: dm?.money, numbers: dm?.numbers };
+  let team = teamFor(shape, pool, teamOpts);
+  if (!team.length && sc) team = teamFor(shape, on, teamOpts);
   const skip = learned.skip.get(owner);
   if (skip) team = team.map((s) => ({ ...s, specialists: s.specialists.filter((x) => !skip.has(x)) })).filter((s) => s.specialists.length).map((s, n) => ({ ...s, step: n + 1 }));
   if (!team.length) return { kind: "answer", confident: true };
@@ -502,12 +517,13 @@ export function estimateUsd(cli: string, promptChars: number, replyChars: number
 export interface StepOutput {
   summary: string; body: string; sources: string[]; check: { ok: boolean; missing: string[] };
   notebook: string[]; verdict?: string; drafts?: { to: string; subject: string; body: string }[];
-  filed?: { decision?: string; task?: { text: string; due?: string }; notes?: Record<string, string> };
+  filed?: { decision?: string; task?: { text: string; due?: string }; tasks?: { text: string; due?: string }[]; notes?: Record<string, string> };
 }
 
 export function parseStepOutput(raw: string): StepOutput {
   const text = raw.trim();
-  const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
+  // A reply that is JSON already wins: its body may hold fenced blocks of its own (a Builder's files).
+  const fence = text.startsWith("{") ? null : /```(?:json)?\s*([\s\S]*?)```/.exec(text);
   const cand = fence ? fence[1]! : text;
   const a = cand.indexOf("{");
   const b = cand.lastIndexOf("}");
@@ -537,7 +553,25 @@ export function codeCheck(s: Specialist, o: StepOutput): string[] {
   if ((s.returns === "findings" || s.returns === "discoveries") && !o.sources.length) miss.push("no sources");
   if (s.returns === "verdict" && !/fit/i.test(o.verdict ?? o.summary)) miss.push("no verdict (fits, fits with changes, does not fit)");
   if (s.returns === "draft" && !(o.drafts?.length)) miss.push("no drafts");
+  if (s.returns === "numbers" && !/\d/.test(o.summary + o.body)) miss.push("no numbers");
+  if (s.returns === "numbers" && !o.sources.length) miss.push("no sources for the numbers");
+  if (s.returns === "timeline" && (o.body.match(/\b(19|20)\d{2}(-\d{2})?\b/g) ?? []).length < 2) miss.push("no dated lines");
+  if (s.returns === "verified" && !/\b(verified|flagged)\b/i.test(o.verdict ?? o.summary)) miss.push("no verdict (verified or flagged)");
+  if (s.returns === "build" && !buildFiles(o.body).length) miss.push("no files (fenced blocks starting with a path line)");
+  if (s.returns === "vault changes" && !(o.filed?.task || o.filed?.tasks?.length || Object.keys(o.filed?.notes ?? {}).length)) miss.push("no changes to file");
   return miss;
+}
+
+/** Files a Builder wrote: fenced blocks whose first line is "path: <name>". Names are kept to safe relative paths. */
+export function buildFiles(body: string): { path: string; text: string }[] {
+  const out: { path: string; text: string }[] = [];
+  for (const m of body.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
+    const lines = m[1]!.split("\n");
+    const p = /^\s*(?:\/\/|#|<!--)?\s*path:\s*([A-Za-z0-9._/-]{1,120})\s*(?:-->)?\s*$/.exec(lines[0] ?? "")?.[1];
+    if (!p || p.includes("..") || p.startsWith("/")) continue;
+    out.push({ path: p, text: lines.slice(1).join("\n") });
+  }
+  return out;
 }
 
 function clip(s: string, n: number): string { return s.length > n ? `${s.slice(0, n)}\n(cut)` : s; }
@@ -572,11 +606,15 @@ export function jobContext(vault: string, job: Job): string {
   return parts.join("\n\n---\n\n");
 }
 
-export function specialistPrompt(o: { s: Specialist; notes: string; notebook: string[]; job: Job; context: string; prior: { name: string; returns: string; body: string }[]; missing: string[]; brief?: string }): string {
+export function specialistPrompt(o: { s: Specialist; notes: string; notebook: string[]; job: Job; context: string; prior: { name: string; returns: string; body: string }[]; missing: string[]; brief?: string; facts?: string }): string {
   const { s, job } = o;
   const tells = [...job.domains.consulted, ...job.domains.informed];
   const extra = s.returns === "verdict"
     ? ',\n  "verdict": "fits | fits with changes | does not fit"'
+    : s.returns === "verified"
+      ? ',\n  "verdict": "verified | flagged"'
+    : s.returns === "vault changes"
+      ? `,\n  "filed": { "tasks": [{ "text": "<a task for the owner>", "due": "YYYY-MM-DD" }], "notes": { ${tells.map((d) => `"${d}": "<one line this domain should know>"`).join(", ")} } }`
     : s.returns === "page"
       ? `,\n  "filed": { "decision": "<one line the owner should keep as the decision, or omit>", "task": { "text": "<the next step for the user>", "due": "YYYY-MM-DD" }, "notes": { ${tells.map((d) => `"${d}": "<one line this domain should know>"`).join(", ")} } }`
       : s.returns === "draft" ? ',\n  "drafts": [{ "to": "<who>", "subject": "<subject>", "body": "<text>" }]' : "";
@@ -589,6 +627,7 @@ export function specialistPrompt(o: { s: Specialist; notes: string; notebook: st
     `## The job\n${job.ask}\nYour part: ${o.brief ?? (s.returns === "page" ? "turn the team's results into one page" : `your ${s.returns} for this job`)}.\nOwner domain: ${job.domains.owner}.${job.domains.consulted.length ? ` Also read: ${job.domains.consulted.join(", ")}.` : ""}`,
     o.notes ? `## The user's instructions for you in ${job.domains.owner}\n${o.notes}` : "",
     o.notebook.length ? `## What you learned here before\n${o.notebook.map((l) => `- ${l}`).join("\n")}` : "",
+    o.facts ? `## What code already knows (computed, not guessed)\n${o.facts}` : "",
     `## Context (the user's own notes, read only)\n${o.context}`,
     o.prior.length ? `## Results from earlier steps\n${o.prior.map((p) => `### ${p.name} (${p.returns})\n${clip(p.body, 6000)}`).join("\n\n")}` : "",
     o.missing.length ? `## Your last pass missed\n${o.missing.map((m) => `- ${m}`).join("\n")}\nFix these.` : "",
@@ -640,7 +679,8 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
     if (!cli) return finish("failed", "no AI runtime available");
     const turn = deps.runChatTurn ?? runChatTurn;
     const context = jobContext(vault, job);
-    const prior: { name: string; returns: string; body: string; out: StepOutput; id: string }[] = [];
+    const prior: { name: string; returns: string; body: string; out: StepOutput; id: string }[] = (job.inputs ?? []).map((x, i) => ({ ...x, id: `input-${i}`, out: { summary: x.body.split("\n")[0] ?? "", body: x.body, sources: [], check: { ok: true, missing: [] }, notebook: [] } }));
+    const handedIn = prior.length;
     let usd = 0;
     const startMs = clock();
     let n = 0;
@@ -658,6 +698,8 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
       // A mission's ceiling can only tighten: a read-only mission never drafts.
       if (job!.mission && ceilingRank(spec.ceiling) > ceilingRank(job!.mission.ceiling)) return { ok: false, status: "needs-approval", note: `the ${spec.name} goes past the mission's ceiling (${job!.mission.ceiling}); raise it on the mission's Setup tab to run it` };
       const notebook = readNotebook(vault, job!.domains.owner, sid);
+      const { specialistFacts } = await import("./specialist-facts.ts");
+      const facts = await specialistFacts(vault, sid, job!.domains.owner, clock());
       const record = { id: `${idx}-${sid}`, specialist: sid, domain: job!.domains.owner, trigger: { kind: job!.origin.kind, ...(job!.origin.thread ? { thread: job!.origin.thread } : {}) }, brief: st.brief ?? job!.ask, status: "running", passes: [] as { n: number; check: { ok: boolean; missing: string[] }; usd: number; ms: number }[], result: null as null | { type: string; file: string }, notebook: [] as string[], cost: { usd: 0, minutes: 0, estimated: true } };
       let out: StepOutput | null = null;
       let missing: string[] = [];
@@ -672,7 +714,7 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
         }
         job!.progress!.push({ step: st.step, specialist: sid, pass });
         saveJob(vault, job!);
-        const prompt = specialistPrompt({ s: spec, notes, notebook, job: job!, context, prior, missing, brief: st.brief });
+        const prompt = specialistPrompt({ s: spec, notes, notebook, job: job!, context, prior, missing, brief: st.brief, facts });
         const t0 = clock();
         const timeout = AbortSignal.timeout(leftMs);
         const signal = AbortSignal.any([ac.signal, timeout]);
@@ -716,7 +758,7 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
       // A gate stops the job when the check says it does not fit.
       if (st.gate) {
         const v = prior.filter((p) => st.specialists.includes(p.id)).map((p) => p.out.verdict ?? p.out.summary).join(" ");
-        if (/does not fit|doesn't fit/i.test(v)) {
+        if (/does not fit|doesn't fit|\bflagged\b/i.test(v)) {
           job.result = { type: "verdict", summary: v, verdict: v };
           job.cost = { usd: Math.round(usd * 100) / 100, minutes: Math.round((clock() - startMs) / 600) / 100, estimated: true };
           return finish("needs-approval", `stopped at the gate: ${v}`);
@@ -724,6 +766,7 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
       }
     }
     // The result, and what gets filed.
+    if (prior.length === handedIn) return finish("failed", "no specialist ran");
     const last = prior[prior.length - 1]!;
     const verdict = prior.find((p) => p.returns === "verdict")?.out.verdict;
     const drafts = prior.flatMap((p) => p.out.drafts ?? []);
@@ -732,7 +775,7 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
     job.result = result;
     job.cost = { usd: Math.round(usd * 100) / 100, minutes: Math.round((clock() - startMs) / 600) / 100, estimated: true };
     saveJob(vault, job);
-    fileResults(vault, job, last, drafts, clock());
+    fileResults(vault, job, last, drafts, clock(), prior.slice(handedIn));
     job = readJob(vault, id) ?? job;
     return finish("done");
   } catch (e) {
@@ -763,7 +806,7 @@ function writeReceipts(vault: string, id: string, rows: Receipt[]): void {
 
 const oneLine = (s: string, n = 200) => s.replace(/\s+/g, " ").replace(/\s*\u2014\s*/g, ", ").trim().slice(0, n);
 
-function fileResults(vault: string, job: Job, last: { returns: string; out: StepOutput }, drafts: NonNullable<JobResult["drafts"]>, now: number): void {
+function fileResults(vault: string, job: Job, last: { returns: string; out: StepOutput }, drafts: NonNullable<JobResult["drafts"]>, now: number, all: { returns: string; out: StepOutput }[] = [last]): void {
   const rows: Receipt[] = [];
   const rel = (p: string) => relative(vault, p);
   const owner = job.domains.owner;
@@ -784,21 +827,35 @@ function fileResults(vault: string, job: Job, last: { returns: string; out: Step
     writeFileSync(p, drafts.map((d) => `## To: ${d.to}\nSubject: ${d.subject}\n\n${d.body}\n`).join("\n"));
     add({ domain: owner, kind: "draft", file: rel(p), ref: rel(p), text: `${drafts.length} draft${drafts.length === 1 ? "" : "s"}, not sent` });
   }
-  const f = last.out.filed;
+  // A Builder's files wait in the job folder; nothing runs or installs.
+  for (const b of all.filter((x) => x.returns === "build")) {
+    for (const bf of buildFiles(b.out.body)) {
+      const p = join(jobDir(vault, job.id), "build", bf.path);
+      mkdirSync(join(p, ".."), { recursive: true });
+      writeFileSync(p, bf.text);
+      add({ domain: owner, kind: "build", file: rel(p), ref: rel(p), text: `file ${bf.path}, waiting for you (nothing ran)` });
+    }
+  }
+  // The page's filing, plus a Clerk's: tasks for the owner and notes for the domains the job tells.
+  const clerk = all.filter((x) => x.returns === "vault changes").map((x) => x.out.filed ?? {});
+  const f: NonNullable<StepOutput["filed"]> = { ...(last.out.filed ?? {}) };
+  for (const c of clerk) { f.tasks = [...(f.tasks ?? []), ...(c.task ? [c.task] : []), ...(c.tasks ?? [])]; f.notes = { ...(c.notes ?? {}), ...(f.notes ?? {}) }; }
   if (f?.decision && oneLine(f.decision)) {
     const d = appendDecision(vault, spaceKey(owner), { type: "job_result", prompt: job.ask, verdict: oneLine(f.decision, 400), source: "job", job: job.id, ts: now });
     add({ domain: owner, kind: "decision", file: rel(decisionsFile(vault, spaceKey(owner))), ref: d.id, text: `decision logged: ${oneLine(f.decision, 120)}` });
   }
-  if (f?.task?.text && oneLine(f.task.text)) {
-    const tid = `j${now.toString(36).slice(-6)}`;
-    const due = f.task.due && /^\d{4}-\d{2}-\d{2}$/.test(f.task.due) ? ` @${f.task.due}` : "";
-    const bf = boardFile(vault, owner);
+  const tasks = [...(f.task ? [f.task] : []), ...(f.tasks ?? [])].filter((t) => t?.text && oneLine(t.text)).slice(0, 6);
+  const bf = boardFile(vault, owner);
+  tasks.forEach((t, i) => {
+    const tid = `j${(now + i).toString(36).slice(-6)}`;
+    const due = t.due && /^\d{4}-\d{2}-\d{2}$/.test(t.due) ? ` @${t.due}` : "";
     const cur = readText(bf);
-    const line = `- [ ] ${oneLine(f.task.text, 160)}${due} +${day} ~src:job:${job.id.slice(0, 40)} ~id:${tid}`;
+    if (parseTaskTexts(cur).has(oneLine(t.text, 160).toLowerCase())) return; // never filed twice
+    const line = `- [ ] ${oneLine(t.text, 160)}${due} +${day} ~src:job:${job.id.slice(0, 40)} ~id:${tid}`;
     mkdirSync(join(bf, ".."), { recursive: true });
     writeFileSync(bf, `${cur ? cur.replace(/\s*$/, "\n") : "# Tasks\n\n"}${line}\n`);
-    add({ domain: owner, kind: "task", file: rel(bf), ref: tid, text: `task: ${oneLine(f.task.text, 100)}${due ? `, by ${f.task.due}` : ""}` });
-  }
+    add({ domain: owner, kind: "task", file: rel(bf), ref: tid, text: `task: ${oneLine(t.text, 100)}${due ? `, by ${t.due}` : ""}` });
+  });
   const allowed = new Set([...job.domains.consulted, ...job.domains.informed]);
   for (const [d, fact] of Object.entries(f?.notes ?? {})) {
     if (!allowed.has(d) || typeof fact !== "string" || !oneLine(fact)) continue;
@@ -808,6 +865,11 @@ function fileResults(vault: string, job: Job, last: { returns: string; out: Step
   if (rows.length) writeReceipts(vault, job.id, rows);
 }
 
+/** Open task texts on a board, lower-cased, so a filing never doubles a line. */
+function parseTaskTexts(board: string): Set<string> {
+  return new Set(board.split("\n").map((l) => /^\s*- \[ \]\s+(.*)$/.exec(l)?.[1]).filter((x): x is string => !!x).map((x) => x.replace(/\s+[~@+]\S+/g, "").trim().toLowerCase()));
+}
+
 /** Undo one filed write. Nothing is deleted: a page moves into the job's own folder. */
 export function undoFiled(vault: string, id: string, n: number, now = Date.now()): Receipt {
   const rows = readReceipts(vault, id);
@@ -815,7 +877,7 @@ export function undoFiled(vault: string, id: string, n: number, now = Date.now()
   if (!r) throw new Error(`no filed line ${n} in job ${id}`);
   if (r.undone) return r;
   const abs = join(vault, r.file);
-  if (r.kind === "page") {
+  if (r.kind === "page" || r.kind === "build") {
     if (existsSync(abs)) { const to = join(jobDir(vault, id), "undone", r.file.split("/").pop()!); mkdirSync(join(to, ".."), { recursive: true }); renameSync(abs, to); }
   } else if (r.kind === "task") {
     const lines = readText(abs).split("\n");

@@ -1,0 +1,15 @@
+{
+  "id": "renewal-review",
+  "name": "Renewal review",
+  "goal": "Before something renews (a policy, a plan, a contract), look back at what it cost and how it served you, compare the market, and draft the requests for quotes. Runs in the domain you start it from.",
+  "steps": [
+    { "kind": "specialist", "id": "s1", "specialist": "sentinel", "brief": "What renews soon in this domain, when, and what has changed since the last renewal?" },
+    { "kind": "specialist", "id": "s2", "specialist": "historian", "brief": "The last policy or plan: what it cost, claims or problems, and what was decided last time." },
+    { "kind": "specialist", "id": "s3", "specialists": ["researcher", "scout"], "brief": "Compare the providers on the market for this renewal on the same facts; and what is easy to miss.", "uses": ["s1", "s2"] },
+    { "kind": "specialist", "id": "s4", "specialist": "analyst", "brief": "Three-year cost of staying against the best two alternatives, from the records and the findings.", "uses": ["s2", "s3"] },
+    { "kind": "specialist", "id": "s5", "specialist": "steward", "brief": "Does the best option fit the Compass and the ideal state?", "uses": ["s3", "s4"], "gate": "stop" },
+    { "kind": "specialist", "id": "s6", "specialist": "auditor", "brief": "Check the claims and the numbers before anything is filed.", "uses": ["s3", "s4"], "gate": "stop" },
+    { "kind": "specialist", "id": "s7", "specialist": "editor", "brief": "One comparison page with the recommendation and the next step.", "uses": ["s3", "s4", "s5", "s6"] },
+    { "kind": "specialist", "id": "s8", "specialist": "writer", "brief": "Drafts asking the two best providers for quotes. Drafts only.", "uses": ["s7"], "approval": "ask" }
+  ]
+}
