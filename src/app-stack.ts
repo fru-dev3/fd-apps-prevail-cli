@@ -16,6 +16,7 @@ import { dayOf, readMachineEvents, type MetricEvent } from "./metrics.ts";
 import { runtimePath } from "./path-safety.ts";
 import { parseModArgs } from "./cli-args.ts";
 import { recordSourceState } from "./sources.ts";
+import { cardCharges, detectSeries, moneyScan, readUnknownMerchants, type MoneyScan } from "./app-money.ts";
 
 const AI_TOOLS: Record<string, string> = { claude: "anthropic", codex: "openai", antigravity: "google", opencode: "opencode", cursor: "cursor", hermes: "hermes", aionui: "aionui", wispr: "wispr-flow" };
 const DAY = 86_400_000;
@@ -173,7 +174,7 @@ function writeCache(vault: string, name: string, v: unknown): void {
   renameSync(`${p}.tmp`, p);
 }
 
-export interface AppsScan { usage: ReturnType<typeof scanAppUsage>; records: RecordsResult; unknown: number; apps: number }
+export interface AppsScan { usage: ReturnType<typeof scanAppUsage>; records: RecordsResult; unknown: number; apps: number; money: MoneyScan | null }
 
 /** The A2 pass: read this Mac's signals, create records for vendors seen, refresh the unknown inbox. */
 export function appsScan(vault: string, opts: { now?: number; records?: boolean; consent?: (id: string) => boolean } = {}): AppsScan {
@@ -187,7 +188,10 @@ export function appsScan(vault: string, opts: { now?: number; records?: boolean;
   for (const [id, v] of Object.entries(states)) if (v && v.state !== "off") recordSourceState(vault, id, { state: v.state, ...(v.note ? { note: v.note } : {}), ...(v.events !== undefined ? { events: v.events } : {}) });
   writeCache(vault, "usage.json", { ts: new Date(model.ts).toISOString(), apps: model.apps });
   writeCache(vault, "unknown.json", { ts: new Date(model.ts).toISOString(), unknown: model.unknown });
-  return { usage, records, unknown: model.unknown.length, apps: Object.keys(model.apps).length };
+  // Money onto the records (A3): card series, Plaid, lifecycle mail.
+  let money: MoneyScan | null = null;
+  try { money = moneyScan(vault, { now: opts.now, host: usage.host }); } catch { money = null; }
+  return { usage, records, unknown: model.unknown.length, apps: Object.keys(model.apps).length, money };
 }
 
 export async function appStackCommand(argv: string[], vault: string): Promise<number> {
@@ -214,8 +218,9 @@ export async function appStackCommand(argv: string[], vault: string): Promise<nu
     }
     if (sub === "unknown") {
       const u = computeUsage(vault);
-      if (args.json) out(u.unknown);
-      else for (const x of u.unknown) console.log(`${x.kind.padEnd(8)} ${x.value.padEnd(40)} ${x.days} days${x.suggestion ? `  maybe ${x.suggestion}` : ""}`);
+      const all: (UnknownSignal & { freq?: string })[] = [...u.unknown, ...readUnknownMerchants(vault)];
+      if (args.json) out(all);
+      else for (const x of all) console.log(`${x.kind.padEnd(8)} ${x.value.padEnd(40)} ${x.days} days${x.suggestion ? `  maybe ${x.suggestion}` : ""}`);
       return 0;
     }
     if (sub === "map") {
@@ -223,6 +228,18 @@ export async function appStackCommand(argv: string[], vault: string): Promise<nu
       if (!kind || !value || !target) { console.error("usage: prevail apps map bundle|domain|merchant|sender|binary <value> <app-id>|ignore"); return 1; }
       const r = correctSignal(vault, kind as SignalKind, value, target);
       if (args.json) out({ ok: true, ...r }); else console.log(r.ignored ? `Ignoring ${kind} ${value}.` : `${kind} ${value} is ${r.app} from now on.`);
+      return 0;
+    }
+    if (sub === "money") {
+      const r = moneyScan(vault);
+      if (args.json) out(r); else console.log(`${r.series} recurring series (${r.matched} matched to apps, ${r.unmatched_recurring} to the inbox), ${r.lifecycle} lifecycle emails; ${r.updated.length} records updated; about $${r.monthly_total} a month`);
+      return 0;
+    }
+    if (sub === "charges") {
+      const m = (await import("./app-map.ts")).buildMatcher(vault);
+      const s = detectSeries(cardCharges(vault), m).filter((x) => x.app || args.has("all"));
+      const rows = s.map((x) => ({ app: x.app, freq: x.freq, last: x.last.date, usd: x.last.usd, next: x.next, mature: x.mature, charges: x.charges.length, price_changes: x.price_changes }));
+      if (args.json) out(rows); else for (const r of rows) console.log(`${String(r.app).padEnd(20)} ${r.freq.padEnd(9)} $${r.usd}  last ${r.last}  next ${r.next}${r.mature ? "" : "  (new)"}`);
       return 0;
     }
     if (sub === "records") {
@@ -235,8 +252,8 @@ export async function appStackCommand(argv: string[], vault: string): Promise<nu
     if (args.json) out({ ok: false, error: (e as Error).message }); else console.error((e as Error).message);
     return 1;
   }
-  console.error("usage: prevail apps scan | usage | unknown | map <kind> <value> <app-id|ignore> | records [--json]");
+  console.error("usage: prevail apps scan | usage | unknown | map <kind> <value> <app-id|ignore> | records | money | charges [--all] [--json]");
   return 1;
 }
 
-export const STACK_SUBCOMMANDS = ["scan", "usage", "unknown", "map", "records"];
+export const STACK_SUBCOMMANDS = ["scan", "usage", "unknown", "map", "records", "money", "charges"];

@@ -348,7 +348,7 @@ export function watchEvents(vault: string): { events: MetricEvent[]; info: Sourc
   return { events, info: { id: "watch", kind: "vault", files, events: events.length, note: "occasional scrapes of watch history, not a continuous record" } };
 }
 
-function csvRows(text: string): string[][] {
+export function csvRows(text: string): string[][] {
   const rows: string[][] = [];
   for (const line of text.replace(/\r/g, "").split("\n")) {
     if (!line.trim()) continue;
@@ -365,7 +365,7 @@ function csvRows(text: string): string[][] {
   }
   return rows;
 }
-const mdy = (s: string) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s); return m ? `${m[3]}-${m[1]}-${m[2]}` : null; };
+export const mdy = (s: string) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s); return m ? `${m[3]}-${m[1]}-${m[2]}` : null; };
 
 /** Card statement CSVs in app folders: spend per day and category. Merchant names are read and dropped. */
 export function spendEvents(vault: string): { events: MetricEvent[]; info: SourceInfo } {
@@ -606,7 +606,11 @@ export async function computeMetrics(vault: string, opts: { now?: number; days?:
   const trips = tripEvents(vault);
   const watch = watchEvents(vault);
   const spend = spendEvents(vault);
-  const events = [...machine.events, ...tasks.events, ...loops.events, ...decisions.events, ...prompts.events, ...trips.events, ...watch.events, ...spend.events].filter((e) => e.ts >= from);
+  // Charges matched to apps (apps plan A3), read in place from the same card statements.
+  const { chargeEvents } = await import("./app-money.ts");
+  const ch = chargeEvents(vault);
+  const chargesInfo: SourceInfo = { id: "charges", kind: "vault", files: [...new Set(ch.events.map((e) => e.file!).filter(Boolean))], events: ch.events.length, note: "card statement charges matched to your apps only" };
+  const events = [...machine.events, ...tasks.events, ...loops.events, ...decisions.events, ...prompts.events, ...trips.events, ...watch.events, ...spend.events, ...ch.events].filter((e) => e.ts >= from);
   const hosts: Record<string, string[]> = {};
   for (const e of machine.events) { const k = NOT_AI(e.src) ? e.src : "ai"; (hosts[k] ??= []); if (!hosts[k]!.includes(e.host)) hosts[k]!.push(e.host); }
   const span = (src: string[]) => { const d = events.filter((e) => src.includes(e.src)).map((e) => e.ts).sort(); return d.length ? { first: d[0], last: d[d.length - 1] } : {}; };
@@ -620,7 +624,7 @@ export async function computeMetrics(vault: string, opts: { now?: number; days?:
   const sources: SourceInfo[] = [
     { id: "ai", kind: "machine", files: aiSrcs.flatMap((s) => machine.files[s] ?? []), events: machine.events.filter((e) => !NOT_AI(e.src)).length, hosts: hosts.ai ?? [], ...span(aiSrcs) },
     { id: "git", kind: "machine", files: machine.files.git ?? [], events: machine.events.filter((e) => e.src === "git").length, hosts: hosts.git ?? [], ...span(["git"]) },
-    ...[tasks.info, loops.info, decisions.info, prompts.info, trips.info, watch.info, spend.info].map((i) => ({ ...i, ...span([i.id === "prompts" ? "capture" : i.id]) })),
+    ...[tasks.info, loops.info, decisions.info, prompts.info, trips.info, watch.info, spend.info, chargesInfo].map((i) => ({ ...i, ...span([i.id === "prompts" ? "capture" : i.id]) })),
     { id: "checkins", kind: "machine", files: machine.files.checkins ?? [], events: machine.events.filter((e) => e.src === "checkins").length, hosts: hosts.checkins ?? [], note: "your weekly 1-5, asked once a week", ...span(["checkins"]) },
     { id: "stated", kind: "machine", files: machine.files.stated ?? [], events: machine.events.filter((e) => e.src === "stated").length, hosts: hosts.stated ?? [], note: "numbers you said in chat (counts only)", ...span(["stated"]) },
     ...connected,
