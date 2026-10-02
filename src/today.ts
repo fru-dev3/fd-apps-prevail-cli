@@ -31,6 +31,8 @@ import { items, readCompass, type CompassItem } from "./compass.ts";
 import { readDomainGoals } from "./goals.ts";
 import { listDecisions, openDecision } from "./decision-records.ts";
 import { listJobs } from "./jobs.ts";
+import { openCommitments, readFiled, type HeaderLite, type OpenCommitment } from "./commitments.ts";
+import { readMailHeaders } from "./source-sync.ts";
 import { checkinFor, reviewWeek } from "./review.ts";
 import { dayOf, weekOf } from "./metrics.ts";
 import { parseModArgs } from "./cli-args.ts";
@@ -59,6 +61,10 @@ export interface TodayCard {
   yourDay: { connected: boolean; note: string };
   alsoDue: TodayItem[];
   feedback: { ts: number; key: string; action: string }[];
+  /** Today T2: every promise to a person (and waiting-for) due this week that is not among the three, so none is missing. */
+  promises?: { key: string; title: string; kind: "commitment" | "waiting"; domain: string; due?: string; person?: string; why: string; slipping: boolean }[];
+  /** Commitments added on their own from sent mail or meeting notes in the last three days, each with Undo. */
+  added?: { id: string; text: string; domain: string; src: string; due?: string }[];
 }
 
 const readText = (p: string) => { try { return vreadFile(p); } catch { try { return readFileSync(p, "utf8"); } catch { return ""; } } };
@@ -104,7 +110,7 @@ function boardFiles(vault: string): { domain: string; file: string }[] {
   return out;
 }
 
-export function candidates(vault: string, date: string): TodayItem[] {
+export function candidates(vault: string, date: string, slips: Map<string, OpenCommitment> = new Map()): TodayItem[] {
   const { byDomain, weight } = threadsFor(vault);
   const learned = readWeights(vault);
   const out: TodayItem[] = [];
@@ -139,8 +145,12 @@ export function candidates(vault: string, date: string): TodayItem[] {
     for (const t of parseTasks(readText(file))) {
       if (t.done || t.trashed || t.status === "icebox" || t.status === "done" || !t.due) continue;
       const kind: ItemKind = t.kind === "commitment" ? "commitment" : t.kind === "waiting" ? "waiting" : "task";
-      // A promise to a person outranks a self-imposed date.
-      const extra = (kind === "commitment" ? 2 : kind === "waiting" ? 1.2 : 1) * (t.priority === "critical" ? 1.4 : t.priority === "high" ? 1.2 : 1);
+      // A promise to a person outranks a self-imposed date; an overdue one
+      // outranks everything else on the card, and one slipping (due soon,
+      // nothing done on it) is pulled forward.
+      const slip = kind !== "task" && t.id ? slips.get(`${domain}:${t.id}`) : undefined;
+      const overduePromise = kind === "commitment" && daysBetween(date, t.due) < 0;
+      const extra = (kind === "commitment" ? 2 : kind === "waiting" ? 1.2 : 1) * (t.priority === "critical" ? 1.4 : t.priority === "high" ? 1.2 : 1) * (overduePromise ? 4 : slip?.slipping ? 1.5 : 1);
       const r = score(domain, kind, t.due, extra);
       if (!r) continue;
       const late = -daysBetween(date, t.due);
@@ -148,7 +158,7 @@ export function candidates(vault: string, date: string): TodayItem[] {
       out.push({
         key: `task:${domain}:${t.id ?? `t-${createHash("sha1").update(t.text).digest("hex").slice(0, 8)}`}`, kind, title: t.text.replace(/\s+~\S+/g, "").replace(/\s*\([^)]*\)\s*$/, "").slice(0, 140), domain, due: t.due, ...(person ? { person } : {}),
         thread: r.v.thread, unlinked: r.v.unlinked, score: r.s, ref: { domain, ...(t.id ? { id: t.id } : { text: t.text }) },
-        why: `${late > 0 ? `${late} day${late === 1 ? "" : "s"} overdue` : late === 0 ? "due today" : `due in ${-late} day${late === -1 ? "" : "s"}`}${kind === "commitment" ? ", a promise to someone" : kind === "waiting" ? ", someone owes you this" : ""}`,
+        why: `${late > 0 ? `${late} day${late === 1 ? "" : "s"} overdue` : late === 0 ? "due today" : `due in ${-late} day${late === -1 ? "" : "s"}`}${kind === "commitment" ? ", a promise to someone" : kind === "waiting" ? ", someone owes you this" : ""}${slip?.slipping && late <= 0 && !slip.activity ? ", nothing done on it yet" : ""}`,
       });
     }
   }
@@ -200,7 +210,11 @@ export function composeToday(vault: string, opts: { now?: number; refresh?: bool
   const { topValue } = threadsFor(vault);
   const feedback = old?.feedback ?? [];
   const handled = new Set(feedback.filter((f) => f.action === "done" || f.action === "move" || f.action === "not-important").map((f) => f.key));
-  const all = candidates(vault, date);
+  let headers: HeaderLite[] = [];
+  try { headers = readMailHeaders(vault) as HeaderLite[]; } catch { /* no mail on this Mac */ }
+  const open = openCommitments(vault, now, headers);
+  const slips = new Map(open.filter((c) => c.id).map((c) => [`${c.domain}:${c.id}`, c]));
+  const all = candidates(vault, date, slips);
   const three = pickThree(all, date, topValue?.title, handled);
   const rest = all.filter((x) => !three.includes(x) && !handled.has(x.key));
   const overdue = rest.filter((x) => x.due && daysBetween(date, x.due) < -7).sort((a, b) => (a.due ?? "").localeCompare(b.due ?? ""))[0];
@@ -214,6 +228,10 @@ export function composeToday(vault: string, opts: { now?: number; refresh?: bool
     yourDay: { connected: false, note: "No calendar is connected yet, so your day is not on the card." },
     alsoDue: rest.filter((x) => x.due && daysBetween(date, x.due) <= 7).slice(0, 12),
     feedback,
+    // No promise due this week is missing from Today: the ones not among the three are listed.
+    promises: open.filter((c) => c.due && daysBetween(date, c.due) <= 7 && !three.some((x) => x.ref.id === c.id && x.domain === c.domain) && !handled.has(`task:${c.domain}:${c.id}`))
+      .map((c) => ({ key: `task:${c.domain}:${c.id ?? c.text}`, title: c.text, kind: c.kind, domain: c.domain, ...(c.due ? { due: c.due } : {}), ...(c.person ? { person: c.person } : {}), why: c.why, slipping: c.slipping })),
+    added: readFiled(vault).filter((r) => !r.undone && r.ts >= now - 3 * 86_400_000 && !r.src.startsWith("chat:")).map((r) => ({ id: r.id, text: r.text, domain: r.domain, src: r.src.split(":")[0]! })),
   };
   mkdirSync(todayDir(vault), { recursive: true });
   writeFileSync(cardPath(vault, date), `${JSON.stringify(card, null, 2)}\n`);
@@ -280,6 +298,7 @@ export function todayText(c: TodayCard): string {
   if (!c.items.length) out.push("Nothing with a date is pressing. A good day to move a goal.");
   c.items.forEach((x, i) => { out.push(`${i + 1}  ${x.title}${x.due ? `   (${x.why})` : ""}`); out.push(`   ${x.thread.join(" > ")}${x.unlinked ? ", unlinked to your Compass" : ""}`); });
   if (c.fallingBehind) out.push("", "FALLING BEHIND", `   ${c.fallingBehind.text}`);
+  if (c.promises?.length) { out.push("", "PROMISES THIS WEEK"); for (const p of c.promises) out.push(`   ${p.title}${p.due ? `, ${p.due}` : ""} (${p.why})`); }
   if (c.decisionDue) out.push("", "DECISION DUE", `   ${c.decisionDue.question}${c.decisionDue.due ? `, due ${c.decisionDue.due}` : ""}${c.decisionDue.recommendation ? ". Recommendation ready." : ""}`);
   out.push("", "YOUR DAY", `   ${c.yourDay.note}`);
   if (c.alsoDue.length) out.push("", `ALSO DUE (${c.alsoDue.length})`);

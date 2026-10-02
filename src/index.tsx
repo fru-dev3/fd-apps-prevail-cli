@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 // Top-level commands whose module parses its own arguments (module-commands.ts).
-const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources"];
+const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources", "commitments", "radar"];
 
 interface Args {
   vaultPath: string | null;
@@ -5780,7 +5780,12 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
     if (!args.includes("--no-sources")) {
       try { sourcesR = await (await import("./source-sync.ts")).syncDue(vault); } catch (e) { sourcesR = { error: String(e).slice(0, 200) }; }
     }
-    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, stack: stackR, sources: sourcesR })}\n`);
+    // Promises in sent mail and meeting notes become commitments (Today T2).
+    let commitR: unknown = null;
+    if (!args.includes("--no-sources")) {
+      try { commitR = await (await import("./commitments.ts")).scanCommitments(vault); } catch (e) { commitR = { error: String(e).slice(0, 200) }; }
+    }
+    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, stack: stackR, sources: sourcesR, commitments: commitR })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {

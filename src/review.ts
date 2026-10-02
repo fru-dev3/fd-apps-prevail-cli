@@ -96,6 +96,8 @@ export interface ReviewCard {
   asked: { ladder: boolean; who5: boolean };
   hypothesis: { key: string; text: string } | null;
   guardrails: string[];
+  /** Today T2: promises found in sent mail or notes that were not sure enough to file alone (Yes files one). */
+  commitments?: { src: string; text: string; due?: string; person?: string; quote: string }[];
 }
 
 /** When the user last did anything in a domain: a chat, a task change, a note from another domain. */
@@ -167,6 +169,7 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     waited: waitedForReview(vault, week).map((w) => ({ kind: w.kind, text: w.text })),
     interruptions: { used: usedThisWeek(vault, now), budget: INTERRUPTION_BUDGET },
     apps: await appsLine(vault, now),
+    commitments: await commitmentLines(vault),
     ...(await qualitativeLines(vault, c, week, now)),
   };
 }
@@ -177,6 +180,10 @@ async function qualitativeLines(vault: string, c: Awaited<ReturnType<typeof comp
     const h = q.hypotheses(vault, c, week)[0];
     return { asked: q.askedDue(vault, now), hypothesis: h ? { key: h.key, text: h.text } : null, guardrails: q.guardrails(vault, c).filter((g) => g.state === "slipping").map((g) => g.text).slice(0, 2) };
   } catch { return { asked: { ladder: false, who5: false }, hypothesis: null, guardrails: [] }; }
+}
+
+async function commitmentLines(vault: string): Promise<NonNullable<ReviewCard["commitments"]>> {
+  try { return (await import("./commitments.ts")).openProposals(vault).slice(0, 3).map((p) => ({ src: p.src, text: p.text, ...(p.due ? { due: p.due } : {}), ...(p.person ? { person: p.person } : {}), quote: p.quote })); } catch { return []; }
 }
 
 async function appsLine(vault: string, now: number): Promise<string | null> {
@@ -200,6 +207,7 @@ export function reviewText(r: ReviewCard): string {
   if (r.surprise) out.push(`One surprise: ${r.surprise}`);
   for (const c of r.candidates) out.push(`You said: "${c.quote}". Make "${c.title}" a ${c.kind === "rule" ? "rule" : c.kind}? (${c.count} time${c.count === 1 ? "" : "s"})`);
   for (const p of r.metricProposals) out.push(`New metric? ${p.title}: ${p.why}`);
+  for (const c of r.commitments ?? []) out.push(`A promise? "${c.quote}" Track "${c.text}"${c.due ? ` by ${c.due}` : ""}? (prevail commitments answer ${c.src} yes)`);
   if (r.woop[0]) out.push(`Your goal "${r.woop[0].title}" needs its plan: say "continue my Compass" in chat.`);
   else if (r.question) out.push(`One question: ${r.question.text}`);
   if (r.apps) out.push(r.apps);

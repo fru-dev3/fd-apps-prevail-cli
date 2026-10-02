@@ -17,6 +17,7 @@
 // Waves 3 and 4 live in source-files.ts and source-mac.ts.
 
 import { createHash } from "node:crypto";
+import { findPromises, personOfAddress, type Promise_ } from "./commitments.ts";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -119,6 +120,10 @@ export interface MailHeader {
   dir: "sent" | "received";
   from: string; to: string[]; cc: string[];
   subject: string; in_reply_to?: string; labels: string[];
+  /** Today T2: explicit promises in a sent message's first lines (the sentence only; the message is never kept). */
+  promises?: Promise_[];
+  /** A sent message that asks something (a waiting-for when nobody answers). */
+  asks?: boolean;
 }
 
 const ADDR = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
@@ -151,7 +156,13 @@ export function headerOf(msg: Record<string, unknown>, account: string, self: Se
   const ts = Number(msg.internalDate ?? 0) || Date.parse(h("Date")) || 0;
   const from = addrs(h("From"))[0] ?? "";
   const sent = labels.includes("SENT") || self.has(from);
-  return { id, thread: String(msg.threadId ?? id), ts, account, dir: sent ? "sent" : "received", from, to: addrs(h("To")), cc: addrs(h("Cc")), subject: h("Subject").slice(0, 200), ...(h("In-Reply-To") ? { in_reply_to: h("In-Reply-To").slice(0, 200) } : {}), labels };
+  const to = addrs(h("To"));
+  // Derive and discard: from a sent message's snippet (its first lines) keep
+  // only the promise sentences and whether it asks something; never the text.
+  const snippet = typeof msg.snippet === "string" ? msg.snippet.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&") : "";
+  const promises = sent && snippet ? findPromises(snippet, ts || Date.now(), to[0] ? personOfAddress(to[0]) : undefined) : [];
+  const asks = sent && (/\?/.test(snippet) || /\?\s*$/.test(h("Subject")));
+  return { id, thread: String(msg.threadId ?? id), ts, account, dir: sent ? "sent" : "received", from, to, cc: addrs(h("Cc")), subject: h("Subject").slice(0, 200), ...(h("In-Reply-To") ? { in_reply_to: h("In-Reply-To").slice(0, 200) } : {}), labels, ...(promises.length ? { promises } : {}), ...(asks ? { asks: true } : {}) };
 }
 
 // Hiring systems and recruiting addresses: a sent application or its confirmation.

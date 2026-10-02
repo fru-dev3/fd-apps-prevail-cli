@@ -13,6 +13,7 @@ export async function runModuleCommand(name: string, args: string[], vault: stri
   if (name === "missions" || name === "mission") return (await import("./missions-cli.ts")).missionsCommand(args, vault);
   if (name === "sources") return (await import("./sources.ts")).sourcesCommand(args, vault);
   if (name === "decide") return (await import("./decision-records.ts")).decideCommand(args, vault);
+  if (name === "commitments") return (await import("./commitments.ts")).commitmentsCommand(args, vault);
   console.error(`unknown command: ${name}`);
   return 1;
 }

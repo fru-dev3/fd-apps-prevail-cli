@@ -72,7 +72,7 @@ import {
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
   type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route"
-    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start";
+    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start" | "filed" | "decision_offer";
   thread: string;
   ts: number;
   domain?: string;
@@ -148,6 +148,10 @@ export interface ChatEvent {
   // mission_start: the message sounds like a mission; a Start card the user
   // confirms (prevail missions create). Never started without a yes.
   missionDraft?: { name: string; outcome: string; owner?: string; consulted: string[]; specialists: string[]; target?: string };
+  /** A commitment or waiting-for filed from what the user said (Today T2), with its id for Undo. */
+  filed?: { id: string; kind: "commitment" | "waiting"; domain: string; text: string; due?: string; person?: string };
+  /** A deliberation noticed in chat (Today T4): offer to open a decision record. */
+  decisionOffer?: { question: string; domain: string; due: string };
   job?: { id: string; status: string; startsAlone: boolean; askReason?: string; owner: string; consulted: string[]; informed: string[]; team: { step: number; specialists: string[]; gate?: boolean }[]; effort: string; budget: { usd: number; minutes: number }; why: string; mention?: string };
 }
 
@@ -400,6 +404,35 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "assistant", cli: cli.kind, model: "", content: r.reply, ts });
       emit({ type: "done", thread, ts: Date.now() });
       return 0;
+    }
+  }
+
+  // A promise told to the chief of staff ("remind me I owe Sam the deck by
+  // Friday") is filed at once on this domain's board, with a receipt and Undo;
+  // code only, no model call (Today T2).
+  if (!scopeApp && scope.kind !== "entity" && scope.kind !== "app" && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
+    const said = userText(message).trim();
+    const cm = await import("./commitments.ts");
+    const told = cm.toldCommitment(said, Date.now());
+    if (told) {
+      const home = scope.kind === "mission" ? `_mission-${scope.mission!.slug}` : opts.domain || "general";
+      const r = cm.fileCommitment(vaultPath, told, { domain: home, src: `chat:${((opts.threadId ?? "").trim() || sessionId).slice(0, 40)}:${Date.now().toString(36)}` });
+      if (r) {
+        const who = told.person ? told.person.replace(/^person\//, "").split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : "";
+        const reply = told.kind === "waiting"
+          ? `Noted: ${who} owes you this${told.due ? `, by ${told.due}` : ""}. It is on the board as a waiting-for; I will bring it up if it slips.`
+          : `Noted: a promise to ${who}${told.due ? `, due ${told.due}` : ""}. It is on the board, and Today will show it before it slips.`;
+        const ts = Date.now();
+        emit({ type: "start", thread, ts, domain: opts.domain, engine: "chief-of-staff" });
+        emit({ type: "user", thread, ts, role: "user", text: message });
+        writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "user", cli: cli.kind, model: "", content: message, ts });
+        emit({ type: "filed", thread, ts, filed: { id: r.id, kind: r.kind, domain: r.domain, text: r.text, ...(told.due ? { due: told.due } : {}), ...(told.person ? { person: told.person } : {}) } });
+        emit({ type: "delta", thread, ts, text: reply });
+        emit({ type: "assistant", thread, ts, role: "assistant", text: reply, engine: "chief-of-staff" });
+        writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "assistant", cli: cli.kind, model: "", content: `${reply}\n\n[filed:${r.id}]`, ts });
+        emit({ type: "done", thread, ts: Date.now() });
+        return 0;
+      }
     }
   }
 
