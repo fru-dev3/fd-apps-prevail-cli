@@ -331,7 +331,9 @@ describe("close-out", () => {
     milestone(V, "learn-the-cello", "done", { title: "Instrument at home" }, NOW);
     writeFileSync(join(M("learn-the-cello"), "memory", "memory.md"), "# What this mission has learned\n- Saturday lessons stuck; weekday practice did not\n");
     writeFileSync(join(M("learn-the-cello"), "files", "receipt.pdf"), "pdf");
-    writeFileSync(join(M("learn-the-cello"), "memory", "tasks.md"), "# Tasks\n\n- [ ] Book next term ~id:t9\n");
+    writeFileSync(join(M("learn-the-cello"), "memory", "tasks.md"), "# Tasks\n\n- [ ] Book next term ~id:t9\n- [ ] Restring the bow ~id:t10\n");
+    writeFileSync(join(D("hobbies"), "memory", "tasks.md"), "# Tasks\n\n- [ ] Tune the strings ~id:h1\n");
+    const beforeBoards = [read(join(M("learn-the-cello"), "memory", "tasks.md")), read(join(D("hobbies"), "memory", "tasks.md"))];
     const ownerMem = join(D("hobbies"), "memory", "memory.md");
     const beforeOwner = read(ownerMem);
     const compass = read(join(V, "build", "compass.md"));
@@ -339,7 +341,7 @@ describe("close-out", () => {
     const plan = planCloseout(V, "learn-the-cello", { result: "partly", resultNote: "Played two pieces", now: NOW });
     expect(plan.filings.map((f) => [f.kind, f.domain])).toEqual([
       ["summary", "hobbies"], ["lesson", "hobbies"], ["note", "money"], ["note", "family"], ["money", "money"],
-      ["person", "person/tutor-example"], ["file", "hobbies"], ["task", "hobbies"],
+      ["person", "person/tutor-example"], ["file", "hobbies"], ["task", "hobbies"], ["task", "hobbies"],
     ]);
     plan.filings.find((f) => f.kind === "note" && f.domain === "family")!.text = "Recital on June 14";
     const r = applyCloseout(V, plan, NOW);
@@ -352,15 +354,14 @@ describe("close-out", () => {
     expect(existsSync(join(D("hobbies"), "source", "missions", "learn-the-cello", "receipt.pdf"))).toBe(true);
     expect(read(join(M("learn-the-cello"), "closeout.md"))).toContain("Result: partly");
     expect(read(join(V, "build", "compass.md"))).toBe(compass);
-    expect(readReceipts(V, "learn-the-cello")).toHaveLength(8);
+    expect(readReceipts(V, "learn-the-cello")).toHaveLength(9);
 
     // Undo each write: the prior bytes come back.
     for (const x of readReceipts(V, "learn-the-cello").reverse()) undoCloseout(V, "learn-the-cello", x.n, NOW + DAY);
     expect(read(ownerMem)).toBe(beforeOwner);
     expect(read(join(D("family"), "memory", "updates.jsonl")).trim()).toBe("");
     expect(existsSync(join(M("learn-the-cello"), "files", "receipt.pdf"))).toBe(true);
-    expect(read(join(M("learn-the-cello"), "memory", "tasks.md"))).toContain("Book next term");
-    expect(read(join(D("hobbies"), "memory", "tasks.md"))).not.toContain("Book next term");
+    expect([read(join(M("learn-the-cello"), "memory", "tasks.md")), read(join(D("hobbies"), "memory", "tasks.md"))]).toEqual(beforeBoards);
     expect(() => undoCloseout(V, "learn-the-cello", 1, NOW + 8 * DAY)).not.toThrow(); // already undone: a no-op
     expect(() => planCloseout(V, "learn-the-cello")).toThrow(/already completed/);
   });

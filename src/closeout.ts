@@ -26,7 +26,7 @@ import { vreadFile, vwriteFile } from "./vault-session.ts";
 export type FilingKind = "summary" | "lesson" | "note" | "money" | "person" | "file" | "task" | "routine";
 export interface Filing { n: number; kind: FilingKind; domain: string; text: string; apply: boolean; ref?: string; action?: "move" | "drop" | "carry" }
 export interface CloseoutPlan { slug: string; name: string; result: MissionResult; resultNote: string; summary: string; filings: Filing[] }
-export interface CloseoutReceipt { n: number; ts: number; kind: FilingKind; domain: string; file: string; text: string; written: string; undone?: number; from?: string }
+export interface CloseoutReceipt { n: number; ts: number; kind: FilingKind; domain: string; file: string; text: string; written: string; undone?: number; from?: string; at?: number }
 
 const UNDO_DAYS = 7;
 const DAY = 86_400_000;
@@ -172,8 +172,12 @@ export function applyCloseout(vault: string, plan: CloseoutPlan, now = Date.now(
       const moved = `${line.trim()}${/~mission:/.test(line) ? "" : ` ~mission:${m.slug}`}`;
       const tcur = readText(target);
       writeText(target, `${tcur ? tcur.replace(/\s*$/, "\n") : "# Tasks\n\n"}${moved}\n`);
-      writeText(board, cur.replace(`${line}\n`, "").replace(line, ""));
-      rec({ kind: f.kind, domain: f.domain, file: rel(target), text: `moved: ${text}`, written: moved, from: line });
+      // Where the line sat on the mission's board, so Undo puts it back there.
+      const lines = cur.split("\n");
+      const at = lines.indexOf(line);
+      lines.splice(at, 1);
+      writeText(board, lines.join("\n"));
+      rec({ kind: f.kind, domain: f.domain, file: rel(target), text: `moved: ${text}`, written: moved, from: line, at });
     }
   }
   writeFileSync(receiptsPath(vault, m.slug), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
@@ -223,10 +227,14 @@ export function undoCloseout(vault: string, ref: string, n: number, now = Date.n
     const cur = readText(abs);
     if (r.text.startsWith("dropped: ")) writeText(abs, cur.replace(`${r.written.replace("- [ ]", "- [x]")} ~status:dropped`, r.written));
     else {
-      writeText(abs, cur.split("\n").filter((l) => l.trim() !== r.written.trim()).join("\n"));
+      // The domain board loses exactly the line added (the last copy of it).
+      const dl = cur.split("\n");
+      const i = dl.map((l) => l.trim()).lastIndexOf(r.written.trim());
+      if (i >= 0) { dl.splice(i, 1); writeText(abs, dl.join("\n")); }
       const board = join(missionDir(vault, m.slug), "memory", "tasks.md");
-      const b = readText(board);
-      writeText(board, `${b ? b.replace(/\s*$/, "\n") : "# Tasks\n\n"}${r.from ?? r.written}\n`);
+      const bl = (readText(board) || "# Tasks\n\n").split("\n");
+      bl.splice(r.at != null && r.at >= 0 && r.at <= bl.length ? r.at : bl.length, 0, r.from ?? r.written);
+      writeText(board, bl.join("\n"));
     }
   } else if (r.file.endsWith(".jsonl")) {
     const cur = readText(abs);
