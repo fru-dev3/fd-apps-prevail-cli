@@ -332,8 +332,23 @@ function scanOpencode(cp: CaptureCheckpoint): { res: ScanResult; newLastTs: numb
 }
 
 // ── antigravity (history.jsonl) ───────────────────────────────────────────────
-// The Antigravity CLI logs each submitted prompt as a JSONL record with a
-// `display` field. mtime-gated like the other file sources.
+// The Antigravity CLI logs each submitted prompt as a JSONL record:
+// { display, timestamp (epoch ms), workspace, conversationId, type? }.
+// mtime-gated like the other file sources.
+
+/** One history.jsonl record -> a prompt, keeping its project and conversation. */
+export function antigravityItem(r: Record<string, unknown>): BatchItem | null {
+  const text = typeof r.display === "string" ? r.display.trim() : "";
+  if (!text) return null;
+  return {
+    prompt: text,
+    session: typeof r.conversationId === "string" ? r.conversationId : "antigravity",
+    cwd: typeof r.workspace === "string" ? r.workspace : "",
+    epochMs: typeof r.timestamp === "number" ? r.timestamp : undefined,
+    entry: typeof r.type === "string" ? r.type : undefined,
+  };
+}
+
 function scanAntigravity(cp: CaptureCheckpoint): ScanResult {
   const file = join(homedir(), ".gemini", "antigravity-cli", "history.jsonl");
   const present = existsSync(file);
@@ -355,8 +370,8 @@ function scanAntigravity(cp: CaptureCheckpoint): ScanResult {
       } catch {
         continue;
       }
-      const text = typeof r.display === "string" ? r.display.trim() : "";
-      if (text) res.items.push({ prompt: text, session: "antigravity", cwd: "" });
+      const item = antigravityItem(r);
+      if (item) res.items.push(item);
     }
   }
   return res;
@@ -387,11 +402,17 @@ export interface SyncResult {
 const UNSUPPORTED: { tool: string; detect: () => boolean; detail: string }[] = [
   {
     tool: "gemini",
-    detect: () => existsSync(join(homedir(), ".gemini", "config")),
-    detail: "Gemini CLI does not persist chat transcripts locally",
+    // ~/.gemini alone is not the Gemini CLI: Antigravity keeps its files there
+    // too. The CLI's own transcripts live in ~/.gemini/tmp/<hash>/chats.
+    detect: () => existsSync(join(homedir(), ".gemini", "tmp")),
+    detail: "Gemini CLI transcripts (~/.gemini/tmp) are not read yet",
   },
   { tool: "openclaw", detect: () => false, detail: "no transcript source" },
-  { tool: "hermes", detect: () => false, detail: "no transcript source" },
+  {
+    tool: "hermes",
+    detect: () => existsSync(join(homedir(), ".hermes", "state.db")),
+    detail: "Hermes keeps sessions in ~/.hermes/state.db; no reader yet",
+  },
   { tool: "pi", detect: () => false, detail: "transcript format not yet supported" },
 ];
 

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import {
+  antigravityItem,
   checkpointPath,
   hostSlug,
   readCheckpoint,
@@ -102,4 +103,15 @@ describe("capture-sync checkpoint namespacing", () => {
     process.env.PREVAIL_HOST_SLUG = "laptop";
     expect(readCheckpoint(vault).prevailLastTs).toBe(500);
   });
+});
+
+describe("antigravity history", () => {
+  test("keeps the workspace, conversation and time", () => {
+    expect(antigravityItem({ display: " foo the bar ", timestamp: 1790000000000, workspace: "/tmp/foo", conversationId: "c-1" })).toEqual({
+      prompt: "foo the bar", session: "c-1", cwd: "/tmp/foo", epochMs: 1790000000000, entry: undefined,
+    });
+    expect(antigravityItem({ display: "/help", type: "slash_command" })).toMatchObject({ session: "antigravity", cwd: "", entry: "slash_command" });
+    expect(antigravityItem({ display: "  " })).toBeNull();
+  });
+
 });

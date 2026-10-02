@@ -74,7 +74,7 @@ export async function installLaunchAgent(vault: string, bin?: string): Promise<v
   if (readMachineRole() === "client") {
     console.log(CLIENT_ROLE_MESSAGE);
     const { installAgent } = await import("./capture-install.ts");
-    const r = installAgent(vault);
+    const r = installAgent();
     if (r.installed) {
       console.log(`installed: sh.prevail.capture (client role: capture only) -> ${r.plist}`);
     } else if (r.unsupported) {

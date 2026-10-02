@@ -147,3 +147,15 @@ describe("per-host capture streams", () => {
     expect(hostSlug()).toMatch(/^host-[0-9a-f]{6}$/);
   });
 });
+
+describe("antigravity dedupe", () => {
+  test("prompts stored before the conversation id are not copied again", () => {
+    const vault = makeVault();
+    expect(ingestBatch(vault, "antigravity", [{ prompt: "foo", session: "antigravity", cwd: "" }]).written).toBe(1);
+    const again = ingestBatch(vault, "antigravity", [
+      { prompt: "foo", session: "c-1", cwd: "/tmp/foo" },
+      { prompt: "bar", session: "c-1", cwd: "/tmp/foo" },
+    ]);
+    expect(again).toMatchObject({ written: 1, skipped: 1 });
+  });
+});
