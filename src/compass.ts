@@ -601,6 +601,7 @@ export function compassJson(vault: string) {
     goals: all.filter((i) => i.kind === "goal").map(view),
     rules: all.filter((i) => i.kind === "rule").map(view),
     negotiables: all.filter((i) => i.kind === "negotiable").map(view),
+    routines: all.filter((i) => i.kind === "routine").map(view),
     proposed: all.filter(isProposed).length + (m && isProposed(m) ? 1 : 0),
   };
 }
