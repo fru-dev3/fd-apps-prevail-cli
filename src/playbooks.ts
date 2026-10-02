@@ -189,7 +189,7 @@ export function setTrigger(vault: string, id: string, space: string, o: { cadenc
   if (!o.cadence && !o.on) throw new Error("a trigger needs a cadence (daily, weekly, monthly) or an event (on: <radar kind>)");
   if (o.on && !/^(commitment|waiting|routine|relationship|goal|path|admin|domain|decision|mission|rule)(:[^\n]{1,60})?$/.test(o.on)) throw new Error(`unknown event ${o.on}`);
   const dir = resolveDomainDir(vault, space);
-  if (!dir || !existsSync(dir)) throw new Error(`no domain or mission ${space}`);
+  if (!dir || !existsSync(dir)) throw new Error(`no domain or project ${space}`);
   const file = join(dir, "_loops.json");
   let doc: { schema?: number; desiredState?: string; loops: Record<string, unknown>[] } = { schema: 1, desiredState: "", loops: [] };
   try { doc = JSON.parse(readFileSync(file, "utf8")); doc.loops ??= []; } catch { /* new file */ }

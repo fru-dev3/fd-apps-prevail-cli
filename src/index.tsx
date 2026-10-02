@@ -39,6 +39,7 @@ interface Args {
   recommendations: boolean;
   recommendationsArgs: string[];
   projects: boolean;
+  promptGroups: boolean;
   projectsArgs: string[];
   mirror: boolean;
   mirrorArgs: string[];
@@ -181,6 +182,7 @@ function parseArgs(argv: string[]): Args {
   let recommendations = false;
   let recommendationsArgs: string[] = [];
   let projects = false;
+  let promptGroups = false;
   let projectsArgs: string[] = [];
   let mirror = false;
   let mirrorArgs: string[] = [];
@@ -331,8 +333,11 @@ function parseArgs(argv: string[]): Args {
       calendar = true;
       calendarArgs = argv.slice(i + 1);
       break;
-    } else if (a === "projects") {
+    } else if (a === "projects" || a === "prompt-groups") {
+      // Projects (stored as missions) and prompt groups share the word: see
+      // the routing where args.projects is handled.
       projects = true;
+      promptGroups = a === "prompt-groups";
       projectsArgs = argv.slice(i + 1);
       break;
     } else if (a === "intent" || a === "mirror") {
@@ -640,6 +645,7 @@ function parseArgs(argv: string[]): Args {
     recommendations,
     recommendationsArgs,
     projects,
+    promptGroups,
     projectsArgs,
     mirror,
     mirrorArgs,
@@ -4897,7 +4903,7 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         }
         for (const g of goalsMigrated) console.log(`${g.domain}: ${g.added} goal(s) moved into source/goals.md from ${g.from.join(" and ") || "nothing new"}; backups kept: ${g.backups.length}`);
         if (profile.merged) console.log(`build/_profile.md folded into build/user.md (backup: ${profile.backup})`);
-        if (missions.migrated) console.log(`${missions.migrated} project page(s) became missions (backup: ${missions.backup})`);
+        if (missions.migrated) console.log(`${missions.migrated} entity project page(s) became Projects (backup: ${missions.backup})`);
         if (missions.purposeRenamed) console.log("build/compass.md: ## Mission is now ## Purpose (the prior text is in compass.versions/)");
         if (missions.compassChain) console.log(`build/compass.md: moved to the Compass chain (~schema:2; ${missions.initiatives} path line(s) now initiative:)`);
         console.log("done — vault is on the clean v4 layout. Originals are in each domain's _pre-v4-v4/ backup.");
@@ -6478,9 +6484,24 @@ async function main() {
     const vault = await vaultFlagOrDefault(a, args.vaultPath);
     const json = a.includes("--json");
     const sub = a[0] && !a[0].startsWith("--") ? a[0] : "list";
-    // create | set | show project/<slug>: the tracked project entities (projects.ts).
-    const ent = await (await import("./projects.ts")).projectsEntityCommand(a, vault);
-    if (ent !== null) { process.exitCode = ent; return; }
+    // Projects are what the user sees (stored as missions, data/missions/):
+    // `prevail projects <sub>` runs every missions subcommand. Prompt groups
+    // (the prompt history grouped by project) live at `prevail prompt-groups`;
+    // their own subcommands (build, rename, timeline, restart, diff, replay)
+    // still answer under `projects`, and `projects show <slug>` falls back to
+    // a prompt group when no project has that slug.
+    if (!args.promptGroups) {
+      const ent = await (await import("./projects.ts")).projectsEntityCommand(a, vault);
+      if (ent !== null) { process.exitCode = ent; return; }
+      const PG = new Set(["build", "rename", "timeline", "restart", "diff", "replay"]);
+      const ms = await import("./missions.ts");
+      const toMissions = !PG.has(sub) && !(sub === "show" && a[1] && !ms.readMission(vault, a[1]));
+      if (toMissions) {
+        const rest = a[0] && !a[0].startsWith("--") ? a : ["list", ...a];
+        process.exitCode = await (await import("./missions-cli.ts")).missionsCommand(rest.filter((x, i) => !(x === "--vault" || rest[i - 1] === "--vault")), vault);
+        return;
+      }
+    }
     const pp = await import("./prompt-projects.ts");
     if (sub === "build") {
       const cli = (get("--cli") ?? "claude") as "claude" | "codex";

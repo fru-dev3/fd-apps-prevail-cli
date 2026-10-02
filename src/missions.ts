@@ -103,7 +103,7 @@ export type MissionView = Mission & { progress: Progress; milestones: Milestone[
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
 export function missionsRoot(vault: string): string { return join(dataRoot(vault), MISSIONS_DIR); }
 export function missionDir(vault: string, slug: string): string {
-  if (!SLUG_RE.test(slug)) throw new Error(`bad mission slug: ${slug}`);
+  if (!SLUG_RE.test(slug)) throw new Error(`bad project slug: ${slug}`);
   return join(missionsRoot(vault), slug);
 }
 const missionFile = (vault: string, slug: string) => join(missionDir(vault, slug), "mission.md");
@@ -430,7 +430,7 @@ export function createMission(vault: string, i: CreateMissionInput): MissionView
   const now = i.now ?? Date.now();
   const name = oneLine(i.name, 120);
   const slug = missionSlugify(name);
-  if (!slug) throw new Error("a mission needs a name");
+  if (!slug) throw new Error("a project needs a name");
   if (existsSync(missionFile(vault, slug))) throw new Error(`mission/${slug} already exists`);
   const target = (i.target ?? "").trim() || proposedTarget(now);
   if (!isYmd(target)) throw new Error(`target must be YYYY-MM-DD, not "${i.target}"`);
@@ -461,8 +461,8 @@ export function createMission(vault: string, i: CreateMissionInput): MissionView
   writeMilestones(vault, slug, (i.milestones ?? []).map((x) => ({ id: `ms-${missionSlugify(x.title).slice(0, 30)}`, title: x.title, done: false, weight: x.weight ?? 1, ...(x.due ? { due: x.due } : {}), ...(x.check ? { check: x.check } : {}) })));
   writeLinks(vault, slug, EMPTY_LINKS);
   writeText(join(dir, "memory", "state.md"), `# ${name}\n\nStarted ${start}. Target ${target}.\n`);
-  writeText(join(dir, "memory", "memory.md"), `# What this mission has learned\n`);
-  logLine(vault, slug, `Mission started${i.from ? ` (${i.from})` : ""}: ${m.outcome || name}`, now);
+  writeText(join(dir, "memory", "memory.md"), `# What this project has learned\n`);
+  logLine(vault, slug, `Project started${i.from ? ` (${i.from})` : ""}: ${m.outcome || name}`, now);
   return missionView(vault, slug, now)!;
 }
 
@@ -470,7 +470,7 @@ export interface MissionPatch { name?: string; outcome?: string; why?: string; t
 
 export function setMission(vault: string, ref: string, p: MissionPatch, now = Date.now()): MissionView {
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   if (p.name !== undefined && oneLine(p.name)) m.name = oneLine(p.name, 120);
   if (p.outcome !== undefined) m.outcome = oneLine(p.outcome);
   if (p.why !== undefined) m.why = p.why.trim();
@@ -494,7 +494,7 @@ export function setMission(vault: string, ref: string, p: MissionPatch, now = Da
 export type AttachKind = "domain" | "app" | "specialist" | "person" | "entity" | "prompt-project" | "repo";
 export function attach(vault: string, ref: string, kind: AttachKind, value: string, now = Date.now()): MissionView {
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   const v = value.trim();
   if (!v) throw new Error(`nothing to attach`);
   if (kind === "domain") m.domains = checkDomains(vault, [...m.domains, parseDomainArg(v)]);
@@ -509,7 +509,7 @@ export function attach(vault: string, ref: string, kind: AttachKind, value: stri
 }
 export function detach(vault: string, ref: string, kind: AttachKind, value: string, now = Date.now()): MissionView {
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   const v = value.trim().split(":")[0]!;
   const drop = (xs: string[]) => xs.filter((x) => x !== v && x !== `person/${v}`);
   if (kind === "domain") m.domains = m.domains.filter((d) => d.slug !== v.toLowerCase());
@@ -525,7 +525,7 @@ export function detach(vault: string, ref: string, kind: AttachKind, value: stri
 
 export function milestone(vault: string, ref: string, op: "add" | "done" | "undone" | "move", o: { title?: string; id?: string; due?: string; check?: string; weight?: number }, now = Date.now()): Milestone[] {
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   const ms = readMilestones(vault, m.slug);
   if (o.due && !isYmd(o.due)) throw new Error(`due must be YYYY-MM-DD, not "${o.due}"`);
   const find = () => {
@@ -580,7 +580,7 @@ export function checkMilestones(vault: string, ref: string, read: (metric: strin
 
 export function setBudgetLine(vault: string, ref: string, line: string, usd: number, label?: string, now = Date.now()): MissionView {
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   const id = missionSlugify(line);
   if (!id) throw new Error("a budget line needs a name");
   if (!Number.isFinite(usd) || usd < 0) throw new Error("usd must be a positive number");
@@ -593,7 +593,7 @@ export function setBudgetLine(vault: string, ref: string, line: string, usd: num
 /** Record a spend (a positive amount spent). A charge ref already recorded is never counted twice. */
 export function spend(vault: string, ref: string, o: { line: string; usd: number; what: string; ref?: string; by?: LedgerRow["by"] }, now = Date.now()): { added: boolean; row: LedgerRow } {
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   if (!Number.isFinite(o.usd) || o.usd <= 0) throw new Error("usd must be a positive amount spent");
   const line = missionSlugify(o.line) || "other";
   const row: LedgerRow = { ts: ymd(now), line, usd: -Math.round(o.usd * 100) / 100, what: oneLine(o.what, 200), ...(o.ref ? { ref: o.ref } : {}), by: o.by ?? "user" };
@@ -606,7 +606,7 @@ export function spend(vault: string, ref: string, o: { line: string; usd: number
 /** Link a calendar event (matched) or queue a created one (a hold the user approves). */
 export function linkEvent(vault: string, ref: string, e: { app?: string; event?: string; title: string; start: string; kind?: string; milestone?: string; create?: boolean }, now = Date.now()): Links {
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   if (Number.isNaN(Date.parse(e.start))) throw new Error(`start must be a date or time, not "${e.start}"`);
   const l = readLinks(vault, m.slug);
   const id = e.event || `pending-${now.toString(36)}`;
@@ -629,9 +629,9 @@ const TRANSITIONS: Record<"pause" | "resume" | "archive" | "reopen", { from: Mis
 export function transition(vault: string, ref: string, op: keyof typeof TRANSITIONS, o: { target?: string; now?: number } = {}): MissionView {
   const now = o.now ?? Date.now();
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   const t = TRANSITIONS[op];
-  if (!t.from.includes(m.status)) throw new Error(`a ${m.status} mission cannot ${op}`);
+  if (!t.from.includes(m.status)) throw new Error(`a ${m.status} project cannot ${op}`);
   if (op === "reopen") {
     const dir = missionDir(vault, m.slug);
     const co = join(dir, "closeout.md");
@@ -744,7 +744,7 @@ export function migrateProjects(vault: string, o: { dryRun?: boolean; now?: numb
     }
     const discussed = sectionOf(body, "What you've discussed");
     if (!conflict) {
-      writeText(join(dir, "memory", "memory.md"), `# What this mission has learned\n${discussed ? `\n## From the old project page\n${discussed}\n` : ""}`);
+      writeText(join(dir, "memory", "memory.md"), `# What this project has learned\n${discussed ? `\n## From the old project page\n${discussed}\n` : ""}`);
       if (!existsSync(join(dir, "milestones.md"))) writeMilestones(vault, slug, []);
       if (!existsSync(join(dir, "memory", "state.md"))) writeText(join(dir, "memory", "state.md"), `# ${m.name}\n`);
     }
@@ -820,9 +820,9 @@ export function missionPointer(vault: string, domain: string, message: string): 
     const named = m.name.length > 3 && said.includes(m.name.toLowerCase());
     if (!named) continue;
     const next = readMilestones(vault, m.slug).filter((x) => !x.done).sort((a, b) => (a.due ?? "9").localeCompare(b.due ?? "9"))[0];
-    lines.push(`Active mission: ${m.name} (mission/${m.slug})${next ? `, next: ${next.title}${next.due ? ` by ${next.due}` : ""}` : ""}${m.domains.some((d) => d.slug === domain) ? "" : ". This domain is not part of it."}`);
+    lines.push(`Active project: ${m.name} (mission/${m.slug})${next ? `, next: ${next.title}${next.due ? ` by ${next.due}` : ""}` : ""}${m.domains.some((d) => d.slug === domain) ? "" : ". This domain is not part of it."}`);
   }
-  return lines.length ? `# ACTIVE MISSIONS\n${lines.join("\n")}` : "";
+  return lines.length ? `# ACTIVE PROJECTS\n${lines.join("\n")}` : "";
 }
 
 /** A few lines about one mission, for a chat that @-references it. */
@@ -831,7 +831,7 @@ export function missionBrief(vault: string, ref: string): string {
   if (!v) return "";
   const p = v.progress;
   return [
-    `# MISSION REFERENCED: ${v.name} (${v.id}), ${v.status}`,
+    `# PROJECT REFERENCED: ${v.name} (${v.id}), ${v.status}`,
     `Outcome: ${v.outcome || "not written"}. Target ${v.target || "none"}, ${p.days.left} days left.`,
     `Milestones ${p.milestones.done} of ${p.milestones.total}${p.milestones.next ? `; next: ${p.milestones.next.title}${p.milestones.next.due ? ` by ${p.milestones.next.due}` : ""}` : ""}.${p.budget.planned ? ` Budget $${p.budget.used} of $${p.budget.planned}.` : ""}`,
     `Domains: ${v.domains.map((d) => `${d.slug} (${d.role})`).join(", ") || "none"}.`,

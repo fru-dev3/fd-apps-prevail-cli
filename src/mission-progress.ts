@@ -130,24 +130,24 @@ export function missionMetricProposals(m: Mission): MissionMetricProposal[] {
   const verb = /^(\w+)/.exec(m.outcome.toLowerCase() || m.name.toLowerCase())?.[1] ?? "";
   const s = m.slug.slice(0, 40);
   const P = (suffix: string, title: string, tokens: string, from: string, why: string): MissionMetricProposal => ({ key: `${s}:${suffix}`, id: `m-${s}-${suffix}`, title, line: `- ${title} ~id:m-${s}-${suffix} ~per:week ${tokens} ~mission:${m.slug}\n  from: ${from}`, why });
-  const lessons = (m.match.calendar ?? []).length ? [P("events", `${m.name}: calendar sessions`, "~unit:count ~tier:measured ~src:missions ~kind:mission.event", "calendar events that match the mission", "the lessons or sessions on your calendar")] : [];
+  const lessons = (m.match.calendar ?? []).length ? [P("events", `${m.name}: calendar sessions`, "~unit:count ~tier:measured ~src:missions ~kind:mission.event", "calendar events that match the project", "the lessons or sessions on your calendar")] : [];
   if (/^(learn|train|practice|practise|prepare|study)/.test(verb) || /\b(learn|practice|lessons?)\b/i.test(m.outcome)) {
     return [
-      P("sessions", `${m.name}: practice sessions`, "~unit:count ~tier:asked ~src:stated ~kind:stated.practiced", "\"practiced 30 min\" said in the mission's chat", "sessions, from what you say in the mission's chat"),
+      P("sessions", `${m.name}: practice sessions`, "~unit:count ~tier:asked ~src:stated ~kind:stated.practiced", "\"practiced 30 min\" said in the project's chat", "sessions, from what you say in the project's chat"),
       P("minutes", `${m.name}: practice minutes`, "~unit:minutes ~tier:asked ~src:stated ~kind:stated.practiced ~value:value", "the minutes in \"practiced 30 min\"", "minutes a week, from the same lines"),
       ...lessons,
     ];
   }
-  if (/^(travel|plan|visit|trip|go)/.test(verb)) return [...lessons, P("mail", `${m.name}: booking mail`, "~unit:count ~tier:measured ~src:missions ~kind:mission.mail_in", "mail from the mission's senders (airlines, hotels)", "confirmations from the places you booked")];
-  if (/^(buy|find|move)/.test(verb)) return [...lessons, P("viewings", `${m.name}: viewings`, "~unit:count ~tier:measured ~src:missions ~kind:mission.event", "calendar events that match the mission", "viewings on your calendar")];
-  if (/^(build|ship|make|write)/.test(verb)) return [P("commits", `${m.name}: commits`, "~unit:count ~tier:measured ~src:git ~kind:git.commit", "commits in the mission's repos", "commits, from git")];
+  if (/^(travel|plan|visit|trip|go)/.test(verb)) return [...lessons, P("mail", `${m.name}: booking mail`, "~unit:count ~tier:measured ~src:missions ~kind:mission.mail_in", "mail from the project's senders (airlines, hotels)", "confirmations from the places you booked")];
+  if (/^(buy|find|move)/.test(verb)) return [...lessons, P("viewings", `${m.name}: viewings`, "~unit:count ~tier:measured ~src:missions ~kind:mission.event", "calendar events that match the project", "viewings on your calendar")];
+  if (/^(build|ship|make|write)/.test(verb)) return [P("commits", `${m.name}: commits`, "~unit:count ~tier:measured ~src:git ~kind:git.commit", "commits in the project's repos", "commits, from git")];
   return lessons;
 }
 
 /** Track a proposal: its line goes under ## Tracking in metrics.md (once), and the mission lists it. */
 export function trackMissionMetric(vault: string, slug: string, key: string, now = Date.now()): string {
   const m = readMission(vault, slug);
-  if (!m) throw new Error(`no mission ${slug}`);
+  if (!m) throw new Error(`no project ${slug}`);
   const p = missionMetricProposals(m).find((x) => x.key === key);
   if (!p) throw new Error(`no proposal ${key}`);
   const file = metricsMdPath(vault);
@@ -249,7 +249,7 @@ export async function linkPath(vault: string, slug: string, pathId: string, now 
   if (cur?.value === slug) return false;
   if (cur) cur.value = slug; else f.path.fields.push({ key: "mission", value: slug });
   f.parent.dirty = true;
-  c.saveCompass(vault, doc, [{ id: pathId, from: "path", to: `mission ${slug}`, reason: "the mission carries out this path", by: "user" }], now);
+  c.saveCompass(vault, doc, [{ id: pathId, from: "path", to: `project ${slug}`, reason: "the project carries out this path", by: "user" }], now);
   return true;
 }
 
@@ -328,7 +328,7 @@ export async function missionNudges(vault: string, items: MissionRadarItem[], no
     const m = readMission(vault, x.mission);
     if (!m || m.status !== "active" || m.nudges.muted) continue;
     const sent = readInterruptions(vault).filter((r) => r.sent && r.kind === "mission-nudge" && (r.key ?? "").startsWith(`mission:${m.slug}:`) && weekOf(dayOf(r.ts)) === week).length;
-    if (sent >= Math.max(0, m.nudges.per_week)) { out.push({ key: x.key, ok: false, why: "this mission's nudges this week are used" }); continue; }
+    if (sent >= Math.max(0, m.nudges.per_week)) { out.push({ key: x.key, ok: false, why: "this project's nudges this week are used" }); continue; }
     const t = tryInterrupt(vault, { kind: "mission-nudge", text: `${x.text} (${x.evidence})`, key: x.key }, now);
     out.push({ key: x.key, ok: t.ok, ...(t.why ? { why: t.why } : {}) });
   }
@@ -343,7 +343,7 @@ export function missionReviewLines(vault: string, now = Date.now()): string[] {
     const p = v.progress;
     return `${m.name}: day ${p.days.day} of ${p.days.total}, ${p.milestones.done} of ${p.milestones.total} milestones${p.budget.planned ? `, $${p.budget.used} of $${p.budget.planned}` : ""}${p.milestones.next ? `; next: ${p.milestones.next.title}${p.milestones.next.due ? ` by ${p.milestones.next.due}` : ""}` : ""}.`;
   });
-  if (ms.length > 7) lines.push(`${ms.length} missions are active. Pause some?`);
+  if (ms.length > 7) lines.push(`${ms.length} projects are active. Pause some?`);
   return lines;
 }
 
@@ -356,7 +356,7 @@ export async function progressCommand(sub: string, argv: string[], vault: string
   const slug = args.pos[1] ?? "";
   try {
     if (sub === "sync") { const r = await syncMissions(vault); if (args.json) out(r); else for (const x of r) console.log(`${x.slug}: ${x.linked} events linked, ${x.events} counted, ${x.mail} mails, ${x.charges} charges`); return 0; }
-    if (sub === "metrics") { const m = readMission(vault, slug); if (!m) return fail(`no mission ${slug}`); const p = missionMetricProposals(m); if (args.json) out(p); else for (const x of p) console.log(`${x.key}  ${x.title}: ${x.why}`); return 0; }
+    if (sub === "metrics") { const m = readMission(vault, slug); if (!m) return fail(`no project ${slug}`); const p = missionMetricProposals(m); if (args.json) out(p); else for (const x of p) console.log(`${x.key}  ${x.title}: ${x.why}`); return 0; }
     if (sub === "track") { const id = trackMissionMetric(vault, slug, args.pos[2] ?? ""); if (args.json) out({ ok: true, id }); else console.log(`Tracking ${id}`); return 0; }
     if (sub === "event-create") { const e = createEvent(vault, slug, { title: args.get("title") ?? "", start: args.get("start") ?? "", end: args.get("end"), attendees: args.get("attendees")?.split(",").map((x) => x.trim()).filter(Boolean), milestone: args.get("milestone") }); if (args.json) out(e); else console.log(e.status === "draft" ? "Drafted the invite (with other people it is never sent by Prevail)." : "A hold waits for your yes."); return 0; }
     if (sub === "event-approve") { const e = await approveEvent(vault, slug, args.pos[2] ?? ""); if (args.json) out(e); else console.log(e.status === "created" ? "On your calendar." : e.note ?? e.status); return 0; }
@@ -365,5 +365,5 @@ export async function progressCommand(sub: string, argv: string[], vault: string
     if (sub === "from-path") { const v = await missionFromPath(vault, args.pos[1] ?? ""); if (args.json) out(v); else console.log(`Started ${v.id}`); return 0; }
     if (sub === "radar") { const r = missionRadar(vault); if (args.json) out(r); else for (const x of r) console.log(`${x.text} (${x.evidence})`); return 0; }
   } catch (e) { return fail((e as Error).message); }
-  return fail("usage: prevail missions sync | metrics <slug> | track <slug> <key> | event-create <slug> --title T --start ISO [--end ISO] [--attendees a,b] | event-approve <slug> <id> | events-pending <slug> | link-path <slug> <path-id> | from-path <path-id> | radar [--json]");
+  return fail("usage: prevail projects sync | metrics <slug> | track <slug> <key> | event-create <slug> --title T --start ISO [--end ISO] [--attendees a,b] | event-approve <slug> <id> | events-pending <slug> | link-path <slug> <path-id> | from-path <path-id> | radar [--json]");
 }

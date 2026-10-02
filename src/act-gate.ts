@@ -498,8 +498,8 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
   // never writes, and below "act" no always-allow rule lets a write run alone.
   const mission = missionGate(vault, domain);
   if (mission?.readOnly) {
-    auditAction(vault, { ts: Date.now(), domain, action: actSummary(toolName), outcome: "blocked_by_egress_guard", report: `mission ceiling is read (${toolName})` });
-    return { action: "deny", reason: "This mission is read-only (its ceiling is read), so this action was NOT run. Tell the user; they can raise the ceiling on the mission's Setup tab." };
+    auditAction(vault, { ts: Date.now(), domain, action: actSummary(toolName), outcome: "blocked_by_egress_guard", report: `project ceiling is read (${toolName})` });
+    return { action: "deny", reason: "This project is read-only (its ceiling is read), so this action was NOT run. Tell the user; they can raise the ceiling on the project's Setup tab." };
   }
   // A trusted remote MCP source's read tools (readOnlyHint at add time) run live.
   if (isTrustedReadTool(vault, toolName)) return { action: "allow" };

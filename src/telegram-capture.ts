@@ -28,14 +28,14 @@ export async function telegramCommand(head: string, arg: string, vault: string, 
     const active = m.activeMissions(vault);
     if (!a) {
       const cur = pin.mission ? m.readMission(vault, pin.mission) : null;
-      return [cur ? `Pinned to the mission ${cur.name}. /m off to unpin.` : "Not pinned to a mission.", active.length ? `Active missions: ${active.map((x) => `${x.name} (/m ${x.slug})`).join(", ")}` : "No active missions."].join("\n");
+      return [cur ? `Pinned to the project ${cur.name}. /m off to unpin.` : "Not pinned to a project.", active.length ? `Active projects: ${active.map((x) => `${x.name} (/m ${x.slug})`).join(", ")}` : "No active projects."].join("\n");
     }
     if (/^(off|none|clear)$/i.test(a)) { delete pin.mission; return "Unpinned. Messages go to your chief of staff as usual."; }
     const bySlug = active.find((x) => x.slug === m.missionSlugify(a));
     const hit = bySlug ?? (await missionForText(vault, a).then((r) => (r ? active.find((x) => x.slug === r.slug) : undefined)));
-    if (!hit) return `No active mission matches "${a}". /m to list them.`;
+    if (!hit) return `No active project matches "${a}". /m to list them.`;
     pin.mission = hit.slug;
-    return `Pinned to the mission ${hit.name}. What you send now goes there; practice and spends count on its progress. /m off to unpin.`;
+    return `Pinned to the project ${hit.name}. What you send now goes there; practice and spends count on its progress. /m off to unpin.`;
   }
   if (head === "/tell") {
     if (!arg.trim()) return "Send /tell and anything to keep, like /tell remind me to renew the passport by Friday";
@@ -65,7 +65,7 @@ export async function telegramText(text: string, vault: string, pin: Pin): Promi
   if (pin.mission) {
     const m = await import("./missions.ts");
     const brief = m.missionBrief(vault, pin.mission);
-    if (brief) return { prompt: `${brief}\nYou are the user's chief of staff, speaking from inside this mission.\n\n${t}`, cwd: m.missionDir(vault, pin.mission), mission: pin.mission };
+    if (brief) return { prompt: `${brief}\nYou are the user's chief of staff, speaking from inside this project.\n\n${t}`, cwd: m.missionDir(vault, pin.mission), mission: pin.mission };
   }
   return { prompt: t };
 }

@@ -66,7 +66,7 @@ function sumOf(c: Computed, id: string, from: string, to: string): number {
 const monthSpan = (m: string) => { const [y, mo] = m.split("-").map(Number); const last = new Date(y!, mo!, 0).getDate(); return [`${m}-01`, `${m}-${String(last).padStart(2, "0")}`] as const; };
 const prevMonth = (m: string) => { const [y, mo] = m.split("-").map(Number); const d = new Date(y!, mo! - 2, 15); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 
-/** Prompts per domain per month (prompt projects, whose monthly counts come from the capture), private domains left out. */
+/** Prompts per domain per month (prompt groups, whose monthly counts come from the capture), private domains left out. */
 export function attentionByMonth(vault: string, year: string, privateDoms: Set<string>): Map<string, Map<string, number>> {
   const out = new Map<string, Map<string, number>>();
   try {
@@ -81,7 +81,7 @@ export function attentionByMonth(vault: string, year: string, privateDoms: Set<s
         out.set(m, row);
       }
     }
-  } catch { /* no prompt projects yet */ }
+  } catch { /* no prompt groups yet */ }
   return out;
 }
 
@@ -335,7 +335,7 @@ ${stat(int(s.building.commits), `commits, ${int(s.building.aiCommits)} with an A
 ${s.hour != null ? stat(hourLabel(s.hour), "your most active hour") : ""}
 ${stat(int(s.exploration.trips), `trips, ${s.exploration.places.length} places, ${s.exploration.countries} countr${s.exploration.countries === 1 ? "y" : "ies"}`)}
 </div>
-<h2>Where your time went</h2>${s.time.length ? bars(s.time.map((t) => ({ label: t.domain, v: t.share }))) : "<p class=\"muted\">No prompt projects yet.</p>"}
+<h2>Where your time went</h2>${s.time.length ? bars(s.time.map((t) => ({ label: t.domain, v: t.share }))) : "<p class=\"muted\">No prompt groups yet.</p>"}
 <h2>Your values, month by month</h2>${firstValue ? `<p>You said ${esc(firstValue.title)} comes first. Here is where it ranked in your attention, month by month.</p>` : ""}${race}
 <h2>Places</h2>${placesSvg(s.exploration.places)}${s.exploration.places.length ? `<p class="muted">${esc(s.exploration.places.slice(0, 8).map((p) => `${p.region} (${p.trips})`).join(", "))}</p>` : ""}
 <h2>Your days</h2><p class="muted">Prompts by day</p>${heatSvg(s.heat.prompts, s.year, "Prompts by day")}${s.heat.calm.length ? `<p class="muted">Weekly calm</p>${heatSvg(s.heat.calm, s.year, "Weekly calm")}` : ""}

@@ -116,7 +116,7 @@ export async function tell(vault: string, raw: string, o: { surface: Surface; do
   const home = ms ? `_mission-${ms.slug}` : domain;
   const src = `tell:${o.surface}:${now.toString(36)}`;
   const base = { surface: o.surface, text, domain, ...(ms ? { mission: ms.slug } : {}) };
-  const where = ms ? `the mission ${ms.name}` : `${label(domain)}`;
+  const where = ms ? `the project ${ms.name}` : `${label(domain)}`;
 
   // Practice or a spend said for a mission: its ledger or its metric events.
   if (ms) {

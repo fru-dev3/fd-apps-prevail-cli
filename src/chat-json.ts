@@ -370,7 +370,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // local engine for local-only domains (and under Bunker / --local-only).
   const turnGuard = { localOnly: (opts.localOnly ?? process.env.PREVAIL_BUNKER === "1") || scope.privacy.localOnly };
   if (!cli) {
-    if (opts.localOnly || scope.privacy.localOnly) return fail(scope.privacy.localOnly ? "this mission is local-only and no local engine is available (ollama not detected)" : "no local engine available (ollama not detected)");
+    if (opts.localOnly || scope.privacy.localOnly) return fail(scope.privacy.localOnly ? "this project is local-only and no local engine is available (ollama not detected)" : "no local engine available (ollama not detected)");
     if (wantedCli) return fail(`engine not available: ${wantedCli}`);
     return fail("no AI CLI detected (claude/codex/antigravity/ollama)");
   }
@@ -495,8 +495,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
         // mission. Nothing outside the scope is read and nothing starts without a yes.
         if ((d?.kind === "bring-in" && d.bringIn) || (d?.kind === "mission" && d.mission)) {
           const reply = d.kind === "bring-in"
-            ? `This needs ${d.bringIn!.domains.join(" and ")}, which ${d.bringIn!.domains.length === 1 ? "is" : "are"} not in the mission${d.bringIn!.never ? " (and on your never-read list)" : ""}. Bring ${d.bringIn!.domains.length === 1 ? "it" : "them"} in for this question, for the mission, or not?`
-            : `This sounds like a mission: ${d.mission!.name}. Start it? I drafted the outcome, a target and who to bring in; adjust anything first.`;
+            ? `This needs ${d.bringIn!.domains.join(" and ")}, which ${d.bringIn!.domains.length === 1 ? "is" : "are"} not in the project${d.bringIn!.never ? " (and on your never-read list)" : ""}. Bring ${d.bringIn!.domains.length === 1 ? "it" : "them"} in for this question, for the project, or not?`
+            : `This sounds like a project: ${d.mission!.name}. Start it? I drafted the outcome, a target and who to bring in; adjust anything first.`;
           const ts = Date.now();
           emit({ type: "start", thread, ts, domain: opts.domain, engine: "chief-of-staff" });
           emit({ type: "user", thread, ts, role: "user", text: message });
@@ -1016,7 +1016,7 @@ export async function chatJsonCommand(
       if (missionExists(vaultPath, old)) {
         mission = missionSlugOf(old);
         entity.splice(entity.indexOf(old), 1);
-        process.stderr.write(`prevail chat: --entity ${old} is the mission ${mission} now (use --mission ${mission})\n`);
+        process.stderr.write(`prevail chat: --entity ${old} is the project ${mission} now (use --mission ${mission})\n`);
       }
     }
   }

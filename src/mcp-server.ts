@@ -168,7 +168,7 @@ export async function runMcpServer(
           domain: { type: "string" },
           cli: { type: "string", description: "claude | codex | gemini | ollama" },
           model: { type: "string", description: "Optional model name; defaults to the CLI's default." },
-          mission: { type: "string", description: "Optional mission slug (from list_missions): the turn runs in the mission with its context; domain is then ignored." },
+          mission: { type: "string", description: "Optional project slug (from list_missions): the turn runs in the project with its context; domain is then ignored." },
         },
         required: ["prompt", "domain"],
       },
@@ -281,37 +281,37 @@ export async function runMcpServer(
     },
     {
       name: "list_missions",
-      description: "The user's missions: time-bound efforts with an outcome and a target date (a trip, learning an instrument, a remodel), each with its status (active, paused, completed, archived), owner and attached domains, milestones done, budget used and days left. Missions are not prompt projects (list_projects).",
+      description: "The user's projects: time-bound efforts with an outcome and a target date (a trip, learning an instrument, a remodel), each with its status (active, paused, completed, archived), owner and attached domains, milestones done, budget used and days left. Projects are not prompt groups (list_projects).",
       inputSchema: { type: "object", properties: { status: { type: "string", enum: ["active", "paused", "completed", "archived", "all"], description: "Default all." } } },
     },
     {
       name: "read_mission",
-      description: "One mission: its fields, domains with roles (owner, consulted, informed), apps, specialists, people, milestones, budget lines and spend, the next linked events, open tasks and the recent log. Takes mission/<slug>, a slug, or an old project/<slug> id.",
+      description: "One project: its fields, domains with roles (owner, consulted, informed), apps, specialists, people, milestones, budget lines and spend, the next linked events, open tasks and the recent log. Takes mission/<slug>, a slug, or an old project/<slug> id.",
       inputSchema: { type: "object", properties: { slug: { type: "string" } }, required: ["slug"] },
     },
     {
       name: "mission_context",
-      description: "The context blocks a chat turn in this mission carries (outcome, progress, memory, tasks, calendar, apps, people), as the app and CLI build them. Read-only.",
+      description: "The context blocks a chat turn in this project carries (outcome, progress, memory, tasks, calendar, apps, people), as the app and CLI build them. Read-only.",
       inputSchema: { type: "object", properties: { slug: { type: "string" } }, required: ["slug"] },
     },
     {
       name: "mission_log",
-      description: "Add one dated line to a mission's log (\"Lesson 3 attended\"). Writes only the mission's own memory/log.md.",
+      description: "Add one dated line to a project's log (\"Lesson 3 attended\"). Writes only the project's own memory/log.md.",
       inputSchema: { type: "object", properties: { slug: { type: "string" }, text: { type: "string" } }, required: ["slug", "text"] },
     },
     {
       name: "create_mission",
-      description: "Ask to start a mission (a time-bound effort with an outcome and a target date). A write: it waits for the user's approval in Prevail's Inbox and is done the moment they allow it.",
+      description: "Ask to start a project (a time-bound effort with an outcome and a target date). A write: it waits for the user's approval in Prevail's Inbox and is done the moment they allow it.",
       inputSchema: { type: "object", properties: { name: { type: "string" }, outcome: { type: "string" }, target: { type: "string", description: "YYYY-MM-DD" }, owner: { type: "string", description: "the owner domain slug" }, consult: { type: "array", items: { type: "string" } }, inform: { type: "array", items: { type: "string" } } }, required: ["name"] },
     },
     {
       name: "set_mission_status",
-      description: "Ask to pause, resume, archive or reopen a mission. A write behind the user's approval in the Inbox.",
+      description: "Ask to pause, resume, archive or reopen a project. A write behind the user's approval in the Inbox.",
       inputSchema: { type: "object", properties: { mission: { type: "string" }, op: { type: "string", enum: ["pause", "resume", "archive", "reopen"] } }, required: ["mission", "op"] },
     },
     {
       name: "complete_mission",
-      description: "Ask to complete a mission with its result; the close-out files the summary, lessons, notes and money into the domains, each with Undo for 7 days. A write behind the user's approval in the Inbox.",
+      description: "Ask to complete a project with its result; the close-out files the summary, lessons, notes and money into the domains, each with Undo for 7 days. A write behind the user's approval in the Inbox.",
       inputSchema: { type: "object", properties: { mission: { type: "string" }, result: { type: "string", enum: ["met", "partly", "not-met", "changed"] }, note: { type: "string" } }, required: ["mission", "result"] },
     },
     {
@@ -341,12 +341,12 @@ export async function runMcpServer(
     },
     {
       name: "tell",
-      description: "Tell the user's chief of staff anything to keep: a promise, something someone owes them, a decision to make, a task (\"remind me to ...\"), a goal or value in their words, a number (\"ran 5 km\"), practice or a spend for a mission, or a note. Filed by code into the right domain or mission with a receipt; returns where it went and an id for Undo. Never sends anything.",
+      description: "Tell the user's chief of staff anything to keep: a promise, something someone owes them, a decision to make, a task (\"remind me to ...\"), a goal or value in their words, a number (\"ran 5 km\"), practice or a spend for a project, or a note. Filed by code into the right domain or project with a receipt; returns where it went and an id for Undo. Never sends anything.",
       inputSchema: { type: "object", properties: { text: { type: "string" }, domain: { type: "string" }, mission: { type: "string" } }, required: ["text"] },
     },
     {
       name: "what_am_i_forgetting",
-      description: "Every open loop across the user's vault: promises due, people they are waiting on, decisions to make, what the radar sees slipping (goals, routines, initiatives, missions, relationships, deadlines), overdue tasks, and actions waiting for their yes.",
+      description: "Every open loop across the user's vault: promises due, people they are waiting on, decisions to make, what the radar sees slipping (goals, routines, initiatives, projects, relationships, deadlines), overdue tasks, and actions waiting for their yes.",
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
     },
     {
@@ -778,14 +778,14 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const { listMissions } = await import("./missions.ts");
       const st = typeof args.status === "string" ? args.status : "all";
       const l = listMissions(vaultPath, { status: st as "all" });
-      if (!l.length) return wrapText("No missions yet.");
+      if (!l.length) return wrapText("No projects yet.");
       return wrapText(JSON.stringify(l.map((m) => ({ id: m.id, name: m.name, status: m.status, outcome: m.outcome, target: m.target, domains: m.domains, milestones: `${m.progress.milestones.done} of ${m.progress.milestones.total}`, budget: m.progress.budget.planned ? `$${m.progress.budget.used} of $${m.progress.budget.planned}` : null, days_left: m.progress.days.left })), null, 2));
     }
     case "read_mission": {
       const { missionView, missionTasks } = await import("./missions.ts");
       const slug = typeof args.slug === "string" ? args.slug : "";
       const v = missionView(vaultPath, slug);
-      if (!v) return wrapText(`No mission "${slug}".`);
+      if (!v) return wrapText(`No project "${slug}".`);
       const { readFileSync } = await import("node:fs");
       const { resolveDomainDir } = await import("./path-safety.ts");
       let log: string[] = [];
@@ -801,7 +801,7 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const { logLine, readMission } = await import("./missions.ts");
       const slug = typeof args.slug === "string" ? args.slug : "";
       const m = readMission(vaultPath, slug);
-      if (!m) return wrapText(`No mission "${slug}".`);
+      if (!m) return wrapText(`No project "${slug}".`);
       const text = String(args.text ?? "").trim();
       if (!text) return wrapText("text is required");
       return wrapText(`Logged: ${logLine(vaultPath, m.slug, text)}`);

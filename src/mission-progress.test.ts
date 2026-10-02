@@ -80,7 +80,7 @@ describe("progress without data entry", () => {
 });
 
 describe("match rules from the CLI", () => {
-  test("missions set takes the match rules", async () => {
+  test("projects set takes the match rules", async () => {
     seed();
     const { missionsCommand } = await import("./missions-cli.ts");
     const orig = process.stdout.write.bind(process.stdout);
@@ -105,7 +105,7 @@ describe("calendar holds and the Compass", () => {
     expect(made.status).toBe("created");
     expect(readLinks(V, slug).calendar.some((c) => c.event === "cal-123")).toBe(true);
   });
-  test("a mission linked to a path writes mission: under it; a chosen path starts a mission", async () => {
+  test("a project linked to a path writes project: under it; a chosen path starts a project", async () => {
     writeFileSync(join(V, "build", "compass.md"), "# Compass\n\n## Goals\n- [ ] Play for the family ~id:g-play ~status:active ~domain:hobbies\n  path: Weekly cello lessons ~id:p-lessons ~status:chosen ~until:2027-06-30\n");
     expect(await linkPath(V, "learn-the-cello", "p-lessons", NOW)).toBe(true);
     expect(readFileSync(join(V, "build", "compass.md"), "utf8")).toContain("  initiative: Weekly cello lessons ~id:p-lessons ~status:chosen ~until:2027-06-30\n    mission: learn-the-cello");
@@ -116,7 +116,7 @@ describe("calendar holds and the Compass", () => {
 });
 
 describe("Today, the radar, nudges and the review", () => {
-  test("Today shows a mission item only when something is due or slipping", () => {
+  test("Today shows a project item only when something is due or slipping", () => {
     const slug = seed();
     milestone(V, slug, "add", { title: "Term 1 finished", due: ymd(NOW + 40 * DAY) }, NOW);
     expect(missionToday(V, ymd(NOW))).toEqual([]);
@@ -140,7 +140,7 @@ describe("Today, the radar, nudges and the review", () => {
     expect(r.some((x) => x.key === `mission:${slug}:target` && /extend, complete or pause/.test(x.text))).toBe(true);
     const sent = await missionNudges(V, r, NOW);
     expect(sent.filter((x) => x.ok).length).toBe(1);
-    expect(sent.find((x) => !x.ok)!.why).toBe("this mission's nudges this week are used");
+    expect(sent.find((x) => !x.ok)!.why).toBe("this project's nudges this week are used");
     setMission(V, slug, { muted: true }, NOW);
     expect(await missionNudges(V, r, NOW + DAY)).toEqual([]);
     // The global budget still holds: two more slots this week at most.
@@ -148,15 +148,15 @@ describe("Today, the radar, nudges and the review", () => {
     tryInterrupt(V, { kind: "overdue-promise", text: "b", key: "b" }, NOW);
     expect(tryInterrupt(V, { kind: "mission-nudge", text: "c", key: "c" }, NOW).ok).toBe(false);
   });
-  test("one review line per active mission; more than seven asks to pause some", () => {
+  test("one review line per active project; more than seven asks to pause some", () => {
     seed();
     expect(missionReviewLines(V, NOW)[0]).toMatch(/^Learn the cello: day 18 of 271, 0 of 0 milestones, \$0 of \$1000\.$/);
     for (let i = 0; i < 7; i++) createMission(V, { name: `Foo effort ${i}`, now: NOW });
-    expect(missionReviewLines(V, NOW).at(-1)).toBe("8 missions are active. Pause some?");
+    expect(missionReviewLines(V, NOW).at(-1)).toBe("8 projects are active. Pause some?");
     transition(V, "foo-effort-0", "pause", { now: NOW });
     expect(missionReviewLines(V, NOW).length).toBe(7);
   });
-  test("the close-out drafts the routines the mission built, unticked", () => {
+  test("the close-out drafts the routines the project built, unticked", () => {
     const slug = seed();
     for (const d of [20, 22, 24, 26, 27]) noteSaid(V, { text: "practiced 30 min", domain: `_mission-${slug}`, now: NOW - 28 * DAY + d * DAY });
     expect(routineDrafts(V, slug, NOW)).toEqual(["Practice sessions: about 1 a week"]);

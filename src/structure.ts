@@ -107,7 +107,7 @@ function fromUnhomed(vault: string, domains: Set<string>, projects: Set<string>,
     out.push({
       id: effort ? `project:topic:${label}` : `domain:${label}`,
       kind: effort ? "project" : "domain",
-      title: effort ? `Start a mission for ${name}?` : `Create a ${name} domain?`,
+      title: effort ? `Start a project for ${name}?` : `Create a ${name} domain?`,
       reason: `${plural(n, "conversation")} about ${label.replace(/-/g, " ")} since ${shortDate(since)}`,
       evidence, confidence: round2(Math.min(0.95, 0.4 + 0.1 * n)),
       metric: { value: n, unit: "conversations" },
@@ -131,7 +131,7 @@ function fromIntent(vault: string, domains: Set<string>): RankedSuggestion[] {
     if (p.status === "done" || n < PROJECT_SITTINGS_AT || tracked.has(p.slug)) continue;
     out.push({
       id: `project:intent:${p.slug}`, kind: "project",
-      title: `Start a mission for ${p.title}?`,
+      title: `Start a project for ${p.title}?`,
       reason: `${plural(n, "sitting")} in your prompts since ${shortDate(p.first_ts)}`,
       evidence: [{ ts: p.last_ts, domain: domains.has(p.domain) ? p.domain : "general" }],
       confidence: round2(Math.min(0.9, 0.4 + 0.05 * n)),

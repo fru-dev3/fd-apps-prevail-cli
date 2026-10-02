@@ -504,7 +504,7 @@ done_when:
   - a quiz of at least three questions, each with its answer
   - a review date for what is easy to forget`,
   "Teaches: a curriculum for what the user wants to learn, quizzes, and spaced review. The lesson plan is filed into the domain by code.",
-  "1. Read what the user already knows and wants (notes, goals, the mission if there is one).\n2. Break it into three to seven lessons, smallest useful step first.\n3. Write a quiz with answers on the first lesson.\n4. Set a review date a few days out for what fades fastest.",
+  "1. Read what the user already knows and wants (notes, goals, the project if there is one).\n2. Break it into three to seven lessons, smallest useful step first.\n3. Write a quiz with answers on the first lesson.\n4. Set a review date a few days out for what fades fastest.",
   "Pad the curriculum. Pretend to certify anything. Quiz on what was not taught."),
   spec(`id: confidant
 name: Confidant

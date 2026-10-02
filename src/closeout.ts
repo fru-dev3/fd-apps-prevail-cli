@@ -54,8 +54,8 @@ function moneyDomain(vault: string, m: Mission): string | null {
 export function planCloseout(vault: string, ref: string, o: { result?: MissionResult; resultNote?: string; now?: number } = {}): CloseoutPlan {
   const now = o.now ?? Date.now();
   const v = missionView(vault, ref, now);
-  if (!v) throw new Error(`no mission "${ref}"`);
-  if (v.status === "completed" || v.status === "archived") throw new Error(`the mission is already ${v.status}`);
+  if (!v) throw new Error(`no project "${ref}"`);
+  if (v.status === "completed" || v.status === "archived") throw new Error(`the project is already ${v.status}`);
   const owner = ownerOf(v) ?? "general";
   const filings: Filing[] = [];
   const add = (f: Omit<Filing, "n" | "apply"> & { apply?: boolean }) => filings.push({ n: filings.length + 1, apply: f.apply ?? true, ...f });
@@ -68,16 +68,16 @@ export function planCloseout(vault: string, ref: string, o: { result?: MissionRe
   const learned = readText(join(missionDir(vault, v.slug), "memory", "memory.md")).split("\n").map((l) => /^\s*-\s+(.*\S)/.exec(l)?.[1] ?? "").filter(Boolean).slice(0, 8);
   for (const l of learned) add({ kind: "lesson", domain: owner, text: oneLine(l, 240) });
   for (const d of [...domainsWith(v, "consulted"), ...domainsWith(v, "informed")]) {
-    add({ kind: "note", domain: d, text: oneLine(`Mission ${v.name} completed (${result.replace("-", " ")}): ${v.outcome || v.name}.`, 240) });
+    add({ kind: "note", domain: d, text: oneLine(`Project ${v.name} completed (${result.replace("-", " ")}): ${v.outcome || v.name}.`, 240) });
   }
   const ledger = readLedger(vault, v.slug);
   const md = moneyDomain(vault, v);
   if (ledger.length && md) {
     const byLine = p.budget.byLine.filter((l) => l.used).map((l) => `${l.label} $${l.used.toFixed(2)} of $${l.planned.toFixed(2)}`);
     const other = ledger.filter((r) => !v.budget.lines.some((l) => l.id === r.line)).reduce((a, r) => a - r.usd, 0);
-    add({ kind: "money", domain: md, text: oneLine(`Mission ${v.name}: spent $${p.budget.used.toFixed(2)}${p.budget.planned ? ` of $${p.budget.planned.toFixed(2)}` : ""}${byLine.length ? ` (${byLine.join("; ")}${other ? `; other $${other.toFixed(2)}` : ""})` : ""}. Refs: ${ledger.map((r) => r.ref).filter(Boolean).join(", ") || "none"}.`, 600) });
+    add({ kind: "money", domain: md, text: oneLine(`Project ${v.name}: spent $${p.budget.used.toFixed(2)}${p.budget.planned ? ` of $${p.budget.planned.toFixed(2)}` : ""}${byLine.length ? ` (${byLine.join("; ")}${other ? `; other $${other.toFixed(2)}` : ""})` : ""}. Refs: ${ledger.map((r) => r.ref).filter(Boolean).join(", ") || "none"}.`, 600) });
   }
-  for (const id of v.people) add({ kind: "person", domain: id, text: oneLine(`Helped with the mission ${v.name} (${ymd(now)}).`, 200) });
+  for (const id of v.people) add({ kind: "person", domain: id, text: oneLine(`Helped with the project ${v.name} (${ymd(now)}).`, 200) });
   // Files the user added to the mission move to the owner domain's source/.
   const filesDir = join(missionDir(vault, v.slug), "files");
   if (existsSync(filesDir)) {
@@ -115,8 +115,8 @@ function appendBlock(file: string, heading: string, block: string): string {
  */
 export function applyCloseout(vault: string, plan: CloseoutPlan, now = Date.now()): { mission: Mission; receipts: CloseoutReceipt[] } {
   const m = readMission(vault, plan.slug);
-  if (!m) throw new Error(`no mission "${plan.slug}"`);
-  if (m.status === "completed" || m.status === "archived") throw new Error(`the mission is already ${m.status}`);
+  if (!m) throw new Error(`no project "${plan.slug}"`);
+  if (m.status === "completed" || m.status === "archived") throw new Error(`the project is already ${m.status}`);
   if (!RESULTS.includes(plan.result)) throw new Error(`result must be ${RESULTS.join(", ")}`);
   const dir = missionDir(vault, m.slug);
   const known = new Set(listDomainDirs(vault));
@@ -140,7 +140,7 @@ export function applyCloseout(vault: string, plan: CloseoutPlan, now = Date.now(
     if (f.kind === "summary" || f.kind === "lesson") {
       const file = join(ddir, "memory", "memory.md");
       const block = f.kind === "summary" ? `- ${ymd(now)} ${text} (close-out: ${link})` : `- ${ymd(now)} Lesson from ${m.name}: ${text}`;
-      rec({ kind: f.kind, domain: f.domain, file: rel(file), text, written: appendBlock(file, "Missions", block) });
+      rec({ kind: f.kind, domain: f.domain, file: rel(file), text, written: appendBlock(file, "Projects", block) });
     } else if (f.kind === "note" || f.kind === "money") {
       const p = domainUpdatesPath(vault, f.domain);
       const row = { ts: now, from_domain: `mission/${m.slug}`, thread: `closeout:${m.slug}`, fact: text, entities: [] as string[] };
@@ -148,7 +148,7 @@ export function applyCloseout(vault: string, plan: CloseoutPlan, now = Date.now(
       rec({ kind: f.kind, domain: f.domain, file: rel(p), text, written: JSON.stringify(row) });
     } else if (f.kind === "routine") {
       const file = join(ddir, "ideal-state.md");
-      rec({ kind: f.kind, domain: f.domain, file: rel(file), text, written: appendBlock(file, "Habits and routines", `- ${text} (from the mission ${m.name})`) });
+      rec({ kind: f.kind, domain: f.domain, file: rel(file), text, written: appendBlock(file, "Habits and routines", `- ${text} (from the project ${m.name})`) });
     } else if (f.kind === "file" && f.ref) {
       const from = join(dir, "files", basename(f.ref));
       if (!existsSync(from)) continue;
@@ -214,7 +214,7 @@ export function applyCloseout(vault: string, plan: CloseoutPlan, now = Date.now(
 /** Undo one close-out write (within 7 days): the exact text written comes back out. */
 export function undoCloseout(vault: string, ref: string, n: number, now = Date.now()): CloseoutReceipt {
   const m = readMission(vault, ref);
-  if (!m) throw new Error(`no mission "${ref}"`);
+  if (!m) throw new Error(`no project "${ref}"`);
   const rows = readReceipts(vault, m.slug);
   const r = rows.find((x) => x.n === n);
   if (!r) throw new Error(`no filed line ${n}`);

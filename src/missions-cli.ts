@@ -11,27 +11,27 @@ import {
 } from "./missions.ts";
 
 const USAGE = [
-  "prevail missions list [--status active|paused|completed|archived|all] --json",
-  "prevail missions create --name N [--outcome O] [--target YYYY-MM-DD] [--owner d] [--consult d]... [--inform d]...",
+  "prevail projects list [--status active|paused|completed|archived|all] --json",
+  "prevail projects create --name N [--outcome O] [--target YYYY-MM-DD] [--owner d] [--consult d]... [--inform d]...",
   "        [--app a]... [--specialist s]... [--person id]... [--budget-usd N] [--milestone T]... [--from-prompt-project slug] --json",
-  "prevail missions create --from-draft --json   (stdin: the draft from missions draft; checked again)",
-  "prevail missions draft --json   (stdin: {\"turns\":[{\"role\":\"user\",\"text\":\"...\"}],\"draft\":{...}}; creates nothing)",
-  "prevail missions show <slug> --json",
-  "prevail missions set <slug> [--name N] [--outcome O] [--target D] [--cadence C] [--ceiling C] [--notes T] [--local-only true|false]",
+  "prevail projects create --from-draft --json   (stdin: the draft from projects draft; checked again)",
+  "prevail projects draft --json   (stdin: {\"turns\":[{\"role\":\"user\",\"text\":\"...\"}],\"draft\":{...}}; creates nothing)",
+  "prevail projects show <slug> --json",
+  "prevail projects set <slug> [--name N] [--outcome O] [--target D] [--cadence C] [--ceiling C] [--notes T] [--local-only true|false]",
   "        [--match-calendar a,b] [--match-email-from a,b] [--match-merchants a,b] --json",
-  "prevail missions attach|detach <slug> --domain d[:role] | --app a | --specialist s | --person id | --entity id | --prompt-project slug | --repo path",
-  "prevail missions milestone <slug> add|done|undone|move --title T [--id ms-x] [--due D] [--check C] [--weight N]",
-  "prevail missions budget <slug> set-line --line L --usd N [--label T] | spend --line L --usd N --what T [--ref R]",
-  "prevail missions event <slug> link|create --title T --start ISO [--event id] [--kind K] [--milestone ms-x]",
-  "prevail missions pause|resume|archive|reopen <slug> [--target D] --json",
-  "prevail missions complete <slug> --plan-only [--result met|partly|not-met|changed] [--note T] | --apply plan.json --json",
-  "prevail missions undo <slug> <n> --json      (a close-out line, within 7 days)",
-  "prevail missions tasks <slug> --json",
-  "prevail missions log <slug> --text T --json",
-  "prevail missions context <slug> [--message M] --json",
-  "prevail missions migrate [--dry-run] --json",
-  "prevail missions sync | radar | metrics <slug> | track <slug> <key> | events-pending <slug> | event-approve <slug> <id>",
-  "prevail missions link-path <slug> <path-id> | from-path <path-id> --json",
+  "prevail projects attach|detach <slug> --domain d[:role] | --app a | --specialist s | --person id | --entity id | --prompt-project slug | --repo path",
+  "prevail projects milestone <slug> add|done|undone|move --title T [--id ms-x] [--due D] [--check C] [--weight N]",
+  "prevail projects budget <slug> set-line --line L --usd N [--label T] | spend --line L --usd N --what T [--ref R]",
+  "prevail projects event <slug> link|create --title T --start ISO [--event id] [--kind K] [--milestone ms-x]",
+  "prevail projects pause|resume|archive|reopen <slug> [--target D] --json",
+  "prevail projects complete <slug> --plan-only [--result met|partly|not-met|changed] [--note T] | --apply plan.json --json",
+  "prevail projects undo <slug> <n> --json      (a close-out line, within 7 days)",
+  "prevail projects tasks <slug> --json",
+  "prevail projects log <slug> --text T --json",
+  "prevail projects context <slug> [--message M] --json",
+  "prevail projects migrate [--dry-run] --json",
+  "prevail projects sync | radar | metrics <slug> | track <slug> <key> | events-pending <slug> | event-approve <slug> <id>",
+  "prevail projects link-path <slug> <path-id> | from-path <path-id> --json",
 ].join("\n");
 
 /** Every value of a repeatable flag. */
@@ -49,8 +49,8 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
   const sub = args.pos[0] ?? "list";
   const slug = args.pos[1] ?? "";
   const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
-  const fail = (msg: string) => { if (args.json) out({ ok: false, error: msg }); else console.error(`prevail missions: ${msg}`); return 1; };
-  const show = (v: MissionView | null) => { if (!v) return fail(`no mission "${slug}"`); if (args.json) out(v); else console.log(summary(v)); return 0; };
+  const fail = (msg: string) => { if (args.json) out({ ok: false, error: msg }); else console.error(`prevail projects: ${msg}`); return 1; };
+  const show = (v: MissionView | null) => { if (!v) return fail(`no project "${slug}"`); if (args.json) out(v); else console.log(summary(v)); return 0; };
   const num = (k: string) => { const v = args.get(k); if (v === undefined) return undefined; const n = Number(v); if (!Number.isFinite(n)) throw new Error(`--${k} must be a number`); return n; };
   // Missions MS4: progress without data entry (mission-progress.ts).
   if (["sync", "metrics", "track", "event-create", "event-approve", "events-pending", "link-path", "from-path", "radar"].includes(sub)) return (await import("./mission-progress.ts")).progressCommand(sub, argv, vault);
@@ -114,12 +114,12 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
     if (sub === "attach" || sub === "detach") {
       const kinds: AttachKind[] = ["domain", "app", "specialist", "person", "entity", "prompt-project", "repo"];
       const kind = kinds.find((k) => args.get(k) !== undefined);
-      if (!kind) return fail(`usage: prevail missions ${sub} <slug> --domain d[:role] | --app a | --specialist s | --person id | --entity id | --prompt-project slug | --repo path`);
+      if (!kind) return fail(`usage: prevail projects ${sub} <slug> --domain d[:role] | --app a | --specialist s | --person id | --entity id | --prompt-project slug | --repo path`);
       return show((sub === "attach" ? attach : detach)(vault, slug, kind, args.get(kind)!));
     }
     if (sub === "milestone") {
       const op = args.pos[2] as "add" | "done" | "undone" | "move";
-      if (!["add", "done", "undone", "move"].includes(op)) return fail("usage: prevail missions milestone <slug> add|done|undone|move --title T [--id ms-x] [--due D] [--check C]");
+      if (!["add", "done", "undone", "move"].includes(op)) return fail("usage: prevail projects milestone <slug> add|done|undone|move --title T [--id ms-x] [--due D] [--check C]");
       const ms = milestone(vault, slug, op, { title: args.get("title"), id: args.get("id"), due: args.get("due"), check: args.get("check"), weight: num("weight") });
       if (args.json) out({ ok: true, milestones: ms }); else for (const m of ms) console.log(`[${m.done ? "x" : " "}] ${m.title}${m.due ? `  ${m.due}` : ""}  ${m.id}`);
       return 0;
@@ -128,7 +128,7 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
       const op = args.pos[2];
       const line = args.get("line") ?? "";
       const usd = num("usd");
-      if (usd === undefined || !line) return fail("usage: prevail missions budget <slug> set-line --line L --usd N | spend --line L --usd N --what T [--ref R]");
+      if (usd === undefined || !line) return fail("usage: prevail projects budget <slug> set-line --line L --usd N | spend --line L --usd N --what T [--ref R]");
       if (op === "set-line") return show(setBudgetLine(vault, slug, line, usd, args.get("label")));
       if (op === "spend") {
         const r = spend(vault, slug, { line, usd, what: args.get("what") ?? line, ref: args.get("ref") });
@@ -139,7 +139,7 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
     }
     if (sub === "event") {
       const op = args.pos[2];
-      if (op !== "link" && op !== "create") return fail("usage: prevail missions event <slug> link|create --title T --start ISO");
+      if (op !== "link" && op !== "create") return fail("usage: prevail projects event <slug> link|create --title T --start ISO");
       // Create is a hold that asks (or, with other people, a draft invite): mission-progress createEvent.
       if (op === "create") { const e = (await import("./mission-progress.ts")).createEvent(vault, slug, { title: args.get("title") ?? "", start: args.get("start") ?? "", end: args.get("end"), attendees: args.get("attendees")?.split(",").map((x) => x.trim()).filter(Boolean), milestone: args.get("milestone") }); if (args.json) out({ ok: true, pending: e, note: e.status === "draft" ? "a draft invite; Prevail never sends it" : "a hold that waits for your yes; nothing was added to a calendar" }); else console.log(e.status === "draft" ? "Drafted." : "A hold waits for your yes."); return 0; }
       const l = linkEvent(vault, slug, { title: args.get("title") ?? "", start: args.get("start") ?? "", event: args.get("event"), app: args.get("app"), kind: args.get("kind"), milestone: args.get("milestone") });
@@ -154,9 +154,9 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
         return 0;
       }
       const file = args.get("apply") ?? args.pos[2];
-      if (!file) return fail("usage: prevail missions complete <slug> --apply plan.json");
+      if (!file) return fail("usage: prevail projects complete <slug> --apply plan.json");
       const plan = JSON.parse(file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8")) as CloseoutPlan;
-      if (plan.slug !== readMission(vault, slug)?.slug) return fail("the plan is for another mission");
+      if (plan.slug !== readMission(vault, slug)?.slug) return fail("the plan is for another project");
       const r = applyCloseout(vault, plan);
       if (args.json) out({ ok: true, ...r }); else console.log(`completed ${r.mission.id}; ${r.receipts.length} line(s) filed`);
       return 0;
@@ -170,8 +170,8 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
     if (sub === "tasks") { const t = missionTasks(vault, slug); if (args.json) out(t); else for (const x of t) console.log(`[${x.done ? "x" : " "}] ${x.text}  (${x.domain})`); return 0; }
     if (sub === "log") {
       const text = args.get("text") ?? args.pos.slice(2).join(" ");
-      if (!text.trim()) return fail("usage: prevail missions log <slug> --text T");
-      if (!readMission(vault, slug)) return fail(`no mission "${slug}"`);
+      if (!text.trim()) return fail("usage: prevail projects log <slug> --text T");
+      if (!readMission(vault, slug)) return fail(`no project "${slug}"`);
       const line = logLine(vault, slug, text);
       if (args.json) out({ ok: true, line }); else console.log(line);
       return 0;

@@ -89,7 +89,7 @@ export class ScopeError extends Error {}
 /** Resolve one chat turn's scope. Throws ScopeError with the message the stream reports. */
 export async function resolveScope(vault: string, i: ScopeInput): Promise<ResolvedScope> {
   const missionSlug = (i.mission ?? "").trim() ? missionScopeSlug(`mission/${(i.mission ?? "").trim().replace(/^(mission|project)\//, "")}`) : missionScopeSlug(i.domain ?? "");
-  if ((i.mission ?? "").trim() && !missionSlug) throw new ScopeError(`invalid mission: ${i.mission}`);
+  if ((i.mission ?? "").trim() && !missionSlug) throw new ScopeError(`invalid project: ${i.mission}`);
   if (missionSlug) return resolveMission(vault, missionSlug, i);
 
   // An app's own chat space: --scope-app <id> is the `_app-<id>` scope key,
@@ -181,7 +181,7 @@ function skillNames(dir: string): string[] {
 
 async function resolveMission(vault: string, slug: string, i: ScopeInput): Promise<ResolvedScope> {
   const v = missionView(vault, slug);
-  if (!v) throw new ScopeError(`unknown mission: ${slug}`);
+  if (!v) throw new ScopeError(`unknown project: ${slug}`);
   const key = `${MISSION_SCOPE_PREFIX}${slug}`;
   const dir = resolveDomainDir(vault, key);
   const owner = ownerOf(v);
@@ -194,8 +194,8 @@ async function resolveMission(vault: string, slug: string, i: ScopeInput): Promi
   const role = (r: string) => domainsWith(v, r as "owner").join(", ") || "none";
   const chain = (await import("./compass-chain.ts")).missionChainText(vault, v.slug);
   blocks.push({ source: "mission", text: clip([
-    `# MISSION: ${v.name}`,
-    `This conversation is the mission ${v.name} (mission/${v.slug}), ${v.status}. You are the user's chief of staff, speaking from inside this mission: bring in its domains, apps and people on your own; the user never has to staff it.`,
+    `# PROJECT: ${v.name}`,
+    `This conversation is the project ${v.name} (mission/${v.slug}), ${v.status}. You are the user's chief of staff, speaking from inside this project: bring in its domains, apps and people on your own; the user never has to staff it.`,
     `Outcome: ${v.outcome || "not written yet; ask for it in one line"}`,
     v.why ? `Why, in the user's words: ${v.why}` : "",
     `Day ${p.days.day} of ${p.days.total}; target ${v.target || "none (propose one)"}${p.days.left < 0 ? `, ${-p.days.left} days past it` : `, ${p.days.left} days left`}.`,
@@ -217,7 +217,7 @@ async function resolveMission(vault: string, slug: string, i: ScopeInput): Promi
   // Progress: milestones, budget, days.
   const open = v.milestones.filter((x) => !x.done);
   blocks.push({ source: "progress", text: clip([
-    `# MISSION PROGRESS`,
+    `# PROJECT PROGRESS`,
     `Milestones: ${p.milestones.done} of ${p.milestones.total} done${p.milestones.next ? `; next: ${p.milestones.next.title}${p.milestones.next.due ? ` by ${p.milestones.next.due}` : ""}` : ""}.`,
     ...open.slice(0, 6).map((x) => `- [ ] ${x.title}${x.due ? ` (due ${x.due})` : ""}${x.check ? ` (completes when ${x.check})` : ""}`),
     p.milestones.overdue.length ? `Overdue: ${p.milestones.overdue.map((x) => x.title).join("; ")}.` : "",
@@ -227,7 +227,7 @@ async function resolveMission(vault: string, slug: string, i: ScopeInput): Promi
   // Memory and state: the mission's own, the owner's memory, consulted states.
   const log = readText(join(dir, "memory", "log.md")).split("\n").filter((l) => /^\s*-\s/.test(l)).slice(0, 10);
   const mem = [
-    `# MISSION MEMORY`,
+    `# PROJECT MEMORY`,
     clip(readText(join(dir, "memory", "state.md")).trim(), 1200),
     clip(readText(join(dir, "memory", "memory.md")).trim(), 1500),
     log.length ? `## Recent log\n${log.join("\n")}` : "",
@@ -241,18 +241,18 @@ async function resolveMission(vault: string, slug: string, i: ScopeInput): Promi
 
   // Tasks: the mission's own and ~mission:<slug> tasks in any domain.
   const tasks = missionTasks(vault, slug).filter((t) => !t.done).slice(0, 12);
-  if (tasks.length) blocks.push({ source: "tasks", text: [`# MISSION TASKS`, ...tasks.map((t) => `- ${t.text}${t.due ? ` (due ${t.due})` : ""}${t.own ? "" : ` [${t.domain}]`}`)].join("\n") });
+  if (tasks.length) blocks.push({ source: "tasks", text: [`# PROJECT TASKS`, ...tasks.map((t) => `- ${t.text}${t.due ? ` (due ${t.due})` : ""}${t.own ? "" : ` [${t.domain}]`}`)].join("\n") });
 
   // Calendar: today's linked events and the next five.
   const today = new Date().toISOString().slice(0, 10);
   const events = v.links.calendar.filter((e) => e.start.slice(0, 10) >= today).slice(0, 5);
-  if (events.length) blocks.push({ source: "calendar", text: [`# MISSION CALENDAR`, ...events.map((e) => `- ${e.start.replace("T", " ")} ${e.title}${e.source === "created" ? " (a hold you drafted)" : ""}`)].join("\n") });
+  if (events.length) blocks.push({ source: "calendar", text: [`# PROJECT CALENDAR`, ...events.map((e) => `- ${e.start.replace("T", " ")} ${e.title}${e.source === "created" ? " (a hold you drafted)" : ""}`)].join("\n") });
 
   // Skills: the mission's own (if any) and the owner domain's.
   const skills = uniq([...skillNames(dir), ...(owner ? skillNames(ownerDir) : [])]);
   if (skills.length) blocks.push({ source: "skills", text: `# SKILLS\nAvailable here: ${skills.join(", ")}.` });
 
-  // Prompt projects (build missions): their restart briefs.
+  // Prompt groups (build missions): their restart briefs.
   for (const pp of v.prompt_projects.slice(0, 2)) {
     try {
       const { restartText } = await import("./project-restart.ts");

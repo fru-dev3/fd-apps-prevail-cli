@@ -55,10 +55,10 @@ export function gateAction(
   // Inside a mission its ceiling and money budget can only tighten the gate.
   const ms = opts.mission;
   if (ms && cls !== "read") {
-    if (ceilingRank(ms.ceiling) <= ceilingRank("read")) return { cls, decision: "block", reason: `the mission ${ms.slug} is read-only` };
+    if (ceilingRank(ms.ceiling) <= ceilingRank("read")) return { cls, decision: "block", reason: `the project ${ms.slug} is read-only` };
     if (cls === "financial") {
       const amount = parseAmountUsd(action);
-      if (amount == null) return { cls, decision: "ask", reason: `money in the mission ${ms.slug}: the amount is unknown, approve to run` };
+      if (amount == null) return { cls, decision: "ask", reason: `money in the project ${ms.slug}: the amount is unknown, approve to run` };
       if (ms.budgetLeftUsd != null && amount > ms.budgetLeftUsd) return { cls, decision: "ask", reason: `over what is left of the mission's budget ($${ms.budgetLeftUsd})` };
     }
   }
@@ -85,7 +85,7 @@ export function gateAction(
       }
     }
   }
-  if (ms && decision === "auto" && ceilingRank(ms.ceiling) < ceilingRank("act")) return { cls, decision: "ask", reason: `the mission ${ms.slug}'s ceiling is ${ms.ceiling}: approve to run` };
+  if (ms && decision === "auto" && ceilingRank(ms.ceiling) < ceilingRank("act")) return { cls, decision: "ask", reason: `the project ${ms.slug}'s ceiling is ${ms.ceiling}: approve to run` };
   if (rule && decision === "auto") return { cls, decision: "ask", reason: rule.reason };
   return { cls, decision, reason: decision === "ask" ? "autonomy not enabled — approve to run" : undefined };
 }

@@ -193,13 +193,13 @@ export function oneQuestion(q: unknown): string | null {
 
 export function buildDraftPrompt(turns: DraftTurn[], draft: MissionDraft, ctx: DraftContext): { system: string; prompt: string } {
   const system = [
-    "You help a person start a mission: an effort with an outcome and an end date. Read the conversation and fill the mission's fields.",
+    "You help a person start a project: an effort with an outcome and an end date. Read the conversation and fill the project's fields.",
     "Reply with ONE JSON object and nothing else:",
     '{"fields": {"name": "...", "outcome": "...", "why": "...", "start": "YYYY-MM-DD", "target": "YYYY-MM-DD", "owner": "<domain>", "consult": ["<domain>"], "inform": ["<domain>"], "apps": ["<app id>"], "specialists": ["<specialist id>"], "people": ["person/<slug>"], "budgetUsd": 0, "hoursWk": 0, "milestones": [{"title": "...", "due": "YYYY-MM-DD"}], "match": {"calendar": ["..."], "email_from": ["..."], "merchants": ["..."]}},',
     ' "say": "one short sentence acknowledging what you learned", "question": "the ONE question that matters most now, or null"}',
-    "Domains have roles: owner is the one domain the mission belongs to; consult are domains whose context it reads along (\"money should read along\", \"check with health\"); inform are domains that only get told the outcome.",
+    "Domains have roles: owner is the one domain the project belongs to; consult are domains whose context it reads along (\"money should read along\", \"check with health\"); inform are domains that only get told the outcome.",
     "Rules: include only fields the conversation supports; leave the rest out. Use only the ids listed below. Never add a person the user did not name. Resolve relative dates (\"by June\", \"in three months\") against today. A name is short, starts with a verb or a noun, and has no date in it. The outcome is what done looks like, in the user's terms.",
-    "Ask about the target date, the outcome and the budget before anything else, one at a time. Do not ask about something already in the draft. When name, outcome and target are known and nothing else clearly matters, set question to null and say the mission is ready to start.",
+    "Ask about the target date, the outcome and the budget before anything else, one at a time. Do not ask about something already in the draft. When name, outcome and target are known and nothing else clearly matters, set question to null and say the project is ready to start.",
     "No em dashes. Plain words.",
   ].join("\n");
   const list = (xs: string[]) => (xs.length ? xs.join(", ") : "(none)");
@@ -264,7 +264,7 @@ export async function createFromDraft(vault: string, raw: unknown, now = Date.no
   const r = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const names = Array.isArray(r.people) ? (r.people as unknown[]).map((p) => ctx.people.find((x) => x.id === p)?.name ?? "").join(" ") : "";
   const { fields: d, dropped } = validateFields(raw, ctx, names);
-  if (!d.name) throw new Error("a mission needs a name");
+  if (!d.name) throw new Error("a project needs a name");
   const ms = await import("./missions.ts");
   const domains = [
     ...(d.owner ? [{ slug: d.owner, role: "owner" as const }] : []),

@@ -63,9 +63,9 @@ afterEach(() => {
   else process.env.PREVAIL_CONFIG_DIR = savedCfg;
 });
 
-describe("projects are missions: the old calls still work", () => {
+describe("projects are projects: the old calls still work", () => {
   const mdir = (slug: string) => join(vault, "data", "missions", slug);
-  test("create makes a mission; the first domain owns it", () => {
+  test("create makes a project; the first domain owns it", () => {
     const p = createProject(vault, { name: "Foo Trip", outcome: "Back home with photos: done", target: "2026-12-01", domains: ["travel", "Hobbies"], now: NOW });
     expect(p).toMatchObject({ id: "mission/foo-trip", name: "Foo Trip", status: "active", outcome: "Back home with photos: done", target: "2026-12-01", goals: [] });
     expect(p.domains).toEqual([{ slug: "travel", role: "owner" }, { slug: "hobbies", role: "consulted" }]);
@@ -82,7 +82,7 @@ describe("projects are missions: the old calls still work", () => {
     expect(existsSync(join(mdir("bar-build"), "mission.md"))).toBe(true);
     expect(() => setProject(vault, "project/bar-build", { target: "soon" })).toThrow(/YYYY-MM-DD/);
     expect(() => setProject(vault, "project/bar-build", { status: "done" })).toThrow(/close-out/);
-    expect(() => setProject(vault, "project/nope", { status: "paused" })).toThrow(/no mission/);
+    expect(() => setProject(vault, "project/nope", { status: "paused" })).toThrow(/no project/);
     expect(() => createProject(vault, { name: "Bar Build" })).toThrow(/already exists/);
     expect(() => createProject(vault, { name: "Baz", domains: ["nowhere"] })).toThrow(/no domain "nowhere"/);
   });
@@ -189,8 +189,8 @@ describe("structure suggestions: the rules", () => {
     createProject(vault, { name: "Already", fromIntent: "tracked", now: NOW });
     const got = suggestStructure(vault, NOW).filter((s) => s.kind === "project");
     expect(got.map((s) => s.id).sort()).toEqual(["project:intent:qux-app", "project:topic:boat-build"]);
-    expect(got.find((s) => s.id === "project:intent:qux-app")).toMatchObject({ title: "Start a mission for Qux App?", reason: "3 sittings in your prompts since Aug 31", evidence: [{ ts: NOW - DAY, domain: "hobbies" }] });
-    expect(got.find((s) => s.id === "project:topic:boat-build")!.title).toBe("Start a mission for Boat Build?");
+    expect(got.find((s) => s.id === "project:intent:qux-app")).toMatchObject({ title: "Start a project for Qux App?", reason: "3 sittings in your prompts since Aug 31", evidence: [{ ts: NOW - DAY, domain: "hobbies" }] });
+    expect(got.find((s) => s.id === "project:topic:boat-build")!.title).toBe("Start a project for Boat Build?");
   });
 
   test("archive: a domain with no threads, touches or updates in 365 days; never General", () => {
@@ -229,7 +229,7 @@ describe("structure suggestions: accept and dismiss", () => {
     await expect(acceptSuggestion(vault, "domain:pets", { now: NOW })).rejects.toThrow(/no suggestion/);
   });
 
-  test("accept a mission suggestion: the mission, linked to its prompt project", async () => {
+  test("accept a project suggestion: the project, linked to its prompt project", async () => {
     intent([{ slug: "qux-app", title: "Qux App", domain: "hobbies" }], { "qux-app": 4 });
     const r = await acceptSuggestion(vault, "project:intent:qux-app", { now: NOW });
     expect(r).toMatchObject({ ok: true, kind: "project", project: { id: "mission/qux-app", prompt_projects: ["qux-app"], domains: [{ slug: "hobbies", role: "owner" }], status: "active" } });

@@ -351,7 +351,7 @@ async function handleCommand(
           "/calm <1-5>         the weekly check-in: how calm was this week?",
           "/tell <anything>    file it: a task, a promise, a decision, a note",
           "/forget             what am I forgetting?",
-          "/m <mission>        pin this chat to a mission (/m off to unpin)",
+          "/m <project>        pin this chat to a project (/m off to unpin)",
           "",
           `current: ${state.domain.name} via ${state.cli.label}${state.councilMode ? " · council ON" : ""}`,
           "",
@@ -473,7 +473,7 @@ async function handleCommand(
           `domain:    ${state.domain.name}`,
           `cli:       ${state.cli.label}${state.model ? ` · ${state.model}` : ""}`,
           `council:   ${state.councilMode ? "ON" : "OFF"}`,
-          `mission:   ${state.mission ?? "(none)"}`,
+          `project:   ${state.mission ?? "(none)"}`,
           `framework: ${fw ?? "(none)"}`,
         ].join("\n"),
       );

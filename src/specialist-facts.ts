@@ -86,7 +86,7 @@ async function historianFacts(vault: string, owner: string, _now: number): Promi
     if (c) out.push(`Calibration here: ${c.retros} retros, gut right ${c.gutRight}, recommendation right ${c.recommendationRight}, ${c.pending} owed.`);
   } catch { /* none */ }
   const ms = missionScopeSlug(owner);
-  if (ms) { const log = readText(join(dir, "memory", "log.md")); if (log) out.push(`Mission log:\n${clip(log, 1500)}`); }
+  if (ms) { const log = readText(join(dir, "memory", "log.md")); if (log) out.push(`Project log:\n${clip(log, 1500)}`); }
   return out.join("\n");
 }
 

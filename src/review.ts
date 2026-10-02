@@ -243,7 +243,7 @@ export function reviewText(r: ReviewCard): string {
   if (r.hypothesis) out.push(`${r.hypothesis.text} Reply yes or no.`);
   if (r.asked?.ladder) out.push("Once a quarter: on a ladder from 0 (worst possible life) to 10 (best possible), where do you stand now, and where in five years?");
   if (r.asked?.who5) out.push("This month's WHO-5 is waiting (five quick questions about the last two weeks).");
-  for (const m of r.missions ?? []) out.push(`Mission: ${m}`);
+  for (const m of r.missions ?? []) out.push(`Project: ${m}`);
   for (const x of r.initiatives ?? []) out.push(`Initiative: ${x.explanation}${x.proposal ? ` ${x.proposal}` : ""}`);
   if (r.experiment) out.push(`Experiment: ${r.experiment.text}`);
   if (r.time) {

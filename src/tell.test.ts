@@ -28,12 +28,12 @@ function seed() {
 
 describe("where it goes", () => {
   beforeEach(seed);
-  test("a domain by its name or routing keywords, else General; a mission by its words", () => {
+  test("a domain by its name or routing keywords, else General; a project by its words", () => {
     expect(domainForText(V, "the boiler made a noise")).toBe("home");
     expect(domainForText(V, "money: check the foo invoice")).toBe("money");
     expect(domainForText(V, "something unrelated")).toBe("general");
   });
-  test("an active mission the words point at; practice goes to the only learning mission", async () => {
+  test("an active project the words point at; practice goes to the only learning project", async () => {
     createMission(V, { name: "Learn the cello", outcome: "Learn the cello for the family", domains: [{ slug: "home", role: "owner" }], now: NOW });
     createMission(V, { name: "Kitchen remodel", outcome: "A new foo kitchen", domains: [{ slug: "home", role: "owner" }], now: NOW });
     expect((await missionForText(V, "the kitchen tiles arrived"))?.slug).toBe("kitchen-remodel");
@@ -80,12 +80,12 @@ describe("what it is, with Undo", () => {
     expect(toldReply(p)).toBe("Filed a promise in General's board, as a promise.");
   });
 
-  test("practice and a spend go to the mission; Undo takes them out", async () => {
+  test("practice and a spend go to the project; Undo takes them out", async () => {
     createMission(V, { name: "Learn the cello", outcome: "Learn the cello for the family", domains: [{ slug: "home", role: "owner" }], budgetUsd: 500, now: NOW });
     const pr = await tell(V, "practiced 30 min", { surface: "telegram", now: NOW });
     expect([pr.kind, pr.mission]).toEqual(["practice", "learn-the-cello"]);
     const sp = await tell(V, "paid $120 for the cello term fee", { surface: "telegram", now: NOW });
-    expect([sp.kind, sp.where]).toEqual(["spend", "the mission Learn the cello's budget ($120)"]);
+    expect([sp.kind, sp.where]).toEqual(["spend", "the project Learn the cello's budget ($120)"]);
     const ledger = join(V, "data", "missions", "learn-the-cello", "memory", "ledger.jsonl");
     expect(readFileSync(ledger, "utf8")).toContain('"usd":-120');
     await undoTold(V, sp.id, NOW);

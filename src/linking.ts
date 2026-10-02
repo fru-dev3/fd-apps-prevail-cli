@@ -233,7 +233,7 @@ function domainOptions(vault: string, home: string, prefer: string[] = []): { sl
       return { slug, description };
     });
   if (!prefer.length) return opts;
-  const first = opts.filter((o) => prefer.includes(o.slug)).map((o) => ({ ...o, description: `part of this mission${o.description ? `; ${o.description}` : ""}` }));
+  const first = opts.filter((o) => prefer.includes(o.slug)).map((o) => ({ ...o, description: `part of this project${o.description ? `; ${o.description}` : ""}` }));
   return [...first, ...opts.filter((o) => !prefer.includes(o.slug))];
 }
 

@@ -33,7 +33,7 @@ export type Level = "purpose" | "value" | "statement" | "vision" | "objective" |
 export const LEVELS: { level: Level; label: string }[] = [
   { level: "purpose", label: "Purpose" }, { level: "value", label: "Values" }, { level: "statement", label: "Mission statement" },
   { level: "vision", label: "Vision" }, { level: "objective", label: "Objectives" }, { level: "goal", label: "Goals" },
-  { level: "initiative", label: "Initiatives" }, { level: "mission", label: "Missions" }, { level: "task", label: "Tasks" },
+  { level: "initiative", label: "Initiatives" }, { level: "mission", label: "Projects" }, { level: "task", label: "Tasks" },
 ];
 
 export interface ChainNode {

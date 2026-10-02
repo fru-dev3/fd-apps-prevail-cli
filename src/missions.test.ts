@@ -107,7 +107,7 @@ describe("the store", () => {
     expect(listMissions(V).map((m) => m.slug)).toEqual(["learn-the-cello"]);
   });
 
-  test("tasks: the mission's own and ~mission: lines in any domain", () => {
+  test("tasks: the project's own and ~mission: lines in any domain", () => {
     cello();
     writeFileSync(join(M("learn-the-cello"), "memory", "tasks.md"), "# Tasks\n\n- [ ] Buy rosin ~id:t1\n");
     writeFileSync(join(D("money"), "memory", "tasks.md"), "# Tasks\n\n- [ ] Pay the term fee @2026-10-10 ~mission:learn-the-cello ~id:t2\n- [ ] Unrelated ~id:t3\n");
@@ -176,7 +176,7 @@ describe("migration from entity projects", () => {
 
 describe("chat: one scope resolver", () => {
   beforeEach(seed);
-  test("parity: a mission turn carries every block kind a domain turn has, and more", async () => {
+  test("parity: a project turn carries every block kind a domain turn has, and more", async () => {
     cello();
     const dom = await resolveScope(V, { domain: "hobbies" });
     const mis = await resolveScope(V, { mission: "learn-the-cello" });
@@ -195,7 +195,7 @@ describe("chat: one scope resolver", () => {
     expect(mis.dispatch).toMatchObject({ allowed: true, defaultOwner: "mission/learn-the-cello", ceiling: "draft", budgetLeftUsd: 1500 });
   });
 
-  test("privacy: a local-only attached domain makes the mission local-only", async () => {
+  test("privacy: a local-only attached domain makes the project local-only", async () => {
     cello();
     writeFileSync(join(D("family"), "manifest.json"), JSON.stringify({ identity: { name: "family" }, privacy: { localOnly: true } }));
     expect((await resolveScope(V, { mission: "learn-the-cello" })).privacy.localOnly).toBe(true);
@@ -205,7 +205,7 @@ describe("chat: one scope resolver", () => {
     expect(lines.join("")).toContain("local-only");
   });
 
-  test("a mission chat stores its thread in the mission, and dispatch is scoped", async () => {
+  test("a project chat stores its thread in the project, and dispatch is scoped", async () => {
     cello();
     const turns: ChatTurn[] = [];
     const seen: unknown[] = [];
@@ -222,24 +222,24 @@ describe("chat: one scope resolver", () => {
     });
     expect(code).toBe(0);
     expect(turns[0]!.cwd).toBe(M("learn-the-cello"));
-    expect(turns[0]!.prompt).toStartWith("# MISSION: Learn the cello");
+    expect(turns[0]!.prompt).toStartWith("# PROJECT: Learn the cello");
     expect(seen[0]).toMatchObject({ slug: "learn-the-cello", specialists: ["researcher", "scout"], ceiling: "draft" });
     expect(existsSync(join(M("learn-the-cello"), "memory", "threads", "t-cello.jsonl"))).toBe(true);
     expect(JSON.parse(lines[0]!)).toMatchObject({ type: "start", domain: "_mission-learn-the-cello" });
   });
 
-  test("a domain turn that names an active mission gets a one-line pointer", async () => {
+  test("a domain turn that names an active project gets a one-line pointer", async () => {
     cello();
     const s = await resolveScope(V, { domain: "money", message: "Can I afford Learn the cello this month?" });
-    expect(s.blocks.map((b) => b.text).join("\n")).toContain("Active mission: Learn the cello (mission/learn-the-cello), next: Instrument at home by 2026-10-05");
+    expect(s.blocks.map((b) => b.text).join("\n")).toContain("Active project: Learn the cello (mission/learn-the-cello), next: Instrument at home by 2026-10-05");
     expect((await resolveScope(V, { domain: "money", message: "What is my balance?" })).blocks).toEqual([]);
     // @ a mission in any chat: a short brief.
     const at = await resolveScope(V, { domain: "money", entity: ["mission/learn-the-cello"] });
-    expect(at.blocks[0]!.text).toStartWith("# MISSION REFERENCED: Learn the cello (mission/learn-the-cello), active");
+    expect(at.blocks[0]!.text).toStartWith("# PROJECT REFERENCED: Learn the cello (mission/learn-the-cello), active");
   });
 });
 
-describe("the mission dispatches inside its scope", () => {
+describe("the project dispatches inside its scope", () => {
   beforeEach(seed);
   const scopeOf = (ceiling: "read" | "draft" = "draft") => {
     const m = readMission(V, "learn-the-cello")!;
@@ -247,7 +247,7 @@ describe("the mission dispatches inside its scope", () => {
   };
   const reply = (o: object) => async () => JSON.stringify({ effort: "quick", open_ended: true, decision: false, why: "find tutors", ...o });
 
-  test("find me three tutors: a job owned by the mission, staffed from it, without naming a domain or a specialist", async () => {
+  test("find me three tutors: a job owned by the project, staffed from it, without naming a domain or a specialist", async () => {
     cello();
     const d = await dispatch({ vault: V, message: "Find me three weekend tutors within twenty minutes of home", domain: "_mission-learn-the-cello", scope: scopeOf(), runner: reply({ owner: "hobbies", consulted: ["money"], informed: ["family"] }), now: NOW });
     expect(d.kind).toBe("job");
@@ -267,20 +267,20 @@ describe("the mission dispatches inside its scope", () => {
     const extra = await dispatch({ vault: V, message: "Find a cheaper way to pay for lessons this term", domain: "x", scope: scopeOf(), runner: reply({ owner: "hobbies", consulted: ["taxes", "money"] }) });
     expect(extra.kind).toBe("job");
     expect(extra.job!.domains.consulted).toEqual(["hobbies", "money"]);
-    expect(extra.job!.why).toContain("left out, not in the mission: taxes");
+    expect(extra.job!.why).toContain("left out, not in the project: taxes");
     const never = await dispatch({ vault: V, message: "Do my secrets notes mention the tutor?", domain: "x", scope: scopeOf(), runner: null });
     expect(never).toMatchObject({ kind: "bring-in", bringIn: { domains: ["secrets"], never: true } });
   });
 
-  test("ceilings and money, in code: a read mission cannot draft; over the budget asks", async () => {
+  test("ceilings and money, in code: a read project cannot draft; over the budget asks", async () => {
     cello();
     const d = await dispatch({ vault: V, message: "Draft an email to the tutor asking about Saturday lessons", domain: "x", scope: scopeOf("read"), runner: reply({ owner: "hobbies" }), now: NOW });
     expect(d.job!.startsAlone).toBe(false);
-    expect(d.job!.askReason).toMatch(/past this mission's ceiling \(read\)/);
+    expect(d.job!.askReason).toMatch(/past this project's ceiling \(read\)/);
     saveJob(V, d.job!);
     const ran = await runJob(V, d.job!.id, { detectClis: async () => [{ kind: "claude", bin: "x", label: "c" }] as never, runChatTurn: async () => JSON.stringify({ summary: "plan", body: "A plan for the email.", sources: [], check: { ok: true, missing: [] }, notebook: [] }) });
     expect(ran.status).toBe("needs-approval");
-    expect(ran.note).toMatch(/mission's ceiling/);
+    expect(ran.note).toMatch(/project's ceiling/);
     const big = await dispatch({ vault: V, message: "Find a used cello under $2,000 near home", domain: "x", scope: { ...scopeOf(), budgetLeftUsd: 300 }, runner: reply({ owner: "hobbies" }) });
     expect(big.job!.askReason).toMatch(/budget/);
     // The broker and the act gate: the same rules for anything that acts.
@@ -291,7 +291,7 @@ describe("the mission dispatches inside its scope", () => {
     expect(missionGate(V, "hobbies")).toBeNull();
   });
 
-  test("a job owned by the mission files into the mission, with Undo", async () => {
+  test("a job owned by the project files into the project, with Undo", async () => {
     cello();
     const d = await dispatch({ vault: V, message: "Find me three weekend tutors within twenty minutes of home", domain: "x", scope: scopeOf(), runner: reply({ owner: "hobbies", consulted: ["money"], informed: ["family"] }), now: NOW });
     saveJob(V, d.job!);
@@ -315,8 +315,8 @@ describe("the mission dispatches inside its scope", () => {
     expect(read(join(M("learn-the-cello"), "memory", "tasks.md"))).not.toContain("Email tutor A");
   });
 
-  test("start a mission from chat: a draft card, never started alone", () => {
-    expect(missionDraftFrom("Start a mission to learn the cello by 2027-06-30", "hobbies", ["hobbies"])).toMatchObject({ name: "Learn the cello", owner: "hobbies", specialists: ["tutor", "coach", "researcher"], target: "2027-06-30" });
+  test("start a project from chat: a draft card, never started alone", () => {
+    expect(missionDraftFrom("Start a project to learn the cello by 2027-06-30", "hobbies", ["hobbies"])).toMatchObject({ name: "Learn the cello", owner: "hobbies", specialists: ["tutor", "coach", "researcher"], target: "2027-06-30" });
     expect(missionDraftFrom("I'm going to remodel the kitchen this winter", "general", [])).toMatchObject({ name: "Remodel the kitchen this winter", specialists: ["researcher", "analyst", "liaison"] });
     expect(missionDraftFrom("What should I cook tonight?", "general", [])).toBeNull();
   });
@@ -329,7 +329,7 @@ describe("close-out", () => {
     attach(V, "learn-the-cello", "domain", "money:consulted");
     spend(V, "learn-the-cello", { line: "lessons", usd: 120, what: "Term one fee", ref: "plaid:txn-foo" }, NOW);
     milestone(V, "learn-the-cello", "done", { title: "Instrument at home" }, NOW);
-    writeFileSync(join(M("learn-the-cello"), "memory", "memory.md"), "# What this mission has learned\n- Saturday lessons stuck; weekday practice did not\n");
+    writeFileSync(join(M("learn-the-cello"), "memory", "memory.md"), "# What this project has learned\n- Saturday lessons stuck; weekday practice did not\n");
     writeFileSync(join(M("learn-the-cello"), "files", "receipt.pdf"), "pdf");
     writeFileSync(join(M("learn-the-cello"), "memory", "tasks.md"), "# Tasks\n\n- [ ] Book next term ~id:t9\n- [ ] Restring the bow ~id:t10\n");
     writeFileSync(join(D("hobbies"), "memory", "tasks.md"), "# Tasks\n\n- [ ] Tune the strings ~id:h1\n");
@@ -346,7 +346,7 @@ describe("close-out", () => {
     plan.filings.find((f) => f.kind === "note" && f.domain === "family")!.text = "Recital on June 14";
     const r = applyCloseout(V, plan, NOW);
     expect(r.mission).toMatchObject({ status: "completed", result: "partly", completed: "2026-10-02" });
-    expect(read(ownerMem)).toContain("## Missions");
+    expect(read(ownerMem)).toContain("## Projects");
     expect(read(ownerMem)).toContain("Lesson from Learn the cello: Saturday lessons stuck");
     expect(read(join(D("family"), "memory", "updates.jsonl"))).toContain("Recital on June 14");
     expect(read(join(D("money"), "memory", "updates.jsonl"))).toContain("plaid:txn-foo");

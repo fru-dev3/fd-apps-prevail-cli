@@ -343,12 +343,12 @@ const MENTION = /^@([A-Za-z][A-Za-z-]{1,40})\b[:,]?\s*/;
 
 // "Start a mission to...", "I'm going to learn...", "plan my trip to...": an
 // effort with an outcome and an end. Code reads it; the user always says yes.
-const MISSION_START = /^(please\s+)?(let'?s\s+)?(start|begin|create|open|set up)\s+(a|the|my)\s+mission\b|^(i'?m going to|i am going to|i want to|i'?d like to|help me)\s+(learn|remodel|renovate|buy|build|plan|train for|prepare for|travel to|move to)\b|^plan my (trip|move|wedding|renovation)\b/i;
+const MISSION_START = /^(please\s+)?(let'?s\s+)?(start|begin|create|open|set up)\s+(a|the|my)\s+(mission|project)\b|^(i'?m going to|i am going to|i want to|i'?d like to|help me)\s+(learn|remodel|renovate|buy|build|plan|train for|prepare for|travel to|move to)\b|^plan my (trip|move|wedding|renovation)\b/i;
 
 export function missionDraftFrom(message: string, here: string, known: string[]): MissionDraft | null {
   const t = message.replace(/^\s*(hey|hi|ok|okay)[,\s]+/i, "").trim();
   if (!MISSION_START.test(t)) return null;
-  const outcome = t.replace(/^(please\s+)?(let'?s\s+)?(start|begin|create|open|set up)\s+(a|the|my)\s+mission\s*(to|for|called|named)?\s*:?\s*/i, "").replace(/^(i'?m going to|i am going to|i want to|i'?d like to|help me)\s+/i, "").replace(/[.!?]+$/, "").trim();
+  const outcome = t.replace(/^(please\s+)?(let'?s\s+)?(start|begin|create|open|set up)\s+(a|the|my)\s+(mission|project)\s*(to|for|called|named)?\s*:?\s*/i, "").replace(/^(i'?m going to|i am going to|i want to|i'?d like to|help me)\s+/i, "").replace(/[.!?]+$/, "").trim();
   const name = (outcome.split(/[,.;]| by | before | so that /i)[0] ?? outcome).trim().replace(/^\w/, (c) => c.toUpperCase()).slice(0, 60);
   if (!name) return null;
   const verb = /^(\w+)/.exec(outcome.toLowerCase())?.[1] ?? "";
@@ -396,7 +396,7 @@ export async function dispatch(i: DispatchInput): Promise<Dispatch> {
     const outside = known.filter((d) => !inScope.has(d) && named(d));
     if (outside.length) {
       const nv = outside.some((d) => never.has(d));
-      return { kind: "bring-in", confident: true, bringIn: { domains: outside, never: nv, why: `${outside.join(" and ")} ${outside.length === 1 ? "is" : "are"} not in the mission ${sc.name}` } };
+      return { kind: "bring-in", confident: true, bringIn: { domains: outside, never: nv, why: `${outside.join(" and ")} ${outside.length === 1 ? "is" : "are"} not in the project ${sc.name}` } };
     }
   } else {
     const draft = missionDraftFrom(message, here, known);
@@ -411,11 +411,11 @@ export async function dispatch(i: DispatchInput): Promise<Dispatch> {
   if (i.runner !== null) {
     const { readDomainGoals } = await import("./goals.ts");
     const pool = known.filter((d) => !never.has(d) || named(d));
-    const domains = pool.map((d) => ({ slug: d, goals: [...(inScope.has(d) ? ["(in this mission)"] : []), ...readDomainGoals(i.vault, d).filter((g) => g.status === "active").map((g) => g.title)] }));
-    const { system, prompt } = buildDispatchPrompt(message, sc ? `the mission ${sc.name}` : here, domains, [...chief.learned, ...learned.lines]);
+    const domains = pool.map((d) => ({ slug: d, goals: [...(inScope.has(d) ? ["(in this project)"] : []), ...readDomainGoals(i.vault, d).filter((g) => g.status === "active").map((g) => g.title)] }));
+    const { system, prompt } = buildDispatchPrompt(message, sc ? `the project ${sc.name}` : here, domains, [...chief.learned, ...learned.lines]);
     try {
       const runner = i.runner ?? (await import("./route.ts")).claudeRouteRunner;
-      dm = parseDispatchReply(await runner({ system, prompt: sc ? `${prompt}\nThis is a mission: prefer the domains marked (in this mission); name another only when the job truly needs it.` : prompt, timeoutMs: 40_000 }), known);
+      dm = parseDispatchReply(await runner({ system, prompt: sc ? `${prompt}\nThis is a project: prefer the domains marked (in this project); name another only when the job truly needs it.` : prompt, timeoutMs: 40_000 }), known);
     } catch { dm = null; }
   }
   // The model may reach outside the mission. When the job belongs to another
@@ -442,7 +442,7 @@ export async function dispatch(i: DispatchInput): Promise<Dispatch> {
   if (skip) team = team.map((s) => ({ ...s, specialists: s.specialists.filter((x) => !skip.has(x)) })).filter((s) => s.specialists.length).map((s, n) => ({ ...s, step: n + 1 }));
   if (!team.length) return { kind: "answer", confident: true };
   const effort = dm?.effort ?? "standard";
-  const why = `${dm?.why ?? `${shape} job`}${leftOut.length ? ` (left out, not in the mission: ${leftOut.join(", ")})` : ""}`;
+  const why = `${dm?.why ?? `${shape} job`}${leftOut.length ? ` (left out, not in the project: ${leftOut.join(", ")})` : ""}`;
   const job = newJob({ ask: message, here, thread: i.thread, kind: i.trigger ?? "chat", owner, consulted, informed, team, effort, why, now });
   if (sc) job.mission = { slug: sc.slug, ceiling: sc.ceiling, budgetLeftUsd: sc.budgetLeftUsd };
   // Unsure: the model did not answer, so the domains are a guess (a mission's own scope is not a guess).
@@ -468,7 +468,7 @@ export function decideStart(vault: string, job: Job, specs: Specialist[], limits
     if (!s || !s.on) reasons.push(`the ${id} is not available`);
     else if (ceilingRank(s.ceiling) > ceilingRank("act-ask")) reasons.push(`the ${s.name} would act`);
     else if (s.outside) reasons.push(`it sends your words to ${s.name}, an outside agent`);
-    else if (job.mission && ceilingRank(s.ceiling) > ceilingRank(job.mission.ceiling)) reasons.push(`the ${s.name} goes past this mission's ceiling (${job.mission.ceiling})`);
+    else if (job.mission && ceilingRank(s.ceiling) > ceilingRank(job.mission.ceiling)) reasons.push(`the ${s.name} goes past this project's ceiling (${job.mission.ceiling})`);
   }
   // Money in a mission: anything that spends asks, and past what is left it says so.
   if (job.mission && job.mission.budgetLeftUsd != null) {
@@ -704,7 +704,7 @@ export function jobContext(vault: string, job: Job): string {
   const dir = resolveDomainDir(vault, job.domains.owner);
   const isMission = !!missionScopeSlug(job.domains.owner);
   const owner = [
-    isMission ? `# OWNER: the mission ${job.domains.owner}` : `# OWNER DOMAIN: ${job.domains.owner}`,
+    isMission ? `# OWNER: the project ${job.domains.owner}` : `# OWNER DOMAIN: ${job.domains.owner}`,
     isMission ? clip(readText(join(dir, "mission.md")).replace(/^---\n[\s\S]*?\n---\n?/, ""), 1500) : "",
     clip(readText(join(dir, "ideal-state.md")), 1500),
     clip(readText(join(dir, "memory", "memory.md")), 2500),
@@ -825,7 +825,7 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
       // read-only and only names actions; code gates each one afterwards.
       if (ceilingRank(spec.ceiling) > ceilingRank("act-ask")) return { ok: false, status: "needs-approval", note: `the ${spec.name} would act on its own; that is never allowed` };
       // A mission's ceiling can only tighten: a read-only mission never drafts.
-      if (job!.mission && ceilingRank(spec.ceiling) > ceilingRank(job!.mission.ceiling)) return { ok: false, status: "needs-approval", note: `the ${spec.name} goes past the mission's ceiling (${job!.mission.ceiling}); raise it on the mission's Setup tab to run it` };
+      if (job!.mission && ceilingRank(spec.ceiling) > ceilingRank(job!.mission.ceiling)) return { ok: false, status: "needs-approval", note: `the ${spec.name} goes past the project's ceiling (${job!.mission.ceiling}); raise it on the project's Setup tab to run it` };
       // An outside agent: only the brief leaves, and only on the user's yes for
       // exactly this brief (an engine act in the Inbox). Its reply is quoted data.
       if (spec.outside) {

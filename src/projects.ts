@@ -1,7 +1,7 @@
 // Projects became Missions (missions-plan.md). The entity kind project/<slug>
 // is retired: `prevail missions migrate` (run by groom) carries old project
 // pages into data/missions/<slug>/, and every old id, command and export here
-// resolves to the mission. Prompt projects (prompt-projects.ts) are a
+// resolves to the mission. Prompt groups (prompt-projects.ts) are a
 // different thing and keep their names.
 //
 // Goals link to a mission with `~mission:<slug>` (or the older `~project:<slug>`)
@@ -22,7 +22,7 @@ export type ProjectDetail = MissionView & { goals: ProjectGoal[] };
 export interface ProjectPatch { status?: string; outcome?: string; target?: string; domains?: string[] }
 export interface CreateProjectInput extends Omit<ProjectPatch, "status"> { name: string; fromIntent?: string; now?: number }
 
-export const RENAMED_NOTE = "projects are now missions: use `prevail missions`";
+export const RENAMED_NOTE = "entity projects are now Projects: use `prevail projects`";
 
 /** Alias: creates a mission (first domain owns it, the rest are consulted). */
 export function createProject(vault: string, i: CreateProjectInput): ProjectDetail {
@@ -35,10 +35,10 @@ export function createProject(vault: string, i: CreateProjectInput): ProjectDeta
 export function setProject(vault: string, id: string, patch: ProjectPatch, o: { now?: number } = {}): ProjectDetail {
   const now = o.now ?? Date.now();
   const m = readMission(vault, id);
-  if (!m) throw new Error(`no mission "${id}"`);
+  if (!m) throw new Error(`no project "${id}"`);
   if (patch.status && patch.status !== m.status) {
     const s = patch.status === "done" ? "completed" : patch.status;
-    if (s === "completed") throw new Error("complete a mission with its close-out: prevail missions complete <slug>");
+    if (s === "completed") throw new Error("complete a project with its close-out: prevail projects complete <slug>");
     const op = s === "paused" ? "pause" : s === "archived" ? "archive" : m.status === "paused" ? "resume" : "reopen";
     transition(vault, m.slug, op, { now });
   }
@@ -92,12 +92,15 @@ export function projectGoals(vault: string, slug: string): ProjectGoal[] {
 /**
  * The old `prevail projects create|set|show project/<slug>` commands, kept as
  * aliases of `prevail missions`. Returns the exit code, or null when the
- * subcommand belongs to prompt projects.
+ * subcommand belongs to prompt groups.
  */
 export async function projectsEntityCommand(a: string[], vault: string): Promise<number | null> {
   const sub = a[0];
   const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && a[i - 1]!.startsWith("--") && !["--json"].includes(a[i - 1]!)));
   if (sub !== "create" && sub !== "set" && !(sub === "show" && pos[1]?.startsWith("project/"))) return null;
+  // New-style calls go straight to the missions command; only the old flags need mapping.
+  const old = a.some((x) => ["--domain", "--domains", "--from-intent", "--status"].includes(x)) || !!pos[1]?.startsWith("project/");
+  if (!old) return null;
   process.stderr.write(`prevail projects ${sub}: ${RENAMED_NOTE}\n`);
   const { missionsCommand } = await import("./missions-cli.ts");
   const rest = a.slice(1).map((x) => (x === "--from-intent" ? "--from-prompt-project" : x === "--domain" ? "--owner" : x));
