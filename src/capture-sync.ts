@@ -40,7 +40,14 @@ export interface CaptureCheckpoint {
   prevailLastTs: number;
   /** High-water epoch-ms for opencode's message DB export. */
   opencodeLastTs: number;
+  /** Reader version per source. When a reader learns a new transcript shape,
+   *  its version goes up and its files are read again from the start (dedupe
+   *  keeps that safe), so prompts the old reader missed are recovered. */
+  readers?: Record<string, number>;
 }
+
+/** Codex reader 2 reads the item_completed UserMessage shape (Codex, Sep 2026). */
+export const CODEX_READER = 2;
 
 /** Legacy, non-namespaced checkpoint path (pre multi-machine). Kept only so the
  *  migration can seed the per-host file from it. */
@@ -64,6 +71,7 @@ function parseCheckpoint(raw: string): CaptureCheckpoint | null {
       files: c.files && typeof c.files === "object" ? c.files : {},
       opencodeLastTs: typeof c.opencodeLastTs === "number" ? c.opencodeLastTs : 0,
       prevailLastTs: typeof c.prevailLastTs === "number" ? c.prevailLastTs : 0,
+      ...(c.readers && typeof c.readers === "object" ? { readers: c.readers } : {}),
     };
   } catch {
     return null;
@@ -208,12 +216,31 @@ function scanClaude(cp: CaptureCheckpoint): ScanResult {
 }
 
 // ── codex ───────────────────────────────────────────────────────────────────
+/** The prompt a person typed, from one rollout line, in either shape Codex
+ *  has written: event_msg/user_message (to Sep 2026) or event_msg/item_completed
+ *  with a UserMessage item (after). response_item user messages are skipped:
+ *  they carry injected context, not what was typed. */
+export function codexPrompt(r: Record<string, unknown>): string | null {
+  if (r.type !== "event_msg") return null;
+  const p = r.payload as Record<string, unknown> | undefined;
+  if (p?.type === "user_message" && typeof p.message === "string") return p.message.trim() || null;
+  const item = p?.type === "item_completed" ? (p.item as { type?: string; content?: unknown } | undefined) : undefined;
+  if (item?.type !== "UserMessage" || !Array.isArray(item.content)) return null;
+  const text = item.content
+    .filter((c): c is { type: string; text: string } => c?.type === "text" && typeof c.text === "string")
+    .map((c) => c.text)
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
 function scanCodex(cp: CaptureCheckpoint): ScanResult {
   const root = join(homedir(), ".codex", "sessions");
   const present = existsSync(root);
   const res: ScanResult = { present, items: [], filesScanned: 0, touched: {} };
   if (!present) return res;
-  for (const { path, mtime } of changedFiles(walkJsonl(root), cp)) {
+  const stale = (cp.readers?.codex ?? 1) < CODEX_READER;
+  for (const { path, mtime } of changedFiles(walkJsonl(root), stale ? { ...cp, files: {} } : cp)) {
     res.filesScanned++;
     res.touched[path] = mtime;
     let raw = "";
@@ -224,6 +251,8 @@ function scanCodex(cp: CaptureCheckpoint): ScanResult {
     }
     let session: string | undefined;
     let cwd: string | undefined;
+    // "cli" for a person at the terminal, "exec" for a headless run.
+    let entry: string | undefined;
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       let r: Record<string, unknown>;
@@ -236,21 +265,16 @@ function scanCodex(cp: CaptureCheckpoint): ScanResult {
       if (r.type === "session_meta" && payload) {
         if (typeof payload.id === "string") session = payload.id;
         if (typeof payload.cwd === "string") cwd = payload.cwd;
+        if (typeof payload.source === "string") entry = payload.source;
         continue;
       }
-      // The real typed turn is event_msg/user_message; response_item messages
-      // carry injected <environment_context> noise, so we skip those.
-      if (
-        r.type === "event_msg" &&
-        payload?.type === "user_message" &&
-        typeof payload.message === "string"
-      ) {
-        const text = payload.message.trim();
-        if (!text) continue;
+      const text = codexPrompt(r);
+      if (text) {
         res.items.push({
           prompt: text,
           session,
           cwd,
+          entry,
           epochMs:
             typeof r.timestamp === "string" ? Date.parse(r.timestamp) || undefined : undefined,
         });
@@ -440,8 +464,12 @@ export function sync(vault: string): SyncResult {
   Object.assign(cp.files, claude.touched);
 
   const codex = scanCodex(cp);
-  sources.push(runSource(vault, "codex", codex));
-  Object.assign(cp.files, codex.touched);
+  const codexReport = runSource(vault, "codex", codex);
+  sources.push(codexReport);
+  if (!codexReport.error) {
+    Object.assign(cp.files, codex.touched);
+    cp.readers = { ...cp.readers, codex: CODEX_READER };
+  }
 
   const prevail = scanPrevail(cp);
   sources.push(runSource(vault, "prevail", prevail.res));

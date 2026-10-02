@@ -6,6 +6,7 @@ import { basename, join } from "node:path";
 import {
   antigravityItem,
   checkpointPath,
+  codexPrompt,
   hostSlug,
   readCheckpoint,
   writeCheckpoint,
@@ -114,4 +115,23 @@ describe("antigravity history", () => {
     expect(antigravityItem({ display: "  " })).toBeNull();
   });
 
+});
+
+describe("codex rollouts", () => {
+  test("reads both the old and the new typed-prompt shapes, and nothing injected", () => {
+    expect(codexPrompt({ type: "event_msg", payload: { type: "user_message", message: " foo " } })).toBe("foo");
+    expect(codexPrompt({
+      type: "event_msg",
+      payload: { type: "item_completed", item: { type: "UserMessage", content: [{ type: "text", text: "bar" }, { type: "image" }] } },
+    })).toBe("bar");
+    expect(codexPrompt({ type: "event_msg", payload: { type: "item_completed", item: { type: "AgentMessage", content: [{ type: "text", text: "x" }] } } })).toBeNull();
+    expect(codexPrompt({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "injected" }] } })).toBeNull();
+  });
+
+  test("the reader version survives a checkpoint round trip", () => {
+    const vault = makeVault();
+    process.env.PREVAIL_HOST_SLUG = "foo-host";
+    writeCheckpoint(vault, { version: 1, files: {}, prevailLastTs: 0, opencodeLastTs: 0, readers: { codex: 2 } });
+    expect(readCheckpoint(vault).readers).toEqual({ codex: 2 });
+  });
 });
