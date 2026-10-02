@@ -617,7 +617,8 @@ export async function computeMetrics(vault: string, opts: { now?: number; days?:
   const { chargeEvents } = await import("./app-money.ts");
   const ch = chargeEvents(vault);
   const chargesInfo: SourceInfo = { id: "charges", kind: "vault", files: [...new Set(ch.events.map((e) => e.file!).filter(Boolean))], events: ch.events.length, note: "card statement charges matched to your apps only" };
-  const events = [...machine.events, ...tasks.events, ...loops.events, ...decisions.events, ...prompts.events, ...trips.events, ...watch.events, ...spend.events, ...ch.events].filter((e) => e.ts >= from);
+  // A household member's numbers (attrs.member, Metrics M6) never count in the owner's own metrics.
+  const events = [...machine.events, ...tasks.events, ...loops.events, ...decisions.events, ...prompts.events, ...trips.events, ...watch.events, ...spend.events, ...ch.events].filter((e) => e.ts >= from && !e.attrs?.member);
   const hosts: Record<string, string[]> = {};
   for (const e of machine.events) { const k = NOT_AI(e.src) ? e.src : "ai"; (hosts[k] ??= []); if (!hosts[k]!.includes(e.host)) hosts[k]!.push(e.host); }
   const span = (src: string[]) => { const d = events.filter((e) => src.includes(e.src)).map((e) => e.ts).sort(); return d.length ? { first: d[0], last: d[d.length - 1] } : {}; };
@@ -836,6 +837,9 @@ export async function metricsCommand(argv: string[], vault: string): Promise<num
     if (args.json) out(r); else console.log(`git on ${r.host}: ${r.repos} repos, ${r.events} events (${r.ms} ms)`);
     return 0;
   }
+  // Metrics M6: log a number by hand; family metrics with consent per person.
+  if (sub === "say" || sub === "family") return (await import("./metrics-family.ts")).familyCommand(sub, argv, vault);
+  if (sub === "packs") return (await import("./packs.ts")).packsCommand(argv.slice(1), vault);
   const c = await computeMetrics(vault);
   if (sub === "compute") { if (args.json) out({ ok: true, ts: c.ts, sources: c.sources }); else console.log(`computed ${c.defs.length} metrics from ${c.sources.length} sources`); return 0; }
   if (sub === "sources") { if (args.json) out(c.sources); else for (const s of c.sources) console.log(`${s.id.padEnd(10)} ${s.kind.padEnd(8)} ${String(s.events).padStart(6)} events  ${s.first ?? ""}${s.last ? ` to ${s.last}` : ""}${s.note ? `  (${s.note})` : ""}`); return 0; }

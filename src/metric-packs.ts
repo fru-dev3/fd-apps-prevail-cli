@@ -2,11 +2,9 @@
 // build/metrics.md. Catalog metrics are tracked as they are; a pack's own
 // metrics are asked ones: a learned line counting stated events
 // (~src:stated ~kind:stated.<id> ~value:value), answered with
-// `prevail metrics say <id> <number>` or the metric's Log button. Nothing is
+// `prevail metrics say <id> <number>` (metrics-family.ts) or the metric's Log button. Nothing is
 // pinned (pinning names what it serves, which only the user knows).
 
-import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
 import type { Pack } from "./packs.ts";
 
 export async function addPackMetrics(vault: string, p: Pack, _now = Date.now()): Promise<{ added: string[]; skipped: string[] }> {
@@ -30,20 +28,4 @@ export async function addPackMetrics(vault: string, p: Pack, _now = Date.now()):
     added.push(d.title);
   }
   return { added, skipped };
-}
-
-/** Log one number for an asked metric (a pack's, or any learned stated one). Content free: the number only. */
-export async function sayMetric(vault: string, id: string, value: number, o: { now?: number; member?: string } = {}): Promise<{ id: string; kind: string; value: number }> {
-  const m = await import("./metrics.ts");
-  const line = m.readRegistry(vault).get(id);
-  const kind = line?.tokens.kind;
-  if (!line || !kind || !kind.startsWith("stated.")) throw new Error(`${id} is not a metric you log by hand`);
-  if (!Number.isFinite(value) || value < 0 || value > 1e7) throw new Error("a number between 0 and 10,000,000");
-  const now = o.now ?? Date.now();
-  const day = m.dayOf(now);
-  const dir = join(m.eventsRoot(vault), "stated");
-  mkdirSync(dir, { recursive: true });
-  const host = m.hostSlug();
-  appendFileSync(join(dir, `${day.slice(0, 7)}.${host}.jsonl`), `${JSON.stringify({ ts: day, src: "stated", kind: kind.split(",")[0], n: 1, host, tier: "asked", attrs: { value, ...(o.member ? { member: o.member } : {}) } })}\n`);
-  return { id, kind, value };
 }
