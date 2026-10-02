@@ -43,7 +43,7 @@ export interface MetricEvent {
   project?: string;
   model?: string;
   host: string;
-  tier: "measured" | "derived" | "asked";
+  tier: "measured" | "derived" | "asked" | "inferred";
   attrs: Record<string, number | string>;
   file?: string;           // where it was read from (vault-relative); never written
 }
@@ -426,6 +426,8 @@ export interface MetricDef {
   value?: (e: MetricEvent) => number; days?: boolean; documentary?: boolean;
   /** A week's value is the average of its days (a 1-5 check-in), not the sum. */
   avg?: boolean;
+  /** Count distinct projects (people, places) a week, not events. */
+  distinct?: boolean;
   /** Learned from the user (a metrics.md line with ~kind:), not built in. */
   learned?: boolean;
 }
@@ -451,6 +453,32 @@ export const CATALOG: MetricDef[] = [
   { id: "m-screen-minutes", title: "Screen time", family: "Time", per: "week", unit: "minutes", tier: "measured", srcs: ["apps"], kinds: ["app.focus"], value: (e) => Number(e.attrs.minutes ?? 0), from: "minutes per app in front, from Screen Time or Prevail's live focus (Mac and iPhone)" },
   { id: "m-phone-minutes", title: "Phone screen time", family: "Time", per: "week", unit: "minutes", tier: "measured", srcs: ["apps"], kinds: ["app.focus"], value: (e) => (e.attrs.device && e.attrs.device !== "mac" ? Number(e.attrs.minutes ?? 0) : 0), from: "Screen Time minutes synced from the iPhone (Screen Time sharing on)" },
   { id: "m-web-visits", title: "Web visits", family: "Learning and attention", per: "week", unit: "count", tier: "measured", srcs: ["web"], kinds: ["web.visits"], from: "visits per website domain from your browsers (no addresses; health, finance, adult and dating never counted)" },
+  { id: "m-emails-sent", title: "Emails sent", family: "Communication and people", per: "week", unit: "count", tier: "measured", srcs: ["gmail"], kinds: ["email.sent"], from: "Gmail headers: messages you sent" },
+  { id: "m-email-replies", title: "Replies received", family: "Communication and people", per: "week", unit: "count", tier: "measured", srcs: ["gmail"], kinds: ["email.reply"], from: "Gmail headers: answers to threads you wrote in" },
+  { id: "m-reply-time", title: "Your reply time", family: "Communication and people", per: "week", unit: "minutes", tier: "derived", srcs: ["gmail"], kinds: ["email.replied"], value: (e) => Number(e.attrs.minutes ?? 0), avg: true, from: "Gmail headers: minutes from their message to your answer, averaged per day" },
+  { id: "m-email-people", title: "People you emailed with", family: "Communication and people", per: "week", unit: "count", tier: "derived", srcs: ["gmail"], kinds: ["email.person"], distinct: true, from: "Gmail headers: distinct people (hashed), personal mail only" },
+  { id: "m-job-apps", title: "Job applications", family: "Communication and people", per: "week", unit: "count", tier: "inferred", srcs: ["gmail"], kinds: ["email.job_application"], from: "Gmail headers: mail to hiring systems and their confirmations (inferred)" },
+  { id: "m-messages", title: "Messages", family: "Communication and people", per: "week", unit: "count", tier: "measured", srcs: ["messages"], kinds: ["msg.sent", "msg.received"], from: "Messages on this Mac, counts only (stays on this Mac)" },
+  { id: "m-calls", title: "Calls", family: "Communication and people", per: "week", unit: "count", tier: "measured", srcs: ["calls"], kinds: ["call.made"], from: "call history on this Mac, counts only (stays on this Mac)" },
+  { id: "m-meeting-hours", title: "Meeting hours", family: "Time", per: "week", unit: "hours", tier: "measured", srcs: ["calendar"], kinds: ["cal.meeting"], value: (e) => Number(e.attrs.hours ?? 0), from: "calendar events with at least one other person, not declined" },
+  { id: "m-focus-hours", title: "Focus hours", family: "Time", per: "week", unit: "hours", tier: "derived", srcs: ["calendar"], kinds: ["cal.focus"], value: (e) => Number(e.attrs.hours ?? 0), from: "focus-time blocks on your calendar" },
+  { id: "m-after-hours", title: "After-hours meetings", family: "Time", per: "week", unit: "hours", tier: "derived", srcs: ["calendar"], kinds: ["cal.after_hours"], value: (e) => Number(e.attrs.hours ?? 0), from: "meetings before 8:00, after 18:00 or on weekends" },
+  { id: "m-family-hours", title: "Family time on the calendar", family: "Time", per: "week", unit: "hours", tier: "inferred", srcs: ["calendar"], kinds: ["cal.family"], value: (e) => Number(e.attrs.hours ?? 0), documentary: true, from: "calendar events whose title or calendar names family (inferred)" },
+  { id: "m-prs-merged", title: "Pull requests merged", family: "AI and building", per: "week", unit: "count", tier: "measured", srcs: ["github"], kinds: ["gh.pr_merged"], from: "GitHub: your pull requests merged" },
+  { id: "m-videos", title: "Videos published", family: "Creating and publishing", per: "month", unit: "count", tier: "measured", srcs: ["youtube"], kinds: ["yt.published"], from: "YouTube: videos published on your channel" },
+  { id: "m-yt-views", title: "Channel views", family: "Creating and publishing", per: "week", unit: "count", tier: "measured", srcs: ["youtube"], kinds: ["yt.views"], from: "YouTube Analytics: daily views" },
+  { id: "m-subscribers", title: "Subscribers gained", family: "Creating and publishing", per: "week", unit: "count", tier: "measured", srcs: ["youtube"], kinds: ["yt.subscribers"], value: (e) => Number(e.attrs.net ?? 0), from: "YouTube Analytics: subscribers gained minus lost" },
+  { id: "m-sleep", title: "Sleep", family: "Health", per: "week", unit: "hours", tier: "measured", srcs: ["apple-health", "oura"], kinds: ["health.sleep"], value: (e) => Number(e.attrs.hours ?? 0), avg: true, from: "Apple Health export or Oura: hours asleep a night, averaged" },
+  { id: "m-steps", title: "Steps a day", family: "Health", per: "week", unit: "count", tier: "measured", srcs: ["apple-health", "oura"], kinds: ["health.steps"], value: (e) => Number(e.attrs.steps ?? 0), avg: true, from: "Apple Health export or Oura: steps a day, averaged" },
+  { id: "m-workouts", title: "Workouts", family: "Health", per: "week", unit: "count", tier: "measured", srcs: ["apple-health", "strava", "garmin"], kinds: ["health.workout"], from: "Apple Health, Strava or Garmin workouts" },
+  { id: "m-rhr", title: "Resting heart rate", family: "Health", per: "week", unit: "count", tier: "measured", srcs: ["apple-health"], kinds: ["health.rhr"], value: (e) => Number(e.attrs.bpm ?? 0), avg: true, from: "Apple Health export, beats a minute" },
+  { id: "m-new-places", title: "New places", family: "Exploration", per: "month", unit: "count", tier: "derived", srcs: ["timeline"], kinds: ["place.new"], documentary: true, from: "Timeline export: places you had not been before" },
+  { id: "m-days-away", title: "Days away", family: "Exploration", per: "month", unit: "days", tier: "derived", srcs: ["timeline"], kinds: ["day.away"], days: true, documentary: true, from: "Timeline export: days with no stop near home" },
+  { id: "m-photo-days", title: "Photo days", family: "Exploration", per: "month", unit: "days", tier: "measured", srcs: ["photos"], kinds: ["photo.taken"], days: true, documentary: true, from: "Apple Photos: days you took photos (stays on this Mac)" },
+  { id: "m-subscriptions", title: "Subscriptions paid", family: "Money", per: "month", unit: "usd", tier: "measured", srcs: ["charges", "plaid"], kinds: ["money.charge"], value: (e) => Number(e.attrs.usd ?? 0), from: "recurring charges matched to your apps (card statements, Plaid)" },
+  { id: "m-ladder-now", title: "Life ladder, now", family: "Inner life", per: "month", unit: "score", tier: "asked", srcs: ["checkins"], kinds: ["checkin.ladder"], value: (e) => Number(e.attrs.now ?? 0), avg: true, from: "your quarterly life ladder, 0 to 10" },
+  { id: "m-ladder-future", title: "Life ladder, in five years", family: "Inner life", per: "month", unit: "score", tier: "asked", srcs: ["checkins"], kinds: ["checkin.ladder"], value: (e) => Number(e.attrs.future ?? 0), avg: true, from: "your quarterly life ladder, 0 to 10" },
+  { id: "m-who5", title: "Wellbeing (WHO-5)", family: "Inner life", per: "month", unit: "score", tier: "asked", srcs: ["checkins"], kinds: ["checkin.who5"], value: (e) => Number(e.attrs.score ?? 0), avg: true, from: "the optional monthly WHO-5, 0 to 100" },
   { id: "m-calm", title: "Weekly calm", family: "Inner life", per: "week", unit: "score", tier: "asked", srcs: ["checkins"], kinds: ["checkin.calm"], value: (e) => Number(e.attrs.calm ?? 0), avg: true, from: "your weekly 1-5 check-in" },
 ];
 
@@ -541,8 +569,20 @@ const matches = (m: MetricDef, e: MetricEvent) => m.kinds.includes(e.kind) && (m
 
 export function dailyPoints(m: MetricDef, events: MetricEvent[]): Point[] {
   const by = new Map<string, Point>();
-  for (const e of events) {
+  // A distinct metric counts a project on the first day it shows up in its week.
+  const firstInWeek = new Set<string>();
+  const list = m.distinct ? [...events].sort((a, b) => a.ts.localeCompare(b.ts)) : events;
+  for (const e of list) {
     if (!matches(m, e)) continue;
+    if (m.distinct) {
+      const k = `${weekOf(e.ts)}\t${e.project ?? ""}`;
+      if (firstInWeek.has(k)) continue;
+      firstInWeek.add(k);
+      const p = by.get(e.ts) ?? { date: e.ts, value: 0, n: 0 };
+      p.n += 1; p.value += 1;
+      by.set(e.ts, p);
+      continue;
+    }
     const p = by.get(e.ts) ?? { date: e.ts, value: 0, n: 0 };
     p.n += e.n;
     p.value = m.days ? 1 : Math.round((p.value + (m.value ? m.value(e) : e.n)) * 1e4) / 1e4;

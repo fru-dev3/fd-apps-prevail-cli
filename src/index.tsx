@@ -5764,7 +5764,12 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
         appsScanR = { ms: r.usage.ms, sources: Object.fromEntries(Object.entries(r.usage.sources).map(([k, v]) => [k, v.state])), events: r.usage.events, created: r.records.created.length };
       } catch (e) { appsScanR = { error: String(e).slice(0, 200) }; }
     }
-    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR })}\n`);
+    // And every connected source that is due (metrics plan M3), if allowed on this Mac.
+    let sourcesR: unknown = null;
+    if (!args.includes("--no-sources")) {
+      try { sourcesR = await (await import("./source-sync.ts")).syncDue(vault); } catch (e) { sourcesR = { error: String(e).slice(0, 200) }; }
+    }
+    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, sources: sourcesR })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {
