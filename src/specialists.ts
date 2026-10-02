@@ -34,9 +34,10 @@
 // with tools that act; a write-vault result is written by code into the
 // domain it was sent to, a draft is stored and never sent.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { buildRoot, resolveDomainDir } from "./path-safety.ts";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { buildRoot, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { appendLedger } from "./ledger.ts";
 import { vreadFile } from "./vault-session.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { parseModArgs } from "./cli-args.ts";
@@ -552,6 +553,153 @@ export function notebooks(vault: string, id: string): { domain: string; lines: n
   return out;
 }
 
+// ── Editing: the app's Edit saves an override, Reset moves it aside ─────────
+//
+// Save writes build/specialists/<id>.md (the same shape as the built-ins); the
+// file it replaces is kept as build/specialists/.versions/<id>.<ISO>.md and a
+// line goes to build/_meta/specialists/ledger.jsonl. Reset moves the override
+// into .versions too, so nothing is ever deleted. A ceiling above the
+// built-in's is refused unless the caller says the user confirmed it.
+
+export const SPECIALIST_TOOLS = ["web", "vault-read"];
+export const SPECIALIST_RUNTIMES = ["fast", "standard", "deep"];
+
+export interface SpecialistEdit {
+  name?: string; returns?: string; ceiling?: Ceiling; tools?: string[]; apps?: string[]; runtime?: string;
+  budget?: { minutes?: number; usd?: number; passes?: number }; handoff?: Handoff; doneWhen?: string[];
+  mandate?: string; method?: string; never?: string;
+}
+export type SaveResult = { ok: true; spec: Specialist; path: string; version: string | null } | { ok: false; error: string; needsConfirm?: boolean };
+
+const oneLine = (x: string, n: number) => x.replace(/\s+/g, " ").trim().slice(0, n);
+const block = (x: string) => x.replace(/\r/g, "").replace(/^##\s/gm, "### ").trim().slice(0, 4000);
+const idOk = (x: string) => /^[a-z][a-z0-9-]{0,40}$/.test(x);
+
+/** The file text for a specialist, in the shape parseSpecialist reads back. */
+export function serializeSpecialist(s: Specialist): string {
+  const fm = [
+    `id: ${s.id}`, `name: ${s.name}`, `icon: ${s.icon}`, `family: ${s.family}`, `returns: ${s.returns}`, `ceiling: ${s.ceiling}`,
+    `tools: [${s.tools.join(", ")}]`, `apps: [${s.apps.join(", ")}]`, `runtime: ${s.runtime}`, `lens: ${s.lens}`,
+    `budget: { minutes: ${s.budget.minutes}, usd: ${s.budget.usd}, passes: ${s.budget.passes} }`, `handoff: ${s.handoff}`,
+    ...(s.doneWhen.length ? ["done_when:", ...s.doneWhen.map((d) => `  - ${d}`)] : []),
+    ...(s.on ? [] : ["on: false"]),
+  ];
+  return `---\n${fm.join("\n")}\n---\n## Mandate\n${s.mandate}\n## Method\n${s.method}\n## Never\n${s.never}\n`;
+}
+
+function isoStamp(now: number): string { return new Date(now).toISOString().replace(/[:.]/g, "-"); }
+
+/** Move (or copy) a file into a sibling .versions/<id>.<ISO>.md; returns the new path. */
+function keepVersion(file: string, id: string, now: number, move: boolean): string | null {
+  if (!existsSync(file)) return null;
+  const dir = join(file, "..", ".versions");
+  mkdirSync(dir, { recursive: true });
+  let to = join(dir, `${id}.${isoStamp(now)}.md`);
+  for (let i = 2; existsSync(to); i++) to = join(dir, `${id}.${isoStamp(now)}-${i}.md`);
+  if (move) renameSync(file, to); else writeFileSync(to, readText(file));
+  return to;
+}
+
+function ledger(vault: string, row: Record<string, unknown>, now: number): void {
+  appendLedger(join(runtimePath(vault, "_meta"), "specialists", "ledger.jsonl"), JSON.stringify({ ts: now, ...row }), now);
+}
+
+/** Apply an edit to a specialist and validate it. Pure: nothing is written. */
+export function applyEdit(base: Specialist, e: SpecialistEdit): Specialist | string {
+  const out: Specialist = { ...base, budget: { ...base.budget }, tools: [...base.tools], apps: [...base.apps], doneWhen: [...base.doneWhen] };
+  if (e.name !== undefined) { out.name = oneLine(e.name, 40); if (!out.name) return "a specialist needs a name"; }
+  if (e.returns !== undefined) out.returns = oneLine(e.returns, 40) || base.returns;
+  if (e.ceiling !== undefined) { if (!CEILINGS.includes(e.ceiling)) return `unknown ceiling: ${e.ceiling}`; out.ceiling = e.ceiling; }
+  if (e.tools !== undefined) {
+    const bad = e.tools.filter((t) => !SPECIALIST_TOOLS.includes(t));
+    if (bad.length) return `unknown tool: ${bad.join(", ")}`;
+    out.tools = [...new Set(e.tools)];
+  }
+  if (e.apps !== undefined) {
+    const bad = e.apps.filter((a) => !idOk(a));
+    if (bad.length) return `not an app id: ${bad.join(", ")}`;
+    out.apps = [...new Set(e.apps)];
+  }
+  if (e.runtime !== undefined) { if (!SPECIALIST_RUNTIMES.includes(e.runtime)) return `unknown runtime: ${e.runtime}`; out.runtime = e.runtime; }
+  if (e.handoff !== undefined) { if (!["off", "offer", "auto"].includes(e.handoff)) return `unknown handoff: ${e.handoff}`; out.handoff = e.handoff; }
+  if (e.budget) {
+    const m = e.budget.minutes ?? out.budget.minutes, u = e.budget.usd ?? out.budget.usd, p = e.budget.passes ?? out.budget.passes;
+    if (!(m > 0 && m <= 120)) return "minutes must be between 1 and 120";
+    if (!(u >= 0 && u <= 50)) return "dollars must be between 0 and 50";
+    if (!(Number.isInteger(p) && p >= 1 && p <= 5)) return "passes must be 1 to 5";
+    out.budget = { minutes: m, usd: Math.round(u * 100) / 100, passes: p };
+  }
+  if (e.doneWhen !== undefined) out.doneWhen = e.doneWhen.map((d) => oneLine(d, 200)).filter(Boolean).slice(0, 12);
+  if (e.mandate !== undefined) out.mandate = block(e.mandate);
+  if (e.method !== undefined) out.method = block(e.method);
+  if (e.never !== undefined) out.never = block(e.never);
+  if (!out.mandate) return "a specialist needs a mandate";
+  return out;
+}
+
+/** Save the user's version of a specialist. A ceiling above the built-in's needs confirmRaise. */
+export function saveSpecialist(vault: string, id: string, e: SpecialistEdit, o: { confirmRaise?: boolean; now?: number } = {}): SaveResult {
+  const now = o.now ?? Date.now();
+  if (!idOk(id)) return { ok: false, error: `not a specialist id: ${id}` };
+  const builtIn = builtInSpecialists().find((s) => s.id === id);
+  const cur = getSpecialist(vault, id);
+  if (!cur) return { ok: false, error: `no specialist "${id}"` };
+  if (builtIn && !builtIn.mandate) return { ok: false, error: `${cur.name} is not built yet` };
+  const next = applyEdit(cur, e);
+  if (typeof next === "string") return { ok: false, error: next };
+  const ceilingOf = builtIn?.ceiling ?? cur.ceiling;
+  if (CEILING_RANK[next.ceiling] > CEILING_RANK[ceilingOf] && !o.confirmRaise) {
+    return { ok: false, needsConfirm: true, error: `This raises ${cur.name}'s ceiling above ${ceilingOf}. Confirm to save.` };
+  }
+  const file = join(specialistsDir(vault), `${id}.md`);
+  const version = keepVersion(file, id, now, false);
+  mkdirSync(specialistsDir(vault), { recursive: true });
+  writeFileSync(file, serializeSpecialist(next));
+  ledger(vault, { action: "save", id, from: cur.ceiling, to: next.ceiling, version: version ? relative(vault, version) : null }, now);
+  return { ok: true, spec: getSpecialist(vault, id)!, path: `build/specialists/${id}.md`, version: version ? relative(vault, version) : null };
+}
+
+/** Back to the built-in: the override moves to .versions, never deleted. */
+export function resetSpecialist(vault: string, id: string, now = Date.now()): { ok: boolean; moved: string | null; error?: string } {
+  if (!idOk(id)) return { ok: false, moved: null, error: `not a specialist id: ${id}` };
+  if (!builtInSpecialists().some((s) => s.id === id)) return { ok: false, moved: null, error: `${id} has no built-in to go back to` };
+  const moved = keepVersion(join(specialistsDir(vault), `${id}.md`), id, now, true);
+  if (moved) ledger(vault, { action: "reset", id, version: relative(vault, moved) }, now);
+  return { ok: true, moved: moved ? relative(vault, moved) : null };
+}
+
+export interface DomainEdit { ceiling?: Ceiling; tools?: string[]; apps?: string[]; on?: boolean; notes?: string }
+
+/**
+ * The user's per-domain instructions. They may only TIGHTEN the specialist:
+ * a ceiling at or below its own, tools and apps from its own list. Anything
+ * looser is refused here, in code, before a file is written.
+ */
+export function saveDomainInstructions(vault: string, id: string, domain: string, e: DomainEdit, now = Date.now()): { ok: true; path: string } | { ok: false; error: string } {
+  const s = getSpecialist(vault, id);
+  if (!s) return { ok: false, error: `no specialist "${id}"` };
+  if (!/^[a-z0-9][a-z0-9_-]{0,60}$/i.test(domain) || !listDomainDirs(vault).includes(domain)) return { ok: false, error: `no domain "${domain}"` };
+  const dir = join(resolveDomainDir(vault, domain), "source", "specialists");
+  if (e.ceiling !== undefined && (!CEILINGS.includes(e.ceiling) || CEILING_RANK[e.ceiling] > CEILING_RANK[s.ceiling])) {
+    return { ok: false, error: `In a domain, ${s.name} can only be tightened: its ceiling here must be ${s.ceiling} or lower.` };
+  }
+  const looser = [...(e.tools ?? []).filter((t) => !s.tools.includes(t)), ...(e.apps ?? []).filter((a) => !s.apps.includes(a))];
+  if (looser.length) return { ok: false, error: `In a domain, ${s.name} can only be tightened: ${looser.join(", ")} is not one of its own.` };
+  const fm = [
+    ...(e.ceiling !== undefined && e.ceiling !== s.ceiling ? [`ceiling: ${e.ceiling}`] : []),
+    ...(e.tools !== undefined && e.tools.length < s.tools.length ? [`tools: [${e.tools.join(", ")}]`] : []),
+    ...(e.apps !== undefined && e.apps.length < s.apps.length ? [`apps: [${e.apps.join(", ")}]`] : []),
+    ...(e.on === false ? ["on: false"] : []),
+  ];
+  const notes = (e.notes ?? "").replace(/\r/g, "").trim().slice(0, 2000);
+  const file = join(dir, `${id}.md`);
+  keepVersion(file, id, now, false);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, `${fm.length ? `---\n${fm.join("\n")}\n---\n` : ""}${notes}\n`);
+  ledger(vault, { action: "domain", id, domain, tighten: fm }, now);
+  return { ok: true, path: `data/domains/${domain}/source/specialists/${id}.md` };
+}
+
 // ── CLI: prevail specialists list|show <id> [--domain d] [--json] ──────────
 
 export async function specialistsCommand(argv: string[], vault: string): Promise<number> {
@@ -581,6 +729,27 @@ export async function specialistsCommand(argv: string[], vault: string): Promise
     if (args.json) out({ path: notebookPath(vault, d, id), lines }); else for (const l of lines) console.log(`- ${l}`);
     return 0;
   }
-  console.error("usage: prevail specialists list | show <id> [--domain d] | notebook <id> --domain d [--json]");
+  if (sub === "save" || sub === "domain-save") {
+    // The edit is JSON, from --file <path> or --file - (stdin).
+    const id = args.pos[1] ?? "";
+    const file = args.get("file") ?? "-";
+    let edit: Record<string, unknown>;
+    try { edit = JSON.parse(file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8")) as Record<string, unknown>; }
+    catch (e) { out({ ok: false, error: `not JSON: ${(e as Error).message}` }); return 1; }
+    const r = sub === "save"
+      ? saveSpecialist(vault, id, edit as SpecialistEdit, { confirmRaise: args.has("confirm-raise") })
+      : saveDomainInstructions(vault, id, args.get("domain") ?? "", edit as DomainEdit);
+    // With --json a refusal is an answer ({ ok: false, needsConfirm }), not a crash.
+    if (args.json) { out(r); return 0; }
+    console.log(r.ok ? "Saved." : r.error);
+    return r.ok ? 0 : 1;
+  }
+  if (sub === "reset") {
+    const r = resetSpecialist(vault, args.pos[1] ?? "");
+    if (args.json) { out(r); return 0; }
+    console.log(r.ok ? (r.moved ? `Back to the built-in. Your version is in ${r.moved}.` : "Already the built-in.") : r.error);
+    return r.ok ? 0 : 1;
+  }
+  console.error("usage: prevail specialists list | show <id> [--domain d] | notebook <id> --domain d | save <id> [--file f|-] [--confirm-raise] | domain-save <id> --domain d [--file f|-] | reset <id> [--json]");
   return 1;
 }
