@@ -279,6 +279,11 @@ export async function runMcpServer(
       },
     },
     {
+      name: "read_compass",
+      description: "The user's Compass: their mission, ranked values (each with an 'enough'), roles, non-negotiables and life goals, in their own words. Only what the user confirmed is returned as the Compass; format json also lists lines still awaiting their confirmation. Read it before advising on plans, priorities or trade-offs.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"], description: "text (default): the confirmed Compass. json: every line with its status." } } },
+    },
+    {
       name: "read_recommendations",
       description: "Prevail's one ranked 'what to do next' list across the whole vault: instructions to save as rules, project next steps and stuck projects to restart, connectors to sign in or sync, recurring people and places to save, better model defaults, and context gaps. Deterministic, ranked by leverage.",
       inputSchema: { type: "object", properties: {} },
@@ -675,6 +680,8 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const format = args.format === "intent" || args.format === "raw" ? args.format : "handoff";
       try { return wrapText(restartText(vaultPath, slug, format, { withPrompts: args.with_prompts === true })); } catch (e) { return wrapText((e as Error).message); }
     }
+    case "read_compass":
+      return wrapText(await tReadCompass(args, vaultPath));
     case "read_recommendations":
       return wrapText(tReadRecommendations(vaultPath));
     case "read_surface":
@@ -1121,6 +1128,15 @@ function tVaultStatus(vaultPath: string): string {
 
 // Mirrored connectors (prevail apps): the cached mirror only, never the slow
 // runtime listing. Empty string when there is no mirror cache yet.
+export async function tReadCompass(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const c = await import("./compass.ts");
+  if (args.format === "json") return JSON.stringify(c.compassJson(vaultPath), null, 2);
+  const block = c.compassBlock(vaultPath);
+  if (block) return block;
+  const n = c.compassJson(vaultPath).proposed;
+  return n ? `No confirmed Compass yet: ${n} drafted lines are waiting for the user to confirm them.` : "No Compass yet.";
+}
+
 export function tListMirrorApps(vaultPath: string): string {
   let doc: MirrorDoc | null = null;
   try { doc = readMirrorCache(vaultPath); } catch { doc = null; }

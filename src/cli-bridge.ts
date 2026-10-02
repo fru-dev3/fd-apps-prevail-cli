@@ -12,6 +12,7 @@ import { resolveModelForDomain } from "./privacy.ts";
 import { APP_SCOPE_PREFIX, APP_SCOPE_SUBDIR, buildRoot, vaultRootForCwd } from "./path-safety.ts";
 import { GOALS_HEADER, domainOfCwd, goalsBlock, readProfile } from "./goals.ts";
 import { CHIEF_HEADER, chiefOfStaffBlock } from "./chief-of-staff.ts";
+import { COMPASS_HEADER, compassBlock } from "./compass.ts";
 import { buildHarnessArgs } from "./harness-profiles.ts";
 import {
   type BudgetCaps,
@@ -196,7 +197,7 @@ function buildDomainIdealPreamble(s: string): string {
 // already carries the desktop's own profile block, the goals when a goals
 // block is already there, so neither is ever doubled.
 export const PROFILE_HEADER = "# WHO YOU'RE HELPING";
-export function buildUserContext(vaultRoot: string, cwd: string, prompt: string): string {
+export function buildUserContext(vaultRoot: string, cwd: string, prompt: string, opts: { local?: boolean } = {}): string {
   const parts: string[] = [];
   try {
     if (!prompt.includes(PROFILE_HEADER)) {
@@ -206,6 +207,12 @@ export function buildUserContext(vaultRoot: string, cwd: string, prompt: string)
     const domain = domainOfCwd(cwd, vaultRoot);
     if (domain === "general" && !prompt.includes(CHIEF_HEADER)) {
       const c = chiefOfStaffBlock(vaultRoot);
+      if (c) parts.push(c);
+    }
+    // The Compass (confirmed lines only) on every turn that has a domain;
+    // ~local lines only when the turn runs on a local model.
+    if (domain && !prompt.includes(COMPASS_HEADER)) {
+      const c = compassBlock(vaultRoot, { local: opts.local });
       if (c) parts.push(c);
     }
     if (!prompt.includes(GOALS_HEADER)) {
@@ -1196,7 +1203,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
   // path (desktop, CLI, MCP, Telegram). The desktop sends its own profile
   // block; the goals block is added only here. Skipped for bare calls
   // (council panelists, classifiers) and incognito.
-  const userBlocks = !bare && !noContext ? buildUserContext(vaultRoot, cwd, prompt) : "";
+  const userBlocks = !bare && !noContext ? buildUserContext(vaultRoot, cwd, prompt, { local: ["ollama", "lmstudio", "mlx"].includes(cli.kind) }) : "";
   const goalsPreamble = userBlocks ? `${userBlocks}\n\n---\n\n` : null;
   const promptGoals = goalsPreamble && cli.kind !== "claude" ? goalsPreamble : "";
   // Synced app data: the newest pull per mirrored connector recipe that feeds

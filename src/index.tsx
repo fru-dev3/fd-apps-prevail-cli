@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 // Top-level commands whose module parses its own arguments (module-commands.ts).
-const MODULE_COMMANDS = ["chief", "fold"];
+const MODULE_COMMANDS = ["chief", "fold", "compass"];
 
 interface Args {
   vaultPath: string | null;
@@ -800,6 +800,10 @@ USAGE
   prevail fold plan|apply [--routes F] --json
                               fold the coordinator domains (chief, vision, intel)
                               into General, the chief of staff's home
+  prevail compass show|block|bootstrap|confirm <id>|--all|drop <id>|versions|ledger --json
+                              the Compass (build/compass.md): mission, values, roles,
+                              goals, rules, every line in your words; bootstrap
+                              drafts proposed lines from the vault, quote per line
   prevail manifest get|set <domain> --json
                               read/merge a domain's manifest (engine JSON API)
   prevail chat --domain <d> --json

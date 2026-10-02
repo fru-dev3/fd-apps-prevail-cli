@@ -4,6 +4,7 @@
 export async function runModuleCommand(name: string, args: string[], vault: string): Promise<number> {
   if (name === "chief") return (await import("./chief-of-staff.ts")).chiefCommand(args, vault);
   if (name === "fold") return (await import("./fold.ts")).foldCommand(args, vault);
+  if (name === "compass") return (await import("./compass.ts")).compassCommand(args, vault);
   console.error(`unknown command: ${name}`);
   return 1;
 }
