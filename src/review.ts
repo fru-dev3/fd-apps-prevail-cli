@@ -80,6 +80,8 @@ export interface ReviewCard {
   checkin: Checkin | null;
   calmNormal: number | null;
   lines: { moved: string[]; drifted: string[]; conflict: string };
+  /** Goals G3: the conflict behind the line (its key, to accept it, and the evidence). */
+  conflict?: { key: string; evidence: string[] } | null;
   glance: GlanceRow[];
   surprise: string | null;
   candidates: TopCandidate[];
@@ -137,6 +139,13 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
   const calms = readCheckins(vault).filter((x) => x.week < week).slice(-8).map((x) => x.calm).sort((a, b) => a - b);
   const calmNormal = calms.length >= 3 ? calms[Math.floor(calms.length / 2)]! : null;
   const dow = (new Date(`${dayOf(now)}T12:00:00`).getDay() + 6) % 7;
+  // Goals G3: the conflict line is the strongest open conflict with evidence (code pass; the model pass runs from the Compass page or `prevail compass conflicts --model`).
+  let conflict: { text: string; key?: string; evidence?: string[] } = { text: "No conflict with evidence this week." };
+  try {
+    const ca = await import("./compass-align.ts");
+    await ca.computeGraph(vault, { now, vars: await ca.stateVariables(vault, { now, points: c.points }) });
+    conflict = ca.conflictLine(vault);
+  } catch { /* no Compass */ }
   return {
     week,
     through: g.through,
@@ -146,9 +155,9 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     lines: {
       moved: moved.slice(0, 3),
       drifted: drifted.slice(0, 3),
-      // The conflict detector arrives with Goals G3; until then the card says so plainly.
-      conflict: "No conflict with evidence this week.",
+      conflict: conflict.text,
     },
+    conflict: conflict.key ? { key: conflict.key, evidence: conflict.evidence ?? [] } : null,
     glance: g.rows,
     surprise: g.surprise,
     candidates: topCandidates(vault, 3),
@@ -186,7 +195,7 @@ export function reviewText(r: ReviewCard): string {
   const out = [`Week of ${weekLabel(r.week)}${r.checkin ? `, calm ${r.checkin.calm}${r.calmNormal ? ` (normal ${r.calmNormal})` : ""}` : ""}`];
   out.push(r.lines.moved.length ? `Moved: ${r.lines.moved.join("; ")}` : "Moved: nothing past your normal.");
   out.push(r.lines.drifted.length ? `Drifted: ${r.lines.drifted.join("; ")}` : "Drifted: nothing below your normal.");
-  out.push(`Conflict: ${r.lines.conflict}`);
+  out.push(`Conflict: ${r.lines.conflict}${r.conflict?.evidence.length ? ` (${r.conflict.evidence.join("; ")})` : ""}`);
   for (const row of r.glance) out.push(row.documentary ? `${row.title}: ${row.record ?? "a record, no target"}` : `${row.title}: ${fmt(row.value, row.unit)} (${row.normal.learning ? "learning your normal" : `normal ${fmt(row.normal.lo, row.unit)} to ${fmt(row.normal.hi, row.unit)}`})`);
   if (r.surprise) out.push(`One surprise: ${r.surprise}`);
   for (const c of r.candidates) out.push(`You said: "${c.quote}". Make "${c.title}" a ${c.kind === "rule" ? "rule" : c.kind}? (${c.count} time${c.count === 1 ? "" : "s"})`);

@@ -614,6 +614,8 @@ export async function compassCommand(argv: string[], vault: string): Promise<num
   const sub = args.pos[0] ?? "show";
   const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
   const ids = () => (args.has("all") ? "all" as const : args.pos.slice(1).flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean));
+  // Alignment and conflicts (Goals G3) live in compass-align.ts.
+  if (["signals", "rules", "conflicts", "conflict", "align"].includes(sub)) return (await import("./compass-align.ts")).alignCommand(sub, argv, vault);
   if (sub === "show") {
     const j = compassJson(vault);
     if (args.json) out(j);

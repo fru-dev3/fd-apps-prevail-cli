@@ -455,7 +455,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
           emit({ type: "start", thread, ts, domain: opts.domain, engine: "chief-of-staff" });
           emit({ type: "user", thread, ts, role: "user", text: message });
           writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "user", cli: cli.kind, model: "", content: message, ts });
-          emit({ type: "job", thread, ts, job: { id: job.id, status: start ? "running" : job.status, startsAlone: job.startsAlone, ...(job.askReason ? { askReason: job.askReason } : {}), owner: job.domains.owner, consulted: job.domains.consulted, informed: job.domains.informed, team: job.team, effort: job.effort, budget: job.budget, why: job.why, ...(d.mention ? { mention: d.mention } : {}) } });
+          emit({ type: "job", thread, ts, job: { id: job.id, status: start ? "running" : job.status, startsAlone: job.startsAlone, ...(job.askReason ? { askReason: job.askReason } : {}), owner: job.domains.owner, consulted: job.domains.consulted, informed: job.domains.informed, team: job.team, effort: job.effort, budget: job.budget, why: job.why, ...(d.mention ? { mention: d.mention } : {}), ...(job.compass ? { compass: job.compass } : {}) } });
           emit({ type: "delta", thread, ts, text: reply });
           emit({ type: "assistant", thread, ts, role: "assistant", text: reply, engine: "chief-of-staff" });
           writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "assistant", cli: cli.kind, model: "", content: `${reply}\n\n[job:${job.id}]`, ts });

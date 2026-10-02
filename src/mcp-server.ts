@@ -305,6 +305,11 @@ export async function runMcpServer(
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"], description: "text (default): the confirmed Compass. json: every line with its status." } } },
     },
     {
+      name: "check_alignment",
+      description: "Check a plan or action against the user's Compass before doing it: which confirmed non-negotiables it touches (checked in code against measured state where a check exists), what Compass goals and values it serves, and the open conflicts between their goals and paths, each with evidence. Read-only.",
+      inputSchema: { type: "object", properties: { action: { type: "string", description: "The plan or action, in a sentence." }, domain: { type: "string", description: "The life domain it belongs to (optional)." } }, required: ["action"] },
+    },
+    {
       name: "read_metrics",
       description: "The user's metrics, computed from what they already do (AI tools, git, task boards, loops, decisions, prompts, trips, watch history, card statements): this week's glance against their own normal, and every metric with its honesty tier (measured, derived), coverage and the files behind it. No data entry; counts only.",
       inputSchema: { type: "object", properties: { format: { type: "string", enum: ["glance", "list"], description: "glance (default): this week in numbers, as text. list: every metric as JSON." } } },
@@ -784,6 +789,22 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(await tMetricSeries(args, vaultPath));
     case "read_compass":
       return wrapText(await tReadCompass(args, vaultPath));
+    case "check_alignment": {
+      const ca = await import("./compass-align.ts");
+      const action = String(args.action ?? "").slice(0, 2000);
+      if (!action.trim()) throw new Error("action is required");
+      const domain = typeof args.domain === "string" && /^[a-z0-9][a-z0-9_-]{0,60}$/.test(args.domain) ? args.domain : "general";
+      const gate = ca.ruleGate(vaultPath, action);
+      const jc = ca.jobCompass(vaultPath, { ask: action, domains: { owner: domain, consulted: [] } });
+      const open = ca.openConflicts(vaultPath).slice(0, 5);
+      const lines = [
+        gate ? `Non-negotiable: ${gate.decision === "block" ? "BLOCKED" : "asks first"}, ${gate.reason}.` : "Touches no non-negotiable that code can check.",
+        jc.serves.length ? `Serves: ${jc.serves.map((x) => x.title).join(", ")}.` : "Serves no Compass goal in this domain (unlinked).",
+        ...(jc.costs.length ? [`Watch: ${jc.costs.map((x) => `${x.title} (${x.why})`).join("; ")}.`] : []),
+        ...(open.length ? ["Open conflicts:", ...open.map((c) => `- ${c.question} Evidence: ${c.evidence.join("; ")}`)] : []),
+      ];
+      return wrapText(lines.join("\n"));
+    }
     case "read_today": {
       const t = await import("./today.ts");
       const c = t.composeToday(vaultPath);

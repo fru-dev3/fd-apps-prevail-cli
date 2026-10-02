@@ -259,7 +259,7 @@ returns: numbers
 ceiling: read
 tools: [vault-read]
 runtime: deep
-budget: { minutes: 5, usd: 0.30, passes: 2 }
+budget: { minutes: 6, usd: 0.40, passes: 2 }
 handoff: offer
 done_when:
   - the answer is a number (or a few) in the first line
@@ -276,7 +276,7 @@ returns: timeline
 ceiling: read
 tools: [vault-read]
 runtime: standard
-budget: { minutes: 4, usd: 0.25, passes: 2 }
+budget: { minutes: 5, usd: 0.30, passes: 2 }
 handoff: offer
 done_when:
   - dated lines, oldest first
@@ -293,7 +293,7 @@ returns: alerts
 ceiling: read
 tools: [vault-read]
 runtime: standard
-budget: { minutes: 3, usd: 0.15, passes: 1 }
+budget: { minutes: 6, usd: 0.25, passes: 1 }
 handoff: offer
 done_when:
   - each alert says what is slipping, by when, and the evidence
@@ -310,7 +310,7 @@ returns: verified
 ceiling: read
 tools: [web, vault-read]
 runtime: deep
-budget: { minutes: 4, usd: 0.30, passes: 1 }
+budget: { minutes: 6, usd: 0.40, passes: 1 }
 handoff: offer
 done_when:
   - a verdict in the first line: verified, or flagged

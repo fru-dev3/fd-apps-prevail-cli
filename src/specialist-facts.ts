@@ -28,8 +28,20 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n(cut)`
 
 type Facts = (vault: string, owner: string, now: number) => Promise<string> | string;
 
-async function stewardFacts(vault: string, _owner: string, _now: number): Promise<string> {
+async function stewardFacts(vault: string, _owner: string, now: number): Promise<string> {
   const out: string[] = [];
+  try {
+    const ca = await import("./compass-align.ts");
+    const rules = ca.evaluateRules((await import("./compass.ts")).readCompass(vault), ca.readSignals(vault).length ? ca.readSignals(vault) : await ca.stateVariables(vault, { now }));
+    if (rules.length) {
+      out.push("Non-negotiables, checked by code:");
+      for (const r of rules) out.push(`- ${r.title}: ${r.state}${r.detail ? ` (${r.detail})` : ""}`);
+      const unchecked = rules.filter((r) => r.state === "unchecked");
+      if (unchecked.length) out.push(`Judge these yourself (code cannot check them): ${unchecked.map((r) => r.title).join("; ")}.`);
+    }
+    const open = ca.openConflicts(vault).slice(0, 3);
+    if (open.length) out.push("Open conflicts in the Compass:", ...open.map((c) => `- ${c.question} (${c.evidence.join("; ")})`));
+  } catch { /* no Compass */ }
   try {
     const { readAlignment } = await import("./alignment.ts");
     const a = readAlignment(vault);

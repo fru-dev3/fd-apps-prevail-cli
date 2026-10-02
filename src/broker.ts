@@ -6,6 +6,7 @@
 import { classifyAction, isConsequential, type ActionClass } from "./action-policy.ts";
 import { isPaused, policyFor, getMonthlyFinancialCap, monthSpendUsd } from "./autonomy.ts";
 import { ceilingRank, type Ceiling } from "./specialists.ts";
+import { ruleGate } from "./compass-align.ts";
 
 // Best-effort dollar amount from an action's text ("pay the $1,200.50 invoice" → 1200.5).
 export function parseAmountUsd(text: string): number | null {
@@ -46,6 +47,11 @@ export function gateAction(
 ): ActionGate {
   const cls = classifyAction(action);
   if (isPaused(opts.vault)) return { cls, decision: "block", reason: "autonomy is globally paused" };
+  // The user's non-negotiables (Compass ~check: rules), in code: an action that
+  // would break a hard limit, or push a rule already broken, is blocked; one
+  // that touches a rule's variable asks. Unconfirmed lines never gate.
+  const rule = ruleGate(opts.vault, action);
+  if (rule?.decision === "block") return { cls, decision: "block", reason: rule.reason };
   // Inside a mission its ceiling and money budget can only tighten the gate.
   const ms = opts.mission;
   if (ms && cls !== "read") {
@@ -80,5 +86,6 @@ export function gateAction(
     }
   }
   if (ms && decision === "auto" && ceilingRank(ms.ceiling) < ceilingRank("act")) return { cls, decision: "ask", reason: `the mission ${ms.slug}'s ceiling is ${ms.ceiling}: approve to run` };
+  if (rule && decision === "auto") return { cls, decision: "ask", reason: rule.reason };
   return { cls, decision, reason: decision === "ask" ? "autonomy not enabled — approve to run" : undefined };
 }

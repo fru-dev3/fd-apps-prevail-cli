@@ -42,7 +42,8 @@ import { routableDomains, type RouteRunner } from "./route.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile } from "./vault-session.ts";
 import { forDomain, getSpecialist, loadSpecialists, readNotebook, appendNotebook, ceilingRank, type Ceiling, type Specialist } from "./specialists.ts";
-import type { MissionDomain } from "./missions.ts";
+import { readMission, type MissionDomain } from "./missions.ts";
+import { jobCompass, ruleGate, type JobCompass } from "./compass-align.ts";
 import { parseModArgs } from "./cli-args.ts";
 
 export type Effort = "quick" | "standard" | "deep";
@@ -82,6 +83,8 @@ export interface Job {
   mission?: { slug: string; ceiling: Ceiling; budgetLeftUsd: number | null };
   /** Results handed in from outside the job (earlier playbook steps): the team reads them first. */
   inputs?: { name: string; returns: string; body: string }[];
+  /** Goals G3: what the job serves, what it may cost, the non-negotiables it touches. */
+  compass?: JobCompass;
 }
 
 export interface Receipt { n: number; ts: number; domain: string; kind: "decision" | "task" | "note" | "page" | "draft" | "build"; file: string; ref: string; text: string; undone?: number }
@@ -437,8 +440,21 @@ export function decideStart(vault: string, job: Job, specs: Specialist[], limits
   const sensitive = askFirstReason(job.ask);
   if (sensitive) reasons.push(sensitive);
   if (!confident) reasons.push("I am not sure how to staff it");
+  // Goals G3: serves, costs and rules on every job. A rule the ask would
+  // break (a hard limit, or one already broken) means it never starts alone.
+  try {
+    const missionGoal = job.mission ? readMissionGoal(vault, job.mission.slug) : undefined;
+    const jc = jobCompass(vault, job, missionGoal);
+    if (jc.serves.length || jc.costs.length || jc.rules.length) job.compass = jc;
+    const rg = ruleGate(vault, job.ask);
+    if (rg) reasons.push(rg.reason);
+  } catch { /* no Compass */ }
   job.startsAlone = reasons.length === 0;
   job.askReason = reasons.length ? reasons.join("; ") : undefined;
+}
+
+function readMissionGoal(vault: string, slug: string): string | undefined {
+  try { return readMission(vault, slug)?.goal || undefined; } catch { return undefined; }
 }
 
 // ── Adjust (a correction, logged and learned) ───────────────────────────────
