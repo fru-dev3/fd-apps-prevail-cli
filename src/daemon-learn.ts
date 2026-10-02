@@ -432,7 +432,9 @@ async function dailyMetrics(root: string, now = Date.now()): Promise<void> {
   const { metricsDir, computeMetrics } = await import("./metrics.ts");
   const stamp = join(metricsDir(root), "catalog.json");
   try { if (now - statSync(stamp).mtimeMs < 20 * 3600_000) return; } catch { /* never computed */ }
-  await computeMetrics(root, { now });
+  const c = await computeMetrics(root, { now });
+  // Metrics M5: last month's recap once, the year page through December.
+  try { await (await import("./stories.ts")).storiesPass(root, c); } catch { /* non-fatal */ }
 }
 
 // The daemon loop: distill on an interval until SIGINT.

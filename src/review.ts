@@ -105,6 +105,8 @@ export interface ReviewCard {
   /** Goals G4: each chosen initiative against its expectations, with the explanation and a proposed change; the quarterly review when owed. */
   initiatives?: { id: string; title: string; state: string; explanation: string; proposal: string }[];
   quarterly?: boolean;
+  /** Metrics M5: the running n-of-1 experiment's arm this week. */
+  experiment?: { id: string; arm: "A" | "B"; text: string } | null;
 }
 
 /** When the user last did anything in a domain: a chat, a task change, a note from another domain. */
@@ -180,6 +182,7 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     radar: await radarLines(vault, now),
     missions: await (async () => { try { return (await import("./mission-progress.ts")).missionReviewLines(vault, now); } catch { return []; } })(),
     ...(await initiativeLines(vault, now)),
+    experiment: await (async () => { try { return (await import("./stories.ts")).experimentThisWeek(vault, now); } catch { return null; } })(),
     ...(await qualitativeLines(vault, c, week, now)),
   };
 }
@@ -239,6 +242,7 @@ export function reviewText(r: ReviewCard): string {
   if (r.asked?.who5) out.push("This month's WHO-5 is waiting (five quick questions about the last two weeks).");
   for (const m of r.missions ?? []) out.push(`Mission: ${m}`);
   for (const x of r.initiatives ?? []) out.push(`Initiative: ${x.explanation}${x.proposal ? ` ${x.proposal}` : ""}`);
+  if (r.experiment) out.push(`Experiment: ${r.experiment.text}`);
   if (r.quarterly) out.push("The quarterly initiative review is due: keep, switch or drop each one (prevail compass paths review).");
   if (r.radar?.length) { out.push("Falling behind:"); for (const x of r.radar) out.push(`- ${x.text} (${x.evidence})`); }
   for (const w of r.waited) out.push(`Waited for this review: ${w.text}`);

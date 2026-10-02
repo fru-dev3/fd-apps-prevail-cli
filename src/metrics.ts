@@ -849,6 +849,8 @@ export async function metricsCommand(argv: string[], vault: string): Promise<num
     return 0;
   }
   if (sub === "rhythm") { const r = rhythm(c, Number(args.get("days") ?? 30) || 30); if (args.json) out(r); else console.log(`${r.length} dots`); return 0; }
+  // Metrics M5: stories (the monthly recap, Your Year, the heatmap, places), patterns and experiments.
+  { const st = await import("./stories.ts"); if (st.STORY_SUBCOMMANDS.includes(sub)) return st.storiesCommand(sub, argv, vault, c); }
   if (["proposals", "answer", "pin", "track", "pause", "retire", "insights", "acceptance", "insight-feedback"].includes(sub)) {
     const mp = await import("./metric-proposals.ts");
     try {
@@ -876,6 +878,6 @@ export async function metricsCommand(argv: string[], vault: string): Promise<num
     return 0;
   }
   if (sub === "glance") { const q = await import("./qualitative.ts"); const ss = q.seasons(vault, c); const g = glance(c, { week: args.get("week"), ids: glanceIds(vault), paused: (id, w) => q.pausedBy(ss, c.defs.find((d) => d.id === id) ?? id, w)?.title ?? null }); if (args.json) out(g); else process.stdout.write(glanceMarkdown(g)); return 0; }
-  console.error("usage: prevail metrics scan [--backfill] | compute | sources | list | series <id> [--per day|week] | rhythm | glance [--week YYYY-MM-DD] | proposals | answer <key> track|dismiss|edit | pin|track|pause|retire <id> [--serves id] [--because text] | insights | acceptance | lived | guardrails | lags | proxies | themes | hypotheses | seasons [--json]");
+  console.error("usage: prevail metrics scan [--backfill] | compute | sources | list | series <id> [--per day|week] | rhythm | year [--year Y] [--write] | recap [--month YYYY-MM] [--write] | heatmap <id> | places | patterns | experiment list|propose|start|stop|score | glance [--week YYYY-MM-DD] | proposals | answer <key> track|dismiss|edit | pin|track|pause|retire <id> [--serves id] [--because text] | insights | acceptance | lived | guardrails | lags | proxies | themes | hypotheses | seasons [--json]");
   return 1;
 }
