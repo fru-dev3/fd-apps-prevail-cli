@@ -95,6 +95,9 @@ export function domainOfCwd(cwd: string, vault: string): string {
   const name = basename(cwd);
   if (!name || cwd.replace(/\/+$/, "") === vault.replace(/\/+$/, "")) return "general";
   if (name === "_scope") return ""; // an app's chat space has no goals of its own
+  // A mission's folder (data/missions/<slug>): its key, so a mission turn gets
+  // the Compass and the chief of staff like General, and only life goals here.
+  if (basename(dirname(cwd)) === "missions") return `_mission-${name}`;
   return name;
 }
 

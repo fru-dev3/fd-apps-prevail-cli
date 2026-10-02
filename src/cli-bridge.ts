@@ -205,7 +205,8 @@ export function buildUserContext(vaultRoot: string, cwd: string, prompt: string,
       if (profile) parts.push(`${PROFILE_HEADER} - the user's profile. Use this as ground truth about them.\n${profile.slice(0, 2500)}`);
     }
     const domain = domainOfCwd(cwd, vaultRoot);
-    if (domain === "general" && !prompt.includes(CHIEF_HEADER)) {
+    // One voice: General and every mission speak as the user's chief of staff.
+    if ((domain === "general" || domain.startsWith("_mission-")) && !prompt.includes(CHIEF_HEADER)) {
       const c = chiefOfStaffBlock(vaultRoot);
       if (c) parts.push(c);
     }

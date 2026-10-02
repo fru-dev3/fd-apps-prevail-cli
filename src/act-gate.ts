@@ -28,6 +28,9 @@ import { scanSensitive, findingCategories, readEgressGuard } from "./egress-guar
 import { auditAction } from "./action-audit.ts";
 import { classifyAction, type ActionClass } from "./action-policy.ts";
 import { isTrustedFetch, isTrustedReadTool } from "./trusted-sources.ts";
+import { missionScopeSlug } from "./path-safety.ts";
+import { readMission } from "./missions.ts";
+import { ceilingRank } from "./specialists.ts";
 
 export interface PendingAct {
   id: string;
@@ -456,6 +459,13 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
     return builtin;
   }
   if (classifyAct(toolName) === "allow") return { action: "allow" };
+  // A mission's ceiling only tightens (missions-plan.md): a read-only mission
+  // never writes, and below "act" no always-allow rule lets a write run alone.
+  const mission = missionGate(vault, domain);
+  if (mission?.readOnly) {
+    auditAction(vault, { ts: Date.now(), domain, action: actSummary(toolName), outcome: "blocked_by_egress_guard", report: `mission ceiling is read (${toolName})` });
+    return { action: "deny", reason: "This mission is read-only (its ceiling is read), so this action was NOT run. Tell the user; they can raise the ceiling on the mission's Setup tab." };
+  }
   // A trusted remote MCP source's read tools (readOnlyHint at add time) run live.
   if (isTrustedReadTool(vault, toolName)) return { action: "allow" };
   const argsJson = JSON.stringify(toolInput ?? {});
@@ -469,7 +479,7 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
   // An "Always allow" rule covers only the harmless shape: never a
   // consequential call and never one carrying sensitive data. Those fall
   // through to the grant check and the queue like any other.
-  if (hasActRule(vault, toolName, domain) && isAlwaysEligible(toolName, categories)) {
+  if (!mission?.askAlways && hasActRule(vault, toolName, domain) && isAlwaysEligible(toolName, categories)) {
     auditAction(vault, {
       ts: Date.now(), domain, action: actSummary(toolName),
       outcome: "executed", report: `ran under always-allow rule (${toolName})`,
@@ -496,6 +506,17 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
       `This action was NOT run. Prevail queued it for the user's approval under Needs You (id ${rec.id}).${sens} ` +
       `Tell the user what you are trying to do and that it awaits their approval; after they approve, call this exact tool with the exact same arguments to run it. Do not attempt another route. ${actMarker(rec.id)}`,
   };
+}
+
+/** The mission a `_mission-<slug>` chat runs in: is it read-only, and must every write ask? */
+export function missionGate(vault: string, domain: string): { readOnly: boolean; askAlways: boolean } | null {
+  const slug = missionScopeSlug(domain);
+  if (!slug) return null;
+  try {
+    const m = readMission(vault, slug);
+    if (!m) return { readOnly: true, askAlways: true }; // fail closed
+    return { readOnly: ceilingRank(m.ceiling) <= ceilingRank("read"), askAlways: ceilingRank(m.ceiling) < ceilingRank("act") };
+  } catch { return { readOnly: true, askAlways: true }; }
 }
 
 // ── Claude hook settings (what cli-bridge passes as --settings) ──────────────

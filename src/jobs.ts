@@ -37,11 +37,12 @@ import { appendDecision, decisionsFile } from "./decisions.ts";
 import { goalsBlock, writeVersioned } from "./goals.ts";
 import { appendJsonl, domainUpdatesPath, readJsonl } from "./linking.ts";
 import { logActivity } from "./activity.ts";
-import { resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { missionScopeSlug, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { routableDomains, type RouteRunner } from "./route.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile } from "./vault-session.ts";
-import { forDomain, getSpecialist, loadSpecialists, readNotebook, appendNotebook, ceilingRank, type Specialist } from "./specialists.ts";
+import { forDomain, getSpecialist, loadSpecialists, readNotebook, appendNotebook, ceilingRank, type Ceiling, type Specialist } from "./specialists.ts";
+import type { MissionDomain } from "./missions.ts";
 import { parseModArgs } from "./cli-args.ts";
 
 export type Effort = "quick" | "standard" | "deep";
@@ -77,6 +78,8 @@ export interface Job {
   result?: JobResult;
   note?: string;
   pid?: number;
+  /** A job a mission started: its ceiling (the lowest wins) and money left. */
+  mission?: { slug: string; ceiling: Ceiling; budgetLeftUsd: number | null };
 }
 
 export interface Receipt { n: number; ts: number; domain: string; kind: "decision" | "task" | "note" | "page" | "draft"; file: string; ref: string; text: string; undone?: number }
@@ -271,62 +274,123 @@ export interface DispatchInput {
   trigger?: TriggerKind;
   runner?: RouteRunner | null;
   now?: number;
+  /** A mission turn: dispatch picks only among what the mission brought in. */
+  scope?: MissionScope;
 }
-export interface Dispatch { kind: "answer" | "job"; job?: Job; confident: boolean; mention?: string }
+export interface MissionScope { slug: string; name: string; domains: MissionDomain[]; specialists: string[]; apps: string[]; ceiling: Ceiling; budgetLeftUsd: number | null }
+/** Something outside the mission's scope: nothing is read until the user says yes. */
+export interface BringIn { domains: string[]; never: boolean; why: string }
+/** A message that should become a mission: a Start card, never started without a yes. */
+export interface MissionDraft { name: string; outcome: string; owner?: string; consulted: string[]; specialists: string[]; target?: string }
+export interface Dispatch { kind: "answer" | "job" | "bring-in" | "mission"; job?: Job; confident: boolean; mention?: string; bringIn?: BringIn; mission?: MissionDraft }
 
 const MENTION = /^@([A-Za-z][A-Za-z-]{1,40})\b[:,]?\s*/;
+
+// "Start a mission to...", "I'm going to learn...", "plan my trip to...": an
+// effort with an outcome and an end. Code reads it; the user always says yes.
+const MISSION_START = /^(please\s+)?(let'?s\s+)?(start|begin|create|open|set up)\s+(a|the|my)\s+mission\b|^(i'?m going to|i am going to|i want to|i'?d like to|help me)\s+(learn|remodel|renovate|buy|build|plan|train for|prepare for|travel to|move to)\b|^plan my (trip|move|wedding|renovation)\b/i;
+
+export function missionDraftFrom(message: string, here: string, known: string[]): MissionDraft | null {
+  const t = message.replace(/^\s*(hey|hi|ok|okay)[,\s]+/i, "").trim();
+  if (!MISSION_START.test(t)) return null;
+  const outcome = t.replace(/^(please\s+)?(let'?s\s+)?(start|begin|create|open|set up)\s+(a|the|my)\s+mission\s*(to|for|called|named)?\s*:?\s*/i, "").replace(/^(i'?m going to|i am going to|i want to|i'?d like to|help me)\s+/i, "").replace(/[.!?]+$/, "").trim();
+  const name = (outcome.split(/[,.;]| by | before | so that /i)[0] ?? outcome).trim().replace(/^\w/, (c) => c.toUpperCase()).slice(0, 60);
+  if (!name) return null;
+  const verb = /^(\w+)/.exec(outcome.toLowerCase())?.[1] ?? "";
+  // The specialists the outcome calls for (the ones not built yet are proposed anyway; the mission says which exist).
+  const team = /^(learn|train|prepare)/.test(verb) ? ["tutor", "coach", "researcher"]
+    : /^(buy|move)/.test(verb) ? ["researcher", "analyst", "steward", "negotiator"]
+    : /^(travel|plan)/.test(verb) ? ["researcher", "planner"]
+    : /^build/.test(verb) ? ["builder", "auditor"]
+    : /^(remodel|renovate)/.test(verb) ? ["researcher", "analyst", "liaison"] : ["researcher", "planner"];
+  const by = /\bby (\d{4}-\d{2}-\d{2})\b/.exec(t)?.[1];
+  return { name, outcome: outcome.slice(0, 300), ...(known.includes(here) && here !== "general" ? { owner: here } : {}), consulted: [], specialists: team, ...(by ? { target: by } : {}) };
+}
 
 export async function dispatch(i: DispatchInput): Promise<Dispatch> {
   const now = i.now ?? Date.now();
   const message = i.message.trim();
-  const here = (i.domain || "general").toLowerCase();
+  const sc = i.scope;
+  const here = sc ? `mission/${sc.slug}` : (i.domain || "general").toLowerCase();
   const chief = readChiefOfStaff(i.vault);
   const specs = loadSpecialists(i.vault);
   const on = new Set(specs.filter((s) => s.on).map((s) => s.id));
+  const known = routableDomains(i.vault).filter((d) => !d.startsWith("_"));
+  const never = new Set(chief.neverRead);
+  const named = (d: string) => new RegExp(`\\b${d.replace(/-/g, "[- ]")}\\b`, "i").test(message);
+  const inScope = new Set(sc?.domains.map((d) => d.slug) ?? []);
 
-  // @Researcher by hand: one run of that specialist, owned by this domain.
+  // @Researcher by hand: one run of that specialist, owned by this domain (or mission).
   const m = MENTION.exec(message);
   if (m) {
     const s = specs.find((x) => x.on && (x.id === m[1]!.toLowerCase() || x.name.toLowerCase() === m[1]!.toLowerCase()));
     if (s) {
       const ask = message.slice(m[0].length).trim() || message;
-      const job = newJob({ ask, here, thread: i.thread, kind: "mention", owner: here, consulted: [], informed: [], team: [{ step: 1, specialists: [s.id] }], effort: "standard", why: `handed to the ${s.name} by hand`, now });
+      const consulted = sc ? sc.domains.filter((d) => d.role !== "informed").map((d) => d.slug) : [];
+      const job = newJob({ ask, here, thread: i.thread, kind: "mention", owner: here, consulted, informed: [], team: [{ step: 1, specialists: [s.id] }], effort: "standard", why: `handed to the ${s.name} by hand`, now });
       job.budget = { usd: Math.min(s.budget.usd * s.budget.passes, chief.limits.usd), minutes: Math.min(s.budget.minutes, chief.limits.minutes) };
+      if (sc) job.mission = { slug: sc.slug, ceiling: sc.ceiling, budgetLeftUsd: sc.budgetLeftUsd };
       decideStart(i.vault, job, specs, chief.limits, true);
       return { kind: "job", job, confident: true, mention: s.id };
     }
   }
 
+  // Inside a mission, a domain the message names that the mission did not
+  // bring in is never read: the user is asked first (never-read ones always).
+  if (sc) {
+    const outside = known.filter((d) => !inScope.has(d) && named(d));
+    if (outside.length) {
+      const nv = outside.some((d) => never.has(d));
+      return { kind: "bring-in", confident: true, bringIn: { domains: outside, never: nv, why: `${outside.join(" and ")} ${outside.length === 1 ? "is" : "are"} not in the mission ${sc.name}` } };
+    }
+  } else {
+    const draft = missionDraftFrom(message, here, known);
+    if (draft) return { kind: "mission", confident: true, mission: draft };
+  }
+
   const shape = shapeOf(message);
   if (!shape) return { kind: "answer", confident: true };
 
-  const known = routableDomains(i.vault).filter((d) => !d.startsWith("_"));
-  const never = new Set(chief.neverRead);
-  const named = (d: string) => new RegExp(`\\b${d.replace(/-/g, "[- ]")}\\b`, "i").test(message);
   const learned = learnedStaffing(i.vault);
   let dm: DispatchModel | null = null;
   if (i.runner !== null) {
     const { readDomainGoals } = await import("./goals.ts");
-    const domains = known.filter((d) => !never.has(d) || named(d)).map((d) => ({ slug: d, goals: readDomainGoals(i.vault, d).filter((g) => g.status === "active").map((g) => g.title) }));
-    const { system, prompt } = buildDispatchPrompt(message, here, domains, [...chief.learned, ...learned.lines]);
+    const pool = known.filter((d) => !never.has(d) || named(d));
+    const domains = pool.map((d) => ({ slug: d, goals: [...(inScope.has(d) ? ["(in this mission)"] : []), ...readDomainGoals(i.vault, d).filter((g) => g.status === "active").map((g) => g.title)] }));
+    const { system, prompt } = buildDispatchPrompt(message, sc ? `the mission ${sc.name}` : here, domains, [...chief.learned, ...learned.lines]);
     try {
       const runner = i.runner ?? (await import("./route.ts")).claudeRouteRunner;
-      dm = parseDispatchReply(await runner({ system, prompt, timeoutMs: 40_000 }), known);
+      dm = parseDispatchReply(await runner({ system, prompt: sc ? `${prompt}\nThis is a mission: prefer the domains marked (in this mission); name another only when the job truly needs it.` : prompt, timeoutMs: 40_000 }), known);
     } catch { dm = null; }
   }
-  const owner = dm?.owner ?? (known.includes(here) ? here : "general");
-  const keep = (d: string) => d !== owner && (!never.has(d) || named(d));
-  const consulted = [...new Set([...(dm?.consulted ?? []), ...(learned.consult.get(owner) ?? [])])].filter(keep).slice(0, 3);
-  const informed = (dm?.informed ?? []).filter((d) => keep(d) && !consulted.includes(d)).slice(0, 3);
-  let team = teamFor(shape, on, { openEnded: dm?.open_ended, decision: dm?.decision });
+  // The model may reach outside the mission. When the job belongs to another
+  // domain, that is a question (bring in), not a read; extra domains it would
+  // only consult are left out and named on the card.
+  let leftOut: string[] = [];
+  if (sc && dm) {
+    if (dm.owner && !inScope.has(dm.owner)) return { kind: "bring-in", confident: true, bringIn: { domains: [dm.owner], never: never.has(dm.owner), why: dm.why ? `the job belongs to ${dm.owner}: ${dm.why}` : `the job belongs to ${dm.owner}` } };
+    leftOut = [...new Set([...(dm.consulted ?? []), ...(dm.informed ?? [])].filter((d) => !inScope.has(d)))];
+  }
+  // Owner: inside a mission the mission owns the outcome; a domain only for a domain-owned write.
+  const owner = sc ? here : dm?.owner ?? (known.includes(here) ? here : "general");
+  const keep = (d: string) => d !== owner && (!never.has(d) || named(d)) && (!sc || inScope.has(d));
+  const scConsulted = sc ? sc.domains.filter((d) => d.role !== "informed").map((d) => d.slug) : [];
+  const scInformed = sc ? sc.domains.filter((d) => d.role === "informed").map((d) => d.slug) : [];
+  const consulted = [...new Set([...(sc && dm?.owner ? [dm.owner] : []), ...(dm?.consulted ?? []), ...(sc && !dm ? scConsulted : []), ...(learned.consult.get(owner) ?? [])])].filter(keep).slice(0, 3);
+  const informed = [...new Set([...(dm?.informed ?? []), ...scInformed])].filter((d) => keep(d) && !consulted.includes(d)).slice(0, 3);
+  // A mission's own specialists staff it when it named any.
+  const pool = sc && sc.specialists.length ? new Set([...on].filter((x) => sc.specialists.includes(x) || x === "editor" || x === "steward")) : on;
+  let team = teamFor(shape, pool, { openEnded: dm?.open_ended, decision: dm?.decision });
+  if (!team.length && sc) team = teamFor(shape, on, { openEnded: dm?.open_ended, decision: dm?.decision });
   const skip = learned.skip.get(owner);
   if (skip) team = team.map((s) => ({ ...s, specialists: s.specialists.filter((x) => !skip.has(x)) })).filter((s) => s.specialists.length).map((s, n) => ({ ...s, step: n + 1 }));
   if (!team.length) return { kind: "answer", confident: true };
   const effort = dm?.effort ?? "standard";
-  const why = dm?.why ?? `${shape} job`;
+  const why = `${dm?.why ?? `${shape} job`}${leftOut.length ? ` (left out, not in the mission: ${leftOut.join(", ")})` : ""}`;
   const job = newJob({ ask: message, here, thread: i.thread, kind: i.trigger ?? "chat", owner, consulted, informed, team, effort, why, now });
-  // Unsure: the model did not answer, so the domains are a guess.
-  const confident = !!dm;
+  if (sc) job.mission = { slug: sc.slug, ceiling: sc.ceiling, budgetLeftUsd: sc.budgetLeftUsd };
+  // Unsure: the model did not answer, so the domains are a guess (a mission's own scope is not a guess).
+  const confident = !!dm || !!sc;
   decideStart(i.vault, job, specs, chief.limits, confident);
   return { kind: "job", job, confident };
 }
@@ -347,6 +411,12 @@ export function decideStart(vault: string, job: Job, specs: Specialist[], limits
     const s = specs.find((x) => x.id === id);
     if (!s || !s.on) reasons.push(`the ${id} is not available`);
     else if (ceilingRank(s.ceiling) > ceilingRank("draft")) reasons.push(`the ${s.name} would act`);
+    else if (job.mission && ceilingRank(s.ceiling) > ceilingRank(job.mission.ceiling)) reasons.push(`the ${s.name} goes past this mission's ceiling (${job.mission.ceiling})`);
+  }
+  // Money in a mission: anything that spends asks, and past what is left it says so.
+  if (job.mission && job.mission.budgetLeftUsd != null) {
+    const amount = /\$\s?([0-9][0-9,]*(?:\.[0-9]{1,2})?)/.exec(job.ask);
+    if (amount && Number(amount[1]!.replace(/,/g, "")) > job.mission.budgetLeftUsd) reasons.push(`it is over what is left of the mission's budget ($${job.mission.budgetLeftUsd})`);
   }
   if (job.budget.usd > limits.usd || job.budget.minutes > limits.minutes) reasons.push(`over your limit of $${limits.usd} and ${limits.minutes} minutes`);
   const sensitive = askFirstReason(job.ask);
@@ -472,14 +542,22 @@ export function codeCheck(s: Specialist, o: StepOutput): string[] {
 
 function clip(s: string, n: number): string { return s.length > n ? `${s.slice(0, n)}\n(cut)` : s; }
 
-/** What the team reads: the Compass, the owner domain, then each consulted domain. */
+/** A job owner's folder key: a mission owner (mission/<slug>) is stored under `_mission-<slug>`. */
+export function spaceKey(owner: string): string {
+  const ms = missionScopeSlug(owner);
+  return ms ? `_mission-${ms}` : owner;
+}
+
+/** What the team reads: the Compass, the owner domain (or mission), then each consulted domain. */
 export function jobContext(vault: string, job: Job): string {
   const parts: string[] = [];
   const c = compassBlock(vault);
   if (c) parts.push(c);
   const dir = resolveDomainDir(vault, job.domains.owner);
+  const isMission = !!missionScopeSlug(job.domains.owner);
   const owner = [
-    `# OWNER DOMAIN: ${job.domains.owner}`,
+    isMission ? `# OWNER: the mission ${job.domains.owner}` : `# OWNER DOMAIN: ${job.domains.owner}`,
+    isMission ? clip(readText(join(dir, "mission.md")).replace(/^---\n[\s\S]*?\n---\n?/, ""), 1500) : "",
     clip(readText(join(dir, "ideal-state.md")), 1500),
     clip(readText(join(dir, "memory", "memory.md")), 2500),
     clip(readText(join(dir, "memory", "state.md")), 1500),
@@ -536,6 +614,7 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
   job.status = "running";
   job.started = clock();
   job.pid = process.pid;
+  delete job.note; // a rerun starts clean; the old note was about the earlier run
   job.progress = [];
   saveJob(vault, job);
   logActivity(vault, { type: "job", domain: job.domains.owner, title: `Job: ${job.ask.slice(0, 80)}`, detail: job.why, status: "pending", ref: id });
@@ -576,6 +655,8 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
       if (!spec.on) return { ok: false, status: "failed", note: `the ${spec.name} is off in ${job!.domains.owner}` };
       // Ceilings, in code: nothing that acts runs in this phase.
       if (ceilingRank(spec.ceiling) > ceilingRank("draft")) return { ok: false, status: "needs-approval", note: `the ${spec.name} would act; that needs your approval and is not built yet` };
+      // A mission's ceiling can only tighten: a read-only mission never drafts.
+      if (job!.mission && ceilingRank(spec.ceiling) > ceilingRank(job!.mission.ceiling)) return { ok: false, status: "needs-approval", note: `the ${spec.name} goes past the mission's ceiling (${job!.mission.ceiling}); raise it on the mission's Setup tab to run it` };
       const notebook = readNotebook(vault, job!.domains.owner, sid);
       const record = { id: `${idx}-${sid}`, specialist: sid, domain: job!.domains.owner, trigger: { kind: job!.origin.kind, ...(job!.origin.thread ? { thread: job!.origin.thread } : {}) }, brief: st.brief ?? job!.ask, status: "running", passes: [] as { n: number; check: { ok: boolean; missing: string[] }; usd: number; ms: number }[], result: null as null | { type: string; file: string }, notebook: [] as string[], cost: { usd: 0, minutes: 0, estimated: true } };
       let out: StepOutput | null = null;
@@ -705,8 +786,8 @@ function fileResults(vault: string, job: Job, last: { returns: string; out: Step
   }
   const f = last.out.filed;
   if (f?.decision && oneLine(f.decision)) {
-    const d = appendDecision(vault, owner, { type: "job_result", prompt: job.ask, verdict: oneLine(f.decision, 400), source: "job", job: job.id, ts: now });
-    add({ domain: owner, kind: "decision", file: rel(decisionsFile(vault, owner)), ref: d.id, text: `decision logged: ${oneLine(f.decision, 120)}` });
+    const d = appendDecision(vault, spaceKey(owner), { type: "job_result", prompt: job.ask, verdict: oneLine(f.decision, 400), source: "job", job: job.id, ts: now });
+    add({ domain: owner, kind: "decision", file: rel(decisionsFile(vault, spaceKey(owner))), ref: d.id, text: `decision logged: ${oneLine(f.decision, 120)}` });
   }
   if (f?.task?.text && oneLine(f.task.text)) {
     const tid = `j${now.toString(36).slice(-6)}`;

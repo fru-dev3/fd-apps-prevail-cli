@@ -142,7 +142,7 @@ describe("in every chat turn", () => {
     seed();
     const b = compassBlock(V);
     expect(b.startsWith("# COMPASS")).toBe(true);
-    expect(b).toContain("Mission: Live a calm foo life.");
+    expect(b).toContain("Purpose: Live a calm foo life.");
     expect(b.indexOf("1. Freedom")).toBeLessThan(b.indexOf("2. Peace of mind (enough: calm 4 of 5 most weeks)"));
     expect(b).not.toContain("Faith");
     expect(compassBlock(V, { local: true })).toContain("Faith");
@@ -163,7 +163,7 @@ describe("in every chat turn", () => {
 
   test("MCP read_compass: the confirmed Compass, or what waits for confirmation", async () => {
     seed();
-    expect(await tReadCompass({}, V)).toContain("Mission: Live a calm foo life.");
+    expect(await tReadCompass({}, V)).toContain("Purpose: Live a calm foo life.");
     expect(JSON.parse(await tReadCompass({ format: "json" }, V)).goals.map((g: { id: string; status: string }) => `${g.id}:${g.status}`)).toEqual(["g-fi:active", "g-hike:proposed"]);
     seed("# Compass\n\n## Values\n- Foo ~id:v-foo ~status:proposed\n");
     expect(await tReadCompass({}, V)).toBe("No confirmed Compass yet: 1 drafted lines are waiting for the user to confirm them.");

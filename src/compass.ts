@@ -1,4 +1,4 @@
-// The Compass: the user's mission, values, roles, goals and their paths,
+// The Compass: the user's purpose, values, roles, goals and their paths,
 // non-negotiables, negotiables and capacity, in one plain file,
 // build/compass.md. The user owns the what and the why; every line is in the
 // user's own words (a quote from them is kept beside it), and nothing a model
@@ -6,7 +6,7 @@
 //
 //   # Compass
 //
-//   ## Mission
+//   ## Purpose   (## Mission is read as an alias)
 //   Live fully. Love deeply.
 //   ~status:proposed
 //     words: "Live fully. Love deeply."
@@ -74,12 +74,16 @@ type Block = { item: CompassItem } | { raw: string };
 export interface CompassSection { heading: string; kind: Kind | "mission"; blocks: Block[]; mission?: Mission }
 export interface CompassDoc { head: string[]; sections: CompassSection[] }
 
+// The life statement is called Purpose (missions-plan.md: "Mission" names the
+// time-bound primitive). `## Mission` is read as an alias forever; groom
+// rewrites the heading (missions.ts renamePurposeHeading, with a snapshot).
+// The kind key stays "mission" on the wire for compatibility.
 const SECTION_KIND: Record<string, Kind | "mission"> = {
-  mission: "mission", values: "value", roles: "role", goals: "goal",
+  purpose: "mission", mission: "mission", values: "value", roles: "role", goals: "goal",
   "non-negotiables": "rule", rules: "rule", negotiables: "negotiable", capacity: "capacity", routines: "routine",
 };
 export const SECTION_TITLE: Record<Exclude<Kind, "other"> | "mission", string> = {
-  mission: "Mission", value: "Values", role: "Roles", goal: "Goals", rule: "Non-negotiables",
+  mission: "Purpose", value: "Values", role: "Roles", goal: "Goals", rule: "Non-negotiables",
   negotiable: "Negotiables", capacity: "Capacity", routine: "Routines",
 };
 const ORDER: (Exclude<Kind, "other"> | "mission")[] = ["mission", "value", "role", "goal", "rule", "negotiable", "capacity", "routine"];
@@ -254,7 +258,7 @@ export function findById(doc: CompassDoc, id: string): { item?: CompassItem; pat
 
 export function compassPath(vault: string): string { return join(buildRoot(vault), "compass.md"); }
 export function compassMetaDir(vault: string): string { return join(runtimePath(vault, "_meta"), "compass"); }
-const EMPTY = "# Compass\n\n## Mission\n\n## Values\n\n## Roles\n\n## Goals\n\n## Non-negotiables\n\n## Negotiables\n";
+const EMPTY = "# Compass\n\n## Purpose\n\n## Values\n\n## Roles\n\n## Goals\n\n## Non-negotiables\n\n## Negotiables\n";
 
 function readText(p: string): string {
   if (!existsSync(p)) return "";
@@ -393,7 +397,7 @@ export function compassBlock(vault: string, opts: { local?: boolean } = {}): str
   const ok = (x: { tokens: Record<string, string>; flags?: string[] }) => !isProposed(x) && (opts.local || !x.flags?.includes("local"));
   const parts: string[] = [];
   const m = mission(doc);
-  if (m && m.text && !isProposed(m)) parts.push(`Mission: ${m.text.replace(/^>\s*/gm, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()}`);
+  if (m && m.text && !isProposed(m)) parts.push(`Purpose: ${m.text.replace(/^>\s*/gm, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()}`);
   const values = items(doc, "value").filter(ok).sort((a, b) => Number(a.tokens.rank ?? 99) - Number(b.tokens.rank ?? 99));
   if (values.length) {
     parts.push("Values, most important first:");
@@ -415,7 +419,7 @@ export function compassBlock(vault: string, opts: { local?: boolean } = {}): str
   const roles = items(doc, "role").filter(ok);
   if (roles.length) parts.push(`Roles: ${roles.map((r) => r.title).join(", ")}`);
   if (!parts.length) return "";
-  return [`${COMPASS_HEADER}: the user's own mission, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.`, ...parts].join("\n").slice(0, 2500);
+  return [`${COMPASS_HEADER}: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.`, ...parts].join("\n").slice(0, 2500);
 }
 
 // ── Bootstrap: a first Compass drafted from the vault, every line quoted ─────
@@ -472,7 +476,7 @@ export function bootstrapPrompt(sources: Source[]): string {
   return [
     "You are drafting the first Compass for a person from their own notes. You never invent: every line you return must carry a QUOTE copied word for word from the notes below, and its title must reuse words from that quote.",
     "Return JSON only, this shape:",
-    '{ "mission": { "text": "<their mission sentence, copied exactly>", "quote": "<same>" },',
+    '{ "mission": { "text": "<their purpose or mission sentence, copied exactly>", "quote": "<same>" },',
     '  "values": [{ "title": "<2-4 words from the quote>", "quote": "<exact words>", "enough": "<only if they said what enough looks like, else omit>" }],',
     '  "roles": [{ "title": "<role, e.g. Father>", "quote": "<exact words>" }],',
     '  "goals": [{ "title": "<short, from the quote>", "quote": "<exact words>", "serves": ["<value titles>"], "due": "YYYY-MM-DD if they said one" }],',

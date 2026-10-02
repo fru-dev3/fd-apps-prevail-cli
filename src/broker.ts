@@ -5,6 +5,7 @@
 
 import { classifyAction, isConsequential, type ActionClass } from "./action-policy.ts";
 import { isPaused, policyFor, getMonthlyFinancialCap, monthSpendUsd } from "./autonomy.ts";
+import { ceilingRank, type Ceiling } from "./specialists.ts";
 
 // Best-effort dollar amount from an action's text ("pay the $1,200.50 invoice" → 1200.5).
 export function parseAmountUsd(text: string): number | null {
@@ -41,10 +42,20 @@ export interface ActionGate {
 
 export function gateAction(
   action: string,
-  opts: { vault: string; autonomousActs: boolean },
+  opts: { vault: string; autonomousActs: boolean; mission?: { slug: string; ceiling: Ceiling; budgetLeftUsd: number | null } },
 ): ActionGate {
   const cls = classifyAction(action);
   if (isPaused(opts.vault)) return { cls, decision: "block", reason: "autonomy is globally paused" };
+  // Inside a mission its ceiling and money budget can only tighten the gate.
+  const ms = opts.mission;
+  if (ms && cls !== "read") {
+    if (ceilingRank(ms.ceiling) <= ceilingRank("read")) return { cls, decision: "block", reason: `the mission ${ms.slug} is read-only` };
+    if (cls === "financial") {
+      const amount = parseAmountUsd(action);
+      if (amount == null) return { cls, decision: "ask", reason: `money in the mission ${ms.slug}: the amount is unknown, approve to run` };
+      if (ms.budgetLeftUsd != null && amount > ms.budgetLeftUsd) return { cls, decision: "ask", reason: `over what is left of the mission's budget ($${ms.budgetLeftUsd})` };
+    }
+  }
   const pol = policyFor(opts.vault, cls);
   if (pol === "never") return { cls, decision: "block", reason: `policy: "${cls}" actions are never allowed` };
   if (pol === "ask") return { cls, decision: "ask", reason: `policy: "${cls}" actions need approval` };
@@ -68,5 +79,6 @@ export function gateAction(
       }
     }
   }
+  if (ms && decision === "auto" && ceilingRank(ms.ceiling) < ceilingRank("act")) return { cls, decision: "ask", reason: `the mission ${ms.slug}'s ceiling is ${ms.ceiling}: approve to run` };
   return { cls, decision, reason: decision === "ask" ? "autonomy not enabled — approve to run" : undefined };
 }

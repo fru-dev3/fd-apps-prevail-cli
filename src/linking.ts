@@ -32,7 +32,8 @@ import { readManifest } from "./manifest.ts";
 import { tryAcquireLock } from "./file-lock.ts";
 import { isClientMachine, CLIENT_ROLE_MESSAGE } from "./machine-role.ts";
 import { listDomainDirs, v4ContentPath } from "./vault-layout-v4.ts";
-import { entitiesContainer, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { entitiesContainer, missionScopeSlug, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { activeMissions as listActiveMissions } from "./missions.ts";
 import { TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchProjectOption, type TouchResult, type UnhomedHit } from "./route.ts";
 import { vappendLine, vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
 
@@ -49,6 +50,10 @@ export function domainUpdatesPath(vault: string, slug: string): string {
 }
 
 export function entityUpdatesPath(vault: string, id: string): string | null {
+  // A mission (or the retired project/<slug> id of one that was migrated) keeps
+  // its notes in its own memory/updates.jsonl.
+  const ms = missionScopeSlug(id.replace(/^project\//, "mission/"));
+  if (ms && existsSync(join(resolveDomainDir(vault, `_mission-${ms}`), "mission.md"))) return domainUpdatesPath(vault, `_mission-${ms}`);
   const p = parseEntityId(id);
   return p?.kind ? join(entityDir(vault, p.kind, p.slug), UPDATES) : null;
 }
@@ -100,7 +105,7 @@ export interface RecordTouchInput {
 /** Append the update lines and the touch line for one turn. Returns what was written. */
 export function recordTouch(vault: string, t: RecordTouchInput): { domains: { slug: string; fact: string }[]; entities: string[] } {
   const ts = t.ts ?? Date.now();
-  const entities = [...new Set(t.entities.map((id) => resolveEntityId(vault, id)))].filter((id) => parseEntityId(id)?.kind);
+  const entities = [...new Set(t.entities.map((id) => (id.startsWith("mission/") ? id : resolveEntityId(vault, id))))].filter((id) => id.startsWith("mission/") || parseEntityId(id)?.kind);
   const domains = t.domains.filter((d) => d.slug !== t.home);
   for (const d of domains) {
     appendJsonl(domainUpdatesPath(vault, d.slug), { ts, from_domain: t.home, thread: t.thread, fact: d.fact, entities } satisfies DomainUpdate);
@@ -111,6 +116,7 @@ export function recordTouch(vault: string, t: RecordTouchInput): { domains: { sl
     const fact = t.entityFacts?.[id] ?? domains[0]?.fact ?? t.fallbackFact;
     appendJsonl(path, { ts, from_domain: t.home, thread: t.thread, fact } satisfies EntityUpdate);
     // After a touch, a Yours entity over the threshold gets its page folder.
+    if (id.startsWith("mission/")) continue;
     try { ensureAutoPage(vault, id, undefined, ts); } catch { /* the line is written; the page can wait for refresh */ }
   }
   if (domains.length || entities.length) {
@@ -142,15 +148,19 @@ export interface TouchStepInput {
   now?: number;
   /** Every tool call on the turn failed (at least one ran). */
   toolsAllFailed?: boolean;
+  /** A mission turn: its attached domains are offered first and marked. */
+  prefer?: string[];
 }
 
 export interface TouchedPayload { domains: { slug: string; fact: string }[]; entities: string[] }
 
-/** The active projects, for the touch step. */
+/** The active missions (and any entity project not yet migrated), for the touch step. */
 export function activeProjects(vault: string): TouchProjectOption[] {
-  return readIndex(vault).entities
-    .filter((e) => e.kind === "project" && (e.project?.status ?? "active") === "active")
+  const missions = listActiveMissions(vault).map((m) => ({ id: m.id, name: m.name, aliases: [] as string[], outcome: m.outcome }));
+  const legacy = readIndex(vault).entities
+    .filter((e) => e.kind === "project" && (e.project?.status ?? "active") === "active" && !missions.some((m) => m.id === `mission/${e.id.slice(8)}`))
     .map((e) => ({ id: e.id, name: e.name, aliases: e.aliases, outcome: e.project?.outcome ?? "" }));
+  return [...missions, ...legacy];
 }
 
 // A reply that is mainly an error: empty, led by "error"/"failed", or short and
@@ -213,8 +223,8 @@ export function touchedEntities(yours: TouchEntityOption[], message: string, rep
   return out.slice(0, TOUCH_MAX_ENTITIES);
 }
 
-function domainOptions(vault: string, home: string): { slug: string; description: string }[] {
-  return listDomainDirs(vault)
+function domainOptions(vault: string, home: string, prefer: string[] = []): { slug: string; description: string }[] {
+  const opts = listDomainDirs(vault)
     .map((d) => d.toLowerCase())
     .filter((d) => d !== home && d !== "general" && !d.startsWith("_"))
     .map((slug) => {
@@ -222,6 +232,9 @@ function domainOptions(vault: string, home: string): { slug: string; description
       try { description = (readManifest(vault, slug)?.identity.summary ?? "").replace(/\s+/g, " ").trim().slice(0, 120); } catch { /* none */ }
       return { slug, description };
     });
+  if (!prefer.length) return opts;
+  const first = opts.filter((o) => prefer.includes(o.slug)).map((o) => ({ ...o, description: `part of this mission${o.description ? `; ${o.description}` : ""}` }));
+  return [...first, ...opts.filter((o) => !prefer.includes(o.slug))];
 }
 
 /**
@@ -233,7 +246,7 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
   try {
     if (touchSkipReason(i)) return null;
     const home = i.home.toLowerCase();
-    const domains = domainOptions(i.vault, home);
+    const domains = domainOptions(i.vault, home, i.prefer);
     let yours: TouchEntityOption[] = [];
     let projects: TouchProjectOption[] = [];
     try { projects = activeProjects(i.vault); } catch { /* no index yet */ }
@@ -241,6 +254,9 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
     try { yours = yoursEntities(i.vault).filter((e) => !e.id.startsWith("project/") || projects.some((p) => p.id === e.id)); } catch { /* no index yet */ }
     // Even with nothing to link, the step runs: it notices topics with no home.
     const named = touchedEntities(yours, i.message, i.reply);
+    // A mission counts when the user names it.
+    const said = userText(i.message).toLowerCase();
+    for (const p of projects) if (p.id.startsWith("mission/") && p.name.length > 3 && said.includes(p.name.toLowerCase()) && !named.includes(p.id)) named.push(p.id);
     const deadline = i.timeoutMs ?? TOUCH_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), deadline); });
@@ -262,7 +278,7 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
     const active = new Set(projects.map((p) => p.id));
     // Entities come only from the user's words and the reply's links (named);
     // a project the classifier names counts only when named too.
-    const entities = named.filter((id) => !id.startsWith("project/") || active.has(id)).slice(0, TOUCH_MAX_ENTITIES);
+    const entities = named.filter((id) => !(id.startsWith("project/") || id.startsWith("mission/")) || active.has(id)).filter((id) => id !== home.replace(/^_mission-/, "mission/")).slice(0, TOUCH_MAX_ENTITIES);
     if (!res.domains.length && !entities.length) return null;
     const excerpt = i.message.replace(/\s+/g, " ").trim();
     const w = recordTouch(i.vault, {

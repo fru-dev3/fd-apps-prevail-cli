@@ -11,7 +11,7 @@ exports[`domain turn 1`] = `
 # You
 A person who likes long walks and quiet mornings.
 
-# COMPASS: the user's own mission, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
 Values, most important first:
 1. Craft
 Life goals:
@@ -37,7 +37,7 @@ exports[`general turn 1`] = `
 # You
 A person who likes long walks and quiet mornings.
 
-# COMPASS: the user's own mission, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
 Values, most important first:
 1. Craft
 Life goals:
@@ -95,7 +95,7 @@ What should I do this weekend?"
 # You
 A person who likes long walks and quiet mornings.
 
-# COMPASS: the user's own mission, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
 Values, most important first:
 1. Craft
 Life goals:
@@ -136,7 +136,7 @@ What should I do this weekend?"
 # You
 A person who likes long walks and quiet mornings.
 
-# COMPASS: the user's own mission, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
 Values, most important first:
 1. Craft
 Life goals:

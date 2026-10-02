@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
 // Top-level commands whose module parses its own arguments (module-commands.ts).
-const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide"];
+const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission"];
 
 interface Args {
   vaultPath: string | null;
@@ -2884,6 +2884,12 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       const id = pos[1];
       if (!id) { fail("usage: prevail entities show <kind/slug|name> [--json]"); return; }
       const idx = en.readIndex(vault).generated_ts ? en.readIndex(vault) : en.buildIndex(vault);
+      // project/<slug> (the retired kind) and mission/<slug> resolve to the mission.
+      if (/^(project|mission)\//.test(id)) {
+        const { projectDetail } = await import("./projects.ts");
+        const mv = projectDetail(vault, id);
+        if (mv) { if (json) out({ found: true, kind: "mission", ...mv }); else console.log(`${mv.id}  ${mv.status}  ${mv.name}\n  ${mv.outcome}`); return; }
+      }
       const d = en.entityDetail(vault, idx, id);
       if (!d) {
         // Not an error for a chip the index has not seen yet: the Entities view shows
@@ -2892,7 +2898,7 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
         fail(`no entity "${id}"`);
         return;
       }
-      // A project also carries its status, outcome, target, domains and goals.
+      // An unmigrated project page also resolves to its mission once migrated.
       const full = d.kind === "project" ? ((await import("./projects.ts")).projectDetail(vault, d.id) ?? d) : d;
       if (json) { out({ found: true, ...full }); return; }
       console.log(en.entityContextText(d, 30));
@@ -4848,7 +4854,19 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         }
         profile = migrateProfile(targetVault);
       } catch { /* best-effort, like the passes above */ }
-      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated, consolidatedLeftovers: consolidated, goalsMigrated, profile }) + "\n");
+      // Missions: entity projects move into data/missions/ (backup first, never
+      // deleted), and the Compass "## Mission" heading becomes "## Purpose"
+      // (snapshot in compass.versions/). Both are no-ops once done.
+      let missions: { migrated: number; backup?: string; purposeRenamed: boolean } = { migrated: 0, purposeRenamed: false };
+      try {
+        const ms = await import("./missions.ts");
+        const { entityThreads, buildIndex } = await import("./entities.ts");
+        const r = ms.migrateProjects(targetVault, { threadsOf: (id) => entityThreads(targetVault, id) });
+        if (r.migrated.length) { try { buildIndex(targetVault); } catch { /* refresh rebuilds it */ } }
+        const pr = await ms.renamePurposeHeading(targetVault);
+        missions = { migrated: r.migrated.length, ...(r.backup ? { backup: r.backup } : {}), purposeRenamed: pr.renamed };
+      } catch { /* best-effort, like the passes above */ }
+      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated, consolidatedLeftovers: consolidated, goalsMigrated, profile, missions }) + "\n");
       else {
         for (const r of results) console.log(r.already ? `${r.domain}: already clean` : `${r.domain}: moved ${r.ops} entr(ies) into source/·memory/·.system/, archived ${r.archived} original(s)`);
         for (const r of relocated) {
@@ -4862,6 +4880,8 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         }
         for (const g of goalsMigrated) console.log(`${g.domain}: ${g.added} goal(s) moved into source/goals.md from ${g.from.join(" and ") || "nothing new"}; backups kept: ${g.backups.length}`);
         if (profile.merged) console.log(`build/_profile.md folded into build/user.md (backup: ${profile.backup})`);
+        if (missions.migrated) console.log(`${missions.migrated} project page(s) became missions (backup: ${missions.backup})`);
+        if (missions.purposeRenamed) console.log("build/compass.md: ## Mission is now ## Purpose (the prior text is in compass.versions/)");
         console.log("done — vault is on the clean v4 layout. Originals are in each domain's _pre-v4-v4/ backup.");
       }
     } catch (e) {
@@ -6381,7 +6401,7 @@ async function main() {
     const json = a.includes("--json");
     const sub = a[0] && !a[0].startsWith("--") ? a[0] : "list";
     // create | set | show project/<slug>: the tracked project entities (projects.ts).
-    const ent = (await import("./projects.ts")).projectsEntityCommand(a, vault);
+    const ent = await (await import("./projects.ts")).projectsEntityCommand(a, vault);
     if (ent !== null) { process.exitCode = ent; return; }
     const pp = await import("./prompt-projects.ts");
     if (sub === "build") {

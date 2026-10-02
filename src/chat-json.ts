@@ -22,7 +22,6 @@
 // .db a regenerable cache (VAULT-SPEC §4).
 
 import { resolve } from "node:path";
-import { mkdirSync } from "node:fs";
 
 import {
   detectClis,
@@ -49,15 +48,11 @@ import {
   type RouteCandidate,
 } from "./model-routing.ts";
 import { readRouteOverrides, type RouteOverride } from "./route-learning.ts";
-import { generalDir } from "./decisions.ts";
-import { entityChatBlock } from "./entities.ts";
-import { GOOGLE_APP_RE } from "./gws-gateway.ts";
 import { updateMirrorStatus } from "./apps-mirror.ts";
-import { appChatBlock, appReadTools, initAppProblems, appToolAccess, mirrorApps, planAppRouting, refDomainBlock } from "./app-scope.ts";
+import { appReadTools, initAppProblems, appToolAccess, mirrorApps, planAppRouting } from "./app-scope.ts";
 import type { MirrorApp } from "./apps-mirror.ts";
 import { turnSources } from "./trusted-sources.ts";
-import { APP_SCOPE_PREFIX, appScopeId, resolveDomainDir } from "./path-safety.ts";
-import { scanVault, type Domain } from "./vault.ts";
+import { APP_SCOPE_PREFIX } from "./path-safety.ts";
 import { isCliKind } from "./config.ts";
 import { classifyTouches } from "./route.ts";
 import { runTouchStep, userText } from "./linking.ts";
@@ -77,7 +72,7 @@ import {
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
   type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route"
-    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job";
+    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start";
   thread: string;
   ts: number;
   domain?: string;
@@ -147,6 +142,12 @@ export interface ChatEvent {
   entities?: string[];
   // job: the chief of staff staffed this message as a job (jobs.ts). The
   // turn's reply is one line; the card polls `prevail job show <id>`.
+  // bring_in: a mission turn reached outside the mission; the user says yes
+  // (for this question or for the mission) or no. Nothing was read.
+  bringIn?: { mission: string; domains: string[]; never: boolean; why: string };
+  // mission_start: the message sounds like a mission; a Start card the user
+  // confirms (prevail missions create). Never started without a yes.
+  missionDraft?: { name: string; outcome: string; owner?: string; consulted: string[]; specialists: string[]; target?: string };
   job?: { id: string; status: string; startsAlone: boolean; askReason?: string; owner: string; consulted: string[]; informed: string[]; team: { step: number; specialists: string[]; gate?: boolean }[]; effort: string; budget: { usd: number; minutes: number }; why: string; mention?: string };
 }
 
@@ -197,6 +198,10 @@ export interface ChatJsonOptions {
   // Start a fresh model session even when resuming a thread (a scheduled turn
   // supplies its context through `preamble` instead).
   fresh?: boolean;
+  // Mission chat (--mission <slug>): the turn runs in data/missions/<slug>,
+  // its thread lives in the mission's memory/threads, and dispatch is scoped
+  // to the mission's domains, apps and specialists (scope.ts, jobs.ts).
+  mission?: string;
   // Entity chat: an entity id (person/foo). Every turn gets the entity's
   // context block (entities.ts entityChatBlock) ahead of the message, rebuilt
   // from the page each turn and never persisted with the user turn.
@@ -271,19 +276,6 @@ function engineLabel(cli: AvailableCli, model: string): string {
   return `${cli.kind}:${m}`;
 }
 
-// Every referenced entity shares this many characters of context.
-const ENTITY_BUDGET = 8000;
-const APP_ID_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
-
-function uniq(xs: (string | undefined)[] | undefined): string[] {
-  return [...new Set((xs ?? []).map((x) => (x ?? "").trim()).filter(Boolean))];
-}
-
-function findDomain(vaultPath: string, name: string): Domain | null {
-  const domains = scanVault(vaultPath);
-  return domains.find((d) => d.name === name) ?? null;
-}
-
 // Pick the engine for this turn. Preference order:
 //   1. explicit opts.cli (must be detected; under --local-only must be ollama)
 //   2. first detected CLI (ollama first under --local-only)
@@ -326,33 +318,27 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const message = opts.message?.trim();
   if (!message) return fail("empty message");
 
-  // An app's own chat space: --scope-app <id> is the `_app-<id>` scope key,
-  // stored under data/apps/<id>/_scope like any other thread space.
-  const scopeApp = (opts.scopeApp ?? "").trim() || appScopeId(opts.domain ?? "") || "";
-  if (scopeApp && !APP_ID_RE.test(scopeApp)) return fail(`invalid app id: ${scopeApp}`);
-  const domainKey = scopeApp ? `${APP_SCOPE_PREFIX}${scopeApp}` : opts.domain;
-  const appIds = uniq([...(scopeApp ? [scopeApp] : []), ...(opts.apps ?? [])]);
-  const badApp = appIds.find((id) => !APP_ID_RE.test(id));
-  if (badApp) return fail(`invalid app id: ${badApp}`);
-
-  let domain = scopeApp ? null : findDomain(vaultPath, domainKey);
-  if (scopeApp) {
-    const dir = resolveDomainDir(vaultPath, domainKey);
-    try { mkdirSync(dir, { recursive: true }); } catch { /* best effort */ }
-    domain = { name: domainKey, path: dir, hasState: false, openLoopCount: 0, stateMtime: null, skills: [] };
+  // One scope resolver for every chat: domain, an app's own space, an entity
+  // chat, or a mission (scope.ts). It picks the folder, the thread key and the
+  // context blocks; this function only runs the turn.
+  const { resolveScope, ScopeError, leadText } = await import("./scope.ts");
+  let scope: Awaited<ReturnType<typeof resolveScope>>;
+  try {
+    scope = await resolveScope(vaultPath, {
+      domain: opts.domain, scopeApp: opts.scopeApp, mission: opts.mission, entity: opts.entity, apps: opts.apps,
+      refDomains: opts.refDomains, googleAccount: opts.googleAccount, message: userText(message),
+      mirrorApps: opts.deps?.mirrorApps ?? mirrorApps,
+    });
+  } catch (e) {
+    if (e instanceof ScopeError) return fail(e.message);
+    throw e;
   }
-  // General may not be scaffolded on disk yet (no chats stored there). It's a
-  // real, addressable space, so synthesize it at general_dir rather than
-  // failing — this is what lets domainless General chat run.
-  const wantName = (opts.domain ?? "").trim();
-  if (!domain && (wantName === "general" || wantName === "__general__" || wantName === "")) {
-    const gdir = generalDir(vaultPath);
-    try { mkdirSync(gdir, { recursive: true }); } catch { /* best effort */ }
-    domain = { name: "general", path: gdir, hasState: false, openLoopCount: 0, stateMtime: null, skills: [] };
-  }
-  if (!domain) return fail(`unknown domain: ${opts.domain}`);
-  // Everything below persists under the resolved key (`_app-<id>` for an app scope).
-  opts = { ...opts, domain: domainKey };
+  const domain = scope.domain;
+  const scopeApp = scope.kind === "app" ? scope.key.slice(APP_SCOPE_PREFIX.length) : "";
+  const appIds = scope.appIds;
+  // Everything below persists under the resolved key (`_app-<id>` for an app
+  // scope, `_mission-<slug>` for a mission).
+  opts = { ...opts, domain: scope.key };
 
   // Lazy back-compat: fold any desktop-style _threads/<slug>.md transcripts
   // into JSONL so a freshly-imported vault has a uniform source of truth
@@ -370,22 +356,22 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const runTurn = opts.deps?.runChatTurn ?? runChatTurn;
   const persist = opts.deps?.persistMessage ?? persistMessage;
   const available = await (opts.deps?.detectClis ?? detectClis)();
-  let cli = pickCli(available, wantedCli, opts.localOnly ?? false);
+  let cli = pickCli(available, wantedCli, (opts.localOnly ?? false) || scope.privacy.localOnly);
   // Privacy + cost guard for every turn on this path. runChatTurn's guard was
   // opt-in and NO caller passed it, so a domain whose manifest says
   // privacy.localOnly still ran on a cloud CLI, and budget caps never fired.
   // With the guard present, resolveModelForDomain redirects a cloud pick to the
   // local engine for local-only domains (and under Bunker / --local-only).
-  const turnGuard = { localOnly: opts.localOnly ?? process.env.PREVAIL_BUNKER === "1" };
+  const turnGuard = { localOnly: (opts.localOnly ?? process.env.PREVAIL_BUNKER === "1") || scope.privacy.localOnly };
   if (!cli) {
-    if (opts.localOnly) return fail("no local engine available (ollama not detected)");
+    if (opts.localOnly || scope.privacy.localOnly) return fail(scope.privacy.localOnly ? "this mission is local-only and no local engine is available (ollama not detected)" : "no local engine available (ollama not detected)");
     if (wantedCli) return fail(`engine not available: ${wantedCli}`);
     return fail("no AI CLI detected (claude/codex/antigravity/ollama)");
   }
 
   // Apps: each connector belongs to one runtime. When this engine lacks a
   // referenced app and one runtime owns them all, run the turn there.
-  const apps = appIds.length ? (opts.deps?.mirrorApps ?? mirrorApps)(vaultPath) : [];
+  const apps = scope.apps;
   const appPlan = appIds.length
     ? planAppRouting(appIds, apps, cli.kind, (k) => !turnGuard.localOnly && !opts.localOnly && available.some((c) => c.kind === k))
     : null;
@@ -427,12 +413,34 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     const dispatchFn = opts.deps ? opts.deps.dispatch : (await import("./jobs.ts")).dispatch;
     const said = userText(message);
     const localTurn = !!opts.localOnly || turnGuard.localOnly;
-    if (dispatchFn && !scopeApp && !uniq(Array.isArray(opts.entity) ? opts.entity : [opts.entity]).length && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !localTurn) {
+    if (dispatchFn && scope.dispatch.allowed && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !localTurn) {
       const { readChiefOfStaff } = await import("./chief-of-staff.ts");
       const mode = readChiefOfStaff(vaultPath).handoff;
       if (mode !== "off" || said.trim().startsWith("@")) {
         let d: Awaited<ReturnType<NonNullable<typeof dispatchFn>>> | null = null;
-        try { d = await dispatchFn({ vault: vaultPath, message: said, domain: opts.domain, thread: (opts.threadId ?? "").trim() || sessionId }); } catch { d = null; }
+        const ms = scope.mission;
+        // A domain the user brought in for this question (--ref-domain) counts as read for this turn.
+        const forThisTurn = (opts.refDomains ?? []).filter((x) => x && !ms?.domains.some((y) => y.slug === x)).map((slug) => ({ slug, role: "consulted" as const }));
+        const missionScope = ms ? { slug: ms.slug, name: ms.name, domains: [...ms.domains, ...forThisTurn], specialists: ms.specialists, apps: ms.apps, ceiling: ms.ceiling, budgetLeftUsd: scope.dispatch.budgetLeftUsd ?? null } : undefined;
+        try { d = await dispatchFn({ vault: vaultPath, message: said, domain: opts.domain, thread: (opts.threadId ?? "").trim() || sessionId, ...(missionScope ? { scope: missionScope } : {}) }); } catch { d = null; }
+        // A card the user answers: bring a domain into the mission, or start a
+        // mission. Nothing outside the scope is read and nothing starts without a yes.
+        if ((d?.kind === "bring-in" && d.bringIn) || (d?.kind === "mission" && d.mission)) {
+          const reply = d.kind === "bring-in"
+            ? `This needs ${d.bringIn!.domains.join(" and ")}, which ${d.bringIn!.domains.length === 1 ? "is" : "are"} not in the mission${d.bringIn!.never ? " (and on your never-read list)" : ""}. Bring ${d.bringIn!.domains.length === 1 ? "it" : "them"} in for this question, for the mission, or not?`
+            : `This sounds like a mission: ${d.mission!.name}. Start it? I drafted the outcome, a target and who to bring in; adjust anything first.`;
+          const ts = Date.now();
+          emit({ type: "start", thread, ts, domain: opts.domain, engine: "chief-of-staff" });
+          emit({ type: "user", thread, ts, role: "user", text: message });
+          writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "user", cli: cli.kind, model: "", content: message, ts });
+          if (d.kind === "bring-in") emit({ type: "bring_in", thread, ts, bringIn: { ...d.bringIn!, mission: scope.mission!.slug } });
+          else emit({ type: "mission_start", thread, ts, missionDraft: d.mission! });
+          emit({ type: "delta", thread, ts, text: reply });
+          emit({ type: "assistant", thread, ts, role: "assistant", text: reply, engine: "chief-of-staff" });
+          writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: null, role: "assistant", cli: cli.kind, model: "", content: reply, ts });
+          emit({ type: "done", thread, ts: Date.now() });
+          return 0;
+        }
         if (d?.kind === "job" && d.job) {
           const jobs = await import("./jobs.ts");
           const job = d.job;
@@ -545,43 +553,12 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const engine = engineLabel(cli, model);
   const startTs = Date.now();
   const threadId = (opts.threadId ?? "").trim() || (rawSession || undefined);
-  // Entity block first (what the conversation is about), then any preamble.
-  // A broken entity lookup never blocks the turn; it just runs unscoped.
-  // Then the referenced apps and domains. All rebuilt every turn, none saved.
   // "claude" names Claude's own one-account connector: no gws pick.
   const googlePick = opts.googleAccount?.trim() && opts.googleAccount.trim().toLowerCase() !== "claude" ? opts.googleAccount.trim() : undefined;
-  const entityIds = uniq(Array.isArray(opts.entity) ? opts.entity : [opts.entity]);
-  const perEntity = entityIds.length ? Math.min(6000, Math.floor(ENTITY_BUDGET / entityIds.length)) : 0;
-  const blocks: string[] = [];
-  for (const id of entityIds) {
-    try { blocks.push(entityChatBlock(vaultPath, id, perEntity)); } catch { /* unscoped */ }
-  }
-  for (const id of appIds) {
-    try { blocks.push(appChatBlock(vaultPath, id, apps.find((a) => a.id === id) ?? null)); } catch { /* skip */ }
-  }
-  // --google-account all: reads fan out across every gws account, one call per
-  // account; drafts and writes go to the default account only, and queue.
-  if (googlePick?.toLowerCase() === "all") {
-    try {
-      const { googleAccounts } = await import("./gws-gateway.ts");
-      const { boundGoogleAccountLabel } = await import("./vault.ts");
-      const accts = googleAccounts(appIds.find((id) => GOOGLE_APP_RE.test(id)) ?? "google", { bound: boundGoogleAccountLabel(vaultPath) });
-      if (accts.length) {
-        const def = accts.find((x) => x.default);
-        blocks.push([
-          "# GOOGLE ACCOUNTS: all",
-          `The user chose all their Google accounts: ${accts.map((x) => x.id).join(", ")}.`,
-          "For reads, call the google_workspace tool once per account with account set to that account, and label every result with its account.",
-          `Drafts and writes go to exactly one account: ${def ? def.id : "none is the default, so ask the user which one"}. They queue for the user's approval. Never send.`,
-        ].join("\n"));
-      }
-    } catch { /* the connector still refuses unlabeled reads */ }
-  }
-  for (const d of uniq(opts.refDomains)) {
-    if (d === opts.domain) continue;
-    try { const b = refDomainBlock(vaultPath, d); if (b) blocks.push(b); } catch { /* skip */ }
-  }
-  const lead = [...blocks, opts.preamble?.trim() ?? ""].filter(Boolean).join("\n\n---\n\n");
+  const entityIds = scope.entityIds;
+  // The scope's blocks lead (what the conversation is about, then the apps and
+  // domains it names), then any preamble. Rebuilt every turn, never saved.
+  const lead = leadText(scope.blocks, opts.preamble);
   const modelPrompt = lead ? `${lead}\n\n---\n\n${message}` : message;
 
   // Pi-style branchable nodes: the user turn roots off the last node already
@@ -705,7 +682,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   const turnBase = {
     prompt: modelPrompt,
     threadId,
-    entityId: entityIds[0],
+    entityId: scope.kind === "mission" ? undefined : entityIds[0],
     cwd: domain.path,
     cli,
     guard: turnGuard,
@@ -855,6 +832,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     const layer = opts.deps ? null : decisionLayer();
     const touched = await runTouchStep({
       vault: vaultPath, home: opts.domain, thread, message, reply,
+      ...(scope.mission ? { prefer: scope.mission.domains.map((x) => x.slug) } : {}),
       toolsAllFailed: toolResults > 0 && toolFailures === toolResults,
       localOnly: !!opts.localOnly || turnGuard.localOnly || manifestLocal || process.env.PREVAIL_BUNKER === "1",
       incognito: !!opts.incognito || process.env.PREVAIL_INCOGNITO === "1",
@@ -891,6 +869,7 @@ export async function chatJsonCommand(
   const apps: string[] = [];
   const refDomains: string[] = [];
   let scopeApp: string | undefined;
+  let mission: string | undefined;
   let incognito = false;
   let vaultPath = vaultOverride ?? "";
 
@@ -923,6 +902,8 @@ export async function chatJsonCommand(
     else if (a.startsWith("--app=")) apps.push(a.slice("--app=".length));
     else if (a === "--scope-app") { scopeApp = next; i++; }
     else if (a.startsWith("--scope-app=")) scopeApp = a.slice("--scope-app=".length);
+    else if (a === "--mission") { mission = next; i++; }
+    else if (a.startsWith("--mission=")) mission = a.slice("--mission=".length);
     else if (a === "--ref-domain") { refDomains.push(next ?? ""); i++; }
     else if (a.startsWith("--ref-domain=")) refDomains.push(a.slice("--ref-domain=".length));
     else if (a === "--local-only") localOnly = true;
@@ -947,6 +928,19 @@ export async function chatJsonCommand(
   // or the vault root) — the same place the desktop persists General threads.
   // Normalizing here lets OpenRouter / LM Studio / MLX chat in General.
   if (!domain.trim()) domain = "general";
+
+  // The retired entity kind: `--entity project/<slug>` is the mission's chat now.
+  if (!mission) {
+    const old = entity.find((e) => /^project\//.test(e));
+    if (old && vaultPath) {
+      const { missionExists, missionSlugOf } = await import("./missions.ts");
+      if (missionExists(vaultPath, old)) {
+        mission = missionSlugOf(old);
+        entity.splice(entity.indexOf(old), 1);
+        process.stderr.write(`prevail chat: --entity ${old} is the mission ${mission} now (use --mission ${mission})\n`);
+      }
+    }
+  }
 
   if (message === undefined) {
     // Read the message from stdin (matches ENGINE-JSON-API: "user message is
@@ -976,6 +970,7 @@ export async function chatJsonCommand(
     entity,
     apps,
     scopeApp,
+    mission,
     refDomains,
     incognito,
   });

@@ -168,6 +168,7 @@ export async function runMcpServer(
           domain: { type: "string" },
           cli: { type: "string", description: "claude | codex | gemini | ollama" },
           model: { type: "string", description: "Optional model name; defaults to the CLI's default." },
+          mission: { type: "string", description: "Optional mission slug (from list_missions): the turn runs in the mission with its context; domain is then ignored." },
         },
         required: ["prompt", "domain"],
       },
@@ -277,6 +278,26 @@ export async function runMcpServer(
         },
         required: ["slug"],
       },
+    },
+    {
+      name: "list_missions",
+      description: "The user's missions: time-bound efforts with an outcome and a target date (a trip, learning an instrument, a remodel), each with its status (active, paused, completed, archived), owner and attached domains, milestones done, budget used and days left. Missions are not prompt projects (list_projects).",
+      inputSchema: { type: "object", properties: { status: { type: "string", enum: ["active", "paused", "completed", "archived", "all"], description: "Default all." } } },
+    },
+    {
+      name: "read_mission",
+      description: "One mission: its fields, domains with roles (owner, consulted, informed), apps, specialists, people, milestones, budget lines and spend, the next linked events, open tasks and the recent log. Takes mission/<slug>, a slug, or an old project/<slug> id.",
+      inputSchema: { type: "object", properties: { slug: { type: "string" } }, required: ["slug"] },
+    },
+    {
+      name: "mission_context",
+      description: "The context blocks a chat turn in this mission carries (outcome, progress, memory, tasks, calendar, apps, people), as the app and CLI build them. Read-only.",
+      inputSchema: { type: "object", properties: { slug: { type: "string" } }, required: ["slug"] },
+    },
+    {
+      name: "mission_log",
+      description: "Add one dated line to a mission's log (\"Lesson 3 attended\"). Writes only the mission's own memory/log.md.",
+      inputSchema: { type: "object", properties: { slug: { type: "string" }, text: { type: "string" } }, required: ["slug", "text"] },
     },
     {
       name: "read_compass",
@@ -714,6 +735,38 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const slug = typeof args.slug === "string" ? args.slug : "";
       try { return wrapText(replayPrompt(vaultPath, slug, args.with_prompts === true)); } catch (e) { return wrapText((e as Error).message); }
     }
+    case "list_missions": {
+      const { listMissions } = await import("./missions.ts");
+      const st = typeof args.status === "string" ? args.status : "all";
+      const l = listMissions(vaultPath, { status: st as "all" });
+      if (!l.length) return wrapText("No missions yet.");
+      return wrapText(JSON.stringify(l.map((m) => ({ id: m.id, name: m.name, status: m.status, outcome: m.outcome, target: m.target, domains: m.domains, milestones: `${m.progress.milestones.done} of ${m.progress.milestones.total}`, budget: m.progress.budget.planned ? `$${m.progress.budget.used} of $${m.progress.budget.planned}` : null, days_left: m.progress.days.left })), null, 2));
+    }
+    case "read_mission": {
+      const { missionView, missionTasks } = await import("./missions.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      const v = missionView(vaultPath, slug);
+      if (!v) return wrapText(`No mission "${slug}".`);
+      const { readFileSync } = await import("node:fs");
+      const { resolveDomainDir } = await import("./path-safety.ts");
+      let log: string[] = [];
+      try { log = readFileSync(`${resolveDomainDir(vaultPath, `_mission-${v.slug}`)}/memory/log.md`, "utf8").split("\n").filter((l) => l.startsWith("- ")).slice(0, 10); } catch { /* none */ }
+      const today = new Date().toISOString().slice(0, 10);
+      return wrapText(JSON.stringify({ ...v, next_events: v.links.calendar.filter((e) => e.start.slice(0, 10) >= today).slice(0, 5), open_tasks: missionTasks(vaultPath, v.slug).filter((t) => !t.done), recent_log: log }, null, 2));
+    }
+    case "mission_context": {
+      const { resolveScope, leadText } = await import("./scope.ts");
+      try { const sc = await resolveScope(vaultPath, { mission: typeof args.slug === "string" ? args.slug : "" }); return wrapText(leadText(sc.blocks)); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "mission_log": {
+      const { logLine, readMission } = await import("./missions.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      const m = readMission(vaultPath, slug);
+      if (!m) return wrapText(`No mission "${slug}".`);
+      const text = String(args.text ?? "").trim();
+      if (!text) return wrapText("text is required");
+      return wrapText(`Logged: ${logLine(vaultPath, m.slug, text)}`);
+    }
     case "intent_findings":
     case "mirror_findings": {
       const { readFindings, findingsText } = await import("./mirror.ts");
@@ -847,9 +900,19 @@ function logMcpIntent(domain: Domain, prompt: string, cli: string, model: string
 }
 
 async function tCouncil(args: Record<string, unknown>, vaultPath: string): Promise<string> {
-  const prompt = String(args.prompt ?? "").trim();
+  let prompt = String(args.prompt ?? "").trim();
   if (!prompt) throw new Error("prompt is required");
-  const domain = resolveDomain(vaultPath, args.domain);
+  // A mission turn: the same scope resolver as the app and CLI.
+  let missionLocal = false;
+  let domain: ReturnType<typeof resolveDomain>;
+  if (typeof args.mission === "string" && args.mission.trim()) {
+    const { resolveScope, leadText } = await import("./scope.ts");
+    const sc = await resolveScope(vaultPath, { mission: args.mission, message: prompt });
+    domain = sc.domain;
+    missionLocal = sc.privacy.localOnly;
+    const lead = leadText(sc.blocks);
+    if (lead) prompt = `${lead}\n\n---\n\n${prompt}`;
+  } else domain = resolveDomain(vaultPath, args.domain);
   // Log the prompt up front with its MCP-client provenance (covers both a direct
   // `council` call and an auto-council escalation from `chat`).
   logMcpIntent(domain, prompt, "council", "", Date.now());
@@ -898,9 +961,19 @@ async function tCouncil(args: Record<string, unknown>, vaultPath: string): Promi
 }
 
 async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<string> {
-  const prompt = String(args.prompt ?? "").trim();
+  let prompt = String(args.prompt ?? "").trim();
   if (!prompt) throw new Error("prompt is required");
-  const domain = resolveDomain(vaultPath, args.domain);
+  // A mission turn: the same scope resolver as the app and CLI.
+  let missionLocal = false;
+  let domain: ReturnType<typeof resolveDomain>;
+  if (typeof args.mission === "string" && args.mission.trim()) {
+    const { resolveScope, leadText } = await import("./scope.ts");
+    const sc = await resolveScope(vaultPath, { mission: args.mission, message: prompt });
+    domain = sc.domain;
+    missionLocal = sc.privacy.localOnly;
+    const lead = leadText(sc.blocks);
+    if (lead) prompt = `${lead}\n\n---\n\n${prompt}`;
+  } else domain = resolveDomain(vaultPath, args.domain);
   const clis = await detectClis();
   if (clis.length === 0) throw new Error("no CLIs detected");
   const wantKind = typeof args.cli === "string" ? args.cli : "claude";
@@ -940,7 +1013,7 @@ async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<
     bare: true,
     // Honor the domain's privacy.localOnly and Bunker on the MCP path too; an
     // external agent must not be able to route a local-only domain to the cloud.
-    guard: { localOnly: process.env.PREVAIL_BUNKER === "1" },
+    guard: { localOnly: process.env.PREVAIL_BUNKER === "1" || missionLocal },
   });
   const ts = Date.now();
   writeTurnSummary({

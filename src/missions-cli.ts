@@ -1,0 +1,172 @@
+// `prevail missions ...`: the CLI over missions.ts and closeout.ts.
+
+import { readFileSync } from "node:fs";
+
+import { parseModArgs } from "./cli-args.ts";
+import { applyCloseout, planCloseout, readReceipts, undoCloseout, type CloseoutPlan } from "./closeout.ts";
+import {
+  attach, createMission, detach, linkEvent, listMissions, logLine, migrateProjects, milestone, missionTasks, missionView,
+  parseDomainArg, readMission, renamePurposeHeading, setBudgetLine, setMission, spend, transition,
+  type AttachKind, type MissionDomain, type MissionResult, type MissionStatus, type MissionView,
+} from "./missions.ts";
+
+const USAGE = [
+  "prevail missions list [--status active|paused|completed|archived|all] --json",
+  "prevail missions create --name N [--outcome O] [--target YYYY-MM-DD] [--owner d] [--consult d]... [--inform d]...",
+  "        [--app a]... [--specialist s]... [--person id]... [--budget-usd N] [--milestone T]... [--from-prompt-project slug] --json",
+  "prevail missions show <slug> --json",
+  "prevail missions set <slug> [--name N] [--outcome O] [--target D] [--cadence C] [--ceiling C] [--notes T] [--local-only true|false] --json",
+  "prevail missions attach|detach <slug> --domain d[:role] | --app a | --specialist s | --person id | --entity id | --prompt-project slug | --repo path",
+  "prevail missions milestone <slug> add|done|undone|move --title T [--id ms-x] [--due D] [--check C] [--weight N]",
+  "prevail missions budget <slug> set-line --line L --usd N [--label T] | spend --line L --usd N --what T [--ref R]",
+  "prevail missions event <slug> link|create --title T --start ISO [--event id] [--kind K] [--milestone ms-x]",
+  "prevail missions pause|resume|archive|reopen <slug> [--target D] --json",
+  "prevail missions complete <slug> --plan-only [--result met|partly|not-met|changed] [--note T] | --apply plan.json --json",
+  "prevail missions undo <slug> <n> --json      (a close-out line, within 7 days)",
+  "prevail missions tasks <slug> --json",
+  "prevail missions log <slug> --text T --json",
+  "prevail missions context <slug> [--message M] --json",
+  "prevail missions migrate [--dry-run] --json",
+].join("\n");
+
+/** Every value of a repeatable flag. */
+function all(a: string[], flag: string): string[] {
+  return a.flatMap((x, i) => (x === flag && a[i + 1] !== undefined && !a[i + 1]!.startsWith("--") ? [a[i + 1]!] : x.startsWith(`${flag}=`) ? [x.slice(flag.length + 1)] : []));
+}
+
+function summary(v: MissionView): string {
+  const p = v.progress;
+  return `${v.id}  ${v.status}  ${v.name}  day ${p.days.day} of ${p.days.total}, ${p.days.left}d left  milestones ${p.milestones.done}/${p.milestones.total}${p.budget.planned ? `  $${p.budget.used} of $${p.budget.planned}` : ""}`;
+}
+
+export async function missionsCommand(argv: string[], vault: string): Promise<number> {
+  const args = parseModArgs(argv);
+  const sub = args.pos[0] ?? "list";
+  const slug = args.pos[1] ?? "";
+  const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
+  const fail = (msg: string) => { if (args.json) out({ ok: false, error: msg }); else console.error(`prevail missions: ${msg}`); return 1; };
+  const show = (v: MissionView | null) => { if (!v) return fail(`no mission "${slug}"`); if (args.json) out(v); else console.log(summary(v)); return 0; };
+  const num = (k: string) => { const v = args.get(k); if (v === undefined) return undefined; const n = Number(v); if (!Number.isFinite(n)) throw new Error(`--${k} must be a number`); return n; };
+  try {
+    if (sub === "list") {
+      const status = (args.get("status") ?? "all") as MissionStatus | "all";
+      const l = listMissions(vault, { status });
+      if (args.json) out(l); else for (const v of l) console.log(summary(v));
+      return 0;
+    }
+    if (sub === "create") {
+      const name = args.get("name");
+      if (!name) return fail(`usage:\n${USAGE}`);
+      const domains: MissionDomain[] = [
+        ...all(argv, "--owner").map((d) => parseDomainArg(d, "owner")),
+        ...all(argv, "--consult").map((d) => parseDomainArg(d, "consulted")),
+        ...all(argv, "--inform").map((d) => parseDomainArg(d, "informed")),
+        ...all(argv, "--domain").map((d) => parseDomainArg(d)),
+      ];
+      const pp = args.get("from-prompt-project");
+      return show(createMission(vault, {
+        name, outcome: args.get("outcome"), why: args.get("why"), target: args.get("target"), domains,
+        apps: all(argv, "--app"), specialists: all(argv, "--specialist"), people: all(argv, "--person"), entities: all(argv, "--entity"),
+        budgetUsd: num("budget-usd"), hoursWk: num("hours-wk"), ceiling: args.get("ceiling") as never,
+        milestones: all(argv, "--milestone").map((t) => ({ title: t })),
+        promptProjects: pp ? [pp] : [], from: pp ? `from the prompt project ${pp}` : args.get("from-suggestion") ? `from the suggestion ${args.get("from-suggestion")}` : undefined,
+      }));
+    }
+    if (!slug && sub !== "migrate") return fail(`usage:\n${USAGE}`);
+    if (sub === "show") return show(missionView(vault, slug));
+    if (sub === "set") {
+      const lo = args.get("local-only");
+      return show(setMission(vault, slug, {
+        name: args.get("name"), outcome: args.get("outcome"), why: args.get("why"), target: args.get("target"), cadence: args.get("cadence"),
+        ceiling: args.get("ceiling"), notes: args.get("notes"), goal: args.get("goal"), path: args.get("path"),
+        ...(lo !== undefined ? { localOnly: lo === "true" } : {}), budgetUsd: num("budget-usd"), hoursWk: num("hours-wk"),
+        nudgesPerWeek: num("nudges"),
+      }));
+    }
+    if (sub === "attach" || sub === "detach") {
+      const kinds: AttachKind[] = ["domain", "app", "specialist", "person", "entity", "prompt-project", "repo"];
+      const kind = kinds.find((k) => args.get(k) !== undefined);
+      if (!kind) return fail(`usage: prevail missions ${sub} <slug> --domain d[:role] | --app a | --specialist s | --person id | --entity id | --prompt-project slug | --repo path`);
+      return show((sub === "attach" ? attach : detach)(vault, slug, kind, args.get(kind)!));
+    }
+    if (sub === "milestone") {
+      const op = args.pos[2] as "add" | "done" | "undone" | "move";
+      if (!["add", "done", "undone", "move"].includes(op)) return fail("usage: prevail missions milestone <slug> add|done|undone|move --title T [--id ms-x] [--due D] [--check C]");
+      const ms = milestone(vault, slug, op, { title: args.get("title"), id: args.get("id"), due: args.get("due"), check: args.get("check"), weight: num("weight") });
+      if (args.json) out({ ok: true, milestones: ms }); else for (const m of ms) console.log(`[${m.done ? "x" : " "}] ${m.title}${m.due ? `  ${m.due}` : ""}  ${m.id}`);
+      return 0;
+    }
+    if (sub === "budget") {
+      const op = args.pos[2];
+      const line = args.get("line") ?? "";
+      const usd = num("usd");
+      if (usd === undefined || !line) return fail("usage: prevail missions budget <slug> set-line --line L --usd N | spend --line L --usd N --what T [--ref R]");
+      if (op === "set-line") return show(setBudgetLine(vault, slug, line, usd, args.get("label")));
+      if (op === "spend") {
+        const r = spend(vault, slug, { line, usd, what: args.get("what") ?? line, ref: args.get("ref") });
+        if (args.json) out({ ok: true, ...r, mission: missionView(vault, slug) }); else console.log(r.added ? `recorded $${usd} on ${r.row.line}` : `already recorded (${r.row.ref})`);
+        return 0;
+      }
+      return fail("budget takes set-line or spend");
+    }
+    if (sub === "event") {
+      const op = args.pos[2];
+      if (op !== "link" && op !== "create") return fail("usage: prevail missions event <slug> link|create --title T --start ISO");
+      const l = linkEvent(vault, slug, { title: args.get("title") ?? "", start: args.get("start") ?? "", event: args.get("event"), app: args.get("app"), kind: args.get("kind"), milestone: args.get("milestone"), create: op === "create" });
+      // A created event is a hold the user approves; it is referenced here and drafted, never placed on anyone's calendar by this command.
+      if (args.json) out({ ok: true, links: l, ...(op === "create" ? { note: "queued as a hold; nothing was added to a calendar" } : {}) }); else console.log(`${l.calendar.length} event(s) linked`);
+      return 0;
+    }
+    if (sub === "pause" || sub === "resume" || sub === "archive" || sub === "reopen") return show(transition(vault, slug, sub, { target: args.get("target") }));
+    if (sub === "complete") {
+      if (args.has("plan-only") || !args.has("apply")) {
+        const plan = planCloseout(vault, slug, { result: args.get("result") as MissionResult | undefined, resultNote: args.get("note") });
+        if (args.json) out(plan); else { console.log(plan.summary); for (const f of plan.filings) console.log(`  ${f.n}. [${f.apply ? "x" : " "}] ${f.kind} -> ${f.domain}: ${f.text}`); }
+        return 0;
+      }
+      const file = args.get("apply") ?? args.pos[2];
+      if (!file) return fail("usage: prevail missions complete <slug> --apply plan.json");
+      const plan = JSON.parse(file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8")) as CloseoutPlan;
+      if (plan.slug !== readMission(vault, slug)?.slug) return fail("the plan is for another mission");
+      const r = applyCloseout(vault, plan);
+      if (args.json) out({ ok: true, ...r }); else console.log(`completed ${r.mission.id}; ${r.receipts.length} line(s) filed`);
+      return 0;
+    }
+    if (sub === "undo") {
+      const r = undoCloseout(vault, slug, Number(args.pos[2] ?? args.get("n")));
+      if (args.json) out({ ok: true, receipt: r }); else console.log(`undone: ${r.text}`);
+      return 0;
+    }
+    if (sub === "filed") { const r = readReceipts(vault, slug); if (args.json) out(r); else for (const x of r) console.log(`${x.n}. ${x.undone ? "(undone) " : ""}${x.domain}: ${x.text}`); return 0; }
+    if (sub === "tasks") { const t = missionTasks(vault, slug); if (args.json) out(t); else for (const x of t) console.log(`[${x.done ? "x" : " "}] ${x.text}  (${x.domain})`); return 0; }
+    if (sub === "log") {
+      const text = args.get("text") ?? args.pos.slice(2).join(" ");
+      if (!text.trim()) return fail("usage: prevail missions log <slug> --text T");
+      if (!readMission(vault, slug)) return fail(`no mission "${slug}"`);
+      const line = logLine(vault, slug, text);
+      if (args.json) out({ ok: true, line }); else console.log(line);
+      return 0;
+    }
+    if (sub === "context") {
+      const { resolveScope } = await import("./scope.ts");
+      const s = await resolveScope(vault, { mission: slug, message: args.get("message") ?? "" });
+      if (args.json) out({ ok: true, label: s.label, cwd: s.cwd, key: s.key, blocks: s.blocks, dispatch: s.dispatch, apps: s.appIds, privacy: s.privacy });
+      else console.log(s.blocks.map((b) => b.text).join("\n\n---\n\n"));
+      return 0;
+    }
+    if (sub === "migrate") {
+      const { entityThreads } = await import("./entities.ts");
+      const r = migrateProjects(vault, { dryRun: args.has("dry-run"), threadsOf: (id) => entityThreads(vault, id) });
+      const purpose = args.has("dry-run") ? { renamed: false } : await renamePurposeHeading(vault);
+      if (!args.has("dry-run") && r.migrated.length) { try { (await import("./entities.ts")).buildIndex(vault); } catch { /* refresh rebuilds it */ } }
+      if (args.json) out({ ...r, purpose });
+      else {
+        for (const m of r.migrated) console.log(`${m.from} -> data/missions/${m.slug}${m.conflict ? " (beside an existing mission: mission.conflict.md)" : ""}`);
+        if (!r.migrated.length) console.log("no entity projects to migrate");
+        if (purpose.renamed) console.log("build/compass.md: ## Mission is now ## Purpose (the prior text is in compass.versions/)");
+      }
+      return r.ok ? 0 : 1;
+    }
+  } catch (e) { return fail((e as Error).message); }
+  return fail(`usage:\n${USAGE}`);
+}
