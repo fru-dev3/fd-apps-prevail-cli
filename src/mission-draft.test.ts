@@ -108,7 +108,7 @@ describe("a turn of the conversation", () => {
     const r = await draftMission(V, { ctx: CTX, draft, turns: t, runner: stub({ fields: { target: "2027-06-30", budgetUsd: 1500 }, say: "June 30, $1,500.", question: null }) });
     expect(r.draft).toMatchObject({ ...draft, target: "2027-06-30", budgetUsd: 1500 });
     expect(r).toMatchObject({ ready: true, go: false, question: null });
-    expect(r.reply).toContain("Say go");
+    expect(r.reply).toContain("Say go to start it");
     const g = await draftMission(V, { ctx: CTX, draft: r.draft, turns: [...t, { role: "assistant", text: r.reply }, { role: "user", text: "go" }], runner: stub({ fields: {}, say: "Starting it." }) });
     expect(g.go).toBe(true);
     // A bare "yes" to some other question is not a go.

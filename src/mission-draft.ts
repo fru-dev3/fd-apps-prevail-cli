@@ -197,6 +197,7 @@ export function buildDraftPrompt(turns: DraftTurn[], draft: MissionDraft, ctx: D
     "Reply with ONE JSON object and nothing else:",
     '{"fields": {"name": "...", "outcome": "...", "why": "...", "start": "YYYY-MM-DD", "target": "YYYY-MM-DD", "owner": "<domain>", "consult": ["<domain>"], "inform": ["<domain>"], "apps": ["<app id>"], "specialists": ["<specialist id>"], "people": ["person/<slug>"], "budgetUsd": 0, "hoursWk": 0, "milestones": [{"title": "...", "due": "YYYY-MM-DD"}], "match": {"calendar": ["..."], "email_from": ["..."], "merchants": ["..."]}},',
     ' "say": "one short sentence acknowledging what you learned", "question": "the ONE question that matters most now, or null"}',
+    "Domains have roles: owner is the one domain the mission belongs to; consult are domains whose context it reads along (\"money should read along\", \"check with health\"); inform are domains that only get told the outcome.",
     "Rules: include only fields the conversation supports; leave the rest out. Use only the ids listed below. Never add a person the user did not name. Resolve relative dates (\"by June\", \"in three months\") against today. A name is short, starts with a verb or a noun, and has no date in it. The outcome is what done looks like, in the user's terms.",
     "Ask about the target date, the outcome and the budget before anything else, one at a time. Do not ask about something already in the draft. When name, outcome and target are known and nothing else clearly matters, set question to null and say the mission is ready to start.",
     "No em dashes. Plain words.",
@@ -225,7 +226,10 @@ export async function draftMission(vault: string, i: { turns: DraftTurn[]; draft
   if (turns.some((t) => t.role === "user")) {
     const runner = i.runner ?? (await import("./route.ts")).claudeRouteRunner;
     const { system, prompt } = buildDraftPrompt(turns, prev, ctx);
-    try { parsed = parseModelJson(await runner({ system, prompt, timeoutMs: 45_000 })); } catch { parsed = null; }
+    // One retry: a reply that does not parse (or a timeout) is usually a one-off.
+    for (let n = 0; n < 2 && !parsed; n++) {
+      try { parsed = parseModelJson(await runner({ system, prompt, timeoutMs: 45_000 })); } catch { parsed = null; }
+    }
   }
   const { fields, dropped } = validateFields(parsed?.fields ?? {}, ctx, userText);
   const draft: MissionDraft = { ...prev };
@@ -242,10 +246,10 @@ export async function draftMission(vault: string, i: { turns: DraftTurn[]; draft
   let question = oneQuestion(parsed?.question);
   if (!question && missing.length) question = FALLBACK_Q[missing[0]!];
   if (question && ready && go) question = null;
-  const say = typeof parsed?.say === "string" ? parsed.say.replace(/\s+/g, " ").replace(/—/g, ",").trim().slice(0, 240) : "";
+  const say = typeof parsed?.say === "string" ? parsed.say.replace(/\s+/g, " ").replace(/\s+[\u2013\u2014-]\s+/g, ", ").replace(/[\u2013\u2014]/g, ",").trim().slice(0, 240) : "";
   const reply = !parsed && turns.some((t) => t.role === "user")
     ? `I could not read that just now. ${question ?? "Tell me a little more about it?"}`
-    : [say, question ?? (ready ? "Say go when you want it started, or keep adding details." : "")].filter(Boolean).join(" ");
+    : [say, question ?? (ready ? "Say go to start it, or keep adding details." : "")].filter(Boolean).join(" ");
   return { draft, filled, dropped, question, reply: reply || (question ?? ""), ready, missing: [...missing], go };
 }
 
