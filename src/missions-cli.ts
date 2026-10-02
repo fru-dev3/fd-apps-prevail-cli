@@ -15,7 +15,8 @@ const USAGE = [
   "prevail missions create --name N [--outcome O] [--target YYYY-MM-DD] [--owner d] [--consult d]... [--inform d]...",
   "        [--app a]... [--specialist s]... [--person id]... [--budget-usd N] [--milestone T]... [--from-prompt-project slug] --json",
   "prevail missions show <slug> --json",
-  "prevail missions set <slug> [--name N] [--outcome O] [--target D] [--cadence C] [--ceiling C] [--notes T] [--local-only true|false] --json",
+  "prevail missions set <slug> [--name N] [--outcome O] [--target D] [--cadence C] [--ceiling C] [--notes T] [--local-only true|false]",
+  "        [--match-calendar a,b] [--match-email-from a,b] [--match-merchants a,b] --json",
   "prevail missions attach|detach <slug> --domain d[:role] | --app a | --specialist s | --person id | --entity id | --prompt-project slug | --repo path",
   "prevail missions milestone <slug> add|done|undone|move --title T [--id ms-x] [--due D] [--check C] [--weight N]",
   "prevail missions budget <slug> set-line --line L --usd N [--label T] | spend --line L --usd N --what T [--ref R]",
@@ -85,6 +86,12 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
         ceiling: args.get("ceiling"), notes: args.get("notes"), goal: args.get("goal"), path: args.get("path"),
         ...(lo !== undefined ? { localOnly: lo === "true" } : {}), budgetUsd: num("budget-usd"), hoursWk: num("hours-wk"),
         nudgesPerWeek: num("nudges"),
+        // Match rules (MS4): comma-separated; an empty value clears that rule.
+        ...(["match-calendar", "match-email-from", "match-merchants"].some((k) => args.get(k) !== undefined) ? { match: {
+          ...(args.get("match-calendar") !== undefined ? { calendar: args.get("match-calendar")!.split(",").map((x) => x.trim()).filter(Boolean) } : {}),
+          ...(args.get("match-email-from") !== undefined ? { email_from: args.get("match-email-from")!.split(",").map((x) => x.trim()).filter(Boolean) } : {}),
+          ...(args.get("match-merchants") !== undefined ? { merchants: args.get("match-merchants")!.split(",").map((x) => x.trim()).filter(Boolean) } : {}),
+        } } : {}),
       }));
     }
     if (sub === "attach" || sub === "detach") {

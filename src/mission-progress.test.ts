@@ -79,6 +79,17 @@ describe("progress without data entry", () => {
   });
 });
 
+describe("match rules from the CLI", () => {
+  test("missions set takes the match rules", async () => {
+    seed();
+    const { missionsCommand } = await import("./missions-cli.ts");
+    const orig = process.stdout.write.bind(process.stdout);
+    (process.stdout as unknown as { write: (s: string) => boolean }).write = () => true;
+    try { await missionsCommand(["set", "learn-the-cello", "--match-calendar", "cello lesson, recital", "--match-merchants", "", "--json"], V); } finally { (process.stdout as unknown as { write: typeof orig }).write = orig; }
+    expect(readMission(V, "learn-the-cello")!.match).toEqual({ calendar: ["cello lesson", "recital"], email_from: ["@foo-music.example"], merchants: [] });
+  });
+});
+
 describe("calendar holds and the Compass", () => {
   beforeEach(() => { seed(); });
   test("a hold asks and is created only on a yes; with other people it stays a draft", async () => {
