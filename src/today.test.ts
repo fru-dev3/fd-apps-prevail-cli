@@ -82,6 +82,7 @@ describe("Today", () => {
     expect(c.items.some((x) => x.thread.includes("Family presence"))).toBe(true);
     const home = [...c.items, ...c.alsoDue].find((x) => x.domain === "home" && x.kind === "task");
     expect(home?.unlinked).toBe(true);
+    expect(home?.thread).toEqual(["Home"]);
     expect(c.fallingBehind?.text).toContain("Fix the foo gutter");
     expect(c.decisionDue?.question).toBe("Keep or sell the foo rental?");
     expect(c.yourDay.connected).toBe(false);
@@ -92,10 +93,12 @@ describe("Today", () => {
     expect(t).toContain("WHAT MATTERS TODAY");
     expect(t).not.toMatch(/\u2014/);
   });
-  test("at most one per domain unless pressing", () => {
+  test("at most one per domain unless pressing, and never three from one domain", () => {
     const it = (key: string, domain: string, due: string, score: number): TodayItem => ({ key, kind: "task", title: key, domain, due, thread: [domain], unlinked: false, why: "", score, ref: { domain } });
     const p = pickThree([it("a", "x", "2026-10-09", 3), it("b", "x", "2026-10-09", 2), it("c", "y", "2026-10-09", 1), it("d", "z", "2026-10-09", 0.5)], "2026-10-02");
     expect(p.map((x) => x.key)).toEqual(["a", "c", "d"]);
+    const q = pickThree([it("a", "x", "2026-09-01", 3), it("b", "x", "2026-09-02", 2), it("c", "x", "2026-09-03", 1), it("d", "z", "2026-10-09", 0.5)], "2026-10-02");
+    expect(q.map((x) => x.key)).toEqual(["a", "b", "d"]);
   });
   test("taps retrain the weights; done checks the task off, move puts it on tomorrow", () => {
     const c = composeToday(V, { now: NOW });

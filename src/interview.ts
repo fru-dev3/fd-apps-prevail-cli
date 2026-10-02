@@ -198,7 +198,8 @@ function applyAnswer(vault: string, s: InterviewState, id: Step, t: string, now:
     const added = propose(vault, s, "value", phrases(t, id === "values" ? 3 : 6), t, [], {}, now);
     if (id === "values" && added[0]) s.value = findById(readCompass(vault), added[0]).item?.title;
   } else if (id === "rules") {
-    propose(vault, s, "rule", phrases(t), t, [], {}, now);
+    // "I would never miss the games" reads as the rule "Never miss the games" (the user's words, minus "I would").
+    propose(vault, s, "rule", phrases(t).map((p) => p.replace(/^(?:I(?:'d| would| will|'ll)?\s+)?never\s+/i, "Never ")), t, [], {}, now);
   } else if (id === "confirm") {
     const c = ctx(vault, s);
     const ids = c.proposed.map((p) => p.id);

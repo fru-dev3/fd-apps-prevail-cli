@@ -11,7 +11,7 @@
 //   x slip risk (how overdue) x leverage (values served) x priority
 //   x the learned weight for that domain and kind.
 // Rules: at most three; at most one per domain unless it is due today or
-// overdue; if the top-ranked value has nothing on the card and a candidate
+// overdue (then two); if the top-ranked value has nothing on the card and a candidate
 // serves it, it takes the third place.
 //
 // The card for a day is written once to build/_meta/today/<date>.json with
@@ -28,6 +28,7 @@ import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { parseTasks } from "./tasks.ts";
 import { items, readCompass, type CompassItem } from "./compass.ts";
+import { readDomainGoals } from "./goals.ts";
 import { listDecisions, openDecision } from "./decision-records.ts";
 import { listJobs } from "./jobs.ts";
 import { checkinFor, reviewWeek } from "./review.ts";
@@ -107,9 +108,16 @@ export function candidates(vault: string, date: string): TodayItem[] {
   const { byDomain, weight } = threadsFor(vault);
   const learned = readWeights(vault);
   const out: TodayItem[] = [];
+  // Without a Compass goal for the domain, the thread stops at the domain's own
+  // first active goal (source/goals.md) and the item is honestly unlinked.
+  const domainGoal = new Map<string, string | undefined>();
+  const ownGoal = (d: string) => {
+    if (!domainGoal.has(d)) domainGoal.set(d, readDomainGoals(vault, d).find((g) => g.status === "active")?.title);
+    return domainGoal.get(d);
+  };
   const valueWeight = (domain: string) => {
     const t = byDomain.get(domain);
-    if (!t || !t.values.length) return { w: 0.15, thread: [label(domain)], unlinked: !t, n: 0 };
+    if (!t || !t.values.length) { const g = ownGoal(domain); return { w: 0.15, thread: [label(domain), ...(t?.goal ? [t.goal.title] : g ? [g] : [])], unlinked: true, n: 0 }; }
     return { w: t.values.reduce((a, v) => a + (weight.get(v.id) ?? 0), 0) || 0.15, thread: [label(domain), t.goal!.title, ...t.values.map((v) => v.title)], unlinked: false, n: t.values.length };
   };
   const urgency = (due?: string) => {
@@ -166,7 +174,8 @@ export function pickThree(all: TodayItem[], date: string, topValue?: string, ski
   for (const x of all) {
     if (pick.length >= 3) break;
     if (skip.has(x.key)) continue;
-    if (!pressing(x) && pick.some((p) => p.domain === x.domain)) continue;
+    const same = pick.filter((p) => p.domain === x.domain).length;
+    if (same >= 2 || (same >= 1 && !pressing(x))) continue;
     pick.push(x);
   }
   if (topValue && pick.length === 3 && !pick.some((p) => p.thread.includes(topValue))) {
@@ -269,7 +278,7 @@ export function todayText(c: TodayCard): string {
   const d = new Date(`${c.date}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
   const out = [`Today, ${d}${c.calm ? `   calm ${c.calm}` : ""}`, "", "WHAT MATTERS TODAY"];
   if (!c.items.length) out.push("Nothing with a date is pressing. A good day to move a goal.");
-  c.items.forEach((x, i) => { out.push(`${i + 1}  ${x.title}${x.due ? `   (${x.why})` : ""}`); out.push(`   ${x.unlinked ? "unlinked" : x.thread.join(" > ")}`); });
+  c.items.forEach((x, i) => { out.push(`${i + 1}  ${x.title}${x.due ? `   (${x.why})` : ""}`); out.push(`   ${x.thread.join(" > ")}${x.unlinked ? ", unlinked to your Compass" : ""}`); });
   if (c.fallingBehind) out.push("", "FALLING BEHIND", `   ${c.fallingBehind.text}`);
   if (c.decisionDue) out.push("", "DECISION DUE", `   ${c.decisionDue.question}${c.decisionDue.due ? `, due ${c.decisionDue.due}` : ""}${c.decisionDue.recommendation ? ". Recommendation ready." : ""}`);
   out.push("", "YOUR DAY", `   ${c.yourDay.note}`);

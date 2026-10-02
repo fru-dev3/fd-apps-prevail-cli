@@ -321,6 +321,10 @@ export function changePoints(c: Computed): Insight[] {
     const byWeek = new Map(s.map((p) => [p.date, p.value]));
     const b = baseline(byWeek, recent[0]!.date);
     if (b.learning || b.hi === b.lo && b.hi === 0) continue;
+    // A source that only started recently looks like a jump; the normal must
+    // rest on at least four weeks that had anything at all.
+    const before = s.filter((p) => p.date < recent[0]!.date).slice(-8);
+    if (before.filter((p) => p.value > 0).length < 4) continue;
     const up = recent.every((p) => p.value > b.hi);
     const down = recent.every((p) => p.value < b.lo);
     if (!up && !down) continue;
