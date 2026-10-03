@@ -81,6 +81,7 @@ describe("said vs used", () => {
       { id: "bar-notes", name: "Bar Notes", days: 0, health: "ok" },
       { id: "qux-term", name: "Qux Term", days: 9, health: null },
       { id: "linkedin", name: "LinkedIn", days: null, health: null },
+      { id: "foo-shop", name: "Foo Shop", days: 20, health: null, category: "shopping" },
     ], "2026-10");
     expect(d.items.map((i) => [i.kind, i.tool])).toEqual([["missing", "Qux Term"], ["status", "Foo Edit"], ["unused", "Bar Notes"]]);
   });
@@ -94,7 +95,7 @@ describe("said vs used", () => {
     const r = acceptStackDiff(V, Date.parse("2026-10-02T09:00:00Z"));
     expect(r.applied).toBe(3);
     const after = readFileSync(toolStackPath(V), "utf8");
-    expect(after).toContain("| Foo Edit | editing | needs sign-in (since 2026-10-02) |");
+    expect(after).toContain("| Foo Edit | editing | connected; needs sign-in since 2026-10-02 |");
     expect(after).toContain("| Bar Notes | notes | connected; unused 30 days (2026-10-02) |");
     expect(after).toContain("## Added from use");
     expect(after).toContain("| Qux Term | used on 9 of the last 30 days | observed (2026-10-02) |");

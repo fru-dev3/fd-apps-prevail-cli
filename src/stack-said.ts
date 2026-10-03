@@ -13,7 +13,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { appsContainer, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { parseModArgs } from "./cli-args.ts";
 
 export interface ListedTool { tool: string; keys: string[]; status: string; line: number; section: string }
@@ -40,24 +40,29 @@ export function parseToolStack(text: string): ListedTool[] {
   return out;
 }
 
-interface Seen { id: string; name: string; days: number | null; health: string | null }
+interface Seen { id: string; name: string; days: number | null; health: string | null; aka?: string[]; category?: string }
+
+// Consumer sites are not tools: shopping, social, news, travel and music use
+// never counts as "in use, not listed" (the stated stack is about tools).
+const NOT_TOOLS = new Set(["shopping", "social", "news", "travel", "music", "entertainment"]);
 
 /** Does a listed tool name an observed app? Exact words, or a whole-word match of four letters or more. */
 function matches(t: ListedTool, a: Seen): boolean {
-  const names = [norm(a.name), norm(a.id.replace(/-/g, " "))];
+  const names = [norm(a.name), norm(a.id.replace(/-/g, " ")), ...(a.aka ?? []).map(norm)].filter(Boolean);
   return t.keys.some((k) => names.some((n) => n === k || (k.length >= 4 && new RegExp(`\\b${k}\\b`).test(n)) || (n.length >= 4 && new RegExp(`\\b${n}\\b`).test(k))));
 }
 
 export function diffStack(listed: ListedTool[], seen: Seen[], month: string): StackDiff {
   const items: DiffItem[] = [];
   for (const a of seen) {
-    if ((a.days ?? 0) >= 3 && !listed.some((t) => matches(t, a))) items.push({ kind: "missing", tool: a.name, detail: `used on ${a.days} of the last 30 days, not in your stack`, proposed: `add ${a.name}` });
+    if ((a.days ?? 0) >= 3 && !NOT_TOOLS.has(a.category ?? "") && !listed.some((t) => matches(t, a))) items.push({ kind: "missing", tool: a.name, detail: `used on ${a.days} of the last 30 days, not in your stack`, proposed: `add ${a.name}` });
   }
   for (const t of listed) {
     const a = seen.find((x) => matches(t, x));
     if (!a) continue;
     if (a.days === 0 && !/unused/i.test(t.status)) items.push({ kind: "unused", tool: t.tool, detail: "listed, no use in the last 30 days", proposed: `mark ${t.tool} unused`, line: t.line });
-    if ((a.health === "auth_expired" || a.health === "ineligible") && !/(expired|sign-?in|ineligible)/i.test(t.status)) {
+    // Only a row that claims a live connection can be contradicted by the doctor.
+    if ((a.health === "auth_expired" || a.health === "ineligible") && /\bconnected\b/i.test(t.status) && !/(expired|sign-?in|ineligible)/i.test(t.status)) {
       const word = a.health === "ineligible" ? "ineligible" : "needs sign-in";
       items.push({ kind: "status", tool: t.tool, detail: `the doctor finds it ${word.replace("needs ", "needing ")}`, proposed: `${t.status} to ${word}`, line: t.line });
     }
@@ -71,7 +76,14 @@ export async function computeStackDiff(vault: string, now = Date.now()): Promise
   if (!existsSync(p)) return null;
   const { buildStack } = await import("./app-doctor.ts");
   const s = buildStack(vault, { now });
-  const seen: Seen[] = s.apps.map((a) => ({ id: a.id, name: a.name, days: a.usage ? a.usage.active_days.d30 : null, health: a.health }));
+  // An app is also known by its sites and bundles (claude.ai, chatgpt.com, linkedin.com).
+  const aka = (id: string): string[] => {
+    try {
+      const m = JSON.parse(readFileSync(join(appsContainer(vault), id, "manifest.json"), "utf8")) as { identifiers?: { domains?: string[] }; aliases?: string[] };
+      return [...(m.aliases ?? []), ...(m.identifiers?.domains ?? []).map((d) => d.replace(/\.(com|ai|io|tech|app|org|net|dev|co)$/, "").replace(/^www\./, ""))];
+    } catch { return []; }
+  };
+  const seen: Seen[] = s.apps.map((a) => ({ id: a.id, name: a.name, days: a.usage ? a.usage.active_days.d30 : null, health: a.health, aka: aka(a.id), category: a.category }));
   return diffStack(parseToolStack(readFileSync(p, "utf8")), seen, new Date(now).toISOString().slice(0, 7));
 }
 
@@ -113,7 +125,7 @@ export function acceptStackDiff(vault: string, now = Date.now()): { applied: num
     if (!t) continue;
     const cells = lines[t.line]!.split("|");
     const last = cells.length - 2; // the status cell (the row ends with "|")
-    if (i.kind === "status") cells[last] = ` ${i.proposed.split(" to ").pop()} (since ${day}) `;
+    if (i.kind === "status") cells[last] = ` ${cells[last]!.trim()}; ${i.proposed.split(" to ").pop()} since ${day} `;
     if (i.kind === "unused") cells[last] = ` ${cells[last]!.trim()}; unused 30 days (${day}) `;
     lines[t.line] = cells.join("|");
     applied++;
