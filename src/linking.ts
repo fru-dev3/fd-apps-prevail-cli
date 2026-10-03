@@ -34,8 +34,9 @@ import { isClientMachine, CLIENT_ROLE_MESSAGE } from "./machine-role.ts";
 import { listDomainDirs, v4ContentPath } from "./vault-layout-v4.ts";
 import { entitiesContainer, missionScopeSlug, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { activeMissions as listActiveMissions } from "./missions.ts";
-import { TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchProjectOption, type TouchResult, type UnhomedHit } from "./route.ts";
+import { TOUCH_MAX_DOMAINS, TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchProjectOption, type TouchResult, type UnhomedHit } from "./route.ts";
 import { vappendLine, vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
+import { noteInMemory, scoreDomains, spendModelCall, STRONG } from "./domain-touch.ts";
 
 export interface DomainUpdate { ts: number; from_domain: string; thread: string; fact: string; entities: string[] }
 export interface EntityUpdate { ts: number; from_domain: string; thread: string; fact: string }
@@ -103,12 +104,15 @@ export interface RecordTouchInput {
 }
 
 /** Append the update lines and the touch line for one turn. Returns what was written. */
-export function recordTouch(vault: string, t: RecordTouchInput): { domains: { slug: string; fact: string }[]; entities: string[] } {
+export function recordTouch(vault: string, t: RecordTouchInput): { domains: { slug: string; fact: string; line?: string }[]; entities: string[]; ts: number } {
   const ts = t.ts ?? Date.now();
   const entities = [...new Set(t.entities.map((id) => (id.startsWith("mission/") ? id : resolveEntityId(vault, id))))].filter((id) => id.startsWith("mission/") || parseEntityId(id)?.kind);
   const domains = t.domains.filter((d) => d.slug !== t.home);
+  const lines = new Map<string, string>();
   for (const d of domains) {
     appendJsonl(domainUpdatesPath(vault, d.slug), { ts, from_domain: t.home, thread: t.thread, fact: d.fact, entities } satisfies DomainUpdate);
+    // The domain's memory grows from every chat: one dated line, quietly (Undo takes it back).
+    try { lines.set(d.slug, noteInMemory(vault, d.slug, { ts, from: t.home, thread: t.thread, fact: d.fact })); } catch { /* the update line is written */ }
   }
   for (const id of entities) {
     const path = entityUpdatesPath(vault, id);
@@ -122,7 +126,7 @@ export function recordTouch(vault: string, t: RecordTouchInput): { domains: { sl
   if (domains.length || entities.length) {
     appendJsonl(touchesPath(vault, t.home), { ts, thread: t.thread, domains: domains.map((d) => d.slug), entities } satisfies TouchLine);
   }
-  return { domains: domains.map((d) => ({ slug: d.slug, fact: d.fact })), entities };
+  return { domains: domains.map((d) => ({ slug: d.slug, fact: d.fact, ...(lines.has(d.slug) ? { line: lines.get(d.slug)! } : {}) })), entities, ts };
 }
 
 // ── The touch step (after a chat turn) ──────────────────────────────────
@@ -152,7 +156,7 @@ export interface TouchStepInput {
   prefer?: string[];
 }
 
-export interface TouchedPayload { domains: { slug: string; fact: string }[]; entities: string[] }
+export interface TouchedPayload { domains: { slug: string; fact: string; line?: string }[]; entities: string[]; ts?: number; by?: "code" | "model" }
 
 /** The active missions (and any entity project not yet migrated), for the touch step. */
 export function activeProjects(vault: string): TouchProjectOption[] {
@@ -257,21 +261,35 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
     // A mission counts when the user names it.
     const said = userText(i.message).toLowerCase();
     for (const p of projects) if (p.id.startsWith("mission/") && p.name.length > 3 && said.includes(p.name.toLowerCase()) && !named.includes(p.id)) named.push(p.id);
-    const deadline = i.timeoutMs ?? TOUCH_TIMEOUT_MS;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), deadline); });
-    const res = await Promise.race([
-      i.classify({
-        home, message: i.message, reply: i.reply, domains, provider: i.provider,
-        entities: yours.filter((e) => named.includes(e.id) && !e.id.startsWith("project/")), projects,
-        // The runner kills its own child a little before the step gives up.
-        timeoutMs: Math.max(1_000, deadline - 500),
-      }),
-      timeout,
-    ]);
-    clearTimeout(timer);
-    if (!res) return null;
+    // Code first: the user's own words against each domain's name and routing
+    // keywords. Clear hits are touches by code; a single hit is a tie the
+    // model breaks, inside the daily ceiling; no hit asks no model.
     const ts = i.now ?? Date.now();
+    const scored = scoreDomains(i.vault, userText(i.message), domains.map((d) => d.slug));
+    const strong = scored.filter((h) => h.score >= STRONG);
+    const ties = scored.filter((h) => h.score < STRONG);
+    let res: TouchResult | null = { domains: strong.map((h) => ({ slug: h.slug, confidence: 1, fact: h.fact })), entity_facts: {}, source: "none" };
+    let by: "code" | "model" = "code";
+    if (ties.length && spendModelCall(i.vault, ts)) {
+      const deadline = i.timeoutMs ?? TOUCH_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), deadline); });
+      const asked = await Promise.race([
+        i.classify({
+          home, message: i.message, reply: i.reply, domains: domains.filter((d) => ties.some((t) => t.slug === d.slug)), provider: i.provider,
+          entities: yours.filter((e) => named.includes(e.id) && !e.id.startsWith("project/")), projects,
+          // The runner kills its own child a little before the step gives up.
+          timeoutMs: Math.max(1_000, deadline - 500),
+        }),
+        timeout,
+      ]);
+      clearTimeout(timer);
+      if (asked) {
+        by = "model";
+        res = { ...asked, domains: [...res.domains, ...asked.domains.filter((d) => !strong.some((s) => s.slug === d.slug))].slice(0, TOUCH_MAX_DOMAINS) };
+      }
+    }
+    if (!res) return null;
     for (const u of res.unhomed ?? []) {
       appendJsonl(unhomedPath(i.vault), { ts, thread: i.thread, home, label: u.label, fact: u.fact, ...(u.effort ? { effort: true } : {}) } satisfies UnhomedLine);
     }
@@ -286,7 +304,7 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
       fallbackFact: `Came up in ${labelFor(home)}: ${excerpt.length > 160 ? `${excerpt.slice(0, 157)}...` : excerpt}`,
       ts,
     });
-    return w.domains.length || w.entities.length ? w : null;
+    return w.domains.length || w.entities.length ? { ...w, by } : null;
   } catch {
     return null;
   }
@@ -478,6 +496,20 @@ export async function linkingCommand(cmd: string, a: string[], vaultPath?: strin
   const { resolveDefaultVaultPath } = await import("./vault.ts");
   const vault = get("--vault") ?? vaultPath ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
 
+  if (cmd === "updates" && a[0] === "undo") {
+    // Undo a turn's notes: --thread T --ts N --domains a,b (exactly the lines written then).
+    const { unnote, notedLine } = await import("./domain-touch.ts");
+    const ts = Number(get("--ts")); const thread = get("--thread") ?? "";
+    if (!Number.isFinite(ts) || !thread) return fail("usage: prevail updates undo --thread T --ts N --domains a,b");
+    const undone: string[] = [];
+    for (const slug of (get("--domains") ?? "").split(",").map((x) => x.trim()).filter(Boolean)) {
+      const row = readJsonl<DomainUpdate>(domainUpdatesPath(vault, slug)).find((r) => r.ts === ts && r.thread === thread);
+      if (!row) continue;
+      if (unnote(vault, slug, { ts, thread, line: notedLine({ ts, from: row.from_domain, thread, fact: row.fact }) })) undone.push(slug);
+    }
+    if (json) out({ ok: true, undone }); else console.log(undone.length ? `Taken back from ${undone.join(", ")}.` : "Nothing to take back.");
+    return 0;
+  }
   if (cmd === "updates") {
     const sinceRaw = get("--since");
     const since = sinceRaw ? Date.parse(sinceRaw) : undefined;

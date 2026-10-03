@@ -42,6 +42,8 @@ export interface DecisionRecord {
   slug: string; domain: string; file: string;
   question: string; status: DecisionStatus; due?: string; owner: string; consulted: string[]; serves: string[];
   gut?: string; recommendation?: string; confidence?: string; decided?: string; chose?: string; retroDue?: string; retroRight?: string;
+  /** A decision heard in a conversation: the thread it came from and source: chat. */
+  thread?: string; source?: string;
   sections: Record<string, string>;
 }
 
@@ -73,7 +75,8 @@ export function parseRecord(text: string, domain: string, slug: string, file: st
     slug, domain, file, question: unq(fm.question), status, due: fm.due || undefined, owner: fm.owner || domain,
     consulted: list(fm.consulted ?? ""), serves: list(fm.serves ?? ""),
     gut: fm.gut ? unq(fm.gut) : undefined, recommendation: fm.recommendation ? unq(fm.recommendation) : undefined, confidence: fm.confidence || undefined,
-    decided: fm.decided || undefined, chose: fm.chose ? unq(fm.chose) : undefined, retroDue: fm.retro_due || undefined, retroRight: fm.retro_right || undefined, sections,
+    decided: fm.decided || undefined, chose: fm.chose ? unq(fm.chose) : undefined, retroDue: fm.retro_due || undefined, retroRight: fm.retro_right || undefined,
+    ...(fm.thread ? { thread: unq(fm.thread) } : {}), ...(fm.source ? { source: fm.source } : {}), sections,
   };
 }
 
@@ -83,6 +86,7 @@ export function renderRecord(r: DecisionRecord): string {
     `consulted: [${r.consulted.join(", ")}]`, `serves: [${r.serves.join(", ")}]`,
     ...(r.gut ? [`gut: ${q(r.gut)}`] : []), ...(r.recommendation ? [`recommendation: ${q(r.recommendation)}`] : []), ...(r.confidence ? [`confidence: ${r.confidence}`] : []),
     ...(r.decided ? [`decided: ${r.decided}`] : []), ...(r.chose ? [`chose: ${q(r.chose)}`] : []), ...(r.retroDue ? [`retro_due: ${r.retroDue}`] : []), ...(r.retroRight ? [`retro_right: ${r.retroRight}`] : []),
+    ...(r.thread ? [`thread: ${q(r.thread)}`] : []), ...(r.source ? [`source: ${r.source}`] : []),
   ];
   return `---\n${fm.join("\n")}\n---\n\n${SECTIONS.map((s) => `## ${s}\n${r.sections[s] ?? ""}`.trim()).join("\n\n")}\n`;
 }
@@ -208,6 +212,10 @@ export async function decideCommand(argv: string[], vault: string): Promise<numb
       if (args.json) out(r); else console.log(`Opened ${r.domain}/${r.slug}`);
       return 0;
     }
+    // Decisions heard in conversation (decision-capture.ts).
+    if (sub === "capture") { const { captureDecision } = await import("./decision-capture.ts"); const r = captureDecision(vault, { text: args.get("text") ?? args.pos.slice(1).join(" "), domain: args.get("domain") ?? "general", thread: args.get("thread") ?? "" }); if (args.json) out({ ok: true, saved: r }); else console.log(r ? `Saved: ${r.what}` : "No decision in that."); return 0; }
+    if (sub === "undo") { const { undoCaptured } = await import("./decision-capture.ts"); const ok = undoCaptured(vault, domain ?? "", slug ?? ""); if (args.json) out({ ok }); else console.log(ok ? "Undone; the record is kept aside." : "Not found."); return 0; }
+    if (sub === "backfill") { const { backfillDecisions } = await import("./decision-capture.ts"); const r = backfillDecisions(vault, { dryRun: args.has("dry-run") }); if (args.json) out(r); else console.log(`${r.threads} threads read; ${args.has("dry-run") ? `${r.found.length} decisions found (dry run)` : `${r.saved} decisions saved`}.`); return 0; }
     if (sub === "scan") { const { decisionsFromTasks } = await import("./decisions-open.ts"); const r = decisionsFromTasks(vault); if (args.json) out({ ok: true, opened: r }); else console.log(`Opened ${r.length} decision record${r.length === 1 ? "" : "s"} from tasks.`); return 0; }
     if (sub === "from-conflict") { const { decisionFromConflict } = await import("./decisions-open.ts"); const r = await decisionFromConflict(vault, args.pos[1] ?? ""); if (args.json) out(r); else console.log(`Opened ${r.domain}/${r.slug}`); return 0; }
     if (!domain || !slug) return fail("name the decision as <domain>/<slug>");
@@ -223,7 +231,7 @@ export async function decideCommand(argv: string[], vault: string): Promise<numb
       if (args.json) out(r); return 0;
     }
   } catch (e) { return fail((e as Error).message); }
-  return fail("usage: prevail decide list [--all] | open <question> --domain d [--due YYYY-MM-DD] | scan | from-conflict <key> | recommend <domain>/<slug> | show|gut|decide|retro <domain>/<slug> ... [--json]");
+  return fail("usage: prevail decide list [--all] | capture --text T --domain d --thread t | undo <domain>/<slug> | backfill [--dry-run] | open <question> --domain d [--due YYYY-MM-DD] | scan | from-conflict <key> | recommend <domain>/<slug> | show|gut|decide|retro <domain>/<slug> ... [--json]");
 }
 
 export function calibrationText(vault: string): string {
