@@ -63,12 +63,12 @@ describe("after a turn the desktop ran itself", () => {
     let asked = 0;
     await afterTurn({
       vaultPath: V, domain: "general", thread: "t-9", localOnly: false, incognito: false, write: (l) => out.push(l),
-      message: "I've decided to start a YouTube video series about foo cooking.", reply: "Good plan.",
+      message: "I've decided to start a YouTube series about foo cooking.", reply: "Good plan.",
       classify: async () => { asked++; return { domains: [], entity_facts: {}, source: "model" }; },
     });
     const ev = out.map((l) => JSON.parse(l));
     expect(ev.map((e) => e.type)).toEqual(["decision_saved", "touched"]);
-    expect(ev[0].decisionSaved).toMatchObject({ domain: "general", what: "Start a YouTube video series about foo cooking" });
+    expect(ev[0].decisionSaved).toMatchObject({ domain: "general", what: "Start a YouTube series about foo cooking" });
     expect(ev[1]).toMatchObject({ by: "code", domains: [{ slug: "content" }] });
     expect(asked).toBe(0);
     expect(readFileSync(join(D("content"), "memory", "memory.md"), "utf8")).toContain("(from General, thread t-9)");

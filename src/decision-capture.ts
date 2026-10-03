@@ -67,7 +67,8 @@ function similar(a: string, b: string): number {
   return n / Math.min(x.size, y.size);
 }
 const slugOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "decision";
-const ymd = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+// The user's own calendar day, not UTC.
+const ymd = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
 export interface Captured { domain: string; slug: string; what: string; decided: string; thread: string }
 

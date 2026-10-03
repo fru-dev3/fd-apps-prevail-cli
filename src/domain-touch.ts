@@ -2,10 +2,10 @@
 // making a YouTube video, pass it into the content domain... real estate to
 // real estate"). Code first: each domain's own name and its manifest's
 // routing keywords are matched against the user's own words. Two or more
-// distinct hits (or the domain's own name) make a touch by code, with the
-// sentence that said it as the dated line. A single hit is a tie the model
-// breaks, and only inside a daily ceiling per machine; with no hit at all no
-// model is asked.
+// distinct hits (or the domain's own name), or the only domain named at all,
+// make a touch by code, with the sentence that said it as the dated line.
+// Single hits beside others are ties the model breaks, only inside a daily
+// ceiling per machine; with no hit at all no model is asked.
 //
 // Each touch also lands, quietly, as one dated line in the domain's
 // memory.md under "## Noted from conversations" with the thread it came
@@ -84,7 +84,8 @@ export function memoryPath(vault: string, slug: string): string {
   return v4ContentPath(dir, "memory/memory.md", "_memory.md");
 }
 const label = (s: string) => s === "general" ? "General" : s.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-const day = (ts: number) => new Date(ts).toISOString().slice(0, 10);
+// The user's own calendar day, not UTC.
+const day = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 export const notedLine = (o: { ts: number; from: string; thread: string; fact: string }) =>
   `- ${day(o.ts)}: ${o.fact.replace(/\s+/g, " ").trim()} (from ${label(o.from)}, thread ${o.thread})`;
 
