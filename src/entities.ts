@@ -155,10 +155,11 @@ export function slugify(name: string): string {
 // Title Case for an entity's display name: each word capitalized, small
 // joining words lowercase after the first. A word that already carries an
 // inner capital (iPhone, McDonald) or is all caps (LLC, NASA), or that looks
-// like a domain, handle or number (foo.com, @foo, 3M), is kept as written.
+// like a domain, handle, number or code name (foo.com, @foo, 3M, fd-apps),
+// is kept as written.
 const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "by", "de", "del", "der", "di", "du", "for", "in", "la", "le", "of", "on", "or", "the", "to", "van", "von", "with"]);
 function capWord(w: string): string {
-  if (!w || /[@/\\:]/.test(w) || /\w\.\w/.test(w) || /^\d/.test(w)) return w;
+  if (!w || /[@/\\:_]/.test(w) || /\w\.\w/.test(w) || /^\d/.test(w)) return w;
   if (/[A-Z]/.test(w.slice(1)) || (w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w))) return w;
   return w.split(/([-'\u2019])/).map((part, i, all) => {
     // After an apostrophe only a real name part is capitalized (O'Brien, not It'S).
@@ -167,6 +168,8 @@ function capWord(w: string): string {
   }).join("");
 }
 export function titleCaseName(name: string): string {
+  // One slug-shaped word (fd-apps, faster_whisper) is a code name: kept as written.
+  if (/^[a-z0-9]+([-_][a-z0-9]+)+$/.test(name.trim())) return name.trim();
   const words = name.trim().replace(/\s+/g, " ").split(" ");
   return words.map((w, i) => (i > 0 && i < words.length - 1 && SMALL_WORDS.has(w.toLowerCase()) && w === w.toLowerCase() ? w : capWord(w))).join(" ");
 }
