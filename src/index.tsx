@@ -3358,7 +3358,7 @@ async function playbookCommand(args: string[], vaultPath?: string | null): Promi
   // `prevail playbooks` (list) or `prevail playbook list`
   const first = args[0];
   // Groups, one playbook's steps, Save as playbook, adopt a draft (playbooks.ts).
-  if (first === "rows" || first === "show" || first === "save" || first === "adopt" || first === "inbox" || first === "seen" || first === "trigger") {
+  if (first === "rows" || first === "show" || first === "save" || first === "adopt" || first === "inbox" || first === "seen" || first === "trigger" || first === "migrate-loops" || first === "verify-loops") {
     const { playbooksCommand } = await import("./playbooks.ts");
     process.exit(await playbooksCommand(args.filter((a, i) => !(a === "--vault" || args[i - 1] === "--vault")), vault));
   }

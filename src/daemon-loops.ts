@@ -311,7 +311,8 @@ export function migrateLoops(vaultPath: string, o: { dryRun?: boolean; now?: num
 export function verifyMigration(vaultPath: string, now = Date.now()): { checked: number; same: number; differ: { space: string; loop: string; why: string }[] } {
   const root = resolve(vaultPath);
   const out = { checked: 0, same: 0, differ: [] as { space: string; loop: string; why: string }[] };
-  const canon = (x: unknown): string => JSON.stringify(x, (_k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, y]) => y !== undefined).sort(([a], [b]) => a.localeCompare(b))) : v));
+  // A missing field and null read the same to the runner (a loop never run has either).
+  const canon = (x: unknown): string => JSON.stringify(x, (_k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, y]) => y !== undefined && y !== null).sort(([a], [b]) => a.localeCompare(b))) : v));
   for (const t of discoverLoopTargets(root)) {
     const disk = rawDoc(t.path);
     if (!disk) continue;
