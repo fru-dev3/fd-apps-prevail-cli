@@ -993,7 +993,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   });
 
   // A decision the user states ("I've decided to...", "I'm going to learn
-  // piano"), in any chat, is saved as a decided record with this thread; the
+  // cello"), in any chat, is saved as a decided record with this thread; the
   // reply gets a quiet receipt with Undo (decision-capture.ts, code only).
   let savedDecision = false;
   if (!opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
