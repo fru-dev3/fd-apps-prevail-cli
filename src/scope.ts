@@ -118,6 +118,13 @@ export async function resolveScope(vault: string, i: ScopeInput): Promise<Resolv
   }
   if (!domain) throw new ScopeError(`unknown domain: ${i.domain}`);
   const entityIds = uniq(Array.isArray(i.entity) ? i.entity : [i.entity]);
+  // A product's app records join its chat: their block and read tools, like an @app.
+  if (!scopeApp && entityIds.some((id) => id.startsWith("org/"))) {
+    try {
+      const { productAppIds } = await import("./ia.ts");
+      for (const id of entityIds) for (const a of productAppIds(vault, id)) if (!appIds.includes(a)) appIds.push(a);
+    } catch { /* the entity alone */ }
+  }
   const apps = appIds.length ? (i.mirrorApps?.(vault) ?? []) : [];
   const blocks = await namedBlocks(vault, { entityIds, appIds, apps, googleAccount: i.googleAccount, refDomains: i.refDomains, self: key, entityBudget: ENTITY_BUDGET });
   // A domain turn that names an active mission gets a one-line pointer to it
@@ -143,7 +150,14 @@ async function namedBlocks(vault: string, o: { entityIds: string[]; appIds: stri
   for (const id of o.entityIds) {
     // @ a mission: a short brief of it, never the whole mission.
     if (id.startsWith("mission/")) { const b = missionBrief(vault, id); if (b) blocks.push({ source: `mission-ref:${id}`, text: b }); continue; }
-    try { blocks.push({ source: `entity:${id}`, text: entityChatBlock(vault, id, perEntity) }); } catch { /* unscoped */ }
+    try {
+      // A thing's or an event's fields and every object it links to ride
+      // along (ia.ts); nothing is added when there are none.
+      const base = entityChatBlock(vault, id, perEntity);
+      let extra = "";
+      try { extra = (await import("./ia.ts")).objectContextText(vault, id); } catch { /* the page alone */ }
+      blocks.push({ source: `entity:${id}`, text: extra ? `${base}\n\n${extra}` : base });
+    } catch { /* unscoped */ }
   }
   for (const id of o.appIds) {
     try { blocks.push({ source: `app:${id}`, text: appChatBlock(vault, id, o.apps.find((a) => a.id === id) ?? null) }); } catch { /* skip */ }
@@ -264,7 +278,10 @@ async function resolveMission(vault: string, slug: string, i: ScopeInput): Promi
   // The attached apps and people, then whatever this turn names (@refs).
   const appIds = uniq([...v.apps, ...(i.apps ?? [])]).filter((id) => APP_ID_RE.test(id));
   const apps = appIds.length ? (i.mirrorApps?.(vault) ?? []) : [];
-  const people = uniq([...v.people, ...v.entities]);
+  // Its people and entities, and whatever the user linked to it (ia.ts links).
+  let linked: string[] = [];
+  try { linked = (await import("./ia.ts")).readLinkRecs(vault).flatMap((r) => (r.a === v.id ? [r.b] : r.b === v.id ? [r.a] : [])).filter((x) => !x.startsWith("mission/")); } catch { /* none */ }
+  const people = uniq([...v.people, ...v.entities, ...linked]);
   const named = uniq(Array.isArray(i.entity) ? i.entity : [i.entity]);
   const peopleBlocks = await namedBlocks(vault, { entityIds: people, appIds: [], apps, self: key, entityBudget: MISSION_PEOPLE_BUDGET });
   const rest = await namedBlocks(vault, { entityIds: named.filter((x) => !people.includes(x)), appIds, apps, googleAccount: i.googleAccount, refDomains: i.refDomains, self: key, entityBudget: ENTITY_BUDGET });

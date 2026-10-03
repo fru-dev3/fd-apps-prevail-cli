@@ -2856,7 +2856,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
 // orgs and things the owner talks about (entities.ts). With --json every
 // subcommand prints exactly one JSON line; errors land in `error`.
 async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<void> {
-  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests", "--file", "--url", "--relation"]);
+  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests", "--file", "--url", "--relation", "--field", "--value", "--date", "--end", "--time", "--place", "--people", "--project", "--notes", "--what", "--cost", "--from", "--to"]);
   const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
   const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(a[i - 1]!)));
   const sub = pos[0] ?? "list";
@@ -2897,6 +2897,14 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
         if (mv) { if (json) out({ found: true, kind: "mission", ...mv }); else console.log(`${mv.id}  ${mv.status}  ${mv.name}\n  ${mv.outcome}`); return; }
       }
       const d = en.entityDetail(vault, idx, id);
+      // Products (ia.ts): an org's app records ride along, and an app with no
+      // company page yet is still a product the user can open.
+      const iam = await import("./ia.ts");
+      const product = /^(org|app)\//.test(id) ? iam.listProducts(vault, idx).find((p) => p.id === iam.canonId(vault, id)) : undefined;
+      if (!d && product && json) {
+        out({ found: true, id: product.id, name: product.name, kind: "org", aliases: [], kinds: ["org"], mention_count: 0, conversations: 0, last_ts: 0, mentions: [], co_mentions: [], digest: "", notes: "", relation: "yours", apps: product.apps, ...(product.website ? { website: product.website } : {}), ...(product.domain ? { domain: product.domain } : {}), fields: {} });
+        return;
+      }
       if (!d) {
         // Not an error for a chip the index has not seen yet: the Entities view shows
         // the bare name with a Save action.
@@ -2906,7 +2914,12 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       }
       // An unmigrated project page also resolves to its mission once migrated.
       const full = d.kind === "project" ? ((await import("./projects.ts")).projectDetail(vault, d.id) ?? d) : d;
-      if (json) { out({ found: true, ...full }); return; }
+      if (json) {
+        const slug = d.id.slice(d.id.indexOf("/") + 1);
+        const page = en.readPage(vault, d.kind, slug);
+        out({ found: true, ...full, fields: page ? iam.readFields(page) : {}, ...(product ? { apps: product.apps } : {}) });
+        return;
+      }
       console.log(en.entityContextText(d, 30));
       return;
     }
@@ -3027,7 +3040,94 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       console.log(`tagged ${t.tagged}/${pick.length} sittings in ${t.calls} calls (${t.entities} entity tags, ${res.remaining} still untagged); ${r.entities} entities, ${r.pages_created} new pages`);
       return;
     }
-    fail("usage: prevail entities [list|show <id>|save <id>|note <id> [--append] --text ...|threads <id>|duplicates|merge <keepId> <mergeId>|not-same <idA> <idB>|set-picture <id> --file F|set-website <id> --url U|files <id>|add-file <id> --file F|migrate-folders|refresh|backfill [--limit N]] --vault <path> [--json]");
+    // The information architecture (ia.ts): kinds, products, links, fields, events, drafts.
+    const ia = await import("./ia.ts");
+    if (sub === "kinds") { out({ groups: ia.GROUPS, kinds: ia.KINDS }); return; }
+    if (sub === "products") {
+      const q = (get("--q") ?? "").toLowerCase();
+      const rows = ia.listProducts(vault).filter((p) => !q || p.name.toLowerCase().includes(q) || p.apps.some((x) => x.id.includes(q)));
+      if (json) { out({ products: rows.slice(0, num("--limit", 5000)) }); return; }
+      for (const p of rows) console.log(`${p.id.padEnd(36)} ${p.company ? "company" : "app    "} ${p.apps.map((x) => x.id).join(",").padEnd(20)} ${p.name}`);
+      return;
+    }
+    if (sub === "links") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities links <id> [--json]"); return; }
+      const r = ia.linksOf(vault, id);
+      if (json) { out(r); return; }
+      for (const l of r.links) console.log(`${l.kind.padEnd(9)} ${l.id.padEnd(36)} ${l.via}${l.role ? ` (${l.role})` : ""}  ${l.name}`);
+      return;
+    }
+    if (sub === "link" || sub === "unlink") {
+      const [x, y] = [pos[1], pos[2]];
+      if (!x || !y) { fail(`usage: prevail entities ${sub} <idA> <idB> [--json]`); return; }
+      const r = sub === "link" ? ia.linkObjects(vault, x, y) : ia.unlinkObjects(vault, x, y);
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(sub === "link" ? `linked ${x} and ${y}` : `unlinked ${x} and ${y}`);
+      return;
+    }
+    if (sub === "set") {
+      const id = pos[1];
+      const field = get("--field");
+      if (!id || !field || get("--value") === null) { fail(`usage: prevail entities set <id> --field <${ia.FIELD_NAMES.join("|")}> --value V ("" clears) [--name N]`); return; }
+      const r = ia.setFields(vault, id, { [field]: get("--value") ?? "" }, { name: get("--name") ?? undefined });
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(`${r.id}: ${field} set`);
+      return;
+    }
+    if (sub === "service") {
+      const id = pos[1];
+      if (!id || !get("--what")) { fail("usage: prevail entities service <thing id> --what \"Battery replaced\" [--date YYYY-MM-DD] [--cost N]"); return; }
+      const list = ia.addService(vault, id, { date: get("--date") ?? undefined, what: get("--what") ?? "", cost: get("--cost") ?? undefined });
+      if (json) { out({ ok: true, service: list }); return; }
+      console.log(`${list.length} service entries`);
+      return;
+    }
+    if (sub === "events") {
+      const rows = ia.listEvents(vault, { from: get("--from") ?? undefined, to: get("--to") ?? undefined });
+      if (json) { out({ events: rows }); return; }
+      for (const e of rows) console.log(`${(e.date || "undated").padEnd(10)} ${(e.time ?? "").padEnd(5)} ${e.source.padEnd(9)} ${e.name}${e.project ? `  [${e.project.name}]` : ""}`);
+      return;
+    }
+    if (sub === "event-add") {
+      const r = ia.createEvent(vault, { name: get("--name") ?? "", date: get("--date") ?? "", end: get("--end") ?? undefined, time: get("--time") ?? undefined, place: get("--place") ?? undefined, people: get("--people")?.split(",").map((x) => x.trim()).filter(Boolean), project: get("--project") ?? undefined, notes: get("--notes") ?? undefined });
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(r.created ? `added ${r.id}` : `${r.id} already exists`);
+      return;
+    }
+    if (sub === "event-adopt") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities event-adopt <calendar:..|milestone:..|hold:..> [--json]"); return; }
+      const r = ia.adoptEvent(vault, id);
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(r.id);
+      return;
+    }
+    if (sub === "event-calendar") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities event-calendar <event id> [--yes|--no] [--json]   (without --yes nothing touches a calendar)"); return; }
+      const r = await ia.eventToCalendar(vault, id, { yes: a.includes("--yes"), no: a.includes("--no") });
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(r.calendar === "synced" ? "On your calendar." : r.calendar === "declined" ? "Kept off your calendar." : r.note ?? "Waiting for your yes.");
+      return;
+    }
+    if (sub === "event-project") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities event-project <event id> [--project mission/<slug>] [--json]"); return; }
+      const r = ia.eventToProject(vault, id, { project: get("--project") ?? undefined });
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(`${r.event} -> ${r.project.id}${r.created ? " (new project)" : ""}`);
+      return;
+    }
+    if (sub === "draft" || sub === "create") {
+      const kind = get("--kind") ?? "";
+      let input: { turns?: unknown; draft?: unknown } = {};
+      try { input = JSON.parse((await Bun.stdin.text()) || "{}"); } catch { fail(`${sub} reads JSON on stdin`); return; }
+      if (sub === "draft") { out(await ia.draftObject(vault, { kind, turns: Array.isArray(input.turns) ? input.turns as never : [], draft: (input.draft ?? {}) as never })); return; }
+      out({ ok: true, ...ia.createFromObjectDraft(vault, kind, input.draft ?? input) });
+      return;
+    }
+    fail("usage: prevail entities [list|show <id>|save <id>|note <id> [--append] --text ...|threads <id>|duplicates|merge <keepId> <mergeId>|not-same <idA> <idB>|set-picture <id> --file F|set-website <id> --url U|files <id>|add-file <id> --file F|migrate-folders|refresh|backfill [--limit N]|kinds|products|links <id>|link <a> <b>|unlink <a> <b>|set <id> --field F --value V|service <id> --what W|events [--from D --to D]|event-add --name N --date D|event-adopt <row>|event-calendar <id> [--yes|--no]|event-project <id> [--project P]|draft --kind K|create --kind K] --vault <path> [--json]");
   } catch (e) { fail((e as Error).message); }
 }
 
