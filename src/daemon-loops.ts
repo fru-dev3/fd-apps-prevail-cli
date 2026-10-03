@@ -44,7 +44,7 @@ function opCliNote(): string {
   return `CREDENTIALS: the user's 1Password CLI ("op") is installed and signed in. When a step needs to sign in to a service (a deploy target, an API, a registry), fetch the credential with op (op item list --categories Login; op item get "<item>" --fields label=username,label=password; op read "op://<vault>/<item>/<field>"). 1Password itself prompts the user to authorize each access - that prompt IS the consent, so use it for the task at hand rather than stopping at "no credentials". Never print, log, or store secret values in your reports, notes, or files; use them directly and reference items by name only.`;
 }
 import { scanVault, scanApps } from "./vault.ts";
-import { readTasks, setTaskStatus, effectiveStatus, type Task } from "./tasks.ts";
+import { readTasks, setTaskStatus, effectiveStatus, taskBoardPath, type Task } from "./tasks.ts";
 import { logActivity } from "./activity.ts";
 import { auditAction } from "./action-audit.ts";
 import { decideAction } from "./broker.ts";
@@ -195,7 +195,7 @@ function todayYmd(): string { return new Date().toISOString().slice(0, 10); }
 export function appendTask(domainDir: string, text: string, opts?: { due?: string; priority?: string }): boolean {
   const clean = text.trim();
   if (!clean) return false;
-  const f = join(domainDir, "_tasks.md");
+  const f = taskBoardPath(domainDir);
   const cur = safeRead(f) || "# Tasks\n\n";
   const already = cur.split("\n").some((l) => {
     const m = /^- \[[ xX]\]\s+(.+?)(?:\s+[@+~][^\s]*)*\s*$/.exec(l.trim());
@@ -906,6 +906,19 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
 // report of what it did (captured by the desktop, recorded as a decision).
 export async function executeAction(cfg: LoopsConfig, domainName: string, action: string): Promise<string> {
   const root = resolve(cfg.vaultPath);
+  // Presence first (agent mesh): a live tab holding this domain gets the work
+  // instead of a second, headless runner on the same domain.
+  const { routeDelivery } = await import("./hub.ts");
+  const route = await routeDelivery(domainName);
+  if (route.to === "wait") return `NO_CONNECTOR: the ${domainName} tab is busy (held by ${route.holder}); run it again when that tab is idle.`;
+  if (route.to === "tab") {
+    const { realHerdr } = await import("./spaces.ts");
+    realHerdr(["pane", "run", route.pane, `Approved action, do it now with your tools and nothing beyond it, then report what you did: ${action.replace(/\s+/g, " ").slice(0, 2000)}`]);
+    const report = `Handed to the live ${domainName} tab, which holds the domain; it reports there.`;
+    logActivity(root, { type: "loop_exec", domain: domainName, title: `Handed to the ${domainName} tab`, detail: action.slice(0, 400), status: "ok" });
+    auditAction(root, { ts: Date.now(), domain: domainName, action, outcome: "executed", provider: "tab", report });
+    return report;
+  }
   const found = scanVault(root).find((d) => d.name === domainName);
   const domainDir = found?.path ?? join(root, "domains", domainName);
   const clis = await detectClis();
