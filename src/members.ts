@@ -152,7 +152,7 @@ export function memberTools(s: Specialist): string[] {
 }
 
 /** The block that makes a turn this member's answer. */
-export function memberPrompt(s: Specialist, o: { notes?: string; chief: string | null; members: string[]; earlier: { name: string; text: string }[]; explicit: boolean }): string {
+export function memberPrompt(s: Specialist, o: { notes?: string; chief: string | null; members: string[]; earlier: { name: string; text: string }[]; explicit: boolean; notebook?: string[]; lately?: string[] }): string {
   return [
     `You are the ${s.name}, a specialist in a group chat with the user${o.chief ? ` and ${o.chief}, their chief of staff` : " and their chief of staff"}. ${o.explicit ? "The user asked you by name." : `${o.chief ?? "The chief of staff"} passed this message to you because it is your kind of work.`}`,
     "Answer the user directly, as yourself, in plain words. Be short: lead with the answer. You never contact anyone, buy anything or change anything; if something needs doing, say what and the user decides.",
@@ -160,6 +160,8 @@ export function memberPrompt(s: Specialist, o: { notes?: string; chief: string |
     s.method ? `## Method\n${s.method}` : "",
     s.never ? `## Never\n${s.never}` : "",
     o.notes ? `## The user's instructions for you here\n${o.notes}` : "",
+    o.notebook?.length ? `## Your notebook here (what you learned before)\n${o.notebook.map((l) => `- ${l}`).join("\n")}` : "",
+    o.lately?.length ? `## Your recent work for the user\n${o.lately.map((l) => `- ${l}`).join("\n")}` : "",
     o.members.length > 1 ? `Members of this chat: ${o.members.join(", ")}.` : "",
     o.earlier.length ? `## Already said on this turn\n${o.earlier.map((e) => `### ${e.name}\n${e.text.slice(0, 1500)}`).join("\n\n")}\nDo not repeat it. Add only what is new from your side; if you have nothing to add, say so in one line.` : "",
   ].filter(Boolean).join("\n\n");

@@ -815,7 +815,9 @@ export async function specialistsCommand(argv: string[], vault: string): Promise
     const s = getSpecialist(vault, args.pos[1] ?? "");
     if (!s) { console.error(`no specialist "${args.pos[1] ?? ""}"`); return 1; }
     const d = args.get("domain");
-    const view = d ? { ...forDomain(vault, s, d), notebook: readNotebook(vault, d, s.id) } : { spec: s, notebooks: notebooks(vault, s.id) };
+    const { readInvolvement } = await import("./involvement.ts");
+    const involvement = readInvolvement(vault, s.id, 50);
+    const view = d ? { ...forDomain(vault, s, d), notebook: readNotebook(vault, d, s.id), involvement } : { spec: s, notebooks: notebooks(vault, s.id), involvement };
     if (args.json) out(view);
     else console.log(JSON.stringify(view, null, 2));
     return 0;
