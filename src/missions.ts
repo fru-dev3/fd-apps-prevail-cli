@@ -415,7 +415,7 @@ export function parseDomainArg(s: string, fallback: Role = "consulted"): Mission
   return { slug: (slug ?? "").trim().toLowerCase(), role: (role?.trim().toLowerCase() as Role) || fallback };
 }
 
-/** Ben proposes a target when the user gives none: trips and learning ask, the rest get 90 days. */
+/** The chief of staff proposes a target when the user gives none: trips and learning ask, the rest get 90 days. */
 export function proposedTarget(now = Date.now()): string { return ymd(now + 90 * DAY); }
 
 export interface CreateMissionInput {

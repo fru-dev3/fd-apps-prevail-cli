@@ -1,6 +1,6 @@
 // Metrics that learn: proposals, answers, lifecycle and insights.
 //
-// Ben proposes metrics from five places (metrics-plan "How metrics are
+// The chief of staff proposes metrics from five places (metrics-plan "How metrics are
 // learned"):
 //   1. ideal   the "Metrics you track" section of each domain's ideal state
 //   2. goal    Compass goals with nothing measuring them
