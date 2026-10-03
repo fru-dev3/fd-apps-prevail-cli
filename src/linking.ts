@@ -36,7 +36,7 @@ import { entitiesContainer, missionScopeSlug, resolveDomainDir, runtimePath } fr
 import { activeMissions as listActiveMissions } from "./missions.ts";
 import { TOUCH_MAX_DOMAINS, TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchProjectOption, type TouchResult, type UnhomedHit } from "./route.ts";
 import { vappendLine, vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
-import { noteInMemory, scoreDomains, spendModelCall, STRONG } from "./domain-touch.ts";
+import { noteInMemory, scoreDomains, spendModelCall, STRONG, UNHOMED_MIN_CHARS, UNHOMED_PER_DAY } from "./domain-touch.ts";
 
 export interface DomainUpdate { ts: number; from_domain: string; thread: string; fact: string; entities: string[] }
 export interface EntityUpdate { ts: number; from_domain: string; thread: string; fact: string }
@@ -290,6 +290,21 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
         by = "model";
         res = { ...asked, domains: [...res.domains, ...asked.domains.filter((d) => !strong.some((s) => s.slug === d.slug))].slice(0, TOUCH_MAX_DOMAINS) };
       }
+    }
+    // A turn that names no domain asks no model to route it, but a small daily
+    // allowance still looks for topics with no home, so new domains keep
+    // being suggested (owner's default, 2026-10-02).
+    if (!scored.length && said.length >= UNHOMED_MIN_CHARS && spendModelCall(i.vault, ts, UNHOMED_PER_DAY, "unhomed-budget")) {
+      const deadline = i.timeoutMs ?? TOUCH_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), deadline); });
+      const asked = await Promise.race([
+        i.classify({ home, message: i.message, reply: i.reply, domains: [], provider: i.provider, entities: [], projects: [], timeoutMs: Math.max(1_000, deadline - 500) }),
+        timeout,
+      ]);
+      clearTimeout(timer);
+      // Only its topics with no home are taken; it routes nothing.
+      if (asked?.unhomed?.length) res = { ...res, unhomed: asked.unhomed };
     }
     if (!res) return null;
     for (const u of res.unhomed ?? []) {

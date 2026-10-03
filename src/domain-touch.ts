@@ -23,6 +23,11 @@ import { vreadFile, vwriteFile } from "./vault-session.ts";
 export const STRONG = 2;
 /** Model tie-breaks per machine per day, at most. */
 export const MODEL_PER_DAY = 40;
+/** Model looks per machine per day at turns that name no domain, only to
+ *  notice topics with no home (structure suggestions). Small on purpose. */
+export const UNHOMED_PER_DAY = 10;
+/** A no-hit turn shorter than this is small talk; no model is asked. */
+export const UNHOMED_MIN_CHARS = 60;
 export const NOTED_HEADING = "## Noted from conversations";
 /** Lines kept under the heading; older ones stay in updates.jsonl. */
 export const NOTED_MAX = 60;
@@ -63,12 +68,12 @@ export function scoreDomains(vault: string, text: string, slugs: string[]): Code
 
 // ── The daily ceiling on model tie-breaks (per machine) ───────────────────
 
-const budgetPath = (vault: string) => runtimePath(vault, join("_meta", "linking", "model-budget.json"));
+const budgetPath = (vault: string, key = "model-budget") => runtimePath(vault, join("_meta", "linking", `${key}.json`));
 const today = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 /** Take one model call from today's allowance; false when it is spent. */
-export function spendModelCall(vault: string, now = Date.now(), cap = MODEL_PER_DAY): boolean {
-  const p = budgetPath(vault);
+export function spendModelCall(vault: string, now = Date.now(), cap = MODEL_PER_DAY, key = "model-budget"): boolean {
+  const p = budgetPath(vault, key);
   let b = { day: today(now), n: 0 };
   try { const x = JSON.parse(readFileSync(p, "utf8")); if (x?.day === b.day && Number.isFinite(x.n)) b = x; } catch { /* first call today */ }
   if (b.n >= cap) return false;
