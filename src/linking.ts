@@ -507,7 +507,7 @@ export async function linkingCommand(cmd: string, a: string[], vaultPath?: strin
     for (const slug of (get("--domains") ?? "").split(",").map((x) => x.trim()).filter(Boolean)) {
       const row = readJsonl<DomainUpdate>(domainUpdatesPath(vault, slug)).find((r) => r.ts === ts && r.thread === thread);
       if (!row) continue;
-      if (unnote(vault, slug, { ts, thread, line: notedLine({ ts, from: row.from_domain, thread, fact: row.fact }) })) undone.push(slug);
+      if (unnote(vault, slug, { ts, thread, from: row.from_domain, fact: row.fact, line: notedLine({ ts, from: row.from_domain, thread, fact: row.fact }) })) undone.push(slug);
     }
     if (json) out({ ok: true, undone }); else console.log(undone.length ? `Taken back from ${undone.join(", ")}.` : "Nothing to take back.");
     return 0;

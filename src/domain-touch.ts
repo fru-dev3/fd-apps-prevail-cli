@@ -114,12 +114,16 @@ export function noteInMemory(vault: string, slug: string, o: { ts: number; from:
 }
 
 /** Undo: take back exactly the line a turn wrote, in memory.md and in updates.jsonl. */
-export function unnote(vault: string, slug: string, o: { ts: number; thread: string; line?: string }): boolean {
+export function unnote(vault: string, slug: string, o: { ts: number; thread: string; from?: string; fact?: string; line?: string }): boolean {
   let changed = false;
   const p = memoryPath(vault, slug);
-  if (existsSync(p) && o.line) {
+  if (existsSync(p) && (o.line || o.fact)) {
     const md = vreadFile(p);
-    const next = md.split("\n").filter((l) => l !== o.line).join("\n");
+    // The written line, or (should its date read differently now) the same fact from the same thread.
+    const tail = o.from ? ` (from ${label(o.from)}, thread ${o.thread})` : null;
+    const fact = o.fact?.replace(/\s+/g, " ").trim();
+    const mine = (l: string) => l === o.line || (!!tail && !!fact && l.startsWith("- ") && l.endsWith(tail) && l.includes(`: ${fact}${tail}`));
+    const next = md.split("\n").filter((l) => !mine(l)).join("\n");
     if (next !== md) { vwriteFile(p, next); changed = true; }
   }
   const u = join(resolveDomainDir(vault, slug), "memory", "updates.jsonl");
