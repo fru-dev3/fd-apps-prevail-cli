@@ -2970,6 +2970,22 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       console.log(`merged ${drop} into ${r.id}`);
       return;
     }
+    if (sub === "rename") {
+      const id = pos[1];
+      const name = get("--name");
+      if (!id || !name) { fail("usage: prevail entities rename <id> --name \"New Name\" [--json]"); return; }
+      const d = en.renameEntity(vault, id, name);
+      if (json) { out(d); return; }
+      console.log(`${d.id} is now "${d.name}"`);
+      return;
+    }
+    if (sub === "normalize-names") {
+      const r = en.normalizeNames(vault, { dryRun: a.includes("--dry-run") });
+      if (json) { out({ ok: true, dry_run: a.includes("--dry-run"), ...r }); return; }
+      for (const c of r.changed) console.log(`${c.id.padEnd(40)} ${c.from} -> ${c.to}`);
+      console.log(`${r.changed.length} of ${r.pages} pages ${a.includes("--dry-run") ? "would change" : "changed"}; old names kept as aliases`);
+      return;
+    }
     if (sub === "set-relation") {
       const [id, rel] = [pos[1], pos[2]];
       if (!id || !rel) { fail("usage: prevail entities set-relation <id> yours|reference [--json]"); return; }

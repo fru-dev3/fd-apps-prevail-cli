@@ -119,7 +119,7 @@ describe("events", () => {
     expect(a.created).toBe(true);
     expect(adoptEvent(V, "event/foo-dentist", NOW).created).toBe(false);
     const after = listEvents(V, { from: "2026-10-01" });
-    expect(after.filter((r) => r.name === "Foo dentist").map((r) => r.source)).toEqual(["prevail"]);
+    expect(after.filter((r) => r.name === "Foo Dentist").map((r) => r.source)).toEqual(["prevail"]);
     // A milestone opened as an event links to its project.
     const m = adoptEvent(V, "milestone:paint-the-foo-shed:ms-paint-bought", NOW);
     expect(readFields(readPage(V, "event", m.id.slice(6))!).project).toBe("mission/paint-the-foo-shed");
@@ -134,7 +134,7 @@ describe("events", () => {
     expect((await eventToCalendar(V, "event/foo-birthday", { no: true, write, now: NOW })).calendar).toBe("declined");
     expect(calls).toEqual([]);
     expect((await eventToCalendar(V, "event/foo-birthday", { yes: true, write, now: NOW })).calendar).toBe("synced");
-    expect(calls).toEqual([{ title: "Foo birthday", date: "2026-11-02" }]);
+    expect(calls).toEqual([{ title: "Foo Birthday", date: "2026-11-02" }]);
     expect(readFields(readPage(V, "event", "foo-birthday")!)).toMatchObject({ calendar: "synced", calendar_event: "g-1" });
     // A failed write stays asked and says why.
     createEvent(V, { name: "Foo trip", date: "2026-11-09" }, NOW);

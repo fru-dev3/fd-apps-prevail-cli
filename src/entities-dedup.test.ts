@@ -115,7 +115,7 @@ describe("merging", () => {
     expect(keep.mention_count).toBe(2);
     expect(keep.aliases).toContain("FooBar");
     const m = readMerges(vault);
-    expect(m.merges).toEqual([{ from: "person/foobar", into: "person/foo-bar", ts: "2026-09-20T12:00:00Z", auto: true, reason: '"Foo Bar" and "FooBar" are the same name written differently' }]);
+    expect(m.merges).toEqual([{ from: "person/foobar", into: "person/foo-bar", ts: "2026-09-20T12:00:00Z", auto: true, reason: '"Foo Bar" and "FooBar" are the same name written differently', from_name: "FooBar" }]);
     expect(m.notSame).toEqual([]);
     // No page existed yet for the merged one, so there is nothing to archive
     // and none is created for it.

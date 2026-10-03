@@ -152,6 +152,25 @@ export function slugify(name: string): string {
     .replace(/-+$/g, "");
 }
 
+// Title Case for an entity's display name: each word capitalized, small
+// joining words lowercase after the first. A word that already carries an
+// inner capital (iPhone, McDonald) or is all caps (LLC, NASA), or that looks
+// like a domain, handle or number (foo.com, @foo, 3M), is kept as written.
+const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "by", "de", "del", "der", "di", "du", "for", "in", "la", "le", "of", "on", "or", "the", "to", "van", "von", "with"]);
+function capWord(w: string): string {
+  if (!w || /[@/\\:]/.test(w) || /\w\.\w/.test(w) || /^\d/.test(w)) return w;
+  if (/[A-Z]/.test(w.slice(1)) || (w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w))) return w;
+  return w.split(/([-'\u2019])/).map((part, i, all) => {
+    // After an apostrophe only a real name part is capitalized (O'Brien, not It'S).
+    if (i > 0 && /['\u2019]/.test(all[i - 1] ?? "") && part.length < 3) return part;
+    return part.charAt(0).toUpperCase() + part.slice(1);
+  }).join("");
+}
+export function titleCaseName(name: string): string {
+  const words = name.trim().replace(/\s+/g, " ").split(" ");
+  return words.map((w, i) => (i > 0 && i < words.length - 1 && SMALL_WORDS.has(w.toLowerCase()) && w === w.toLowerCase() ? w : capWord(w))).join(" ");
+}
+
 export function isKind(k: unknown): k is EntityKind {
   return typeof k === "string" && (ENTITY_KINDS as string[]).includes(k);
 }
@@ -801,8 +820,9 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     const names = [...a.names.entries()]
       .sort((x, y) => y[1] - x[1] || slugShaped(x[0]) - slugShaped(y[0]) || y[0].length - x[0].length || x[0].localeCompare(y[0]))
       .map(([n]) => n);
-    const name = page?.doc.name ?? names[0];
-    const aliases = [...new Set([...(page?.doc.aliases ?? []), ...names.filter((n) => n !== name)])].slice(0, 12);
+    // Shown in Title Case everywhere; a name differing only in case is not an alias worth showing.
+    const name = titleCaseName(page?.doc.name ?? names[0]);
+    const aliases = [...new Set([...(page?.doc.aliases ?? []), ...names].filter((n) => n.toLowerCase() !== name.toLowerCase()))].slice(0, 12);
     a.mentions.sort((x, y) => y.ts - x.ts);
     const refs = new Set(a.mentions.map((m) => `${m.source === "prompt" ? "p" : "f"}:${m.ref}`));
     const id = `${kind}/${a.slug}`;
@@ -933,8 +953,9 @@ export function conversationsSection(r: EntityRec, max = 50): string {
 }
 
 export function newPage(r: { name: string; kind: EntityKind; aliases: string[] }, saved: boolean, now: number): PageDoc {
+  const name = titleCaseName(r.name);
   return {
-    name: r.name, kind: r.kind, aliases: r.aliases.slice(0, 8), saved, created: iso(now), updated: iso(now), mention_count: 0,
+    name, kind: r.kind, aliases: [...new Set([...(name !== r.name.trim() ? [r.name.trim()] : []), ...r.aliases])].slice(0, 8), saved, created: iso(now), updated: iso(now), mention_count: 0,
     preamble: "", discussed: "", notes: "", conversations: "", extra: {},
   };
 }
@@ -1048,6 +1069,8 @@ export interface EntityDetail extends EntityRec {
   digest: string;
   notes: string;
   page_path?: string;
+  /** What was merged into this entity, oldest first (provenance). */
+  merged_from: MergedFrom[];
 }
 
 export function entityDetail(vault: string, idx: EntityIndex, idOrName: string): EntityDetail | null {
@@ -1064,7 +1087,7 @@ export function entityDetail(vault: string, idx: EntityIndex, idOrName: string):
   const doc = readPage(vault, r.kind, slug);
   const pic = doc ? pictureOf(vault, r.kind, slug, doc).picture : undefined;
   return {
-    ...r, relation: r.relation ?? "yours", digest: doc?.discussed ?? "", notes: doc?.notes ?? "",
+    ...r, relation: r.relation ?? "yours", digest: doc?.discussed ?? "", notes: doc?.notes ?? "", merged_from: mergedInto(readMerges(vault), r.id),
     ...(doc ? { page_path: relative(vault, pageFile(vault, r.kind, slug) ?? pagePath(vault, r.kind, slug)), saved: doc.saved, website: doc.website } : {}),
     // Absolute, for the CLI/desktop.
     picture: pic ? join(vault, pic) : undefined,
@@ -1113,6 +1136,42 @@ export function setNotes(vault: string, idOrName: string, text: string, o: { kin
   return entityDetail(vault, next, `${kind}/${slug}`)!;
 }
 
+/** Rename an entity (Title Case). The old name stays as an alias, so every link and mention still finds it. */
+export function renameEntity(vault: string, idOrName: string, name: string, o: { kind?: string; now?: number } = {}): EntityDetail {
+  const now = o.now ?? Date.now();
+  const next = titleCaseName(name);
+  if (!next) throw new Error("a name is needed");
+  const { kind, slug, rec } = resolveForWrite(readIndex(vault), idOrName, o.kind);
+  const doc = readPage(vault, kind, slug) ?? newPage({ name: rec?.name || slug, kind, aliases: rec?.aliases ?? [] }, true, now);
+  if (doc.name !== next) doc.aliases = [...new Set([doc.name, ...doc.aliases])].filter((a) => a && a !== next);
+  doc.name = next;
+  doc.saved = true;
+  doc.updated = iso(now);
+  writePage(vault, kind, slug, doc);
+  return entityDetail(vault, buildIndex(vault, { now }), `${kind}/${slug}`)!;
+}
+
+/**
+ * Every entity page's name in Title Case; the name as it was is kept as an
+ * alias so links and mentions keep resolving. Ids (slugs) never change.
+ * dryRun reports without writing.
+ */
+export function normalizeNames(vault: string, o: { dryRun?: boolean; now?: number } = {}): { changed: { id: string; from: string; to: string }[]; pages: number } {
+  const now = o.now ?? Date.now();
+  const changed: { id: string; from: string; to: string }[] = [];
+  const pages = listPages(vault);
+  for (const p of pages) {
+    const to = titleCaseName(p.doc.name);
+    if (!to || to === p.doc.name) continue;
+    changed.push({ id: p.id, from: p.doc.name, to });
+    if (o.dryRun) continue;
+    const doc = { ...p.doc, aliases: [...new Set([p.doc.name, ...p.doc.aliases])].filter((a) => a !== to), name: to, updated: iso(now) };
+    writePage(vault, p.kind, p.slug, doc);
+  }
+  if (changed.length && !o.dryRun) buildIndex(vault, { now });
+  return { changed, pages: pages.length };
+}
+
 // Add a dated paragraph to the end of "Your notes" (the chat's "Add to notes").
 // Creates a saved page when there is none yet, like setNotes.
 export function appendNote(vault: string, idOrName: string, text: string, o: { kind?: string; name?: string; now?: number } = {}): EntityDetail {
@@ -1150,7 +1209,20 @@ export function entityThreads(vault: string, idOrName: string): EntityThread[] {
 // once normalized (or a multi-word alias) merges on its own; a shared first
 // name, a short form or a likely typo is only ever proposed.
 
-export interface MergeRec { from: string; into: string; ts: string; auto: boolean; reason: string }
+// from_name: the merged entity's display name then (older records have none; its slug stands in).
+export interface MergeRec { from: string; into: string; ts: string; auto: boolean; reason: string; from_name?: string }
+/** One line of an entity's merge history: what was folded into it, and when. */
+export interface MergedFrom { id: string; name: string; ts: string; auto: boolean }
+
+/** Every entity folded into `id` (directly or through a chain), oldest first. */
+export function mergedInto(m: MergesFile, id: string): MergedFrom[] {
+  const final = mergeMap(m);
+  return m.merges
+    .filter((r) => (final[r.from] ?? r.into) === id || r.into === id)
+    .filter((r, i, all) => all.findIndex((x) => x.from === r.from) === i)
+    .map((r) => ({ id: r.from, name: r.from_name || titleCaseName(slugOf(r.from).replace(/-/g, " ")), ts: r.ts, auto: !!r.auto }))
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+}
 export interface MergesFile { merges: MergeRec[]; notSame: [string, string][] }
 
 export const AUTO_MERGE = 0.9;
@@ -1362,7 +1434,7 @@ export function mergeEntities(vault: string, keepId: string, mergeId: string, o:
   writePage(vault, keep.kind, kSlug, kDoc);
 
   updateMerges(vault, (m) => {
-    m.merges.push({ from: gone.id, into: keep.id, ts: iso(now), auto: !!o.auto, reason: o.reason ?? "merged by you" });
+    m.merges.push({ from: gone.id, into: keep.id, ts: iso(now), auto: !!o.auto, reason: o.reason ?? "merged by you", from_name: gDoc?.name ?? gone.name });
   });
 
   // The merged entity's files are copied to the keeper (its picture too when

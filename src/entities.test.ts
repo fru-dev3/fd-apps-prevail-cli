@@ -182,11 +182,11 @@ describe("pages", () => {
     expect(d.page_path).toBe("data/entities/orgs/acme/entity.md");
     expect(readIndex(vault).entities.find((e) => e.id === "org/acme")?.saved).toBe(true);
     const saved = saveEntity(vault, "thing/blue-kayak", { name: "Blue kayak", now: NOW });
-    expect(saved.name).toBe("Blue kayak");
+    expect(saved.name).toBe("Blue Kayak");
     const detail = entityDetail(vault, readIndex(vault), "Blue kayak")!;
     expect(detail.id).toBe("thing/blue-kayak");
     const text = entityContextText(entityDetail(vault, readIndex(vault), "org/acme")!);
-    expect(text).toContain("# acme (Product, id org/acme)");
+    expect(text).toContain("# Acme (Product, id org/acme)");
     expect(text).toContain("quoted the roof");
     expect(() => saveEntity(vault, "nobody-known", { now: NOW })).toThrow(/kind person, place, org, thing or event/);
   });
