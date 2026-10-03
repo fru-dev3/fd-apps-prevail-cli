@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { checkContracts, contractBlock, foreignDomainOf, formatHandoff, ownerFor, parseContract, parseHandoff, readContracts } from "./agent-contract.ts";
@@ -126,6 +126,9 @@ describe("MCP domain scope", () => {
     const { readTasks } = await import("./tasks.ts");
     expect(readTasks(join(V, "data", "domains", "ledger")).map((t) => t.text)).toContain("From orchard: Sold the old tractor | amount: $4,200");
     expect(readTasks(join(V, "data", "domains", "orchard"))).toEqual([]);
+    // A v4 domain's board is memory/tasks.md; nothing splits it into a root _tasks.md.
+    expect(existsSync(join(V, "data", "domains", "ledger", "memory", "tasks.md"))).toBe(true);
+    expect(existsSync(join(V, "data", "domains", "ledger", "_tasks.md"))).toBe(false);
     await expect(call("update_task", { domain: "ledger", id: "x", status: "done" })).rejects.toThrow("reads and writes only orchard");
     const list = (await dispatch({ jsonrpc: "2.0", id: 2, method: "tools/list" }, mcpTools(), V, "orchard")) as { tools: { name: string }[] };
     expect(list.tools.some((t) => t.name === "connect_app")).toBe(false);

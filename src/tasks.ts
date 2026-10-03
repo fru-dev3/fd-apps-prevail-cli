@@ -156,7 +156,18 @@ export function renderTasks(tasks: Task[]): string {
   return s;
 }
 
-function tasksFile(domainDir: string): string { return join(domainDir, "_tasks.md"); }
+/**
+ * A domain's task board: memory/tasks.md on a v4 domain, _tasks.md on an older
+ * one. An existing file wins, so a board is never split across the two.
+ */
+export function taskBoardPath(domainDir: string): string {
+  const v4 = join(domainDir, "memory", "tasks.md");
+  const flat = join(domainDir, "_tasks.md");
+  if (existsSync(v4)) return v4;
+  if (existsSync(flat)) return flat;
+  return existsSync(join(domainDir, "memory")) ? v4 : flat;
+}
+function tasksFile(domainDir: string): string { return taskBoardPath(domainDir); }
 
 export function readTasks(domainDir: string): Task[] {
   const f = tasksFile(domainDir);
