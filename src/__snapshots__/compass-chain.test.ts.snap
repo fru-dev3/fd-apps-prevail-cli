@@ -1,0 +1,18 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`chat context carries the chain for confirmed lines snapshot of the # COMPASS block with the chain 1`] = `
+"# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+Purpose: Live a calm foo life.
+Values, most important first:
+1. Peace of mind
+2. Family presence
+Mission statement: Build calm foo tools for families
+Vision: A foo home that runs on its own
+Objectives (the measurable outcomes that show the vision is happening):
+- Twelve months of costs in cash (target 12 cash_months) by 2028-12-31
+- Weekly foo hikes with the kids
+Life goals:
+- Bar cash buffer (serves Peace of mind), toward the objective Twelve months of costs in cash
+- Hike the foo ridge with my son (serves Family presence), toward the objective Weekly foo hikes with the kids
+Roles: Parent"
+`;

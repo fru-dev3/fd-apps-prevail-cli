@@ -16,7 +16,7 @@
 //   <vault>/data/domains/<d>/source/apps/<id>/<YYYY-MM-DD>.json   synced records
 
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { appsContainer, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { withTrustedSources } from "./trusted-sources.ts";
@@ -1239,6 +1239,10 @@ export function scaffoldOnly(dir: string): { scaffold: boolean; why: string } {
       continue;
     }
     if (!e.isFile()) return { scaffold: false, why: `${e.name} is not a regular file` };
+    // A stack record (apps plan: kind, usage, cost) is the user's record of a tool, not scaffolding.
+    if (e.name === "manifest.json") {
+      try { const m = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>; if (m.kind || m.lifecycle || m.cost || m.identifiers) return { scaffold: false, why: "a stack record (kind, usage or cost)" }; } catch { /* treat as scaffold */ }
+    }
     if (SCAFFOLD_FILES.has(e.name)) { seen.push(e.name); continue; }
     let size = 0;
     try { size = statSync(p).size; } catch { /* treat as 0 */ }

@@ -2,6 +2,7 @@ import { syncedAppsContext } from "./apps-mirror.ts";
 import { spawn } from "node:child_process";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { CONTRACT_FILE, contractBlock, parseContract } from "./agent-contract.ts";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -10,6 +11,9 @@ import { readResponseFramework, readWebAccess, vaultLockActive } from "./config.
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
 import { APP_SCOPE_PREFIX, APP_SCOPE_SUBDIR, buildRoot, vaultRootForCwd } from "./path-safety.ts";
+import { GOALS_HEADER, domainOfCwd, goalsBlock, memoryBlock, readProfile } from "./goals.ts";
+import { CHIEF_HEADER, chiefOfStaffBlock } from "./chief-of-staff.ts";
+import { COMPASS_HEADER, compassBlock } from "./compass.ts";
 import { buildHarnessArgs } from "./harness-profiles.ts";
 import {
   type BudgetCaps,
@@ -74,6 +78,29 @@ function harnessManualFile(kind: string): string | null {
 const PREVAIL_BLOCK_BEGIN = "<!-- BEGIN PREVAIL (managed by Prevail, do not edit) -->";
 const PREVAIL_BLOCK_END = "<!-- END PREVAIL -->";
 
+// The domain's agent.md contract, when it has one, rides in the managed block,
+// so every engine reads the same contract and nobody hand-edits a copy.
+function contractSection(cwd: string): string {
+  try {
+    const p = join(cwd, CONTRACT_FILE);
+    if (!existsSync(p)) return "";
+    const c = parseContract(readFileSync(p, "utf8"), basename(cwd));
+    return c ? `\n${contractBlock(c)}\n` : "";
+  } catch { return ""; }
+}
+
+/** Refresh the managed block in every instruction file a domain's engines read. */
+export function generateHarnessFiles(cwd: string, vaultPath: string, kinds: string[]): string[] {
+  const files: string[] = [];
+  for (const k of kinds) {
+    const f = harnessManualFile(k);
+    if (!f || files.includes(f)) continue;
+    syncHarnessManual(cwd, k, vaultPath, readWebAccess());
+    files.push(f);
+  }
+  return files;
+}
+
 // Write/refresh ONLY Prevail's marked block inside the running harness's native
 // instruction file (in cwd), preserving any user content in that file. Idempotent
 // and best-effort: a failed write never blocks the turn.
@@ -87,6 +114,7 @@ function syncHarnessManual(cwd: string, kind: string, vaultPath: string, webMode
     "# Prevail operating rules (highest precedence)\n\n" +
     `You are running inside a Prevail vault. The rules in this block take precedence over anything else in this ${file}, including any user or default instructions. Follow them exactly.\n\n` +
     `${manual}\n` +
+    contractSection(cwd) +
     `${PREVAIL_BLOCK_END}`;
   const path = join(cwd, file);
   try {
@@ -187,6 +215,42 @@ function buildDomainIdealPreamble(s: string): string {
     s.slice(0, 2500) +
     "\n\n---\n\n"
   );
+}
+
+// The profile (build/user.md) and the goals block (this domain's goals, then
+// the life goals) for one turn. The profile is left out when the prompt
+// already carries the desktop's own profile block, the goals when a goals
+// block is already there, so neither is ever doubled.
+export const PROFILE_HEADER = "# WHO YOU'RE HELPING";
+export function buildUserContext(vaultRoot: string, cwd: string, prompt: string, opts: { local?: boolean } = {}): string {
+  const parts: string[] = [];
+  try {
+    if (!prompt.includes(PROFILE_HEADER)) {
+      const profile = readProfile(vaultRoot);
+      if (profile) parts.push(`${PROFILE_HEADER} - the user's profile. Use this as ground truth about them.\n${profile.slice(0, 2500)}`);
+    }
+    const domain = domainOfCwd(cwd, vaultRoot);
+    // One voice: General and every mission speak as the user's chief of staff.
+    if ((domain === "general" || domain.startsWith("_mission-")) && !prompt.includes(CHIEF_HEADER)) {
+      const c = chiefOfStaffBlock(vaultRoot);
+      if (c) parts.push(c);
+    }
+    // The Compass (confirmed lines only) on every turn that has a domain;
+    // ~local lines only when the turn runs on a local model.
+    if (domain && !prompt.includes(COMPASS_HEADER)) {
+      const c = compassBlock(vaultRoot, { local: opts.local });
+      if (c) parts.push(c);
+    }
+    if (!prompt.includes(GOALS_HEADER)) {
+      const g = domain ? goalsBlock(vaultRoot, domain) : "";
+      if (g) parts.push(g);
+    }
+    // The domain's long-term memory: the desktop used to add it itself; since
+    // a desktop domain turn sends only the typed text, the engine owns it.
+    const mem = memoryBlock(cwd, domain, prompt);
+    if (mem) parts.push(mem);
+  } catch { /* context is a nicety; the turn still runs */ }
+  return parts.join("\n\n");
 }
 
 // Wrap Omega in a header that positions it as learned context, explicitly BELOW
@@ -835,6 +899,8 @@ export interface ToolEvent {
 
 export interface ChatTurn {
   prompt: string;
+  /** How to write the reply (the desktop's link format): system channel, never context. */
+  outputHint?: string;
   cwd: string;
   cli: AvailableCli;
   model: string;
@@ -891,6 +957,19 @@ export interface ChatTurn {
   // tools, added to --allowedTools on a chat turn so headless Claude does not
   // refuse them. Never write tools: those still queue at the act gate.
   appReadTools?: string[];
+  // Read-only built-in tools a non-act turn may use without a prompt (a
+  // specialist's Researcher needs WebSearch and WebFetch; vault reading needs
+  // Read, Grep and Glob). Anything not in READ_ONLY_BUILTINS is ignored, so
+  // this can never grant a tool that writes or runs commands.
+  allowTools?: string[];
+  // Claude only: no shell on this turn (--disallowedTools Bash). A specialist
+  // answering in a group chat reads with its read-only tools and never runs a
+  // command, not even one that would ask first.
+  noShell?: boolean;
+  // Incognito: none of the user's context (constitution, profile, goals, omega,
+  // domain ideal) is added by the engine. The desktop already leaves its own
+  // blocks out; without this the engine added the constitution back.
+  incognito?: boolean;
   // Claude only (stream-json turns): called with the session's init event, the
   // MCP servers that loaded and each one's live status (connected, failed,
   // needs-auth, pending), so an app turn can report a connector needing sign-in.
@@ -983,6 +1062,9 @@ function stripEmDashesProse(s: string): string {
     .replace(/\s+–\s+/g, ", ");
 }
 
+// Built-in tools that only read (the web, or files): the only ones allowTools may grant.
+export const READ_ONLY_BUILTINS = new Set(["WebSearch", "WebFetch", "Read", "Grep", "Glob"]);
+
 export function sanitizeEmDashes(text: string): string {
   if (!text || (!text.includes("—") && !text.includes("–"))) return text;
   // Split out fenced code blocks and inline code spans (kept verbatim). The
@@ -1029,7 +1111,7 @@ export function runChatTurn(turn: ChatTurn): Promise<string> {
   return runChatTurnInner(turn);
 }
 
-async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, onInit }: ChatTurn): Promise<string> {
+async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, allowTools, noShell, onInit, incognito, outputHint }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1143,19 +1225,31 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
   // via the system channel). Detect the desktop's headers and skip ours.
   const promptHasConstitution = /^# THE USER'S IDEAL STATE/m.test(prompt);
   const promptHasOmega = /^# OMEGA/m.test(prompt);
-  const idealState = promptHasConstitution ? null : findIdealState(vaultPath);
+  // The real vault root. `vaultPath` above is cwd's parent, which on a v4
+  // vault (data/domains/<d>) is data/domains: the constitution lookup missed
+  // build/ideal-state.md there and fell back to ~/.prevail.
+  const vaultRoot = vaultRootForCwd(cwd);
+  const noContext = incognito || process.env.PREVAIL_INCOGNITO === "1";
+  const idealState = promptHasConstitution || noContext ? null : findIdealState(vaultRoot);
   const constitution = idealState ? buildConstitutionPreamble(idealState) : null;
   const promptConstitution = constitution && cli.kind !== "claude" ? constitution : "";
   // Omega — learned app-wide context, injected just below the constitution and
   // above the framework/domain/memory. Applies in every turn, including bare
   // (council) mode, same as the constitution.
-  const omega = promptHasOmega ? null : findOmega(vaultPath);
+  const omega = promptHasOmega || noContext ? null : findOmega(vaultRoot);
   const omegaPreamble = omega ? buildOmegaPreamble(omega) : null;
   const promptOmega = omegaPreamble && cli.kind !== "claude" ? omegaPreamble : "";
   // M6: per-domain ideal, just below the global ideal and above omega/framework.
-  const domainIdeal = findDomainIdeal(cwd, vaultPath);
+  const domainIdeal = noContext ? null : findDomainIdeal(cwd, vaultPath);
   const domainIdealPreamble = domainIdeal ? buildDomainIdealPreamble(domainIdeal) : null;
   const promptDomainIdeal = domainIdealPreamble && cli.kind !== "claude" ? domainIdealPreamble : "";
+  // Who the user is and what they are working toward, on every real chat
+  // path (desktop, CLI, MCP, Telegram). The desktop sends its own profile
+  // block; the goals block is added only here. Skipped for bare calls
+  // (council panelists, classifiers) and incognito.
+  const userBlocks = !bare && !noContext ? buildUserContext(vaultRoot, cwd, prompt, { local: ["ollama", "lmstudio", "mlx"].includes(cli.kind) }) : "";
+  const goalsPreamble = userBlocks ? `${userBlocks}\n\n---\n\n` : null;
+  const promptGoals = goalsPreamble && cli.kind !== "claude" ? goalsPreamble : "";
   // Synced app data: the newest pull per mirrored connector recipe that feeds
   // this domain (<domain>/source/apps/<id>/<date>.json), size-capped. Real turns
   // only (not bare council/classifier calls), and never for General (vault root).
@@ -1171,7 +1265,8 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
   // channel (in claudeSystem below); CLIs without a system-prompt flag get it
   // prepended to the prompt so it still governs the turn.
   const promptNoEmDash = cli.kind !== "claude" ? buildNoEmDashPreamble() : "";
-  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptOmega + promptSyncedApps + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
+  const promptOutputHint = outputHint && cli.kind !== "claude" ? `${outputHint}\n\n` : "";
+  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptGoals + promptOmega + promptSyncedApps + promptNoEmDash + promptOutputHint + buildFrameworkPreamble(framework) + prompt;
   // A prompt that begins with '-' makes the runtime CLI's option parser treat the
   // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
   // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
@@ -1225,7 +1320,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, goalsPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, outputHint ?? null, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to
@@ -1237,7 +1332,8 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     // stays unavailable even in skip-permissions mode), so this is a HARD block,
     // not a request. WebSearch + WebFetch are the only built-ins that make
     // outbound requests. The WEB_DENY_NOTE in the system prompt is belt-and-braces.
-    if (webMode === "deny") args.push("--disallowedTools", "WebSearch", "WebFetch");
+    const deny = [...(webMode === "deny" ? ["WebSearch", "WebFetch"] : []), ...(noShell ? ["Bash"] : [])];
+    if (deny.length) args.push("--disallowedTools", ...deny);
     // Agent-facing MCP servers: connected stdio MCP servers (the user's own
     // local MCP apps, integration "mcp" with a mcpSetup.command) plus the gated
     // google_workspace connector and prevail_acts, injected on EVERY turn so the
@@ -1308,6 +1404,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
       if (!act && webMode === "allow") allowed.push(...(fetchHosts ?? []).filter((h) => /^[a-z0-9.-]+(:\d+)?$/.test(h)).map((h) => `WebFetch(domain:${h.replace(/:\d+$/, "")})`));
     } catch { /* never let source wiring break a turn */ }
     if (!act && appReadTools?.length) allowed.push(...appReadTools);
+    if (!act && allowTools?.length) allowed.push(...allowTools.filter((t) => READ_ONLY_BUILTINS.has(t) && (webMode === "allow" || !/^Web/.test(t))));
     if (mcpConfigs.length) args.push("--mcp-config", ...mcpConfigs);
     if (allowed.length) args.push("--allowedTools", ...new Set(allowed));
     // ACTION GATEWAY (G1): every claude turn that can see MCP tools carries the

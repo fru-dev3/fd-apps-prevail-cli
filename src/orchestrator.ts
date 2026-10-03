@@ -15,14 +15,23 @@
 //                  gated by the action class of its goal.
 //   - synthesize : an agent turn that reads the run's collected data and WRITES a
 //                  summary doc into a domain.
+//   - specialist : one specialist (or several side by side) runs as a job
+//                  (jobs.ts), with every ceiling, budget and Undo a chat job has.
+//                  Its typed result (findings, numbers, verdict, page...) feeds
+//                  the steps that `uses` it; a gate that says "does not fit" or
+//                  "flagged" stops the playbook; an ASK step waits for the user.
+//   - task       : a task for the user on the domain's board (a Planner step no
+//                  specialist can do). Reversible: it is one line.
 //
-// Outputs of every step are collected under <vault>/_runs/<runId>/ so later steps
-// (and the user) can see exactly what was produced.
+// Outputs of every step are collected under build/_meta/jobs/<runId>/ so later
+// steps (and the user) can see exactly what was produced. (Runs once went to
+// <vault>/_runs/, which broke the rule that the vault root holds only build/
+// and data/.)
 
 import { join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { vwriteFile } from "./vault-session.ts";
+import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { runChatTurn, detectClis, type AvailableCli } from "./cli-bridge.ts";
 import { scanCommunityApps } from "./vault.ts";
 import { loadSkillsForConnector, packForSkill, runSkillPackWithFallback } from "./connector-skills.ts";
@@ -30,12 +39,43 @@ import { gateAction, parseAmountUsd, type GateDecision } from "./broker.ts";
 import { isPaused, recordSpend } from "./autonomy.ts";
 import { auditAction, type ActionOutcome } from "./action-audit.ts";
 import { logActivity } from "./activity.ts";
-import { resolveDomainDir } from "./path-safety.ts";
+import { buildRoot, resolveDomainDir, runtimePath } from "./path-safety.ts";
 
 export type PlaybookStep =
   | { kind: "skill"; app: string; skill: string; inputs?: Record<string, unknown>; label?: string }
-  | { kind: "agent"; goal: string; domain?: string; web?: boolean; label?: string }
-  | { kind: "synthesize"; domain: string; output: string; instruction: string; label?: string };
+  // output: the file (in its domain, {date} allowed) the step must write; it
+  // then counts as done only when that file exists, and later steps read it.
+  | { kind: "agent"; goal: string; domain?: string; web?: boolean; label?: string; output?: string }
+  | { kind: "synthesize"; domain: string; output: string; instruction: string; label?: string }
+  // The week's metrics glance, computed by code (never written by a model),
+  // to `output`; with appendTo, also added to the end of that file.
+  | { kind: "glance"; domain: string; output: string; appendTo?: string; label?: string }
+  | { kind: "specialist"; id?: string; specialist?: string; specialists?: string[]; brief: string; domain?: string; uses?: string[]; gate?: "stop" | null; approval?: "ask" | null; label?: string }
+  | { kind: "task"; id?: string; text: string; domain?: string; due?: string; label?: string }
+  // A loop carried over into a playbook (playbooks replace loops): the loop's
+  // own definition, run by the same loop runner, so it behaves as it did.
+  | { kind: "loop"; id?: string; loop: Record<string, unknown> & { id: string }; label?: string };
+
+/**
+ * When a playbook runs on its own: the schedule a loop had (cadence or an
+ * event), its switches and its last run. `space` is the domain, app or
+ * mission it runs in; `loop` the loop id it came from (and the key of its
+ * run history), so a hub still reading _loops.json runs it once, not twice.
+ */
+export interface PlaybookSchedule {
+  space: string;
+  loop?: string;
+  cadence: "continuous" | "daily" | "weekly" | "monthly";
+  on?: string;
+  enabled: boolean;
+  status?: "active" | "paused" | "done" | "staged";
+  autonomy?: "suggest" | "tasks" | "ask" | "auto";
+  model?: string;
+  lastRunTs: number | null;
+  createdTs?: number;
+  /** The day it was carried over from a loop. */
+  migrated?: string;
+}
 
 export interface Playbook {
   id: string;
@@ -43,6 +83,17 @@ export interface Playbook {
   goal: string;
   domain?: string;     // home domain (where the result usually lands)
   steps: PlaybookStep[];
+  /** Saved from chat (a Planner draft or "Save as playbook"), not yet adopted. */
+  draft?: boolean;
+  /** Compass links (goals-plan): the goal and path this playbook serves. */
+  goalId?: string;
+  pathId?: string;
+  /** Where it came from: a job id, when saved from one. */
+  from?: string;
+  /** Runs on its own on this schedule (yours only; built-in playbooks get a small wrapper). */
+  schedule?: PlaybookSchedule;
+  /** The space's desired state, kept from the loops file it came from. */
+  desiredState?: string;
 }
 
 export interface StepResult {
@@ -53,6 +104,8 @@ export interface StepResult {
   ok: boolean;
   note: string;
   outputs: string[];   // absolute paths produced
+  /** The specialists a specialist step staffed (their faces on the Inbox result). */
+  specialists?: string[];
 }
 
 export interface PlaybookRunResult {
@@ -71,6 +124,14 @@ export interface OrchestratorCtx {
   autonomousActs: boolean;   // global opt-in (a step gated "auto" only runs when true)
   signal?: AbortSignal;
   onProgress?: (event: Record<string, unknown>) => void;
+  /** The domain a domain-free playbook runs in (built-in playbooks name none). */
+  domain?: string;
+  /** Test seams for specialist steps (the model call). */
+  runDeps?: import("./jobs.ts").RunDeps;
+  /** What started the run: a loop's clock, a radar event, or the user. Scheduled and event runs land in the Inbox. */
+  trigger?: "schedule" | "event" | "manual";
+  /** The radar item that fired an event run. */
+  event?: string;
 }
 
 const STEP_TIMEOUT_MS = 10 * 60_000;
@@ -83,6 +144,10 @@ function stepLabel(step: PlaybookStep, i: number): string {
   if (step.label) return step.label;
   if (step.kind === "skill") return `${step.app}:${step.skill}`;
   if (step.kind === "agent") return `agent: ${step.goal.slice(0, 48)}`;
+  if (step.kind === "glance") return `glance → ${step.domain}/${step.output}`;
+  if (step.kind === "specialist") return `${(step.specialists ?? [step.specialist ?? "?"]).join(" + ")}: ${step.brief.slice(0, 48)}`;
+  if (step.kind === "task") return `task: ${step.text.slice(0, 48)}`;
+  if (step.kind === "loop") return String(step.loop.name ?? step.loop.id);
   return `synthesize → ${step.domain}/${step.output}`;
 }
 
@@ -91,10 +156,11 @@ export async function runPlaybook(
   playbook: Playbook,
   ctx: OrchestratorCtx,
 ): Promise<PlaybookRunResult> {
-  const runDir = join(ctx.vault, "_runs", runId);
+  const runDir = jobsDir(ctx.vault, runId);
   mkdirSync(runDir, { recursive: true });
   const steps: StepResult[] = [];
   const collected: string[] = []; // all output paths so far, for synthesize steps
+  const typed = new Map<string, { name: string; returns: string; body: string }[]>(); // specialist results by step id
 
   emit(ctx, { phase: "started", runId, playbook: playbook.id, steps: playbook.steps.length });
   logActivity(ctx.vault, { type: "playbook", domain: playbook.domain, title: `Playbook: ${playbook.name}`, detail: playbook.goal, status: "pending", ref: runId });
@@ -119,13 +185,36 @@ export async function runPlaybook(
     const label = stepLabel(step, i);
     emit(ctx, { phase: "step", index: i, kind: step.kind, label });
 
-    const res: StepResult = { index: i, kind: step.kind, label, decision: "auto", ok: false, note: "", outputs: [] };
+    const res: StepResult = { index: i, kind: step.kind, label, decision: "auto", ok: false, note: "", outputs: [],
+      ...(step.kind === "specialist" ? { specialists: (step.specialists ?? (step.specialist ? [step.specialist] : [])).map((x) => x.toLowerCase()) } : {}) };
     try {
       if (step.kind === "skill") {
         await runSkillStep(step, ctx, res);
         collected.push(...res.outputs);
       } else if (step.kind === "agent") {
         await runAgentStep(step, ctx, cli, runDir, collected, res);
+        collected.push(...res.outputs);
+      } else if (step.kind === "glance") {
+        await runGlanceStep(step, ctx, res);
+        collected.push(...res.outputs);
+      } else if (step.kind === "specialist") {
+        const stop = await runSpecialistStep(step, i, runId, playbook, ctx, typed, res);
+        collected.push(...res.outputs);
+        if (stop) {
+          auditAction(ctx.vault, { ts: Date.now(), domain: playbook.domain ?? "", action: `${label}: ${res.note}`.slice(0, 280), outcome: "proposed", provider: ctx.provider, model: ctx.model || undefined });
+          emit(ctx, { phase: "step_done", index: i, ok: res.ok, decision: res.decision, note: res.note, outputs: res.outputs });
+          steps.push(res);
+          emit(ctx, { phase: "gated", index: i, note: res.note });
+          break;
+        }
+      } else if (step.kind === "task") {
+        runTaskStep(step, playbook, ctx, res);
+      } else if (step.kind === "loop") {
+        // The loop runner applies the loop's own autonomy, approvals and history.
+        const { runOneLoop } = await import("./daemon-loops.ts");
+        const r = await runOneLoop({ vaultPath: ctx.vault, intervalSec: 3600, provider: ctx.provider, model: ctx.model }, playbook.schedule?.space ?? ctx.domain ?? playbook.domain ?? "general", step.loop.id);
+        res.ok = r.ok;
+        res.note = r.error ?? r.note;
       } else {
         await runSynthesizeStep(step, ctx, cli, collected, res);
         collected.push(...res.outputs);
@@ -137,7 +226,7 @@ export async function runPlaybook(
 
     // Audit + activity for every step, whatever the outcome.
     const outcome: ActionOutcome = res.decision === "auto" ? (res.ok ? "executed" : "error") : "proposed";
-    auditAction(ctx.vault, { ts: Date.now(), domain: step.kind === "agent" || step.kind === "synthesize" ? (step as { domain?: string }).domain ?? playbook.domain ?? "" : playbook.domain ?? "", action: `${label} — ${res.note}`.slice(0, 280), outcome, provider: ctx.provider, model: ctx.model || undefined });
+    auditAction(ctx.vault, { ts: Date.now(), domain: step.kind === "agent" || step.kind === "synthesize" ? (step as { domain?: string }).domain ?? playbook.domain ?? "" : playbook.domain ?? "", action: `${label}: ${res.note}`.slice(0, 280), outcome, provider: ctx.provider, model: ctx.model || undefined });
     logActivity(ctx.vault, { type: "playbook_step", domain: playbook.domain, title: label, detail: res.note, status: res.ok ? "ok" : res.decision === "auto" ? "error" : "pending", ref: runId });
     emit(ctx, { phase: "step_done", index: i, ok: res.ok, decision: res.decision, note: res.note, outputs: res.outputs });
     steps.push(res);
@@ -147,7 +236,7 @@ export async function runPlaybook(
   const ok = steps.length > 0 && steps.every((s) => s.ok || s.decision !== "auto");
   const note = `${ranOk}/${steps.length} steps completed`;
   // Write a run manifest so the result is fully inspectable.
-  try { vwriteFile(join(runDir, "run.json"), `${JSON.stringify({ runId, playbook: playbook.id, goal: playbook.goal, ok, note, steps }, null, 2)}\n`); } catch { /* best effort */ }
+  try { vwriteFile(join(runDir, "run.json"), `${JSON.stringify({ runId, playbook: playbook.id, name: playbook.name, goal: playbook.goal, ok, note, steps, trigger: ctx.trigger ?? "manual", ...(ctx.event ? { event: ctx.event } : {}), ...(ctx.domain ? { domain: ctx.domain } : {}), ts: Date.now() }, null, 2)}\n`); } catch { /* best effort */ }
   logActivity(ctx.vault, { type: "playbook", domain: playbook.domain, title: `Playbook done: ${playbook.name}`, detail: note, status: ok ? "ok" : "error", ref: runId });
   emit(ctx, { phase: "complete", runId, ok, note });
   return { runId, playbook: playbook.id, ok, note, steps, runDir };
@@ -190,10 +279,20 @@ async function runAgentStep(step: Extract<PlaybookStep, { kind: "agent" }>, ctx:
   if (!cli) { res.note = "no AI CLI available"; return; }
   const cwd = step.domain ? safeDomainDir(ctx.vault, step.domain) : runDir;
   const context = collected.length ? `\n\nData gathered so far in this run (read these as needed):\n${collected.map((p) => `- ${p}`).join("\n")}` : "";
-  const prompt = `You are executing one step of an autonomous playbook on the user's behalf.\n\nGoal: ${step.goal}${context}\n\nWork in: ${cwd}. Use your tools. Stay strictly within this goal — do not take consequential actions (money, sends, deletes) and do not go beyond what was asked.`;
+  const output = step.output ? expandOutput(step.output) : "";
+  const outAbs = output ? resolve(cwd, output.replace(/^\/+/, "")) : "";
+  if (outAbs && !outAbs.startsWith(cwd)) { res.note = "refusing to write outside the domain"; return; }
+  const deliver = outAbs ? `\n\nWrite your result to: ${outAbs} (create folders as needed). The step counts as done only when that file exists.` : "";
+  const prompt = `You are executing one step of an autonomous playbook on the user's behalf.\n\nGoal: ${expandOutput(step.goal)}${context}${deliver}\n\nWork in: ${cwd}. Use your tools. Stay strictly within this goal: do not take consequential actions (money, sends, deletes) and do not go beyond what was asked.`;
   const out = await runChatTurn({ prompt, cwd, cli, model: ctx.model || "", isFirst: true, bare: false, act: true, webAccess: step.web ? "allow" : "deny", signal: ctx.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS), maxOutputChars: 8000 });
-  res.ok = true;
-  res.note = (out || "").trim().slice(0, 400) || "done";
+  if (outAbs) {
+    res.ok = existsSync(outAbs);
+    if (res.ok) res.outputs.push(outAbs);
+    res.note = res.ok ? `wrote ${output}` : `no file at ${output}: ${(out || "").trim().slice(0, 300)}`;
+  } else {
+    res.ok = true;
+    res.note = (out || "").trim().slice(0, 400) || "done";
+  }
   // A financial action that actually ran counts against the monthly cap.
   if (gate.cls === "financial") { const amt = parseAmountUsd(step.goal); if (amt) recordSpend(ctx.vault, amt); }
 }
@@ -206,13 +305,105 @@ async function runSynthesizeStep(step: Extract<PlaybookStep, { kind: "synthesize
   if (gate.decision !== "auto") { res.note = gate.reason ?? gate.decision; return; }
   if (!cli) { res.note = "no AI CLI available"; return; }
   const domainDir = safeDomainDir(ctx.vault, step.domain);
-  const outAbs = resolve(domainDir, step.output.replace(/^\/+/, ""));
+  const output = expandOutput(step.output);
+  const outAbs = resolve(domainDir, output.replace(/^\/+/, ""));
   if (!outAbs.startsWith(domainDir)) { res.note = "refusing to write outside the domain"; return; }
   const sources = collected.length ? collected.map((p) => `- ${p}`).join("\n") : "(no prior data — note what's missing)";
   const prompt = `You are the synthesis step of an autonomous playbook. Read the data files below and write a single clear markdown summary to: ${outAbs}\n\nData files:\n${sources}\n\nInstruction: ${step.instruction}\n\nWrite the file with your file tool. Be concise and concrete; cite the numbers. Do not take any other action.`;
   await runChatTurn({ prompt, cwd: domainDir, cli, model: ctx.model || "", isFirst: true, bare: false, act: true, webAccess: "deny", signal: ctx.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS), maxOutputChars: 4000 });
-  if (existsSync(outAbs)) { res.ok = true; res.outputs.push(outAbs); res.note = `wrote ${step.output}`; }
+  if (existsSync(outAbs)) { res.ok = true; res.outputs.push(outAbs); res.note = `wrote ${output}`; }
   else { res.note = "synthesis produced no file"; }
+}
+
+async function runGlanceStep(step: Extract<PlaybookStep, { kind: "glance" }>, ctx: OrchestratorCtx, res: StepResult): Promise<void> {
+  const gate = gateAction(`write summary document ${step.output}`, { vault: ctx.vault, autonomousActs: ctx.autonomousActs });
+  res.decision = gate.decision;
+  if (gate.decision !== "auto") { res.note = gate.reason ?? gate.decision; return; }
+  const domainDir = safeDomainDir(ctx.vault, step.domain);
+  const output = expandOutput(step.output);
+  const outAbs = resolve(domainDir, output.replace(/^\/+/, ""));
+  const appendAbs = step.appendTo ? resolve(domainDir, expandOutput(step.appendTo).replace(/^\/+/, "")) : "";
+  if (!outAbs.startsWith(domainDir) || (appendAbs && !appendAbs.startsWith(domainDir))) { res.note = "refusing to write outside the domain"; return; }
+  const { computeMetrics, glance, glanceIds, glanceMarkdown } = await import("./metrics.ts");
+  const md = glanceMarkdown(glance(await computeMetrics(ctx.vault), { ids: glanceIds(ctx.vault) }));
+  mkdirSync(dirname(outAbs), { recursive: true });
+  vwriteFile(outAbs, md);
+  res.outputs.push(outAbs);
+  if (appendAbs && existsSync(appendAbs)) {
+    const cur = vreadFile(appendAbs);
+    if (!cur.includes("## This week in numbers")) vwriteFile(appendAbs, `${cur.replace(/\s*$/, "")}\n\n${md}`);
+  }
+  res.ok = true;
+  res.note = `wrote ${output}${appendAbs && existsSync(appendAbs) ? `, added to ${expandOutput(step.appendTo!)}` : ""}`;
+}
+
+// A specialist step is a job (origin playbook) so it has the job's ceilings,
+// budget, records and Undo. Returns true when the playbook must stop here (a
+// gate that did not pass).
+async function runSpecialistStep(step: Extract<PlaybookStep, { kind: "specialist" }>, i: number, runId: string, playbook: Playbook, ctx: OrchestratorCtx, typed: Map<string, { name: string; returns: string; body: string }[]>, res: StepResult): Promise<boolean> {
+  const jobs = await import("./jobs.ts");
+  const { loadSpecialists } = await import("./specialists.ts");
+  const { readChiefOfStaff } = await import("./chief-of-staff.ts");
+  const ids = (step.specialists ?? (step.specialist ? [step.specialist] : [])).map((x) => x.toLowerCase());
+  const specs = loadSpecialists(ctx.vault);
+  const missing = ids.filter((x) => !specs.some((s) => s.id === x && s.on));
+  if (!ids.length || missing.length) { res.decision = "block"; res.note = `not available: ${missing.join(", ") || "no specialist named"}`; return false; }
+  const owner = step.domain ?? playbook.domain ?? ctx.domain ?? "general";
+  const sid = step.id ?? `s${i + 1}`;
+  const uses = step.uses ?? [...typed.keys()];
+  const inputs = uses.flatMap((u) => typed.get(u) ?? []);
+  const chief = readChiefOfStaff(ctx.vault);
+  const job: import("./jobs.ts").Job = {
+    id: `${runId}-${sid}`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 120), ask: step.brief, origin: { kind: "playbook", domain: owner },
+    domains: { owner, consulted: [], informed: [] }, entities: [], team: [{ step: 1, specialists: ids, ...(step.gate === "stop" ? { gate: true } : {}), brief: step.brief }],
+    effort: "standard", budget: { usd: Math.min(jobs.EFFORT_BUDGET.standard.usd, chief.limits.usd), minutes: Math.min(jobs.EFFORT_BUDGET.standard.minutes, chief.limits.minutes) },
+    why: `step ${i + 1} of the playbook ${playbook.name}`, playbook: playbook.id, status: "proposed", startsAlone: false, created: Date.now(), inputs,
+  };
+  jobs.decideStart(ctx.vault, job, specs, chief.limits, true);
+  jobs.saveJob(ctx.vault, job);
+  // ASK steps, and anything that may not start alone (money, people, a
+  // ceiling past draft), wait for the user: the job is kept, offered, not run.
+  if (step.approval === "ask" || !job.startsAlone) {
+    res.decision = "ask";
+    res.note = `waits for your yes (job ${job.id})${job.askReason ? `: ${job.askReason}` : ""}`;
+    return false;
+  }
+  res.decision = "auto";
+  const done = await jobs.runJob(ctx.vault, job.id, ctx.runDeps ?? {});
+  const resultFile = join(jobs.jobDir(ctx.vault, job.id), "result.json");
+  if (existsSync(resultFile)) res.outputs.push(resultFile);
+  const steps = jobs.jobView(ctx.vault, job.id)?.steps as { specialist: string; result?: { type: string; file: string } }[] | undefined;
+  const out: { name: string; returns: string; body: string }[] = [];
+  for (const st of steps ?? []) {
+    if (!st.result) continue;
+    try {
+      const body = (JSON.parse(vreadFile(join(jobs.jobDir(ctx.vault, job.id), st.result.file))) as { body?: string }).body ?? "";
+      out.push({ name: specs.find((s) => s.id === st.specialist)?.name ?? st.specialist, returns: st.result.type, body });
+    } catch { /* unreadable step result */ }
+  }
+  typed.set(sid, out);
+  res.ok = done.status === "done";
+  res.note = `${done.status}${done.result?.summary ? `: ${done.result.summary}` : done.note ? `: ${done.note}` : ""} (job ${job.id})`;
+  // A gate that did not pass stops the playbook; so does a gate that could not
+  // run (nothing unchecked is filed after it).
+  return step.gate === "stop" ? done.status !== "done" : done.status === "needs-approval" && /stopped at the gate/.test(done.note ?? "");
+}
+
+// A task step files one line on the domain's board (a step for the user).
+function runTaskStep(step: Extract<PlaybookStep, { kind: "task" }>, playbook: Playbook, ctx: OrchestratorCtx, res: StepResult): void {
+  const domain = step.domain ?? playbook.domain ?? ctx.domain ?? "general";
+  const dir = safeDomainDir(ctx.vault, domain);
+  const board = existsSync(join(dir, "memory")) ? join(dir, "memory", "tasks.md") : join(dir, "_tasks.md");
+  const cur = existsSync(board) ? vreadFile(board) : "";
+  const text = step.text.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (cur.split("\n").some((l) => l.includes(text))) { res.ok = true; res.note = "already on the board"; return; }
+  const due = step.due && /^\d{4}-\d{2}-\d{2}$/.test(step.due) ? ` @${step.due}` : "";
+  const day = expandOutput("{date}");
+  mkdirSync(dirname(board), { recursive: true });
+  vwriteFile(board, `${cur ? cur.replace(/\s*$/, "\n") : "# Tasks\n\n"}- [ ] ${text}${due} +${day} ~src:playbook:${playbook.id} ~id:pb${Date.now().toString(36).slice(-5)}\n`);
+  res.ok = true;
+  res.note = `task on ${domain}'s board`;
+  res.outputs.push(board);
 }
 
 function safeDomainDir(vault: string, domain: string): string {
@@ -221,7 +412,22 @@ function safeDomainDir(vault: string, domain: string): string {
 }
 
 // Bundled playbooks ship beside the binary (like skill-packs); a user can
-// override or add their own under <vault>/_playbooks/<id>.json.
+// override or add their own under build/playbooks/<id>.json (the older
+// <vault>/_playbooks/ is still read).
+export function jobsDir(vault: string, runId: string): string {
+  return join(runtimePath(vault, "_meta"), "jobs", runId);
+}
+
+// A synthesize step's output may carry {date} (today, YYYY-MM-DD), so a
+// scheduled playbook writes one file per run instead of overwriting one.
+export function expandOutput(output: string, now = new Date()): string {
+  const d = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return output.replace(/\{date\}/g, d);
+}
+
+export function userPlaybookDirs(vault: string): string[] {
+  return [join(buildRoot(vault), "playbooks"), join(vault, "_playbooks")];
+}
 function playbooksDirs(): string[] {
   const dirs: string[] = [];
   if (process.env.PREVAIL_PLAYBOOKS_DIR) dirs.push(process.env.PREVAIL_PLAYBOOKS_DIR);
@@ -243,9 +449,7 @@ export function loadPlaybook(vault: string, id: string): Playbook | null {
   // The id arrives from MCP run_playbook. `../../x` would load (and run) any
   // JSON file on disk shaped like a playbook; ids are plain slugs.
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/.test(id)) return null;
-  const userP = join(vault, "_playbooks", `${id}.json`);
-  if (existsSync(userP)) { const p = parsePlaybook(userP); if (p) return p; }
-  for (const d of playbooksDirs()) {
+  for (const d of [...userPlaybookDirs(vault), ...playbooksDirs()]) {
     const p = join(d, `${id}.json`);
     if (existsSync(p)) { const pb = parsePlaybook(p); if (pb) return pb; }
   }
@@ -255,7 +459,7 @@ export function loadPlaybook(vault: string, id: string): Playbook | null {
 export function listPlaybooks(vault: string): { id: string; name: string; goal: string }[] {
   const seen = new Set<string>();
   const out: { id: string; name: string; goal: string }[] = [];
-  const dirs = [join(vault, "_playbooks"), ...playbooksDirs()];
+  const dirs = [...userPlaybookDirs(vault), ...playbooksDirs()];
   for (const d of dirs) {
     if (!existsSync(d)) continue;
     for (const f of readdirSync(d)) {

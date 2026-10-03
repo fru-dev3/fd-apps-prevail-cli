@@ -420,7 +420,37 @@ async function learnPass(cfg: LearnConfig): Promise<{ domains: number; lines: nu
   // "Across your life" (and entity pages). Once a day per target, and a no-op
   // on a client machine: consolidate() checks the role itself.
   try { consolidate(root); } catch { /* non-fatal */ }
+  // Metrics: once a day, on the hub only, every source into the daily points
+  // (any Mac can still compute on demand; the hub keeps them fresh).
+  try { await dailyMetrics(root); } catch { /* non-fatal */ }
   return { domains, lines };
+}
+
+async function dailyMetrics(root: string, now = Date.now()): Promise<void> {
+  const { readMachineRole } = await import("./config.ts");
+  if (readMachineRole() !== "hub") return;
+  const { metricsDir, computeMetrics } = await import("./metrics.ts");
+  const stamp = join(metricsDir(root), "catalog.json");
+  try { if (now - statSync(stamp).mtimeMs < 20 * 3600_000) return; } catch { /* never computed */ }
+  const c = await computeMetrics(root, { now });
+  // Metrics M5: last month's recap once, the year page through December.
+  try { await (await import("./stories.ts")).storiesPass(root, c); } catch { /* non-fatal */ }
+  // Goals G5: a fresh start (new year, birthday, a new quarter, a move or a
+  // new job) is offered once, inside the interruption budget; on a new year
+  // or a birthday Your Year is written fresh for it.
+  try {
+    const lt = await import("./lifetime.ts");
+    const fs = lt.freshStarts(root, now);
+    await lt.freshStartPass(root, now);
+    // Once a year, by code: this year's review page, saved for the user to answer.
+    await lt.yearlyAuto(root, now);
+    if (fs.some((f) => f.kind === "new-year" || f.kind === "birthday")) {
+      const st = await import("./stories.ts");
+      // On a new year, the year that just ended; on a birthday, this year so far.
+      const y = new Date(now).getFullYear();
+      st.writeYear(root, await st.yearStory(root, c, String(fs.some((f) => f.kind === "new-year") ? y - 1 : y)));
+    }
+  } catch { /* non-fatal */ }
 }
 
 // The daemon loop: distill on an interval until SIGINT.

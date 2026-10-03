@@ -1,0 +1,166 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`domain turn 1`] = `
+{
+  "cwd": "<vault>/data/domains/homestead",
+  "entityId": null,
+  "inheritUserMcp": false,
+  "prompt": "What should I do this weekend?",
+  "userContext": 
+"# WHO YOU'RE HELPING - the user's profile. Use this as ground truth about them.
+# You
+A person who likes long walks and quiet mornings.
+
+# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+Values, most important first:
+1. Craft
+Life goals:
+- Finish the shed (serves Craft)
+
+# GOALS: what the user is working toward. Keep advice consistent with these; say so when a request works against one.
+## homestead goals
+- Paint the shed @2026-11-01
+## Life goals
+- Walk every day
+
+# LONG-TERM MEMORY (homestead): what this space has learned across sessions. Use it as background; the user's words in this turn win.
+# Memory
+Paint dries slowly in autumn."
+,
+}
+`;
+
+exports[`general turn 1`] = `
+{
+  "cwd": "<vault>/data/domains/general",
+  "entityId": null,
+  "inheritUserMcp": false,
+  "prompt": "What should I do this weekend?",
+  "userContext": 
+"# WHO YOU'RE HELPING - the user's profile. Use this as ground truth about them.
+# You
+A person who likes long walks and quiet mornings.
+
+# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+Values, most important first:
+1. Craft
+Life goals:
+- Finish the shed (serves Craft)
+
+# GOALS: what the user is working toward. Keep advice consistent with these; say so when a request works against one.
+## Life goals
+- Walk every day
+
+# LONG-TERM MEMORY (general): what this space has learned across sessions. Use it as background; the user's words in this turn win.
+# General"
+,
+}
+`;
+
+exports[`app scope turn 1`] = `
+{
+  "cwd": "<vault>/data/apps/paint-shop/_scope",
+  "entityId": null,
+  "inheritUserMcp": true,
+  "prompt": 
+"# APP CONTEXT: paint-shop
+App id paint-shop is not in the apps mirror (run: prevail apps refresh), so its tools may not be available on this turn.
+
+Use this app's tools to get what the user asks for. Reads run; writes and sends are queued for the user's approval.
+If this app's tools are not available in this conversation, say in one sentence that it needs to be connected, and stop. Do not try other ways to reach it (files, shell, other tools).
+
+---
+
+What should I do this weekend?"
+,
+  "userContext": 
+"# WHO YOU'RE HELPING - the user's profile. Use this as ground truth about them.
+# You
+A person who likes long walks and quiet mornings."
+,
+}
+`;
+
+exports[`entity turn 1`] = `
+{
+  "cwd": "<vault>/data/domains/general",
+  "entityId": "person/foo",
+  "inheritUserMcp": false,
+  "prompt": 
+"# ENTITY CONTEXT
+This conversation is about Foo (Person, id person/foo). Answer with it in mind; the notes below are what the user has recorded.
+
+## Your notes
+Lends a ladder.
+
+---
+
+What should I do this weekend?"
+,
+  "userContext": 
+"# WHO YOU'RE HELPING - the user's profile. Use this as ground truth about them.
+# You
+A person who likes long walks and quiet mornings.
+
+# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+Values, most important first:
+1. Craft
+Life goals:
+- Finish the shed (serves Craft)
+
+# GOALS: what the user is working toward. Keep advice consistent with these; say so when a request works against one.
+## Life goals
+- Walk every day
+
+# LONG-TERM MEMORY (general): what this space has learned across sessions. Use it as background; the user's words in this turn win.
+# General"
+,
+}
+`;
+
+exports[`domain turn with a referenced app and domain 1`] = `
+{
+  "cwd": "<vault>/data/domains/homestead",
+  "entityId": null,
+  "inheritUserMcp": true,
+  "prompt": 
+"# APP CONTEXT: paint-shop
+App id paint-shop is not in the apps mirror (run: prevail apps refresh), so its tools may not be available on this turn.
+
+Use this app's tools to get what the user asks for. Reads run; writes and sends are queued for the user's approval.
+If this app's tools are not available in this conversation, say in one sentence that it needs to be connected, and stop. Do not try other ways to reach it (files, shell, other tools).
+
+---
+
+# REFERENCED DOMAIN: money
+The user referenced this domain. Its current state:
+# State
+Budget is fine.
+
+---
+
+What should I do this weekend?"
+,
+  "userContext": 
+"# WHO YOU'RE HELPING - the user's profile. Use this as ground truth about them.
+# You
+A person who likes long walks and quiet mornings.
+
+# COMPASS: the user's own purpose, values, rules and life goals, confirmed by them. Keep advice consistent with these, and say plainly when a request works against one.
+Values, most important first:
+1. Craft
+Life goals:
+- Finish the shed (serves Craft)
+
+# GOALS: what the user is working toward. Keep advice consistent with these; say so when a request works against one.
+## homestead goals
+- Paint the shed @2026-11-01
+## Life goals
+- Walk every day
+
+# LONG-TERM MEMORY (homestead): what this space has learned across sessions. Use it as background; the user's words in this turn win.
+# Memory
+Paint dries slowly in autumn."
+,
+}
+`;

@@ -16,11 +16,12 @@
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { projectFields, slugify } from "./entities.ts";
+import { slugify } from "./entities.ts";
 import { tryAcquireLock } from "./file-lock.ts";
 import { appendJsonl, domainUpdatesPath, readJsonl, readUnhomed, touchesPath, type DomainUpdate } from "./linking.ts";
 import { dataRoot, resolveDomainDir } from "./path-safety.ts";
-import { createProject, listProjectPages, type ProjectDetail } from "./projects.ts";
+import { createProject, type ProjectDetail } from "./projects.ts";
+import { listMissions } from "./missions.ts";
 import { projectSittings, readProjectsIndex } from "./prompt-projects.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile, vwriteFileAtomic } from "./vault-session.ts";
@@ -81,7 +82,8 @@ function updateDecisions(vault: string, fn: (d: SuggestionsFile) => void): void 
 
 // ── The rules ───────────────────────────────────────────────────────────
 
-const archivedDomain = (vault: string, slug: string) => existsSync(join(vault, "_archive", slug));
+// Archived domains: data/domains/_archive/<d> (v4), or <vault>/_archive/<d> (older).
+const archivedDomain = (vault: string, slug: string) => existsSync(join(dataRoot(vault), "domains", "_archive", slug)) || existsSync(join(vault, "_archive", slug));
 
 function fromUnhomed(vault: string, domains: Set<string>, projects: Set<string>, now: number): RankedSuggestion[] {
   const groups = new Map<string, { thread: string; ts: number; home: string; fact: string; effort?: boolean }[]>();
@@ -105,7 +107,7 @@ function fromUnhomed(vault: string, domains: Set<string>, projects: Set<string>,
     out.push({
       id: effort ? `project:topic:${label}` : `domain:${label}`,
       kind: effort ? "project" : "domain",
-      title: effort ? `Track ${name} as a project?` : `Create a ${name} domain?`,
+      title: effort ? `Start a project for ${name}?` : `Create a ${name} domain?`,
       reason: `${plural(n, "conversation")} about ${label.replace(/-/g, " ")} since ${shortDate(since)}`,
       evidence, confidence: round2(Math.min(0.95, 0.4 + 0.1 * n)),
       metric: { value: n, unit: "conversations" },
@@ -119,10 +121,9 @@ function fromIntent(vault: string, domains: Set<string>): RankedSuggestion[] {
   if (!idx) return [];
   const sittings = projectSittings(vault);
   const tracked = new Set<string>();
-  for (const p of listProjectPages(vault)) {
-    tracked.add(p.slug);
-    const from = projectFields(p.doc).intent_project;
-    if (from) tracked.add(from);
+  for (const m of listMissions(vault)) {
+    tracked.add(m.slug);
+    for (const pp of m.prompt_projects) tracked.add(pp);
   }
   const out: RankedSuggestion[] = [];
   for (const p of idx.projects) {
@@ -130,7 +131,7 @@ function fromIntent(vault: string, domains: Set<string>): RankedSuggestion[] {
     if (p.status === "done" || n < PROJECT_SITTINGS_AT || tracked.has(p.slug)) continue;
     out.push({
       id: `project:intent:${p.slug}`, kind: "project",
-      title: `Track ${p.title} as a project?`,
+      title: `Start a project for ${p.title}?`,
       reason: `${plural(n, "sitting")} in your prompts since ${shortDate(p.first_ts)}`,
       evidence: [{ ts: p.last_ts, domain: domains.has(p.domain) ? p.domain : "general" }],
       confidence: round2(Math.min(0.9, 0.4 + 0.05 * n)),
@@ -185,7 +186,7 @@ export const SUGGESTION_ID_RE = /^[A-Za-z0-9_.:\/-]+$/;
 export function candidateSuggestions(vault: string, now = Date.now()): RankedSuggestion[] {
   const dirs = listDomainDirs(vault);
   const have = new Set(dirs.map((d) => d.toLowerCase()));
-  const projects = new Set(listProjectPages(vault).map((p) => p.slug));
+  const projects = new Set(listMissions(vault).map((m) => m.slug));
   return [...fromUnhomed(vault, have, projects, now), ...fromIntent(vault, have), ...fromDormant(vault, dirs, now)]
     .filter((s) => SUGGESTION_ID_RE.test(s.id))
     .sort((a, b) => b.confidence - a.confidence || a.id.localeCompare(b.id));

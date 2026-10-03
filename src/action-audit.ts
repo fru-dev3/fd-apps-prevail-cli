@@ -9,7 +9,8 @@
 // Lives at <vault>/_log/action-audit.jsonl, one JSON object per line.
 
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { runtimePath } from "./path-safety.ts";
 import { appendLedger, readLedgerAll } from "./ledger.ts";
 import { shardPathFor, shardPaths } from "./ledger-shard.ts";
 import { redact } from "./privacy.ts";
@@ -29,16 +30,25 @@ export interface ActionAuditEntry {
   report?: string;
 }
 
+// Callers hand in the vault, or (the act gate under a v4 domain cwd, a
+// playbook run) the domains or apps container; both used to grow a
+// data/domains/_log that scans then offered as a domain. Every caller now
+// lands in the vault's build/_log.
+export function auditVaultRoot(root: string): string {
+  const r = resolve(root);
+  if (basename(dirname(r)) === "data" && (basename(r) === "domains" || basename(r) === "apps")) return dirname(dirname(r));
+  return r;
+}
+
 export function actionAuditPath(vaultRoot: string): string {
-  return join(vaultRoot, "_log", "action-audit.jsonl");
+  return join(runtimePath(auditVaultRoot(vaultRoot), "_log"), "action-audit.jsonl");
 }
 
 /// Append one redacted audit record. Best-effort: auditing must never block or
 /// fail the action path.
 export function auditAction(vaultRoot: string, entry: ActionAuditEntry): void {
   try {
-    const logDir = join(vaultRoot, "_log");
-    mkdirSync(logDir, { recursive: true });
+    mkdirSync(dirname(actionAuditPath(vaultRoot)), { recursive: true });
     const safe: ActionAuditEntry = {
       ...entry,
       cls: entry.cls ?? classifyAction(entry.action),

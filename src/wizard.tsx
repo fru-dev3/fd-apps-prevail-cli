@@ -27,8 +27,6 @@ const SEED_DOMAINS = [
   "content",
   "brand",
   "calendar",
-  "vision",
-  "intel",
   "learning",
   "homestead",
   "social",

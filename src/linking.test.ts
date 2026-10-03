@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runChatJson } from "./chat-json.ts";
 import { readAutosave, setAutosave } from "./config.ts";
 import { buildIndex, findEntity, readIndex, readPage, readRelations, refreshEntities, saveEntity, scoreRelation, setRelation } from "./entities.ts";
-import { catchUpCount, consolidate, readUpdates, recordTouch, replaceSection, replyIsError, runTouchStep, TOUCH_MAX_ENTITIES, touchSkipReason, touchedEntities, userText } from "./linking.ts";
+import { catchUpCount, consolidate, readUnhomed, readUpdates, recordTouch, replaceSection, replyIsError, runTouchStep, TOUCH_MAX_ENTITIES, touchSkipReason, touchedEntities, userText } from "./linking.ts";
 import { fromUpdates } from "./recommendations.ts";
 import { classifyTouches, parseTouchReply, TOUCH_FACT_CHARS, type TouchOptions, type TouchResult } from "./route.ts";
 import type { DecisionProvider } from "./decision.ts";
@@ -137,16 +137,41 @@ describe("the touched event and update lines", () => {
     entity_facts: {}, source: "model",
   });
 
-  test("touched comes after done, and the lines land in every touched place", async () => {
-    const r = await turn(stub);
+  test("touched comes after done, and the lines land in every touched place: code first, the model only for a tie", async () => {
+    writeFileSync(dom("insurance", "manifest.json"), JSON.stringify({ identity: { name: "insurance" }, routing: { keywords: ["claim", "adjuster"] } }));
+    writeFileSync(dom("legal", "manifest.json"), JSON.stringify({ identity: { name: "legal" }, routing: { keywords: ["lawyer", "settlement"] } }));
+    let asked: string[] = [];
+    const r = await turn(async (o) => { asked = o.domains.map((d) => d.slug); return stub(o); });
+    // Legal has two hits (code); insurance one (a tie: only it goes to the model).
+    expect(asked).toEqual(["insurance"]);
     expect(r.code).toBe(0);
     expect(r.events.map((e) => e.type)).toEqual(["start", "user", "assistant", "usage", "done", "touched"]);
     const t = r.events.at(-1);
-    expect(t).toMatchObject({ type: "touched", thread: "t-foo", domains: [{ slug: "insurance", fact: "insurance: claim not released" }, { slug: "legal", fact: "legal: claim not released" }], entities: [] });
+    expect(t).toMatchObject({ type: "touched", thread: "t-foo", by: "model", domains: [{ slug: "legal", fact: MSG }, { slug: "insurance", fact: "insurance: claim not released" }], entities: [] });
     const ins = lines(dom("insurance", "memory", "updates.jsonl"));
     expect(ins).toHaveLength(1);
     expect(ins[0]).toMatchObject({ from_domain: "general", thread: "t-foo", fact: "insurance: claim not released", entities: [] });
-    expect(lines(dom("general", "memory", "touches.jsonl"))[0]).toMatchObject({ thread: "t-foo", domains: ["insurance", "legal"], entities: [] });
+    expect(lines(dom("general", "memory", "touches.jsonl"))[0]).toMatchObject({ thread: "t-foo", domains: ["legal", "insurance"], entities: [] });
+    expect(readFileSync(dom("legal", "memory", "memory.md"), "utf8")).toContain(`: ${MSG} (from General, thread t-foo)`);
+  });
+
+  test("a turn that names no domain routes nothing, but a small daily allowance still notices topics with no home", async () => {
+    writeFileSync(dom("insurance", "manifest.json"), JSON.stringify({ identity: { name: "insurance" }, routing: { keywords: ["claim", "adjuster"] } }));
+    const LONG = "I keep thinking about building a foo workbench in the garage over the winter, with proper vises and storage.";
+    const seen: string[][] = [];
+    const classify = async (o: TouchOptions): Promise<TouchResult> => { seen.push(o.domains.map((d) => d.slug)); return { domains: [{ slug: "insurance", confidence: 1, fact: "never taken" }], entity_facts: {}, unhomed: [{ label: "woodworking", fact: "a foo workbench" }], source: "model" }; };
+    const step = { vault, home: "general", thread: "t-wood", reply: "Sounds good.", incognito: false, localOnly: false, classify };
+    // Small talk with no domain asks nothing.
+    await runTouchStep({ ...step, message: "ok, sounds good to me" });
+    expect(seen).toEqual([]);
+    // A real no-hit turn: the model sees no domains, routes nothing, and its topic is kept.
+    const r = await runTouchStep({ ...step, message: LONG });
+    expect(seen).toEqual([[]]);
+    expect(r?.domains ?? []).toEqual([]);
+    expect(readUnhomed(vault).map((u) => u.label)).toEqual(["woodworking"]);
+    // The allowance is small: after ten looks today, no more.
+    for (let n = 0; n < 12; n++) await runTouchStep({ ...step, thread: `t-${n}`, message: LONG });
+    expect(seen.length).toBe(10);
   });
 
   test("no classifier in tests means no step; skips and timeouts emit nothing", async () => {
@@ -274,7 +299,9 @@ describe("daily consolidation", () => {
     expect(state).toContain("## Open items\n\n- renew");
     const mem = readFileSync(dom("insurance", "memory", "memory.md"), "utf8");
     expect(mem).toContain("## Across your life\n\n- 2026-09-19 · from Realestate: Settlement not released");
-    expect(mem).not.toContain("Lawyer engaged");
+    expect(mem.split("## Across your life")[1]).not.toContain("Lawyer engaged");
+    // Every touch is also a dated line in the domain's memory, with its thread.
+    expect(mem).toContain("## Noted from conversations\n- 2026-09-17: Claim open at the Foo house (from Realestate, thread ");
     expect(readPage(vault, "place", "foo-house")!.discussed).toContain("**Across your life**\n- 2026-09-19 · from Realestate: Roof leak");
     expect(lines(dom("insurance", "memory", "updates.jsonl"))).toHaveLength(4);
 

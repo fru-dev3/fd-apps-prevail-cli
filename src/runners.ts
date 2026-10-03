@@ -540,7 +540,7 @@ export async function runSkillMcp(
 // attacker-controlled public host to `http://169.254.169.254/…` (cloud
 // metadata) or a private address — the initial-URL check alone can't see that
 // (B8/O8 follow-up). We cap at 5 hops and re-validate each Location.
-async function fetchGuarded(
+export async function fetchGuarded(
   url: string,
   init: RequestInit,
   maxHops = 5,

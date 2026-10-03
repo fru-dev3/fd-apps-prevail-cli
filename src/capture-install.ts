@@ -4,7 +4,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 
 import { KNOWN_TOOLS, type KnownTool } from "./capture.ts";
-import { runtimePath, validateVaultPath } from "./path-safety.ts";
+import { validateVaultPath } from "./path-safety.ts";
 // prevailInvocation: the prevail binary this process IS, so installed hooks and
 // agents re-invoke the same code.
 import { escapeXml, prevailInvocation } from "./heartbeat.ts";
@@ -56,11 +56,19 @@ export function captureHookCommand(slug: string): string {
 // launchd agent - the sync backstop. RunAtLoad:false → SAFE / disabled.
 // -----------------------------------------------------------------------------
 
-export function renderPlist(vaultPath: string): string {
-  const argv = [...prevailInvocation(), "capture", "sync", "--vault", vaultPath];
+/** Where the sync agent logs: beside the other Prevail agents, not in a vault. */
+export function captureLogPath(): string {
+  return join(homedir(), "Library", "Logs", "prevail-capture.log");
+}
+
+// No --vault: each run resolves the vault from config.json, like the push hooks
+// do. A pinned path kept syncing into a demo vault long after the switch to the
+// real one, so a month of prompts landed where nothing reads them.
+export function renderPlist(): string {
+  const argv = [...prevailInvocation(), "capture", "sync"];
   const programArgs = argv.map((a) => `    <string>${escapeXml(a)}</string>`).join("\n");
-  const logOut = join(runtimePath(vaultPath, "_log"), "capture.out.log");
-  const logErr = join(runtimePath(vaultPath, "_log"), "capture.err.log");
+  const logOut = captureLogPath();
+  const logErr = captureLogPath();
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -102,8 +110,10 @@ export function isAgentLoaded(): boolean {
   }
 }
 
-/** Write (not load) the launchd plist. SAFE: operator enables explicitly. */
-export function installAgent(vaultPath: string): AgentResult {
+/** Write the launchd plist. SAFE: never loads it for the first time (the
+ *  operator enables it), but an agent that is already loaded is reloaded so a
+ *  re-install takes effect instead of launchd running the stale copy. */
+export function installAgent(): AgentResult {
   const file = plistPath();
   if (platform() !== "darwin") {
     return { installed: false, plist: file, unsupported: true, error: "launchd is macOS-only" };
@@ -111,11 +121,16 @@ export function installAgent(vaultPath: string): AgentResult {
   try {
     const dir = dirname(file);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(file, renderPlist(vaultPath));
+    writeFileSync(file, renderPlist());
     try {
       chmodSync(file, 0o644);
     } catch {
       /* best effort */
+    }
+    if (isAgentLoaded()) {
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      spawnSync("launchctl", ["bootout", `${domain}/${CAPTURE_LABEL}`], { stdio: "ignore" });
+      spawnSync("launchctl", ["bootstrap", domain, file], { stdio: "ignore" });
     }
   } catch (err) {
     return { installed: false, plist: file, error: (err as Error).message };
@@ -142,17 +157,24 @@ export function uninstallAgent(): AgentResult {
 }
 
 // -----------------------------------------------------------------------------
-// Claude Code push hook - merge a UserPromptSubmit entry into ~/.claude/settings.json
+// Push hooks - a UserPromptSubmit entry in Claude Code's ~/.claude/settings.json
+// and Codex's ~/.codex/hooks.json. Both files nest the same shape:
+// { hooks: { UserPromptSubmit: [ { hooks: [ {type, command, timeout} ] } ] } }.
 // -----------------------------------------------------------------------------
 
 export function claudeSettingsPath(): string {
   return join(homedir(), ".claude", "settings.json");
 }
 
-/** Is Claude Code present on this machine? Its config dir is the reliable tell. */
-function claudePresent(): boolean {
-  return existsSync(join(homedir(), ".claude"));
+export function codexHooksPath(): string {
+  return join(homedir(), ".codex", "hooks.json");
 }
+
+/** The push-hooked harnesses: config file and the folder that proves it is installed. */
+export const PUSH_TOOLS: Record<string, { file: () => string; home: () => string; name: string }> = {
+  claude: { file: claudeSettingsPath, home: () => join(homedir(), ".claude"), name: "Claude Code" },
+  codex: { file: codexHooksPath, home: () => join(homedir(), ".codex"), name: "Codex" },
+};
 
 type HookEntry = { type?: string; command?: string; timeout?: number; [k: string]: unknown };
 type HookGroup = { hooks?: HookEntry[]; [k: string]: unknown };
@@ -184,120 +206,113 @@ export function captureSourcePath(slug: string, transcript?: string): string | u
       return join(home, ".local", "share", "opencode", "opencode.db");
     case "prevail":
       return join(home, ".prevail", "sessions.db");
+    case "hermes":
+      return join(home, ".hermes", "state.db");
     default:
       return transcript ? join(home, transcript) : undefined;
   }
 }
 
-/** Idempotently merge (or refresh) the prevail capture hook into Claude Code's
- *  settings.json UserPromptSubmit list, preserving every other hook and key. */
-export function wireClaudeHook(): HookWireResult {
-  const target = claudeSettingsPath();
-  const base: HookWireResult = {
-    tool: "claude",
-    method: "push",
-    present: claudePresent(),
-    target,
-    wired: false,
-  };
-  if (!base.present) {
-    return {
-      ...base,
-      wired: false,
-      action: "noop",
-      detail: "Claude Code not installed (~/.claude absent)",
-    };
+const marker = (tool: string) => `capture --tool ${tool}`;
+
+/** Does this hooks file already carry our capture hook for `tool`? */
+export function promptHookWired(tool: string, file = PUSH_TOOLS[tool]?.file()): boolean {
+  if (!file || !existsSync(file)) return false;
+  try {
+    return readFileSync(file, "utf8").includes(marker(tool));
+  } catch {
+    return false;
+  }
+}
+
+/** Idempotently merge (or refresh) the prevail capture hook into a harness's
+ *  UserPromptSubmit list, preserving every other hook and key. `file` and
+ *  `present` are injectable for tests. */
+export function wirePromptHook(
+  tool: string,
+  file = PUSH_TOOLS[tool].file(),
+  present = existsSync(PUSH_TOOLS[tool].home()),
+): HookWireResult {
+  const base: HookWireResult = { tool, method: "push", present, target: file, wired: false };
+  if (!present) {
+    return { ...base, action: "noop", detail: `${PUSH_TOOLS[tool]?.name ?? tool} not installed` };
   }
 
   let settings: Record<string, unknown> = {};
-  if (existsSync(target)) {
+  if (existsSync(file)) {
     try {
-      settings = JSON.parse(readFileSync(target, "utf8")) as Record<string, unknown>;
+      settings = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
     } catch (err) {
-      return {
-        ...base,
-        wired: false,
-        error: `settings.json is not valid JSON: ${(err as Error).message}`,
-      };
+      return { ...base, error: `${file} is not valid JSON: ${(err as Error).message}` };
     }
   }
 
   const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
   const list = (hooks.UserPromptSubmit ??= []) as HookGroup[];
-  const command = captureHookCommand("claude");
-  const entry: HookEntry = { type: "command", command, timeout: 10 };
+  const entry: HookEntry = { type: "command", command: captureHookCommand(tool), timeout: 10 };
 
-  // Find an existing prevail-capture group by its stable marker and replace its
+  // Find an existing prevail-capture entry by its stable marker and replace its
   // command (the exec path may have changed, e.g. app moved to /Applications).
   let action: "added" | "updated" = "added";
-  let found = false;
   for (const group of list) {
     const inner = Array.isArray(group?.hooks) ? group.hooks : [];
     for (let i = 0; i < inner.length; i++) {
-      if (
-        typeof inner[i]?.command === "string" &&
-        inner[i].command!.includes("capture --tool claude")
-      ) {
+      if (typeof inner[i]?.command === "string" && inner[i].command!.includes(marker(tool))) {
         inner[i] = entry;
-        found = true;
         action = "updated";
       }
     }
   }
-  if (!found) list.push({ hooks: [entry] });
+  if (action === "added") list.push({ hooks: [entry] });
 
   try {
-    const dir = dirname(target);
+    const dir = dirname(file);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(target, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+    writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   } catch (err) {
-    return { ...base, wired: false, error: (err as Error).message };
+    return { ...base, error: (err as Error).message };
   }
   return { ...base, wired: true, action };
 }
 
-/** Remove the prevail capture hook from Claude Code's settings.json. */
-export function unwireClaudeHook(): HookWireResult {
-  const target = claudeSettingsPath();
+/** Remove the prevail capture hook from a harness's hooks file. */
+export function unwirePromptHook(tool: string, file = PUSH_TOOLS[tool].file()): HookWireResult {
   const base: HookWireResult = {
-    tool: "claude",
+    tool,
     method: "push",
-    present: claudePresent(),
-    target,
+    present: existsSync(PUSH_TOOLS[tool]?.home() ?? file),
+    target: file,
     wired: false,
   };
-  if (!existsSync(target)) return { ...base, wired: false, action: "noop" };
+  if (!existsSync(file)) return { ...base, action: "noop" };
   let settings: Record<string, unknown>;
   try {
-    settings = JSON.parse(readFileSync(target, "utf8")) as Record<string, unknown>;
+    settings = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
   } catch {
-    return {
-      ...base,
-      wired: false,
-      action: "noop",
-      detail: "settings.json unparseable; left untouched",
-    };
+    return { ...base, action: "noop", detail: `${file} unparseable; left untouched` };
   }
   const hooks = settings.hooks as Record<string, unknown> | undefined;
   const list = hooks?.UserPromptSubmit as HookGroup[] | undefined;
-  if (!Array.isArray(list)) return { ...base, wired: false, action: "noop" };
+  if (!Array.isArray(list)) return { ...base, action: "noop" };
   let removed = false;
   const kept = list.filter((group) => {
     const inner = Array.isArray(group?.hooks) ? group.hooks : [];
-    const isOurs = inner.some(
-      (h) => typeof h?.command === "string" && h.command.includes("capture --tool claude"),
-    );
+    const isOurs = inner.some((h) => typeof h?.command === "string" && h.command.includes(marker(tool)));
     if (isOurs) removed = true;
     return !isOurs;
   });
   (hooks as Record<string, unknown>).UserPromptSubmit = kept;
   try {
-    writeFileSync(target, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+    writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   } catch (err) {
-    return { ...base, wired: false, error: (err as Error).message };
+    return { ...base, error: (err as Error).message };
   }
-  return { ...base, wired: false, action: removed ? "removed" : "noop" };
+  return { ...base, action: removed ? "removed" : "noop" };
 }
+
+/** Kept for callers of the Claude-only API. */
+export const wireClaudeHook = (): HookWireResult => wirePromptHook("claude");
+export const unwireClaudeHook = (): HookWireResult => unwirePromptHook("claude");
 
 // -----------------------------------------------------------------------------
 // Harness roster - which tools get PUSH vs SYNC, plus light presence detection.
@@ -327,6 +342,16 @@ function binAvailable(bin: string): boolean {
 
 /** Report a SYNC-covered harness (no push hook wired this increment). */
 function syncHarness(t: KnownTool): HookWireResult {
+  if (t.slug === "hermes") {
+    return {
+      tool: "hermes",
+      method: "sync",
+      present: binAvailable("hermes") || existsSync(captureSourcePath("hermes")!),
+      wired: false,
+      source: captureSourcePath("hermes"),
+      detail: "Hermes keeps sessions in ~/.hermes/state.db; no reader yet",
+    };
+  }
   if (t.slug === "prevail") {
     return {
       tool: "prevail",
@@ -371,13 +396,13 @@ export function install(vaultPath: string): CaptureInstallResult {
       error: v.reason,
     };
   }
-  const agent = installAgent(vaultPath);
+  const agent = installAgent();
   const harnesses: HookWireResult[] = [];
-  // PUSH: Claude Code (the one mature submit hook).
-  harnesses.push(wireClaudeHook());
+  // PUSH: the harnesses with a real submit hook. Each is also read by sync.
+  for (const tool of Object.keys(PUSH_TOOLS)) harnesses.push(wirePromptHook(tool));
   // SYNC: everything else, reported so the UI/operator sees full coverage.
   for (const t of KNOWN_TOOLS) {
-    if (t.slug === "claude") continue;
+    if (t.slug in PUSH_TOOLS) continue;
     harnesses.push(syncHarness(t));
   }
   // Success when the platform supported the agent AND no harness hard-errored.
@@ -388,7 +413,7 @@ export function install(vaultPath: string): CaptureInstallResult {
 
 export function uninstall(_vaultPath: string): CaptureInstallResult {
   const agent = uninstallAgent();
-  const harnesses = [unwireClaudeHook()];
+  const harnesses = Object.keys(PUSH_TOOLS).map((tool) => unwirePromptHook(tool));
   return { ok: !agent.error && !harnesses.some((h) => h.error), agent, harnesses };
 }
 
@@ -401,29 +426,22 @@ export interface CaptureInstallStatus {
 /** Report current wiring without changing anything (pure read). */
 export function status(_vaultPath: string): CaptureInstallStatus {
   const plist = plistPath();
-  const claudeWired =
-    claudePresent() &&
-    existsSync(claudeSettingsPath()) &&
-    (() => {
-      try {
-        return readFileSync(claudeSettingsPath(), "utf8").includes("capture --tool claude");
-      } catch {
-        return false;
-      }
-    })();
-  const harnesses: HookWireResult[] = [
-    {
-      tool: "claude",
-      method: "push",
-      present: claudePresent(),
-      wired: claudeWired,
-      target: claudeSettingsPath(),
-      source: captureSourcePath("claude", ".claude/projects"),
-    },
-  ];
+  const harnesses: HookWireResult[] = [];
   for (const t of KNOWN_TOOLS) {
-    if (t.slug === "claude") continue;
-    harnesses.push(syncHarness(t));
+    const push = PUSH_TOOLS[t.slug];
+    if (!push) {
+      harnesses.push(syncHarness(t));
+      continue;
+    }
+    const present = existsSync(push.home());
+    harnesses.push({
+      tool: t.slug,
+      method: "push",
+      present,
+      wired: present && promptHookWired(t.slug),
+      target: push.file(),
+      source: captureSourcePath(t.slug, t.transcript),
+    });
   }
   return {
     ok: true,

@@ -25,6 +25,7 @@
 // to the model path as examples, and a correction on the same thread pins that
 // thread's domains outright.
 
+import { ownerFor, readContracts } from "./agent-contract.ts";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 
@@ -38,7 +39,7 @@ export interface RouteHit {
   confidence: number;
 }
 
-export type RouteSource = "typesafe" | "model" | "correction" | "none";
+export type RouteSource = "typesafe" | "model" | "correction" | "contract" | "none";
 
 export interface RouteCandidateScore {
   slug: string;
@@ -372,6 +373,17 @@ interface Classified {
 }
 
 async function classify(opts: RouteOptions, text: string, domains: string[]): Promise<Classified | null> {
+  // Declared owner first (agent.md `owns`): no model call when one domain's
+  // contract plainly claims the subject. A tie or no match falls through.
+  const owner = opts.vault ? ownerFor(text, readContracts(opts.vault), domains) : null;
+  if (owner) {
+    return {
+      domains: [{ slug: owner.domain, confidence: 1 }],
+      ranked: [{ slug: owner.domain, score: 1 }],
+      reason: `${labelFor(owner.domain).toLowerCase()} owns ${owner.matched}`,
+      source: "contract",
+    };
+  }
   if (opts.provider) {
     const res = await evaluateDecision(opts.provider, text.slice(0, ROUTE_MAX_TEXT), { route: buildRouteQuestion(domains) });
     const a = res?.answers.route;
@@ -568,7 +580,7 @@ export function buildTouchPrompt(o: { message: string; reply: string; domains: T
     'If it concerns nothing, reply {"domains":[],"entity_facts":{},"projects":[],"unhomed":[]}.',
   ].join("\n");
   const ents = o.entities.length
-    ? `The user's own people, places and things (id = name):\n${o.entities.slice(0, 60).map((e) => `- ${e.id} = ${[e.name, ...e.aliases.slice(0, 3)].join(" / ")}`).join("\n")}\n\n`
+    ? `The user's own entities and events (people, places, products, things and events; id = name):\n${o.entities.slice(0, 60).map((e) => `- ${e.id} = ${[e.name, ...e.aliases.slice(0, 3)].join(" / ")}`).join("\n")}\n\n`
     : "";
   const projs = projects.length
     ? `The user's active projects (id = name: what done looks like):\n${projects.map((p) => `- ${p.id} = ${[p.name, ...p.aliases.slice(0, 2)].join(" / ")}${p.outcome ? `: ${p.outcome}` : ""}`).join("\n")}\n\n`

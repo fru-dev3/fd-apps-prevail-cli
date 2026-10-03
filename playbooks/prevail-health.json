@@ -1,0 +1,8 @@
+{
+  "id": "prevail-health",
+  "name": "Prevail health",
+  "goal": "Once a week, the Mechanic checks Prevail itself: connections, sources, loops that fail or stopped running, capture that went quiet. Each fix becomes a task for you; nothing touches a credential.",
+  "steps": [
+    { "kind": "specialist", "id": "s1", "specialist": "mechanic", "brief": "What in Prevail is broken or stalled this week, the evidence, and the fix for each." }
+  ]
+}

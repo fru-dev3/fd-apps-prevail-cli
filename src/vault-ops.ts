@@ -24,7 +24,7 @@ import {
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { DOMAINS_DIR, resolveDomainDir } from "./path-safety.ts";
+import { DATA_DIR, DOMAINS_DIR, resolveDomainDir } from "./path-safety.ts";
 
 import { readManifest, writeManifest } from "./manifest.ts";
 
@@ -634,8 +634,22 @@ export interface RestoreDomainResult {
   to: string;
 }
 
+// Where archived domains go: beside the live ones on a v4 vault
+// (data/domains/_archive/<d>), so the vault root keeps only build/ and data/.
+// An older vault (or a v4 vault archived before this) used <vault>/_archive;
+// that is still read for listing and restoring.
 function archiveRoot(vaultPath: string): string {
-  return join(resolve(vaultPath), ARCHIVE_DIR);
+  const v = resolve(vaultPath);
+  const domains = join(v, DATA_DIR, DOMAINS_DIR);
+  return existsSync(domains) ? join(domains, ARCHIVE_DIR) : join(v, ARCHIVE_DIR);
+}
+function archiveRoots(vaultPath: string): string[] {
+  return [...new Set([archiveRoot(vaultPath), join(resolve(vaultPath), ARCHIVE_DIR)])];
+}
+/** The folder an archived domain lives in, or null when it is not archived. */
+export function archivedDomainDir(vaultPath: string, domain: string): string | null {
+  for (const r of archiveRoots(vaultPath)) if (existsSync(join(r, domain))) return join(r, domain);
+  return null;
 }
 
 // Reject domain names that could escape the vault when joined (path
@@ -709,11 +723,11 @@ export function restoreDomain(
 ): RestoreDomainResult {
   assertSafeDomainName(domain);
   const vault = resolve(vaultPath);
-  const root = archiveRoot(vault);
-  const from = join(root, domain);
+  const from = archivedDomainDir(vault, domain) ?? join(archiveRoot(vault), domain);
   if (!existsSync(from)) {
     throw new Error(`restoreDomain: not archived: ${from}`);
   }
+  const root = dirname(from);
   const to = resolveDomainDir(vault, domain);
   if (existsSync(to)) {
     throw new Error(`restoreDomain: a live domain already exists at ${to}`);
@@ -733,14 +747,14 @@ export function restoreDomain(
  * <vault>/_archive/). Returns [] when nothing is archived.
  */
 export function listArchived(vaultPath: string): string[] {
-  const root = archiveRoot(vaultPath);
-  if (!existsSync(root)) return [];
-  const out: string[] = [];
-  for (const name of safeReaddir(root)) {
-    if (isDir(join(root, name))) out.push(name);
+  const out = new Set<string>();
+  for (const root of archiveRoots(vaultPath)) {
+    if (!existsSync(root)) continue;
+    for (const name of safeReaddir(root)) {
+      if (isDir(join(root, name))) out.add(name);
+    }
   }
-  out.sort((a, b) => a.localeCompare(b));
-  return out;
+  return [...out].sort((a, b) => a.localeCompare(b));
 }
 
 // Set/clear archived + archived_at on a domain's manifest. If no manifest

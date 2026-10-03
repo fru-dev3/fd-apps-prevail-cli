@@ -11,6 +11,8 @@ import { existsSync, readdirSync, readFileSync, renameSync, mkdirSync, rmdirSync
 import { homedir } from "node:os";
 import { bundledDemoVaultPath, readConfig, writeConfig, readMachineRole, setMachineRole, type MachineRole } from "./config.ts";
 import type { ChatEvent } from "./chat-json.ts";
+// Top-level commands whose module parses its own arguments (module-commands.ts).
+const MODULE_COMMANDS = ["chief", "fold", "compass", "metrics", "specialists", "job", "review", "today", "decide", "missions", "mission", "sources", "commitments", "radar", "whereis", "time", "tell", "forgetting", "agents", "spaces", "aidev", "hub"];
 
 interface Args {
   vaultPath: string | null;
@@ -37,6 +39,7 @@ interface Args {
   recommendations: boolean;
   recommendationsArgs: string[];
   projects: boolean;
+  promptGroups: boolean;
   projectsArgs: string[];
   mirror: boolean;
   mirrorArgs: string[];
@@ -117,6 +120,10 @@ interface Args {
   heartbeatArgs: string[];
   capture: boolean;
   captureArgs: string[];
+  ai: boolean;
+  aiArgs: string[];
+  moduleCmd: string | null;
+  moduleArgs: string[];
   gateway: boolean;
   gatewayArgs: string[];
   domains: boolean;
@@ -175,6 +182,7 @@ function parseArgs(argv: string[]): Args {
   let recommendations = false;
   let recommendationsArgs: string[] = [];
   let projects = false;
+  let promptGroups = false;
   let projectsArgs: string[] = [];
   let mirror = false;
   let mirrorArgs: string[] = [];
@@ -254,6 +262,12 @@ function parseArgs(argv: string[]): Args {
   let heartbeatArgs: string[] = [];
   let capture = false;
   let captureArgs: string[] = [];
+  let ai = false;
+  let aiArgs: string[] = [];
+  // Commands owned by their own module (chief, fold, compass, metrics):
+  // `prevail <name> ...` hands the rest of argv to it.
+  let moduleCmd: string | null = null;
+  let moduleArgs: string[] = [];
   let gateway = false;
   let gatewayArgs: string[] = [];
   let domains = false;
@@ -319,8 +333,11 @@ function parseArgs(argv: string[]): Args {
       calendar = true;
       calendarArgs = argv.slice(i + 1);
       break;
-    } else if (a === "projects") {
+    } else if (a === "projects" || a === "prompt-groups") {
+      // Projects (stored as missions) and prompt groups share the word: see
+      // the routing where args.projects is handled.
       projects = true;
+      promptGroups = a === "prompt-groups";
       projectsArgs = argv.slice(i + 1);
       break;
     } else if (a === "intent" || a === "mirror") {
@@ -499,6 +516,14 @@ function parseArgs(argv: string[]): Args {
       capture = true;
       captureArgs = argv.slice(i + 1);
       break;
+    } else if (a === "ai") {
+      ai = true;
+      aiArgs = argv.slice(i + 1);
+      break;
+    } else if (MODULE_COMMANDS.includes(a)) {
+      moduleCmd = a;
+      moduleArgs = argv.slice(i + 1);
+      break;
     } else if (a === "gateway") {
       gateway = true;
       gatewayArgs = argv.slice(i + 1);
@@ -620,6 +645,7 @@ function parseArgs(argv: string[]): Args {
     recommendations,
     recommendationsArgs,
     projects,
+    promptGroups,
     projectsArgs,
     mirror,
     mirrorArgs,
@@ -699,6 +725,10 @@ function parseArgs(argv: string[]): Args {
     heartbeatArgs,
     capture,
     captureArgs,
+    ai,
+    aiArgs,
+    moduleCmd,
+    moduleArgs,
     gateway,
     gatewayArgs,
     domains,
@@ -771,6 +801,19 @@ USAGE
                               (bench list --json for the machine question list)
   prevail vault [...]         prune old logs, snapshot/restore the vault
                               archive/restore/list-archived domains (--json)
+  prevail chief show|set-name <name> --json
+                              the user's chief of staff (build/chief-of-staff.md)
+  prevail fold plan|apply [--routes F] --json
+                              fold the coordinator domains (chief, vision, intel)
+                              into General, the chief of staff's home
+  prevail compass show|block|bootstrap|confirm <id>|--all|drop <id>|versions|ledger --json
+                              the Compass (build/compass.md): mission, values, roles,
+                              goals, rules, every line in your words; bootstrap
+                              drafts proposed lines from the vault, quote per line
+  prevail metrics scan [--backfill]|compute|sources|list|series <id>|rhythm|glance --json
+                              metrics from what you already do: AI tools, git, task
+                              boards, loops, decisions, prompts, trips, watch history,
+                              card statements; each with a tier, coverage and sources
   prevail manifest get|set <domain> --json
                               read/merge a domain's manifest (engine JSON API)
   prevail chat --domain <d> --json
@@ -2591,7 +2634,7 @@ async function benchCommand(args: string[], vaultOverride: string | null): Promi
         ["HOW THEY DECIDE — ideal-state constitution", idealCtx],
         ["this domain's ideal state", readCtx("ideal-state.md", 1500)],
         ["state", readCtx("memory/state.md", 3000) || readCtx("_state.md", 3000) || readCtx("state.md", 3000)],
-        ["goals.md", readCtx("goals.md", 1500)],
+        ["goals", readCtx("source/goals.md", 1500) || readCtx("goals.md", 1500)],
         ["config.md", readCtx("config.md", 800)],
         ["soul.md", readCtx("soul.md", 800)],
         ["tasks", readCtx("memory/tasks.md", 800) || readCtx("_tasks.md", 800)],
@@ -2813,7 +2856,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
 // orgs and things the owner talks about (entities.ts). With --json every
 // subcommand prints exactly one JSON line; errors land in `error`.
 async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<void> {
-  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests", "--file", "--url", "--relation"]);
+  const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests", "--file", "--url", "--relation", "--field", "--value", "--date", "--end", "--time", "--place", "--people", "--project", "--notes", "--what", "--cost", "--from", "--to"]);
   const get = (flag: string): string | null => { const i = a.indexOf(flag); return i >= 0 ? (a[i + 1] ?? null) : null; };
   const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(a[i - 1]!)));
   const sub = pos[0] ?? "list";
@@ -2847,7 +2890,21 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       const id = pos[1];
       if (!id) { fail("usage: prevail entities show <kind/slug|name> [--json]"); return; }
       const idx = en.readIndex(vault).generated_ts ? en.readIndex(vault) : en.buildIndex(vault);
+      // project/<slug> (the retired kind) and mission/<slug> resolve to the mission.
+      if (/^(project|mission)\//.test(id)) {
+        const { projectDetail } = await import("./projects.ts");
+        const mv = projectDetail(vault, id);
+        if (mv) { if (json) out({ found: true, kind: "mission", ...mv }); else console.log(`${mv.id}  ${mv.status}  ${mv.name}\n  ${mv.outcome}`); return; }
+      }
       const d = en.entityDetail(vault, idx, id);
+      // Products (ia.ts): an org's app records ride along, and an app with no
+      // company page yet is still a product the user can open.
+      const iam = await import("./ia.ts");
+      const product = /^(org|app)\//.test(id) ? iam.listProducts(vault, idx).find((p) => p.id === iam.canonId(vault, id)) : undefined;
+      if (!d && product && json) {
+        out({ found: true, id: product.id, name: product.name, kind: "org", aliases: [], kinds: ["org"], mention_count: 0, conversations: 0, last_ts: 0, mentions: [], co_mentions: [], digest: "", notes: "", relation: "yours", apps: product.apps, ...(product.website ? { website: product.website } : {}), ...(product.domain ? { domain: product.domain } : {}), fields: {} });
+        return;
+      }
       if (!d) {
         // Not an error for a chip the index has not seen yet: the Entities view shows
         // the bare name with a Save action.
@@ -2855,9 +2912,14 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
         fail(`no entity "${id}"`);
         return;
       }
-      // A project also carries its status, outcome, target, domains and goals.
+      // An unmigrated project page also resolves to its mission once migrated.
       const full = d.kind === "project" ? ((await import("./projects.ts")).projectDetail(vault, d.id) ?? d) : d;
-      if (json) { out({ found: true, ...full }); return; }
+      if (json) {
+        const slug = d.id.slice(d.id.indexOf("/") + 1);
+        const page = en.readPage(vault, d.kind, slug);
+        out({ found: true, ...full, fields: page ? iam.readFields(page) : {}, ...(product ? { apps: product.apps } : {}) });
+        return;
+      }
       console.log(en.entityContextText(d, 30));
       return;
     }
@@ -2906,6 +2968,22 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       const r = en.mergeEntities(vault, keep, drop);
       if (json) { out(r); return; }
       console.log(`merged ${drop} into ${r.id}`);
+      return;
+    }
+    if (sub === "rename") {
+      const id = pos[1];
+      const name = get("--name");
+      if (!id || !name) { fail("usage: prevail entities rename <id> --name \"New Name\" [--json]"); return; }
+      const d = en.renameEntity(vault, id, name);
+      if (json) { out(d); return; }
+      console.log(`${d.id} is now "${d.name}"`);
+      return;
+    }
+    if (sub === "normalize-names") {
+      const r = en.normalizeNames(vault, { dryRun: a.includes("--dry-run") });
+      if (json) { out({ ok: true, dry_run: a.includes("--dry-run"), ...r }); return; }
+      for (const c of r.changed) console.log(`${c.id.padEnd(40)} ${c.from} -> ${c.to}`);
+      console.log(`${r.changed.length} of ${r.pages} pages ${a.includes("--dry-run") ? "would change" : "changed"}; old names kept as aliases`);
       return;
     }
     if (sub === "set-relation") {
@@ -2978,7 +3056,94 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
       console.log(`tagged ${t.tagged}/${pick.length} sittings in ${t.calls} calls (${t.entities} entity tags, ${res.remaining} still untagged); ${r.entities} entities, ${r.pages_created} new pages`);
       return;
     }
-    fail("usage: prevail entities [list|show <id>|save <id>|note <id> [--append] --text ...|threads <id>|duplicates|merge <keepId> <mergeId>|not-same <idA> <idB>|set-picture <id> --file F|set-website <id> --url U|files <id>|add-file <id> --file F|migrate-folders|refresh|backfill [--limit N]] --vault <path> [--json]");
+    // The information architecture (ia.ts): kinds, products, links, fields, events, drafts.
+    const ia = await import("./ia.ts");
+    if (sub === "kinds") { out({ groups: ia.GROUPS, kinds: ia.KINDS }); return; }
+    if (sub === "products") {
+      const q = (get("--q") ?? "").toLowerCase();
+      const rows = ia.listProducts(vault).filter((p) => !q || p.name.toLowerCase().includes(q) || p.apps.some((x) => x.id.includes(q)));
+      if (json) { out({ products: rows.slice(0, num("--limit", 5000)) }); return; }
+      for (const p of rows) console.log(`${p.id.padEnd(36)} ${p.company ? "company" : "app    "} ${p.apps.map((x) => x.id).join(",").padEnd(20)} ${p.name}`);
+      return;
+    }
+    if (sub === "links") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities links <id> [--json]"); return; }
+      const r = ia.linksOf(vault, id);
+      if (json) { out(r); return; }
+      for (const l of r.links) console.log(`${l.kind.padEnd(9)} ${l.id.padEnd(36)} ${l.via}${l.role ? ` (${l.role})` : ""}  ${l.name}`);
+      return;
+    }
+    if (sub === "link" || sub === "unlink") {
+      const [x, y] = [pos[1], pos[2]];
+      if (!x || !y) { fail(`usage: prevail entities ${sub} <idA> <idB> [--json]`); return; }
+      const r = sub === "link" ? ia.linkObjects(vault, x, y) : ia.unlinkObjects(vault, x, y);
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(sub === "link" ? `linked ${x} and ${y}` : `unlinked ${x} and ${y}`);
+      return;
+    }
+    if (sub === "set") {
+      const id = pos[1];
+      const field = get("--field");
+      if (!id || !field || get("--value") === null) { fail(`usage: prevail entities set <id> --field <${ia.FIELD_NAMES.join("|")}> --value V ("" clears) [--name N]`); return; }
+      const r = ia.setFields(vault, id, { [field]: get("--value") ?? "" }, { name: get("--name") ?? undefined });
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(`${r.id}: ${field} set`);
+      return;
+    }
+    if (sub === "service") {
+      const id = pos[1];
+      if (!id || !get("--what")) { fail("usage: prevail entities service <thing id> --what \"Battery replaced\" [--date YYYY-MM-DD] [--cost N]"); return; }
+      const list = ia.addService(vault, id, { date: get("--date") ?? undefined, what: get("--what") ?? "", cost: get("--cost") ?? undefined });
+      if (json) { out({ ok: true, service: list }); return; }
+      console.log(`${list.length} service entries`);
+      return;
+    }
+    if (sub === "events") {
+      const rows = ia.listEvents(vault, { from: get("--from") ?? undefined, to: get("--to") ?? undefined });
+      if (json) { out({ events: rows }); return; }
+      for (const e of rows) console.log(`${(e.date || "undated").padEnd(10)} ${(e.time ?? "").padEnd(5)} ${e.source.padEnd(9)} ${e.name}${e.project ? `  [${e.project.name}]` : ""}`);
+      return;
+    }
+    if (sub === "event-add") {
+      const r = ia.createEvent(vault, { name: get("--name") ?? "", date: get("--date") ?? "", end: get("--end") ?? undefined, time: get("--time") ?? undefined, place: get("--place") ?? undefined, people: get("--people")?.split(",").map((x) => x.trim()).filter(Boolean), project: get("--project") ?? undefined, notes: get("--notes") ?? undefined });
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(r.created ? `added ${r.id}` : `${r.id} already exists`);
+      return;
+    }
+    if (sub === "event-adopt") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities event-adopt <calendar:..|milestone:..|hold:..> [--json]"); return; }
+      const r = ia.adoptEvent(vault, id);
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(r.id);
+      return;
+    }
+    if (sub === "event-calendar") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities event-calendar <event id> [--yes|--no] [--json]   (without --yes nothing touches a calendar)"); return; }
+      const r = await ia.eventToCalendar(vault, id, { yes: a.includes("--yes"), no: a.includes("--no") });
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(r.calendar === "synced" ? "On your calendar." : r.calendar === "declined" ? "Kept off your calendar." : r.note ?? "Waiting for your yes.");
+      return;
+    }
+    if (sub === "event-project") {
+      const id = pos[1];
+      if (!id) { fail("usage: prevail entities event-project <event id> [--project mission/<slug>] [--json]"); return; }
+      const r = ia.eventToProject(vault, id, { project: get("--project") ?? undefined });
+      if (json) { out({ ok: true, ...r }); return; }
+      console.log(`${r.event} -> ${r.project.id}${r.created ? " (new project)" : ""}`);
+      return;
+    }
+    if (sub === "draft" || sub === "create") {
+      const kind = get("--kind") ?? "";
+      let input: { turns?: unknown; draft?: unknown } = {};
+      try { input = JSON.parse((await Bun.stdin.text()) || "{}"); } catch { fail(`${sub} reads JSON on stdin`); return; }
+      if (sub === "draft") { out(await ia.draftObject(vault, { kind, turns: Array.isArray(input.turns) ? input.turns as never : [], draft: (input.draft ?? {}) as never })); return; }
+      out({ ok: true, ...ia.createFromObjectDraft(vault, kind, input.draft ?? input) });
+      return;
+    }
+    fail("usage: prevail entities [list|show <id>|save <id>|note <id> [--append] --text ...|threads <id>|duplicates|merge <keepId> <mergeId>|not-same <idA> <idB>|set-picture <id> --file F|set-website <id> --url U|files <id>|add-file <id> --file F|migrate-folders|refresh|backfill [--limit N]|kinds|products|links <id>|link <a> <b>|unlink <a> <b>|set <id> --field F --value V|service <id> --what W|events [--from D --to D]|event-add --name N --date D|event-adopt <row>|event-calendar <id> [--yes|--no]|event-project <id> [--project P]|draft --kind K|create --kind K] --vault <path> [--json]");
   } catch (e) { fail((e as Error).message); }
 }
 
@@ -3001,6 +3166,11 @@ async function appsCommand(a: string[], vaultPath?: string | null): Promise<void
   const pos = a.filter((x, i) => !x.startsWith("--") && !(i > 0 && a[i - 1]!.startsWith("--") && !["--json", "--tools", "--due", "--dry-run", "--apply", "--from-draft"].includes(a[i - 1]!)));
   const sub = pos[0] ?? "list";
   const vault = get("--vault") ?? vaultPath ?? process.env.PREVAIL_VAULT_ROOT ?? readConfig()?.vaultPath ?? (await import("./vault.ts")).resolveDefaultVaultPath();
+  // The stack (apps plan A2 to A4): usage, records, mapping, money, doctor.
+  {
+    const st = await import("./app-stack.ts");
+    if (st.STACK_SUBCOMMANDS.includes(sub)) { process.exitCode = await st.appStackCommand(a, vault); return; }
+  }
   const am = await import("./apps-mirror.ts");
   const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
   const fail = (msg: string, extra: Record<string, unknown> = {}) => {
@@ -3135,15 +3305,21 @@ async function appsCommand(a: string[], vaultPath?: string | null): Promise<void
   }
 }
 
+async function missionCouncilFallbacks(key: string | undefined): Promise<string[]> {
+  const m = /^_mission-(.+)$/.exec(key ?? "");
+  if (!m) return [];
+  try { const ms = await import("./missions.ts"); const v = ms.readMission(resolveVault(null), m[1]!); const owner = v ? ms.ownerOf(v) : undefined; return owner ? [owner] : []; } catch { return []; }
+}
+
 async function resolveVaultFromArgs(args: string[]): Promise<string> {
   return vaultFlagOrDefault(args, process.env.PREVAIL_VAULT_ROOT);
 }
 
 // prevail autonomy status|pause|resume|policy <class> <allow|ask|never>|cap <usd|off>
-async function autonomyCommand(args: string[]): Promise<void> {
+async function autonomyCommand(args: string[], vaultPath?: string | null): Promise<void> {
   const sub = args[0];
   const json = args.includes("--json");
-  const vault = await resolveVaultFromArgs(args);
+  const vault = vaultPath ? resolveVault(vaultPath) : await resolveVaultFromArgs(args);
   const A = await import("./autonomy.ts");
   if (!sub || sub === "status") {
     const r = { state: A.getAutonomyState(vault), policy: A.getActionPolicy(vault), monthlyFinancialCapUsd: A.getMonthlyFinancialCap(vault) };
@@ -3190,13 +3366,18 @@ async function autonomyCommand(args: string[]): Promise<void> {
 }
 
 // prevail playbooks  |  prevail playbook list  |  prevail run-playbook <id> [--auto] [--stream] [--json]
-async function playbookCommand(args: string[]): Promise<void> {
+async function playbookCommand(args: string[], vaultPath?: string | null): Promise<void> {
   const json = args.includes("--json");
   const stream = args.includes("--stream");
-  const vault = await resolveVaultFromArgs(args);
+  const vault = vaultPath ? resolveVault(vaultPath) : await resolveVaultFromArgs(args);
   const { loadPlaybook, listPlaybooks, runPlaybook } = await import("./orchestrator.ts");
   // `prevail playbooks` (list) or `prevail playbook list`
   const first = args[0];
+  // Groups, one playbook's steps, Save as playbook, adopt a draft (playbooks.ts).
+  if (first === "rows" || first === "show" || first === "save" || first === "adopt" || first === "inbox" || first === "seen" || first === "trigger" || first === "migrate-loops" || first === "verify-loops") {
+    const { playbooksCommand } = await import("./playbooks.ts");
+    process.exit(await playbooksCommand(args.filter((a, i) => !(a === "--vault" || args[i - 1] === "--vault")), vault));
+  }
   if (!first || first === "list" || first.startsWith("--")) {
     const list = listPlaybooks(vault);
     if (json) { process.stdout.write(`${JSON.stringify(list)}\n`); return; }
@@ -3223,6 +3404,7 @@ async function playbookCommand(args: string[]): Promise<void> {
     model: "",
     autonomousActs,
     onProgress,
+    ...(args.includes("--domain") && args[args.indexOf("--domain") + 1] ? { domain: args[args.indexOf("--domain") + 1] } : {}),
   });
   if (stream) { process.stdout.write(`${JSON.stringify({ phase: result.ok ? "complete" : "error", ...result })}\n`); return; }
   if (json) { process.stdout.write(`${JSON.stringify(result)}\n`); return; }
@@ -4796,7 +4978,34 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
           if (c.moved.length + c.deduped.length + c.conflicts.length + c.merged.length > 0) consolidated.push(c);
         }
       } catch { /* consolidation is best-effort; never fail the migration over it */ }
-      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated, consolidatedLeftovers: consolidated }) + "\n");
+      // One goal store: fold memory/goals.md and manifest goals[] into each
+      // domain's source/goals.md (old files kept as dated backups), and the
+      // old build/_profile.md into build/user.md. Idempotent.
+      const goalsMigrated: { domain: string; added: number; from: string[]; backups: string[] }[] = [];
+      let profile: { merged: boolean; backup?: string } = { merged: false };
+      try {
+        const { migrateLegacyGoals, migrateProfile } = await import("./goals.ts");
+        for (const d of listDomainDirs(targetVault)) {
+          try {
+            const g = migrateLegacyGoals(targetVault, d);
+            if (g.added || g.backups.length) goalsMigrated.push(g);
+          } catch { /* one bad domain never stops the rest */ }
+        }
+        profile = migrateProfile(targetVault);
+      } catch { /* best-effort, like the passes above */ }
+      // Missions: entity projects move into data/missions/ (backup first, never
+      // deleted), and the Compass "## Mission" heading becomes "## Purpose"
+      // (snapshot in compass.versions/). Both are no-ops once done.
+      let missions: { migrated: number; backup?: string; purposeRenamed: boolean; compassChain?: boolean; initiatives?: number } = { migrated: 0, purposeRenamed: false };
+      try {
+        const ms = await import("./missions.ts");
+        const { entityThreads, buildIndex } = await import("./entities.ts");
+        const r = ms.migrateProjects(targetVault, { threadsOf: (id) => entityThreads(targetVault, id) });
+        if (r.migrated.length) { try { buildIndex(targetVault); } catch { /* refresh rebuilds it */ } }
+        const pr = await ms.renamePurposeHeading(targetVault);
+        missions = { migrated: r.migrated.length, ...(r.backup ? { backup: r.backup } : {}), purposeRenamed: pr.renamed, compassChain: !!pr.migrated, initiatives: pr.initiatives ?? 0 };
+      } catch { /* best-effort, like the passes above */ }
+      if (asJson) process.stdout.write(JSON.stringify({ ok: true, domains: results, relocatedAppScopes: relocated, consolidatedLeftovers: consolidated, goalsMigrated, profile, missions }) + "\n");
       else {
         for (const r of results) console.log(r.already ? `${r.domain}: already clean` : `${r.domain}: moved ${r.ops} entr(ies) into source/·memory/·.system/, archived ${r.archived} original(s)`);
         for (const r of relocated) {
@@ -4808,6 +5017,11 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
           const n = c.moved.length + c.deduped.length + c.conflicts.length + c.merged.length;
           console.log(`${c.domain}: consolidated ${n} leftover(s) into memory/·.system/ (moved ${c.moved.length}, deduped ${c.deduped.length}, merged ${c.merged.length}, kept-both ${c.conflicts.length})`);
         }
+        for (const g of goalsMigrated) console.log(`${g.domain}: ${g.added} goal(s) moved into source/goals.md from ${g.from.join(" and ") || "nothing new"}; backups kept: ${g.backups.length}`);
+        if (profile.merged) console.log(`build/_profile.md folded into build/user.md (backup: ${profile.backup})`);
+        if (missions.migrated) console.log(`${missions.migrated} entity project page(s) became Projects (backup: ${missions.backup})`);
+        if (missions.purposeRenamed) console.log("build/compass.md: ## Mission is now ## Purpose (the prior text is in compass.versions/)");
+        if (missions.compassChain) console.log(`build/compass.md: moved to the Compass chain (~schema:2; ${missions.initiatives} path line(s) now initiative:)`);
         console.log("done — vault is on the clean v4 layout. Originals are in each domain's _pre-v4-v4/ backup.");
       }
     } catch (e) {
@@ -5655,7 +5869,74 @@ async function captureCommand(args: string[], vaultOverride: string | null): Pro
     if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
     const { handleSync } = await import("./capture-sync.ts");
     const result = handleSync(vault);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    // The same pass reads every AI tool's token and session records into the
+    // per-host usage events (Metrics M0, Apps A1). Best-effort: a failing
+    // adapter never fails the prompt sync.
+    let ai: unknown = null;
+    if (!args.includes("--no-ai")) {
+      try {
+        const { scanAiUsage } = await import("./ai-usage.ts");
+        const r = scanAiUsage(vault);
+        ai = { ms: r.ms, tools: Object.fromEntries(Object.entries(r.tools).map(([k, v]) => [k, { shape: v.shape, events: v.events }])) };
+      } catch (e) { ai = { error: String(e).slice(0, 200) }; }
+    }
+    // And this Mac's git repos into the per-host git events (Metrics M1).
+    let gitScan: unknown = null;
+    if (!args.includes("--no-git")) {
+      try {
+        const { scanGit } = await import("./metrics.ts");
+        gitScan = scanGit(vault);
+      } catch (e) { gitScan = { error: String(e).slice(0, 200) }; }
+    }
+    // And this Mac's app and web usage (apps plan A2): Spotlight, browser
+    // domains, Screen Time when Prevail has Full Disk Access, live focus.
+    let appsScanR: unknown = null;
+    if (!args.includes("--no-apps")) {
+      try {
+        const { appsScan } = await import("./app-stack.ts");
+        const { consented } = await import("./sources.ts");
+        const r = appsScan(vault, { consent: (id) => consented(vault, id) });
+        appsScanR = { ms: r.usage.ms, sources: Object.fromEntries(Object.entries(r.usage.sources).map(([k, v]) => [k, v.state])), events: r.usage.events, created: r.records.created.length };
+      } catch (e) { appsScanR = { error: String(e).slice(0, 200) }; }
+    }
+    // Once a day: the connection doctor, the stack's cards and the monthly stack review (apps plan A4).
+    let stackR: unknown = null;
+    if (!args.includes("--no-doctor")) {
+      try { stackR = await (await import("./app-doctor.ts")).dailyStackPass(vault); } catch (e) { stackR = { error: String(e).slice(0, 200) }; }
+    }
+    // And every connected source that is due (metrics plan M3), if allowed on this Mac.
+    let sourcesR: unknown = null;
+    if (!args.includes("--no-sources")) {
+      try { sourcesR = await (await import("./source-sync.ts")).syncDue(vault); } catch (e) { sourcesR = { error: String(e).slice(0, 200) }; }
+    }
+    // Promises in sent mail and meeting notes become commitments (Today T2).
+    let commitR: unknown = null;
+    if (!args.includes("--no-sources")) {
+      try { commitR = await (await import("./commitments.ts")).scanCommitments(vault); } catch (e) { commitR = { error: String(e).slice(0, 200) }; }
+    }
+    // Mail you sent yourself ("tell:", "todo:" ...) is filed once (Today T6).
+    try { if (!args.includes("--no-sources")) await (await import("./tell.ts")).tellFromMail(vault); } catch { /* best effort */ }
+    // Missions (MS4): match calendar, mail and charges to active missions; milestones that check themselves; nudges within the budget.
+    let missionsR: unknown = null;
+    try {
+      const mp = await import("./mission-progress.ts");
+      const synced = await mp.syncMissions(vault);
+      const mm = await import("./missions.ts");
+      const metr = await import("./metrics.ts");
+      let reached = 0;
+      const msFile = (slug: string) => join(mm.missionDir(vault, slug), "milestones.md");
+      if (mm.activeMissions(vault).some((x) => existsSync(msFile(x.slug)) && readFileSync(msFile(x.slug), "utf8").includes("~check:"))) {
+        const c = await metr.computeMetrics(vault);
+        for (const x of mm.activeMissions(vault)) reached += mm.checkMilestones(vault, x.slug, (id) => mp.totalSince(c.points, id, x.start || "0000")).length;
+      }
+      missionsR = { synced: synced.length, reached, nudges: await mp.missionNudges(vault, mp.missionRadar(vault)) };
+    } catch (e) { missionsR = { error: String(e).slice(0, 200) }; }
+    // Tasks phrased as decisions open a decision record each, once (Today T4).
+    try { (await import("./decisions-open.ts")).decisionsFromTasks(vault); } catch { /* best effort */ }
+    // The radar (Today T3): what is falling behind; only what may interrupt spends the weekly budget.
+    let radarR: unknown = null;
+    try { const rd = await import("./radar.ts"); const r = await rd.computeRadar(vault); radarR = { items: r.items.length, interrupts: await rd.radarInterrupts(vault, r) }; } catch (e) { radarR = { error: String(e).slice(0, 200) }; }
+    process.stdout.write(`${JSON.stringify({ ...result, ai, git: gitScan, apps: appsScanR, stack: stackR, sources: sourcesR, commitments: commitR, radar: radarR, missions: missionsR })}\n`);
     return result.ok ? 0 : 1;
   }
   if (sub === "enable" || sub === "disable") {
@@ -5980,7 +6261,8 @@ async function modesCommand(args: string[], vaultOverride: string | null): Promi
     web: cfg.readWebAccess(),
     save: cfg.readCheckpoint(domainKey),
     serendipity: cfg.readSerendipity(domainKey),
-    auto: cfg.readAutoCouncil(domainKey),
+    // A mission resolves its own mode, then its owner domain's, then the global one (MS4).
+    auto: cfg.readAutoCouncil(domainKey, await missionCouncilFallbacks(domainKey)),
     framework: cfg.resolveResponseFramework(domainKey),
     lens: cfg.resolveResponseLens(domainKey),
   };
@@ -6263,6 +6545,15 @@ async function main() {
     return;
   }
   if (args.doctor) {
+    // `prevail doctor apps`: the connection doctor for the stack (apps plan A4).
+    const di = process.argv.indexOf("doctor");
+    if (process.argv[di + 1] === "apps") {
+      const rest = process.argv.slice(di + 2);
+      const sub = parseJsonSubArgs(rest, args.vaultPath);
+      const vault = sub.vaultPath ?? resolveVault(args.vaultPath);
+      const { appsDoctorCommand } = await import("./app-doctor.ts");
+      process.exit(await appsDoctorCommand(rest, vault, rest.includes("--json")));
+    }
     await doctor({ debug: args.debug });
     return;
   }
@@ -6291,11 +6582,13 @@ async function main() {
     return;
   }
   if (args.autonomy) {
-    await autonomyCommand(args.autonomyArgs);
+    await autonomyCommand(args.autonomyArgs, args.vaultPath);
     return;
   }
   if (args.playbook) {
-    await playbookCommand(args.playbookArgs);
+    // A --vault given before the command must win (it was dropped, so a run
+    // meant for a copy of the vault ran against the configured one).
+    await playbookCommand(args.playbookArgs, args.vaultPath);
     return;
   }
   if (args.projects) {
@@ -6307,9 +6600,24 @@ async function main() {
     const vault = await vaultFlagOrDefault(a, args.vaultPath);
     const json = a.includes("--json");
     const sub = a[0] && !a[0].startsWith("--") ? a[0] : "list";
-    // create | set | show project/<slug>: the tracked project entities (projects.ts).
-    const ent = (await import("./projects.ts")).projectsEntityCommand(a, vault);
-    if (ent !== null) { process.exitCode = ent; return; }
+    // Projects are what the user sees (stored as missions, data/missions/):
+    // `prevail projects <sub>` runs every missions subcommand. Prompt groups
+    // (the prompt history grouped by project) live at `prevail prompt-groups`;
+    // their own subcommands (build, rename, timeline, restart, diff, replay)
+    // still answer under `projects`, and `projects show <slug>` falls back to
+    // a prompt group when no project has that slug.
+    if (!args.promptGroups) {
+      const ent = await (await import("./projects.ts")).projectsEntityCommand(a, vault);
+      if (ent !== null) { process.exitCode = ent; return; }
+      const PG = new Set(["build", "rename", "timeline", "restart", "diff", "replay"]);
+      const ms = await import("./missions.ts");
+      const toMissions = !PG.has(sub) && !(sub === "show" && a[1] && !ms.readMission(vault, a[1]));
+      if (toMissions) {
+        const rest = a[0] && !a[0].startsWith("--") ? a : ["list", ...a];
+        process.exitCode = await (await import("./missions-cli.ts")).missionsCommand(rest.filter((x, i) => !(x === "--vault" || rest[i - 1] === "--vault")), vault);
+        return;
+      }
+    }
     const pp = await import("./prompt-projects.ts");
     if (sub === "build") {
       const cli = (get("--cli") ?? "claude") as "claude" | "codex";
@@ -6529,11 +6837,12 @@ async function main() {
       } catch { return ""; }
     };
     const idealCtx = readCtx("_ideal-state.md", 1500) || readCtx("ideal-state.md", 1500) || readCtx("soul.md", 800);
+    // v4 homes first (memory/, source/), the flat legacy names as fallbacks.
     const sections = ([
       ["Ideal state", idealCtx],
-      ["Long-term memory", readCtx("_memory.md", 2000)],
-      ["State", readCtx("_state.md", 1500) || readCtx("state.md", 1500)],
-      ["Goals", readCtx("goals.md", 1000)],
+      ["Long-term memory", readCtx("memory/memory.md", 2000) || readCtx("_memory.md", 2000)],
+      ["State", readCtx("memory/state.md", 1500) || readCtx("_state.md", 1500) || readCtx("state.md", 1500)],
+      ["Goals", readCtx("source/goals.md", 1000) || readCtx("goals.md", 1000)],
       ["Decisions already made", readDecisions()],
       ["Recent things the user asked", readIntents()],
     ] as [string, string][]).filter(([, t]) => t);
@@ -6768,15 +7077,17 @@ async function main() {
       out(ag.readPendingActsView(vault));
       return;
     }
-    if (sub === "approve") {
-      const r = ag.approvePendingAct(vault, flag("id"), args.actsArgs.includes("--allow-sensitive"), args.actsArgs.includes("--always"));
-      out(r);
-      if (!r.ok) process.exit(1);
-      return;
-    }
-    if (sub === "deny") {
-      const r = ag.denyPendingAct(vault, flag("id"));
-      out(r);
+    if (sub === "approve" || sub === "deny") {
+      // An engine act (the Operator's action, an MCP mission write) is carried
+      // out by the engine once answered; a connector act waits for its retry.
+      const act = ag.pendingAct(vault, flag("id"));
+      const r = sub === "approve" ? ag.approvePendingAct(vault, flag("id"), args.actsArgs.includes("--allow-sensitive"), args.actsArgs.includes("--always")) : ag.denyPendingAct(vault, flag("id"));
+      let after: unknown = undefined;
+      if (r.ok && act) {
+        const ea = await import("./engine-acts.ts");
+        if (ea.isEngineAct(act.tool)) { try { after = await ea.afterActAnswer(vault, act, sub === "approve" ? "approved" : "denied"); } catch (e) { after = { error: (e as Error).message }; } }
+      }
+      out(after === undefined ? r : { ...r, after });
       if (!r.ok) process.exit(1);
       return;
     }
@@ -6956,18 +7267,24 @@ async function main() {
     const { computeAlignment } = await import("./alignment.ts");
     const vault = args.vaultPath;
     if (!vault) { console.error("alignment: no vault path"); process.exit(1); }
-    const useModel = args.alignmentArgs.includes("--model");
+    // The model method is the default (`--signal` forces the cheap readiness
+    // proxy). computeAlignment reuses a recent model report, so the desktop
+    // card asking on every open costs at most one model call a day.
+    const useModel = !args.alignmentArgs.includes("--signal");
     let run: ((prompt: string) => Promise<string>) | undefined;
     if (useModel) {
       const { detectClis, runChatTurn, defaultModelFor } = await import("./cli-bridge.ts");
-      const { scanVault } = await import("./vault.ts");
-      const clis = await detectClis();
-      // detectClis() returns only available CLIs; take the first as the runner.
-      const cli = clis[0];
-      const dom = scanVault(vault)[0]?.name ?? "chief";
-      if (cli) run = (prompt) => runChatTurn({ prompt, cwd: `${vault}/${dom}`, cli, model: defaultModelFor(cli.kind), isFirst: true, bare: true });
+      const { generalDir } = await import("./decisions.ts");
+      let clis = await detectClis();
+      // Bunker Mode: only local engines may read the vault.
+      if (process.env.PREVAIL_BUNKER === "1") clis = clis.filter((c) => ["ollama", "lmstudio", "mlx"].includes(c.kind));
+      // Prefer a cloud CLI that scores reliably; any detected CLI otherwise.
+      const cli = clis.find((c) => c.kind === "claude") ?? clis.find((c) => c.kind === "codex") ?? clis[0];
+      const cwd = generalDir(vault);
+      try { mkdirSync(cwd, { recursive: true }); } catch { /* exists */ }
+      if (cli) run = (prompt) => runChatTurn({ prompt, cwd, cli, model: defaultModelFor(cli.kind), isFirst: true, bare: true });
     }
-    const report = await computeAlignment(vault, Date.now(), run ? { run } : undefined);
+    const report = await computeAlignment(vault, Date.now(), run ? { run, force: args.alignmentArgs.includes("--force") } : undefined);
     if (args.alignmentArgs.includes("--json")) process.stdout.write(`${JSON.stringify(report)}\n`);
     else {
       console.log(`alignment (${report.method}) — overall ${report.overall}/100`);
@@ -6987,6 +7304,20 @@ async function main() {
   if (args.capture) {
     const code = await captureCommand(args.captureArgs, args.vaultPath);
     process.exit(code);
+  }
+  if (args.moduleCmd) {
+    const rest = parseJsonSubArgs(args.moduleArgs, args.vaultPath);
+    const vault = rest.vaultPath ?? resolveVault(args.vaultPath);
+    if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+    const { runModuleCommand } = await import("./module-commands.ts");
+    process.exit(await runModuleCommand(args.moduleCmd, args.moduleArgs, vault));
+  }
+  if (args.ai) {
+    const rest = parseJsonSubArgs(args.aiArgs.slice(1), args.vaultPath);
+    const vault = rest.vaultPath ?? resolveVault(args.vaultPath);
+    if (!existsSync(vault)) emitJsonError(`vault path not found: ${vault}`, "VAULT_NOT_FOUND");
+    const { aiCommand } = await import("./ai-usage-cli.ts");
+    process.exit(await aiCommand(args.aiArgs, vault));
   }
   if (args.gateway) {
     const code = await gatewayCommand(args.gatewayArgs, args.vaultPath);

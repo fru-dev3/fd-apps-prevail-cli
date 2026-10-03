@@ -25,6 +25,18 @@ export interface Task {
   id?: string;
   trashed?: string; // YYYY-MM-DD soft-delete date; "~trashed:" token. Set = in Trash, not removed.
   priority?: string; // "high" | "critical"; "~priority:" token. Absent = normal.
+  // A promise with a person attached (today-plan T0):
+  //   ~kind:commitment ~to:person/<slug>    something the user said they would do for someone
+  //   ~kind:waiting    ~from:person/<slug>  something someone owes the user
+  // and ~src:<where it came from> (gmail:<thread-hash>, chat:<thread>, job:<id>).
+  kind?: string;   // "commitment" | "waiting"
+  to?: string;
+  from?: string;
+  // ~mission:<slug>: a domain-owned task that serves a mission (missions-plan.md).
+  mission?: string;
+  // The Compass chain (goals-plan.md G1b): ~initiative:<p-id> or ~goal:<g-id>, the line it moves.
+  initiative?: string;
+  goal?: string;
 }
 
 export const VALID_STATUS = ["todo", "doing", "review", "blocked", "done", "icebox"] as const;
@@ -69,6 +81,12 @@ function splitMeta(raw: string): { text: string; meta: Partial<Task> } {
           else if (k === "src") meta.source = v;
           else if (k === "trashed") meta.trashed = v;
           else if (k === "priority") meta.priority = v;
+          else if (k === "kind") meta.kind = v;
+          else if (k === "to") meta.to = v;
+          else if (k === "from") meta.from = v;
+          else if (k === "mission") meta.mission = v;
+          else if (k === "initiative") meta.initiative = v;
+          else if (k === "goal") meta.goal = v;
           else matched = false;
           if (matched) { text = t.slice(0, idx); continue; }
         }
@@ -96,7 +114,7 @@ export function parseTasks(md: string): Task[] {
     else if (t.startsWith("- [x] ") || t.startsWith("- [X] ")) { done = true; rest = t.slice(t.indexOf("] ") + 2); }
     else continue;
     const { text, meta } = splitMeta(rest);
-    out.push({ text, done, due: meta.due, added: meta.added, source: meta.source, owner: meta.owner, status: meta.status, id: meta.id, trashed: meta.trashed, priority: meta.priority });
+    out.push({ text, done, due: meta.due, added: meta.added, source: meta.source, owner: meta.owner, status: meta.status, id: meta.id, trashed: meta.trashed, priority: meta.priority, kind: meta.kind, to: meta.to, from: meta.from, mission: meta.mission, initiative: meta.initiative, goal: meta.goal });
   }
   return out;
 }
@@ -120,18 +138,36 @@ export function renderTasks(tasks: Task[]): string {
     let line = `- [${t.done ? "x" : " "}] ${t.text.trim()}`;
     if (t.due) line += ` @${t.due}`;
     if (t.added) line += ` +${t.added}`;
-    if (t.source) line += ` ~${t.source}`;
+    // A plain word stays the legacy bare "~source"; anything else ("gmail:<hash>") is "~src:".
+    if (t.source) line += /^[a-zA-Z0-9]+$/.test(t.source) ? ` ~${t.source}` : ` ~src:${t.source}`;
     if (t.owner === "ai") line += " ~owner:ai";
     if (t.status && ["doing", "review", "blocked", "icebox"].includes(t.status)) line += ` ~status:${t.status}`;
     if (t.id) line += ` ~id:${t.id}`;
     if (t.trashed) line += ` ~trashed:${t.trashed}`;
     if (t.priority && ["high", "critical"].includes(t.priority)) line += ` ~priority:${t.priority}`;
+    if (t.kind === "commitment" || t.kind === "waiting") line += ` ~kind:${t.kind}`;
+    if (t.to) line += ` ~to:${t.to}`;
+    if (t.from) line += ` ~from:${t.from}`;
+    if (t.mission) line += ` ~mission:${t.mission}`;
+    if (t.initiative) line += ` ~initiative:${t.initiative}`;
+    if (t.goal) line += ` ~goal:${t.goal}`;
     s += `${line}\n`;
   }
   return s;
 }
 
-function tasksFile(domainDir: string): string { return join(domainDir, "_tasks.md"); }
+/**
+ * A domain's task board: memory/tasks.md on a v4 domain, _tasks.md on an older
+ * one. An existing file wins, so a board is never split across the two.
+ */
+export function taskBoardPath(domainDir: string): string {
+  const v4 = join(domainDir, "memory", "tasks.md");
+  const flat = join(domainDir, "_tasks.md");
+  if (existsSync(v4)) return v4;
+  if (existsSync(flat)) return flat;
+  return existsSync(join(domainDir, "memory")) ? v4 : flat;
+}
+function tasksFile(domainDir: string): string { return taskBoardPath(domainDir); }
 
 export function readTasks(domainDir: string): Task[] {
   const f = tasksFile(domainDir);

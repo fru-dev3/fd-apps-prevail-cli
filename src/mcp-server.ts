@@ -1,4 +1,7 @@
 import { hostname } from "node:os";
+import { scopeFromEnv, scopeToolCall, scopedTools, validScope } from "./mcp-scope.ts";
+import { parseHandoff } from "./agent-contract.ts";
+import { logActivity } from "./activity.ts";
 import { existsSync } from "node:fs";
 // Every vault read goes through the crypto-aware reader: on an encrypted vault
 // a raw readFileSync handed MCP clients ciphertext for every read tool.
@@ -18,7 +21,7 @@ import { appendDecision, readDecisions, domainDir, runtimeFile } from "./decisio
 import { buildRecommendations } from "./recommendations.ts";
 import { runSurface } from "./surface.ts";
 import { readTasks, writeTasks, setTaskStatus, effectiveStatus } from "./tasks.ts";
-import { appendTask, runOneLoop, executeAction, DEFAULT_LOOPS, type LoopsConfig } from "./daemon-loops.ts";
+import { appendTask, runOneLoop, executeAction, readLoops, DEFAULT_LOOPS, type LoopsConfig } from "./daemon-loops.ts";
 import { gateAction } from "./broker.ts";
 import { isAuto } from "./autonomy.ts";
 import { syncApp } from "./daemon-sync.ts";
@@ -42,7 +45,7 @@ import { mcpConfigPath, readOrCreateMcpToken } from "./mcp-config.ts";
 // responses. ALL logging goes to stderr (anything on stdout that isn't
 // valid JSON-RPC crashes the client). No exceptions.
 
-interface JsonRpcReq {
+export interface JsonRpcReq {
   jsonrpc: "2.0";
   id?: number | string | null;
   method: string;
@@ -56,7 +59,7 @@ interface JsonRpcRes {
   error?: { code: number; message: string; data?: unknown };
 }
 
-interface McpTool {
+export interface McpTool {
   name: string;
   description: string;
   inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[] };
@@ -144,291 +147,12 @@ export async function runMcpServer(
 
   log(`starting · vault=${vaultPath}${requireToken ? " · network (token required)" : " · stdio"}`);
 
-  const tools: McpTool[] = [
-    {
-      name: "council",
-      description:
-        "Run a council across Claude, Codex, Antigravity, and local Ollama in parallel for a high-stakes question. Returns a synthesized verdict that explicitly surfaces where the panel disagreed. Use for decisions where one model's answer would be a single point of view (financial, medical, career, contract review).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          prompt: { type: "string", description: "The question to ask the panel." },
-          domain: { type: "string", description: "Life domain context (wealth, health, tax, etc.) - must match a folder in the vault." },
-        },
-        required: ["prompt", "domain"],
-      },
-    },
-    {
-      name: "chat",
-      description: "Single-CLI chat turn against the named engine. Faster + cheaper than council for routine questions. Returns the assistant reply as a string. Note: when the user has auto-council set to \"auto\" for the domain, a high-stakes judgment call is automatically escalated to the full council and you receive the council verdict instead.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          prompt: { type: "string" },
-          domain: { type: "string" },
-          cli: { type: "string", description: "claude | codex | gemini | ollama" },
-          model: { type: "string", description: "Optional model name; defaults to the CLI's default." },
-        },
-        required: ["prompt", "domain"],
-      },
-    },
-    {
-      name: "list_domains",
-      description: "List all life domains in the vault with their open-loop count and last-modified timestamp.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "read_state",
-      description: "Read the state.md for a given domain. Returns the raw markdown.",
-      inputSchema: {
-        type: "object",
-        properties: { domain: { type: "string" } },
-        required: ["domain"],
-      },
-    },
-    {
-      name: "read_log",
-      description: "Read today's _log/YYYY-MM-DD.md for a domain - the self-curating decision log written by prevAIl after every turn.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          domain: { type: "string" },
-          date: { type: "string", description: "Optional YYYY-MM-DD; defaults to today." },
-        },
-        required: ["domain"],
-      },
-    },
-    {
-      name: "read_intents",
-      description: "Read the intent ledger for a domain - the chronological record of what the user actually asked (their prompts), newest first. Use to understand recent context and recurring themes before answering.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          domain: { type: "string" },
-          limit: { type: "number", description: "Max records (default 30)." },
-        },
-        required: ["domain"],
-      },
-    },
-    {
-      name: "entities_search",
-      description: "Search the people, places, companies/products and things the user has talked about across their chats and prompts. Returns ids, names, kinds and how many conversations mention each. Use entity_context on an id for the details.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Name or part of a name; empty lists the most mentioned." },
-          kind: { type: "string", enum: ["person", "place", "org", "thing"] },
-          limit: { type: "number", description: "Max results (default 20)." },
-        },
-      },
-    },
-    {
-      name: "entity_context",
-      description: "Everything the vault knows about one person, place, company/product or thing: the digest of what the user has discussed about it, the user's own notes, recent mentions with dates and excerpts, and what it is often mentioned with.",
-      inputSchema: {
-        type: "object",
-        properties: { id: { type: "string", description: "Entity id (person/sam-rivera) or a name." } },
-        required: ["id"],
-      },
-    },
-    {
-      name: "read_decisions",
-      description: "Read the decision log for a domain - past decisions and council verdicts with their rationale, newest first. Use to avoid re-litigating settled questions and to stay consistent with prior reasoning.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          domain: { type: "string" },
-          limit: { type: "number", description: "Max records (default 20)." },
-        },
-        required: ["domain"],
-      },
-    },
-    {
-      name: "list_projects",
-      description: "The user's projects: everything they have been building or working on, distilled from their full prompt history across every AI tool, with prompt counts, dates, status, takeaways and open questions, plus cross-project recommendations (tasks, skills, apps, habits, automations).",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "read_project",
-      description: "A project's REPLAY BRIEF: one prompt, distilled by the most capable model from every prompt the user typed about the project (requirements, their corrections and taste rules, decisions, pitfalls), written so a model can rebuild the project from scratch. with_prompts=true appends the full verbatim prompt history.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          slug: { type: "string", description: "Project slug from list_projects." },
-          with_prompts: { type: "boolean", description: "Append every original prompt, in order (large)." },
-        },
-        required: ["slug"],
-      },
-    },
-    {
-      name: "intent_findings",
-      description: "Intent: what the user's own prompts say about them. A few plain findings (instructions they keep restating, share of time on tools vs outcomes, projects that went quiet, late-night correction rate, life areas that never came up) plus the latest weekly letter. Read-only; computed by `prevail intent refresh`.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "project_restart",
-      description: "Restart a project with a newer model: the replay brief rendered as a handoff prompt (goal, success criteria, rules the user already had to give, dead ends, open questions), a short intent brief, or the raw prompts. Read-only.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          slug: { type: "string", description: "Project slug from list_projects." },
-          format: { type: "string", enum: ["handoff", "intent", "raw"], description: "Default handoff." },
-          with_prompts: { type: "boolean", description: "Append every original prompt to the handoff (large)." },
-        },
-        required: ["slug"],
-      },
-    },
-    {
-      name: "read_recommendations",
-      description: "Prevail's one ranked 'what to do next' list across the whole vault: instructions to save as rules, project next steps and stuck projects to restart, connectors to sign in or sync, recurring people and places to save, better model defaults, and context gaps. Deterministic, ranked by leverage.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "read_surface",
-      description: "Proactively surfaced questions and high-leverage next actions for a domain, inferred from its state, decisions, and memory. Use to suggest what the user should tackle next.",
-      inputSchema: {
-        type: "object",
-        properties: { domain: { type: "string" } },
-        required: ["domain"],
-      },
-    },
-    {
-      name: "read_memory",
-      description: "Read Prevail's learned knowledge: the durable per-domain MEMORY.md when a domain is given, otherwise the vault-wide omega.md (cross-domain lessons). This is the distilled long-term context, not raw chat history.",
-      inputSchema: {
-        type: "object",
-        properties: { domain: { type: "string", description: "Optional; omit for vault-wide omega." } },
-      },
-    },
-    {
-      name: "list_tasks",
-      description: "List the tasks for a domain with their status (todo | doing | review | blocked | done | icebox), due dates, and priority.",
-      inputSchema: {
-        type: "object",
-        properties: { domain: { type: "string" } },
-        required: ["domain"],
-      },
-    },
-    {
-      name: "add_task",
-      description: "Add a task to a domain's task list. Use after a decision or council verdict to capture the concrete next step. Returns whether it was added (false if a duplicate already exists).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          domain: { type: "string" },
-          text: { type: "string", description: "The task, phrased as a doable action." },
-          due: { type: "string", description: "Optional due date YYYY-MM-DD." },
-          priority: { type: "string", description: "Optional: high | critical." },
-        },
-        required: ["domain", "text"],
-      },
-    },
-    {
-      name: "update_task",
-      description: "Set the status of an existing task. Identify it by its id (from list_tasks) or, if it has none yet, by its exact text. Status is one of todo | doing | review | blocked | done | icebox.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          domain: { type: "string" },
-          id: { type: "string", description: "Task id from list_tasks, or the exact task text." },
-          status: { type: "string" },
-        },
-        required: ["domain", "id", "status"],
-      },
-    },
-    {
-      name: "log_decision",
-      description: "Record a decision and its rationale to the domain's decision log, so future turns (and the user) can see what was decided and why. Use when a choice is made, not for routine answers.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          domain: { type: "string" },
-          decision: { type: "string", description: "The decision reached." },
-          rationale: { type: "string", description: "Why - the reasoning behind it." },
-        },
-        required: ["domain", "decision"],
-      },
-    },
-    {
-      name: "list_loops",
-      description: "List a domain's standing loops (self-driving routines): id, name, purpose, cadence, autonomy level, and whether enabled.",
-      inputSchema: {
-        type: "object",
-        properties: { domain: { type: "string" } },
-        required: ["domain"],
-      },
-    },
-    {
-      name: "run_loop",
-      description: "Run one loop now (by id or name). The loop evaluates the domain's current state and returns proposed next actions; depending on the loop's autonomy it may file tasks or queue approvals. Returns the note + proposed actions + any tasks created.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          domain: { type: "string" },
-          loop: { type: "string", description: "Loop id or name (from list_loops)." },
-        },
-        required: ["domain", "loop"],
-      },
-    },
-    {
-      name: "approve_loop_action",
-      description: "Execute a loop action that was queued for approval, using Prevail's agent tools. Pass the exact action text from run_loop. Higher-stakes than other tools - only call when the user has approved this action.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          domain: { type: "string" },
-          action: { type: "string", description: "The exact action text to execute." },
-        },
-        required: ["domain", "action"],
-      },
-    },
-    {
-      name: "list_apps",
-      description: "List the connected apps/connectors (Gmail, GitHub, bank feeds, …) with the life domains they feed and how they connect. These are the data sources Prevail pulls into the vault.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "vault_status",
-      description: "Health and privacy status of the vault: passcode lock, Bunker Mode (local-only), and domain count. Check before suggesting anything that depends on network or write access.",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "sync_app",
-      description: "Sync one connected app NOW (by id from list_apps): runs its connector to pull fresh data into the vault. Returns whether it succeeded and how many artifacts were routed.",
-      inputSchema: {
-        type: "object",
-        properties: { id: { type: "string", description: "App id from list_apps." } },
-        required: ["id"],
-      },
-    },
-    {
-      name: "list_playbooks",
-      description: "List available playbooks: multi-step routines that run skills across several apps and synthesize a result (e.g. 'net-worth' pulls every financial account + scans email, then writes a summary). Returns [{ id, name, goal }].",
-      inputSchema: { type: "object", properties: {} },
-    },
-    {
-      name: "run_playbook",
-      description: "Run a playbook NOW (by id from list_playbooks). It executes each step through Prevail's safety gate (global pause + per-action-class policy + audit); read-only/allowed steps run, anything needing consent is recorded as 'ask' and skipped. Returns the per-step outcome and the run directory. Use for composite jobs like building a net-worth picture.",
-      inputSchema: {
-        type: "object",
-        properties: { id: { type: "string", description: "Playbook id from list_playbooks." } },
-        required: ["id"],
-      },
-    },
-    {
-      name: "connect_app",
-      description: "Connect a new app/data source. Prevail's Connection Agent researches the best way to connect it right now (MCP, an official API/CLI, a gateway, or a browser login), scaffolds it into the vault wired to the given domains, and returns a plan with the ONE auth step the user must complete. Higher-stakes: creates vault files and may require the user to authorize.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          name: { type: "string", description: "The app to connect, e.g. \"GitHub\", \"Strava\"." },
-          goal: { type: "string", description: "What data it should pull in." },
-          domains: { type: "array", items: { type: "string" }, description: "Optional: domains this should feed (informational; the agent also infers)." },
-        },
-        required: ["name"],
-      },
-    },
-  ];
+  const scope = scopeFromEnv();
+  if (scope && !validScope(vaultPath, scope)) {
+    log(`PREVAIL_DOMAIN="${scope}" is not a domain in this vault`);
+    process.exit(1);
+  }
+  const tools = mcpTools();
 
   // Print the token-discovery hint once, on stderr, so a human launching the
   // server in network mode can find their token. Never on stdout - that
@@ -465,7 +189,7 @@ export async function runMcpServer(
       continue;
     }
     try {
-      const result = await dispatch(req, tools, vaultPath);
+      const result = await dispatch(req, tools, vaultPath, scope);
       // Notifications have id=null and expect no response.
       if (req.id !== undefined && req.id !== null) {
         send({ jsonrpc: "2.0", id, result });
@@ -586,7 +310,7 @@ function verifyParentProcess(): ParentVerdict {
   };
 }
 
-async function dispatch(req: JsonRpcReq, tools: McpTool[], vaultPath: string): Promise<unknown> {
+export async function dispatch(req: JsonRpcReq, tools: McpTool[], vaultPath: string, scope: string | null = null): Promise<unknown> {
   switch (req.method) {
     case "initialize": {
       const p = (req.params ?? {}) as { clientInfo?: { name?: string } };
@@ -602,12 +326,13 @@ async function dispatch(req: JsonRpcReq, tools: McpTool[], vaultPath: string): P
       // Spec-required notification from the client after init. No response.
       return undefined;
     case "tools/list":
-      return { tools };
+      return { tools: scopedTools(scope, tools) };
     case "tools/call": {
       const p = (req.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
       const name = p.name ?? "";
-      const args = p.arguments ?? {};
-      const content = await callTool(name, args, vaultPath);
+      const verdict = scopeToolCall(vaultPath, scope, name, p.arguments ?? {});
+      if (!verdict.ok) throw new Error(verdict.error);
+      const content = await callTool(name, verdict.args, vaultPath);
       return { content };
     }
     case "ping":
@@ -664,6 +389,42 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const slug = typeof args.slug === "string" ? args.slug : "";
       try { return wrapText(replayPrompt(vaultPath, slug, args.with_prompts === true)); } catch (e) { return wrapText((e as Error).message); }
     }
+    case "create_mission":
+    case "set_mission_status":
+    case "complete_mission":
+      return wrapText(await (await import("./missions-mcp.ts")).missionWriteTool(vaultPath, name as import("./missions-mcp.ts").MissionWrite, args));
+    case "list_missions": {
+      const { listMissions } = await import("./missions.ts");
+      const st = typeof args.status === "string" ? args.status : "all";
+      const l = listMissions(vaultPath, { status: st as "all" });
+      if (!l.length) return wrapText("No projects yet.");
+      return wrapText(JSON.stringify(l.map((m) => ({ id: m.id, name: m.name, status: m.status, outcome: m.outcome, target: m.target, domains: m.domains, milestones: `${m.progress.milestones.done} of ${m.progress.milestones.total}`, budget: m.progress.budget.planned ? `$${m.progress.budget.used} of $${m.progress.budget.planned}` : null, days_left: m.progress.days.left })), null, 2));
+    }
+    case "read_mission": {
+      const { missionView, missionTasks } = await import("./missions.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      const v = missionView(vaultPath, slug);
+      if (!v) return wrapText(`No project "${slug}".`);
+      const { readFileSync } = await import("node:fs");
+      const { resolveDomainDir } = await import("./path-safety.ts");
+      let log: string[] = [];
+      try { log = readFileSync(`${resolveDomainDir(vaultPath, `_mission-${v.slug}`)}/memory/log.md`, "utf8").split("\n").filter((l) => l.startsWith("- ")).slice(0, 10); } catch { /* none */ }
+      const today = new Date().toISOString().slice(0, 10);
+      return wrapText(JSON.stringify({ ...v, next_events: v.links.calendar.filter((e) => e.start.slice(0, 10) >= today).slice(0, 5), open_tasks: missionTasks(vaultPath, v.slug).filter((t) => !t.done), recent_log: log }, null, 2));
+    }
+    case "mission_context": {
+      const { resolveScope, leadText } = await import("./scope.ts");
+      try { const sc = await resolveScope(vaultPath, { mission: typeof args.slug === "string" ? args.slug : "" }); return wrapText(leadText(sc.blocks)); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "mission_log": {
+      const { logLine, readMission } = await import("./missions.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      const m = readMission(vaultPath, slug);
+      if (!m) return wrapText(`No project "${slug}".`);
+      const text = String(args.text ?? "").trim();
+      if (!text) return wrapText("text is required");
+      return wrapText(`Logged: ${logLine(vaultPath, m.slug, text)}`);
+    }
     case "intent_findings":
     case "mirror_findings": {
       const { readFindings, findingsText } = await import("./mirror.ts");
@@ -674,6 +435,87 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       const slug = typeof args.slug === "string" ? args.slug : "";
       const format = args.format === "intent" || args.format === "raw" ? args.format : "handoff";
       try { return wrapText(restartText(vaultPath, slug, format, { withPrompts: args.with_prompts === true })); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "read_metrics":
+      return wrapText(await tReadMetrics(args, vaultPath));
+    case "metric_series":
+      return wrapText(await tMetricSeries(args, vaultPath));
+    case "read_compass":
+      return wrapText(await tReadCompass(args, vaultPath));
+    case "check_alignment": {
+      const ca = await import("./compass-align.ts");
+      const action = String(args.action ?? "").slice(0, 2000);
+      if (!action.trim()) throw new Error("action is required");
+      const domain = typeof args.domain === "string" && /^[a-z0-9][a-z0-9_-]{0,60}$/.test(args.domain) ? args.domain : "general";
+      const gate = ca.ruleGate(vaultPath, action);
+      const jc = ca.jobCompass(vaultPath, { ask: action, domains: { owner: domain, consulted: [] } });
+      const open = ca.openConflicts(vaultPath).slice(0, 5);
+      const lines = [
+        gate ? `Non-negotiable: ${gate.decision === "block" ? "BLOCKED" : "asks first"}, ${gate.reason}.` : "Touches no non-negotiable that code can check.",
+        jc.serves.length ? `Serves: ${jc.serves.map((x) => x.title).join(", ")}.` : "Serves no Compass goal in this domain (unlinked).",
+        ...(jc.costs.length ? [`Watch: ${jc.costs.map((x) => `${x.title} (${x.why})`).join("; ")}.`] : []),
+        ...(open.length ? ["Open conflicts:", ...open.map((c) => `- ${c.question} Evidence: ${c.evidence.join("; ")}`)] : []),
+      ];
+      return wrapText(lines.join("\n"));
+    }
+    case "read_today": {
+      const t = await import("./today.ts");
+      const c = t.composeToday(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(c, null, 2) : t.todayText(c));
+    }
+    case "tell": {
+      const t = await import("./tell.ts");
+      const text = String(args.text ?? "").trim();
+      if (!text) throw new Error("text is required");
+      const r = await t.tell(vaultPath, text, { surface: "mcp", ...(typeof args.domain === "string" && args.domain ? { domain: args.domain } : {}), ...(typeof args.mission === "string" && args.mission ? { mission: args.mission } : {}) });
+      return wrapText(`${t.toldReply(r)} (id ${r.id}; undo with: prevail tell undo ${r.id})`);
+    }
+    case "what_am_i_forgetting": {
+      const t = await import("./tell.ts");
+      const f = await t.forgetting(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(f, null, 2) : t.forgettingText(f));
+    }
+    case "read_time": {
+      const t = await import("./time.ts");
+      const r = await t.timeReview(vaultPath);
+      if (args.format === "json") return wrapText(JSON.stringify(r, null, 2));
+      const w = r.thisWeek;
+      return wrapText([w.connected ? `This week: ${w.hours} h on the calendar, ${w.meetings} h of meetings, ${w.focus} h focus, ${w.afterHours} h after hours.` : w.note ?? "", ...w.byValue.map((v) => `- ${v.title}: ${v.hours} h (${v.share}%, rank ${v.rank})`), ...w.lines, r.warning ?? "", ...r.holds.map((h) => `Waiting for a yes: ${h.title}, ${h.start}`), ...r.declines.map((d) => `Drafted, yours to send: ${d.body}`)].filter(Boolean).join("\n"));
+    }
+    case "weekly_review": {
+      const r = await import("./review.ts");
+      const card = await r.weeklyReview(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(card, null, 2) : r.reviewText(card));
+    }
+    case "log_checkin": {
+      const r = await import("./review.ts");
+      try { const c = r.checkin(vaultPath, Number(args.calm), typeof args.note === "string" ? args.note : undefined); return wrapText(`Recorded calm ${c.calm} for the week of ${c.week}.`); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "list_specialists": {
+      const { loadSpecialists } = await import("./specialists.ts");
+      return wrapText(loadSpecialists(vaultPath).map((x) => `${x.on ? "on " : "off"} ${x.name}: returns ${x.returns}, ceiling ${x.ceiling}${x.mandate ? `. ${x.mandate}` : ""}`).join("\n"));
+    }
+    case "hand_off": {
+      const j = await import("./jobs.ts");
+      const message = typeof args.message === "string" ? args.message : "";
+      if (!message.trim()) return wrapText("message is required");
+      const d = await j.dispatch({ vault: vaultPath, message, domain: typeof args.domain === "string" ? args.domain : "general", trigger: "cli" });
+      if (d.kind !== "job" || !d.job) return wrapText("That reads as a question, not a job; answer it directly.");
+      j.saveJob(vaultPath, d.job);
+      if (d.job.startsAlone) j.startJob(vaultPath, d.job.id);
+      return wrapText(JSON.stringify({ ...d.job, status: d.job.startsAlone ? "running" : d.job.status }, null, 2));
+    }
+    case "list_jobs": {
+      const j = await import("./jobs.ts");
+      if (typeof args.id === "string" && args.id) return wrapText(JSON.stringify(j.jobView(vaultPath, args.id) ?? { error: "no such job" }, null, 2));
+      return wrapText(j.listJobs(vaultPath, 30).map((x) => `${x.status.padEnd(14)} ${x.id}  ${x.domains.owner}  ${x.ask.slice(0, 80)}`).join("\n") || "No jobs yet.");
+    }
+    case "open_decisions": {
+      const d = await import("./decision-records.ts");
+      // Gut first: a recommendation is shown only after the user's gut call (decisionView).
+      const { decisionView } = await import("./decisions-open.ts");
+      const open = d.listDecisions(vaultPath).map(decisionView).map((r) => `${r.due ?? "no date"}  ${r.domain}/${r.slug}: ${r.question}${r.gut ? ` (gut: ${r.gut})` : ""}${r.recommendation ? ` (recommendation: ${r.recommendation}, ${r.confidence ?? "medium"} confidence)` : r.recommendationReady ? " (a recommendation is ready once they give a gut call)" : ""}`);
+      return wrapText([...(open.length ? open : ["No open decisions."]), "", "Calibration:", d.calibrationText(vaultPath) || "no retros yet"].join("\n"));
     }
     case "read_recommendations":
       return wrapText(tReadRecommendations(vaultPath));
@@ -710,6 +552,403 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
     default:
       throw new Error(`unknown tool: ${name}`);
   }
+}
+
+export function mcpTools(): McpTool[] {
+  return [
+    {
+      name: "council",
+      description:
+        "Run a council across Claude, Codex, Antigravity, and local Ollama in parallel for a high-stakes question. Returns a synthesized verdict that explicitly surfaces where the panel disagreed. Use for decisions where one model's answer would be a single point of view (financial, medical, career, contract review).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "The question to ask the panel." },
+          domain: { type: "string", description: "Life domain context (wealth, health, tax, etc.) - must match a folder in the vault." },
+        },
+        required: ["prompt", "domain"],
+      },
+    },
+    {
+      name: "chat",
+      description: "Single-CLI chat turn against the named engine. Faster + cheaper than council for routine questions. Returns the assistant reply as a string. Note: when the user has auto-council set to \"auto\" for the domain, a high-stakes judgment call is automatically escalated to the full council and you receive the council verdict instead.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          domain: { type: "string" },
+          cli: { type: "string", description: "claude | codex | gemini | ollama" },
+          model: { type: "string", description: "Optional model name; defaults to the CLI's default." },
+          mission: { type: "string", description: "Optional project slug (from list_missions): the turn runs in the project with its context; domain is then ignored." },
+        },
+        required: ["prompt", "domain"],
+      },
+    },
+    {
+      name: "list_domains",
+      description: "List all life domains in the vault with their open-loop count and last-modified timestamp.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "read_state",
+      description: "Read the state.md for a given domain. Returns the raw markdown.",
+      inputSchema: {
+        type: "object",
+        properties: { domain: { type: "string" } },
+        required: ["domain"],
+      },
+    },
+    {
+      name: "read_log",
+      description: "Read today's _log/YYYY-MM-DD.md for a domain - the self-curating decision log written by prevAIl after every turn.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          date: { type: "string", description: "Optional YYYY-MM-DD; defaults to today." },
+        },
+        required: ["domain"],
+      },
+    },
+    {
+      name: "read_intents",
+      description: "Read the intent ledger for a domain - the chronological record of what the user actually asked (their prompts), newest first. Use to understand recent context and recurring themes before answering.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          limit: { type: "number", description: "Max records (default 30)." },
+        },
+        required: ["domain"],
+      },
+    },
+    {
+      name: "entities_search",
+      description: "Search the user's Entities (people, places, products such as companies and apps, and things they own) and Events, from their chats, prompts and pages. Returns ids, names, kinds and how many conversations mention each. Use entity_context on an id for the details.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Name or part of a name; empty lists the most mentioned." },
+          kind: { type: "string", enum: ["person", "place", "org", "thing"] },
+          limit: { type: "number", description: "Max results (default 20)." },
+        },
+      },
+    },
+    {
+      name: "entity_context",
+      description: "Everything the vault knows about one person, place, company/product or thing: the digest of what the user has discussed about it, the user's own notes, recent mentions with dates and excerpts, and what it is often mentioned with.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Entity id (person/sam-rivera) or a name." } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "read_decisions",
+      description: "Read the decision log for a domain - past decisions and council verdicts with their rationale, newest first. Use to avoid re-litigating settled questions and to stay consistent with prior reasoning.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          limit: { type: "number", description: "Max records (default 20)." },
+        },
+        required: ["domain"],
+      },
+    },
+    {
+      name: "list_projects",
+      description: "The user's projects: everything they have been building or working on, distilled from their full prompt history across every AI tool, with prompt counts, dates, status, takeaways and open questions, plus cross-project recommendations (tasks, skills, apps, habits, automations).",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "read_project",
+      description: "A project's REPLAY BRIEF: one prompt, distilled by the most capable model from every prompt the user typed about the project (requirements, their corrections and taste rules, decisions, pitfalls), written so a model can rebuild the project from scratch. with_prompts=true appends the full verbatim prompt history.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          slug: { type: "string", description: "Project slug from list_projects." },
+          with_prompts: { type: "boolean", description: "Append every original prompt, in order (large)." },
+        },
+        required: ["slug"],
+      },
+    },
+    {
+      name: "intent_findings",
+      description: "Intent: what the user's own prompts say about them. A few plain findings (instructions they keep restating, share of time on tools vs outcomes, projects that went quiet, late-night correction rate, life areas that never came up) plus the latest weekly letter. Read-only; computed by `prevail intent refresh`.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "project_restart",
+      description: "Restart a project with a newer model: the replay brief rendered as a handoff prompt (goal, success criteria, rules the user already had to give, dead ends, open questions), a short intent brief, or the raw prompts. Read-only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          slug: { type: "string", description: "Project slug from list_projects." },
+          format: { type: "string", enum: ["handoff", "intent", "raw"], description: "Default handoff." },
+          with_prompts: { type: "boolean", description: "Append every original prompt to the handoff (large)." },
+        },
+        required: ["slug"],
+      },
+    },
+    {
+      name: "list_missions",
+      description: "The user's projects: time-bound efforts with an outcome and a target date (a trip, learning an instrument, a remodel), each with its status (active, paused, completed, archived), owner and attached domains, milestones done, budget used and days left. Projects are not prompt groups (list_projects).",
+      inputSchema: { type: "object", properties: { status: { type: "string", enum: ["active", "paused", "completed", "archived", "all"], description: "Default all." } } },
+    },
+    {
+      name: "read_mission",
+      description: "One project: its fields, domains with roles (owner, consulted, informed), apps, specialists, people, milestones, budget lines and spend, the next linked events, open tasks and the recent log. Takes mission/<slug>, a slug, or an old project/<slug> id.",
+      inputSchema: { type: "object", properties: { slug: { type: "string" } }, required: ["slug"] },
+    },
+    {
+      name: "mission_context",
+      description: "The context blocks a chat turn in this project carries (outcome, progress, memory, tasks, calendar, apps, people), as the app and CLI build them. Read-only.",
+      inputSchema: { type: "object", properties: { slug: { type: "string" } }, required: ["slug"] },
+    },
+    {
+      name: "mission_log",
+      description: "Add one dated line to a project's log (\"Lesson 3 attended\"). Writes only the project's own memory/log.md.",
+      inputSchema: { type: "object", properties: { slug: { type: "string" }, text: { type: "string" } }, required: ["slug", "text"] },
+    },
+    {
+      name: "create_mission",
+      description: "Ask to start a project (a time-bound effort with an outcome and a target date). A write: it waits for the user's approval in Prevail's Inbox and is done the moment they allow it.",
+      inputSchema: { type: "object", properties: { name: { type: "string" }, outcome: { type: "string" }, target: { type: "string", description: "YYYY-MM-DD" }, owner: { type: "string", description: "the owner domain slug" }, consult: { type: "array", items: { type: "string" } }, inform: { type: "array", items: { type: "string" } } }, required: ["name"] },
+    },
+    {
+      name: "set_mission_status",
+      description: "Ask to pause, resume, archive or reopen a project. A write behind the user's approval in the Inbox.",
+      inputSchema: { type: "object", properties: { mission: { type: "string" }, op: { type: "string", enum: ["pause", "resume", "archive", "reopen"] } }, required: ["mission", "op"] },
+    },
+    {
+      name: "complete_mission",
+      description: "Ask to complete a project with its result; the close-out files the summary, lessons, notes and money into the domains, each with Undo for 7 days. A write behind the user's approval in the Inbox.",
+      inputSchema: { type: "object", properties: { mission: { type: "string" }, result: { type: "string", enum: ["met", "partly", "not-met", "changed"] }, note: { type: "string" } }, required: ["mission", "result"] },
+    },
+    {
+      name: "read_compass",
+      description: "The user's Compass, the chain in their own words: purpose, ranked values (each with an 'enough'), mission statement, vision, measurable objectives, goals and the initiatives under them, plus roles and non-negotiables. Only what the user confirmed is returned as the Compass text; format json also lists lines awaiting confirmation and the tree (every node with its parents and children, and how many are not linked per level); format tree returns only the tree. Read it before advising on plans, priorities or trade-offs.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json", "tree"], description: "text (default): the confirmed Compass. json: every line with its status, and the tree. tree: the chain as a tree." } } },
+    },
+    {
+      name: "check_alignment",
+      description: "Check a plan or action against the user's Compass before doing it: which confirmed non-negotiables it touches (checked in code against measured state where a check exists), what Compass goals and values it serves, and the open conflicts between their goals and paths, each with evidence. Read-only.",
+      inputSchema: { type: "object", properties: { action: { type: "string", description: "The plan or action, in a sentence." }, domain: { type: "string", description: "The life domain it belongs to (optional)." } }, required: ["action"] },
+    },
+    {
+      name: "read_metrics",
+      description: "The user's metrics, computed from what they already do (AI tools, git, task boards, loops, decisions, prompts, trips, watch history, card statements): this week's glance against their own normal, and every metric with its honesty tier (measured, derived), coverage and the files behind it. No data entry; counts only.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["glance", "list"], description: "glance (default): this week in numbers, as text. list: every metric as JSON." } } },
+    },
+    {
+      name: "metric_series",
+      description: "One metric over time: per day or per week values (zeros included) for a metric id from read_metrics (for example m-ai-spend, m-commits, m-shipped).",
+      inputSchema: { type: "object", properties: { id: { type: "string" }, per: { type: "string", enum: ["day", "week"] }, count: { type: "number", description: "How many periods back (default 26 weeks or 90 days)." } }, required: ["id"] },
+    },
+    {
+      name: "read_today",
+      description: "The user's Today card: at most three things that matter today (each with its thread to a Compass value, or 'unlinked'), one thing falling behind, the nearest open decision, and what else is due. Computed by code from task boards, commitments, decisions and the Compass.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
+    },
+    {
+      name: "tell",
+      description: "Tell the user's chief of staff anything to keep: a promise, something someone owes them, a decision to make, a task (\"remind me to ...\"), a goal or value in their words, a number (\"ran 5 km\"), practice or a spend for a project, or a note. Filed by code into the right domain or project with a receipt; returns where it went and an id for Undo. Never sends anything.",
+      inputSchema: { type: "object", properties: { text: { type: "string" }, domain: { type: "string" }, mission: { type: "string" } }, required: ["text"] },
+    },
+    {
+      name: "what_am_i_forgetting",
+      description: "Every open loop across the user's vault: promises due, people they are waiting on, decisions to make, what the radar sees slipping (goals, routines, initiatives, projects, relationships, deadlines), overdue tasks, and actions waiting for their yes.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
+    },
+    {
+      name: "read_time",
+      description: "Time against values (Today T5): this week's calendar hours by Compass value against each value's rank, meetings, focus and after-hours, next week against the user's capacity (a warning when over), protected blocks waiting for a yes and drafted declines (never sent). Says plainly when no calendar is connected.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
+    },
+    {
+      name: "weekly_review",
+      description: "This week's review card: what moved and drifted against the user's own normal, the metrics glance, Compass lines heard in chat awaiting a yes, metric proposals, and whether the weekly 1-5 calm check-in is done.",
+      inputSchema: { type: "object", properties: { format: { type: "string", enum: ["text", "json"] } } },
+    },
+    {
+      name: "log_checkin",
+      description: "Record the user's weekly check-in: how calm was this week, 1 to 5, with an optional note. Only when the user gave the number themselves.",
+      inputSchema: { type: "object", properties: { calm: { type: "number" }, note: { type: "string" } }, required: ["calm"] },
+    },
+    {
+      name: "list_specialists",
+      description: "The user's specialists (Researcher, Scout, Planner, Steward, Editor, Writer and the rest of the roster): what each returns, its ceiling (read, draft, write vault) and whether it is on.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "hand_off",
+      description: "Hand a job to the user's chief of staff: it picks the owner domain, the domains to read and to tell, and a team of specialists. The job starts on its own only when every step is read, draft or a reversible vault write, it fits the user's limits, and it does not touch money, people, location or identity; otherwise it waits for the user. Returns the job record.",
+      inputSchema: { type: "object", properties: { message: { type: "string" }, domain: { type: "string", description: "Where the ask comes from (default general)." } }, required: ["message"] },
+    },
+    {
+      name: "list_jobs",
+      description: "Jobs the chief of staff staffed and playbook runs, newest first, with status (proposed, running, needs-approval, done, failed, stopped). With id: one job with its steps, result and what it filed in which domain.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } } },
+    },
+    {
+      name: "open_decisions",
+      description: "Open decisions across the user's domains (question, due date, gut call, recommendation), nearest first, plus calibration: how often their gut and the recommendations turned out right per domain.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "read_recommendations",
+      description: "Prevail's one ranked 'what to do next' list across the whole vault: instructions to save as rules, project next steps and stuck projects to restart, connectors to sign in or sync, recurring people and places to save, better model defaults, and context gaps. Deterministic, ranked by leverage.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "read_surface",
+      description: "Proactively surfaced questions and high-leverage next actions for a domain, inferred from its state, decisions, and memory. Use to suggest what the user should tackle next.",
+      inputSchema: {
+        type: "object",
+        properties: { domain: { type: "string" } },
+        required: ["domain"],
+      },
+    },
+    {
+      name: "read_memory",
+      description: "Read Prevail's learned knowledge: the durable per-domain MEMORY.md when a domain is given, otherwise the vault-wide omega.md (cross-domain lessons). This is the distilled long-term context, not raw chat history.",
+      inputSchema: {
+        type: "object",
+        properties: { domain: { type: "string", description: "Optional; omit for vault-wide omega." } },
+      },
+    },
+    {
+      name: "list_tasks",
+      description: "List the tasks for a domain with their status (todo | doing | review | blocked | done | icebox), due dates, and priority.",
+      inputSchema: {
+        type: "object",
+        properties: { domain: { type: "string" } },
+        required: ["domain"],
+      },
+    },
+    {
+      name: "add_task",
+      description: "Add a task to a domain's task list. Use after a decision or council verdict to capture the concrete next step. A session scoped to one domain (PREVAIL_DOMAIN) may add to ANOTHER domain only as a handoff: the task is written \"From <your domain>: <event> | amount | date | source\". Returns whether it was added (false if a duplicate already exists).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          text: { type: "string", description: "The task, phrased as a doable action." },
+          due: { type: "string", description: "Optional due date YYYY-MM-DD." },
+          priority: { type: "string", description: "Optional: high | critical." },
+          amount: { type: "string", description: "Handoff only: the amount involved, e.g. $12,400." },
+          date: { type: "string", description: "Handoff only: when the event happened, YYYY-MM-DD." },
+          source: { type: "string", description: "Handoff only: the file in your own folder it came from, e.g. source/statement.pdf." },
+        },
+        required: ["domain", "text"],
+      },
+    },
+    {
+      name: "update_task",
+      description: "Set the status of an existing task. Identify it by its id (from list_tasks) or, if it has none yet, by its exact text. Status is one of todo | doing | review | blocked | done | icebox.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          id: { type: "string", description: "Task id from list_tasks, or the exact task text." },
+          status: { type: "string" },
+        },
+        required: ["domain", "id", "status"],
+      },
+    },
+    {
+      name: "log_decision",
+      description: "Record a decision and its rationale to the domain's decision log, so future turns (and the user) can see what was decided and why. Use when a choice is made, not for routine answers.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          decision: { type: "string", description: "The decision reached." },
+          rationale: { type: "string", description: "Why - the reasoning behind it." },
+        },
+        required: ["domain", "decision"],
+      },
+    },
+    {
+      name: "list_loops",
+      description: "List a domain's scheduled playbooks (what used to be loops): id, name, purpose, cadence or event, autonomy level, and whether enabled.",
+      inputSchema: {
+        type: "object",
+        properties: { domain: { type: "string" } },
+        required: ["domain"],
+      },
+    },
+    {
+      name: "run_loop",
+      description: "Run one scheduled playbook now (by its id or name from list_loops). It evaluates the domain's current state and returns proposed next actions; depending on the loop's autonomy it may file tasks or queue approvals. Returns the note + proposed actions + any tasks created.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          loop: { type: "string", description: "Loop id or name (from list_loops)." },
+        },
+        required: ["domain", "loop"],
+      },
+    },
+    {
+      name: "approve_loop_action",
+      description: "Execute a loop action that was queued for approval, using Prevail's agent tools. Pass the exact action text from run_loop. Higher-stakes than other tools - only call when the user has approved this action.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string" },
+          action: { type: "string", description: "The exact action text to execute." },
+        },
+        required: ["domain", "action"],
+      },
+    },
+    {
+      name: "list_apps",
+      description: "List the connected apps/connectors (Gmail, GitHub, bank feeds, …) with the life domains they feed and how they connect. These are the data sources Prevail pulls into the vault.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "vault_status",
+      description: "Health and privacy status of the vault: passcode lock, Bunker Mode (local-only), and domain count. Check before suggesting anything that depends on network or write access.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "sync_app",
+      description: "Sync one connected app NOW (by id from list_apps): runs its connector to pull fresh data into the vault. Returns whether it succeeded and how many artifacts were routed.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "App id from list_apps." } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "list_playbooks",
+      description: "List available playbooks: multi-step routines that run skills across several apps and synthesize a result (e.g. 'net-worth' pulls every financial account + scans email, then writes a summary). Returns [{ id, name, goal }].",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "run_playbook",
+      description: "Run a playbook NOW (by id from list_playbooks). It executes each step through Prevail's safety gate (global pause + per-action-class policy + audit); read-only/allowed steps run, anything needing consent is recorded as 'ask' and skipped. Returns the per-step outcome and the run directory. Use for composite jobs like building a net-worth picture.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Playbook id from list_playbooks." }, domain: { type: "string", description: "The domain a built-in playbook runs in (optional)." } },
+        required: ["id"],
+      },
+    },
+    {
+      name: "connect_app",
+      description: "Connect a new app/data source. Prevail's Connection Agent researches the best way to connect it right now (MCP, an official API/CLI, a gateway, or a browser login), scaffolds it into the vault wired to the given domains, and returns a plan with the ONE auth step the user must complete. Higher-stakes: creates vault files and may require the user to authorize.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The app to connect, e.g. \"GitHub\", \"Strava\"." },
+          goal: { type: "string", description: "What data it should pull in." },
+          domains: { type: "array", items: { type: "string" }, description: "Optional: domains this should feed (informational; the agent also infers)." },
+        },
+        required: ["name"],
+      },
+    },
+  ];
 }
 
 function wrapText(s: string): McpContent[] {
@@ -753,9 +992,19 @@ function logMcpIntent(domain: Domain, prompt: string, cli: string, model: string
 }
 
 async function tCouncil(args: Record<string, unknown>, vaultPath: string): Promise<string> {
-  const prompt = String(args.prompt ?? "").trim();
+  let prompt = String(args.prompt ?? "").trim();
   if (!prompt) throw new Error("prompt is required");
-  const domain = resolveDomain(vaultPath, args.domain);
+  // A mission turn: the same scope resolver as the app and CLI.
+  let missionLocal = false;
+  let domain: ReturnType<typeof resolveDomain>;
+  if (typeof args.mission === "string" && args.mission.trim()) {
+    const { resolveScope, leadText } = await import("./scope.ts");
+    const sc = await resolveScope(vaultPath, { mission: args.mission, message: prompt });
+    domain = sc.domain;
+    missionLocal = sc.privacy.localOnly;
+    const lead = leadText(sc.blocks);
+    if (lead) prompt = `${lead}\n\n---\n\n${prompt}`;
+  } else domain = resolveDomain(vaultPath, args.domain);
   // Log the prompt up front with its MCP-client provenance (covers both a direct
   // `council` call and an auto-council escalation from `chat`).
   logMcpIntent(domain, prompt, "council", "", Date.now());
@@ -804,9 +1053,19 @@ async function tCouncil(args: Record<string, unknown>, vaultPath: string): Promi
 }
 
 async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<string> {
-  const prompt = String(args.prompt ?? "").trim();
+  let prompt = String(args.prompt ?? "").trim();
   if (!prompt) throw new Error("prompt is required");
-  const domain = resolveDomain(vaultPath, args.domain);
+  // A mission turn: the same scope resolver as the app and CLI.
+  let missionLocal = false;
+  let domain: ReturnType<typeof resolveDomain>;
+  if (typeof args.mission === "string" && args.mission.trim()) {
+    const { resolveScope, leadText } = await import("./scope.ts");
+    const sc = await resolveScope(vaultPath, { mission: args.mission, message: prompt });
+    domain = sc.domain;
+    missionLocal = sc.privacy.localOnly;
+    const lead = leadText(sc.blocks);
+    if (lead) prompt = `${lead}\n\n---\n\n${prompt}`;
+  } else domain = resolveDomain(vaultPath, args.domain);
   const clis = await detectClis();
   if (clis.length === 0) throw new Error("no CLIs detected");
   const wantKind = typeof args.cli === "string" ? args.cli : "claude";
@@ -846,7 +1105,7 @@ async function tChat(args: Record<string, unknown>, vaultPath: string): Promise<
     bare: true,
     // Honor the domain's privacy.localOnly and Bunker on the MCP path too; an
     // external agent must not be able to route a local-only domain to the cloud.
-    guard: { localOnly: process.env.PREVAIL_BUNKER === "1" },
+    guard: { localOnly: process.env.PREVAIL_BUNKER === "1" || missionLocal },
   });
   const ts = Date.now();
   writeTurnSummary({
@@ -987,6 +1246,8 @@ function tAddTask(args: Record<string, unknown>, vaultPath: string): string {
   const due = typeof args.due === "string" ? args.due : undefined;
   const priority = typeof args.priority === "string" ? args.priority : undefined;
   const added = appendTask(domainDir(vaultPath, domain.name), text, { due, priority });
+  const handoff = added ? parseHandoff(text) : null;
+  if (handoff) logActivity(vaultPath, { type: "task_filed", domain: domain.name, title: `Handoff from ${handoff.from} to ${domain.name}`, detail: text, status: "ok", ref: "handoff" });
   return added
     ? `Added to ${domain.name}: "${text}".`
     : `Not added - a task like "${text}" already exists in ${domain.name}.`;
@@ -1041,22 +1302,14 @@ function loopsCfg(vaultPath: string, providerKind: string): LoopsConfig {
 
 function tListLoops(args: Record<string, unknown>, vaultPath: string): string {
   const domain = resolveDomain(vaultPath, args.domain);
-  let f = join(domain.path, "_loops.json");
-  if (!existsSync(f)) f = join(domainDir(vaultPath, domain.name), "_loops.json");
-  if (!existsSync(f)) return `(no loops defined for ${domain.name})`;
-  let loops: Array<Record<string, unknown>> = [];
-  try {
-    const doc = JSON.parse(vreadFile(f)) as { loops?: Array<Record<string, unknown>> };
-    loops = Array.isArray(doc.loops) ? doc.loops : [];
-  } catch {
-    return `(could not read loops for ${domain.name})`;
-  }
-  if (!loops.length) return `(no loops defined for ${domain.name})`;
+  // Playbooks replace loops: a scheduled playbook is listed as the loop it runs as.
+  const loops = readLoops(vaultPath, existsSync(join(domain.path, "_loops.json")) ? domain.path : domainDir(vaultPath, domain.name));
+  if (!loops.length) return `(nothing scheduled for ${domain.name})`;
   const lines = loops.map((l) => {
     const state = l.enabled === false ? "disabled" : (l.status ?? "active");
-    return `- (${l.id}) ${l.name}  [${l.cadence}, autonomy:${l.autonomy ?? "suggest"}, ${state}]\n  ${l.purpose ?? ""}`;
+    return `- (${l.id}) ${l.name}  [${l.on ? `on ${l.on}` : l.cadence}, autonomy:${l.autonomy ?? "suggest"}, ${state}]\n  ${l.purpose ?? ""}`;
   });
-  return `# Loops - ${domain.name} (${loops.length})\n${lines.join("\n")}`;
+  return `# Scheduled playbooks - ${domain.name} (${loops.length})\n${lines.join("\n")}`;
 }
 
 async function tRunLoop(args: Record<string, unknown>, vaultPath: string): Promise<string> {
@@ -1121,6 +1374,34 @@ function tVaultStatus(vaultPath: string): string {
 
 // Mirrored connectors (prevail apps): the cached mirror only, never the slow
 // runtime listing. Empty string when there is no mirror cache yet.
+export async function tReadMetrics(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const m = await import("./metrics.ts");
+  const c = await m.computeMetrics(vaultPath);
+  if (args.format === "list") return JSON.stringify(m.listMetrics(c, vaultPath), null, 2);
+  return m.glanceMarkdown(m.glance(c, { ids: m.glanceIds(vaultPath) }));
+}
+
+export async function tMetricSeries(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const m = await import("./metrics.ts");
+  const id = typeof args.id === "string" ? args.id : "";
+  if (!m.CATALOG.some((x) => x.id === id)) return `Unknown metric "${id}". Known: ${m.CATALOG.map((x) => x.id).join(", ")}`;
+  const per = args.per === "day" ? "day" : "week";
+  const count = typeof args.count === "number" && args.count > 0 ? Math.min(400, Math.floor(args.count)) : per === "day" ? 90 : 26;
+  return JSON.stringify({ id, per, points: m.series(await m.computeMetrics(vaultPath), id, per, count) });
+}
+
+export async function tReadCompass(args: Record<string, unknown>, vaultPath: string): Promise<string> {
+  const c = await import("./compass.ts");
+  if (args.format === "json" || args.format === "tree") {
+    const tree = (await import("./compass-chain.ts")).compassTree(vaultPath);
+    return JSON.stringify(args.format === "tree" ? tree : { ...c.compassJson(vaultPath), tree }, null, 2);
+  }
+  const block = c.compassBlock(vaultPath);
+  if (block) return block;
+  const n = c.compassJson(vaultPath).proposed;
+  return n ? `No confirmed Compass yet: ${n} drafted lines are waiting for the user to confirm them.` : "No Compass yet.";
+}
+
 export function tListMirrorApps(vaultPath: string): string {
   let doc: MirrorDoc | null = null;
   try { doc = readMirrorCache(vaultPath); } catch { doc = null; }
@@ -1163,10 +1444,10 @@ async function tSyncApp(args: Record<string, unknown>, vaultPath: string): Promi
 }
 
 async function tListPlaybooks(vaultPath: string): Promise<string> {
-  const { listPlaybooks } = await import("./orchestrator.ts");
-  const list = listPlaybooks(vaultPath);
+  const { playbookRows } = await import("./playbooks.ts");
+  const list = playbookRows(vaultPath);
   if (list.length === 0) return "No playbooks available.";
-  return list.map((p) => `- ${p.id}: ${p.name} — ${p.goal}`).join("\n");
+  return list.map((p) => `- ${p.id} (${p.group}${p.domain ? `, ${p.domain}` : ""}): ${p.name}: ${p.goal}`).join("\n");
 }
 
 async function tRunPlaybook(args: Record<string, unknown>, vaultPath: string): Promise<string> {
@@ -1176,7 +1457,8 @@ async function tRunPlaybook(args: Record<string, unknown>, vaultPath: string): P
   const { isAuto } = await import("./autonomy.ts");
   const pb = loadPlaybook(vaultPath, id);
   if (!pb) throw new Error(`no playbook "${id}" (see list_playbooks)`);
-  const result = await runPlaybook(`mcp-${id}-${Date.now()}`, pb, { vault: vaultPath, provider: "claude", model: "", autonomousActs: isAuto(vaultPath) });
+  const domain = typeof args.domain === "string" && /^[a-z0-9][a-z0-9_-]{0,60}$/.test(args.domain) ? args.domain : undefined;
+  const result = await runPlaybook(`mcp-${id}-${Date.now()}`, pb, { vault: vaultPath, provider: "claude", model: "", autonomousActs: isAuto(vaultPath), ...(domain ? { domain } : {}) });
   const lines = result.steps.map((s) => `  [${s.decision}] ${s.ok ? "✓" : "·"} ${s.label} — ${s.note}`);
   return `${result.ok ? "✓" : "✗"} ${pb.name}: ${result.note}\n${lines.join("\n")}\nRun dir: ${result.runDir}`;
 }

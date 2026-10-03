@@ -601,11 +601,13 @@ export function setSerendipity(on: boolean, domainKey?: string): void {
 // passive hint without surprise behavior.
 export type AutoCouncilMode = "off" | "suggest" | "auto";
 
-export function readAutoCouncil(domainKey?: string): AutoCouncilMode {
+export function readAutoCouncil(domainKey?: string, fallbacks: string[] = []): AutoCouncilMode {
   const cfg = readConfig();
   if (!cfg) return "suggest";
-  if (domainKey) {
-    const override = cfg.domainAutoCouncil?.[domainKey];
+  // A mission resolves itself, then its owner domain (the fallbacks), then the global mode.
+  for (const k of [domainKey, ...fallbacks]) {
+    if (!k) continue;
+    const override = cfg.domainAutoCouncil?.[k];
     if (override) return override;
   }
   return cfg.autoCouncil ?? "suggest";

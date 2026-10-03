@@ -7,6 +7,24 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.10.6] - 2026-10-03 · Compass, specialists, Entities and Activities, projects
+
+### Added
+- **Compass**: `build/compass.md` holds Purpose, Values, Mission statement, Vision, Objectives, Goals, Initiatives, Roles, Rules and Routines, each linked to the line above (`prevail compass tree`). Lines are drafted from your notes with exact quotes and count only once confirmed; confirmed lines reach every chat. Conflicts come with evidence; non-negotiables with a `~check:` are enforced in code. A yearly review runs on its own.
+- **Specialists and jobs**: a chief of staff (named by you) dispatches jobs to specialists with an owner domain, domains to read and to tell, a team and an effort; ceilings in dollars and minutes, read-only tools, drafts never sent, and asks before anything touching money, people, location or identity. Several specialists can be members of a chat and answer as themselves; replies record who answered and who was present. `prevail specialists save|reset|domain-save` edit them.
+- **Entities and Activities**: People, Places, Products (companies and apps together) and Things, plus Events and Projects, each first class with chat, links, notes and files. Projects (stored as missions) are drafted from a conversation with every field checked in code, track progress from what already happens, and file what they learned back to their domains on close.
+- **Today, decisions and domains**: commitments, a falling-behind radar, open decision records with a gut call and a retro, decisions captured from chat, and every chat turn noted in the domains it concerns, each with Undo.
+- **AI usage and apps**: `prevail ai scan` reads every AI tool's local records into one ledger with three cost numbers; app inventory, recurring charges, `prevail doctor apps` and a monthly stack review.
+- **Metrics**: events and canonical metrics from data already on disk, learned proposals, patterns and experiments, Your Year.
+- **Hub**: `prevail spaces` and a hub server that serves the MCP per domain with its own token, domain contracts (`prevail agents`) and handoffs.
+
+### Changed
+- Loops are now scheduled playbooks (`prevail playbook migrate-loops`); missions are shown as Projects (`prevail projects` aliases every missions command).
+- Capture follows the saved vault, reads the current Codex rollout format and keeps Antigravity's project.
+
+### Removed
+- Household and packs.
+
 ## [1.10.5] - 2026-10-02 · Every conversation has a home domain
 
 ### Added

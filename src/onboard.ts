@@ -1,3 +1,4 @@
+import { appendGoals, readDomainGoals } from "./goals.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -544,9 +545,12 @@ export function applyOnboarding(vaultPath: string, picks: string[]): Domain[] {
         manifest.identity.summary = spec.summary;
         changed = true;
       }
-      if (manifest.goals.length === 0 && spec.starterGoals.length > 0) {
-        manifest.goals = [...spec.starterGoals];
-        changed = true;
+      // Starter goals go where every reader looks: source/goals.md (the
+      // manifest's goals[] was never read). Skips titles already there.
+      if (spec.starterGoals.length > 0) {
+        try {
+          if (readDomainGoals(vaultPath, name).length === 0) appendGoals(vaultPath, name, spec.starterGoals);
+        } catch { /* goals are a nicety; onboarding goes on */ }
       }
       if (manifest.config.skills.length === 0 && spec.suggestedSkills.length > 0) {
         manifest.config.skills = [...spec.suggestedSkills];

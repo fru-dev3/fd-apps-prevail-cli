@@ -252,7 +252,7 @@ export function evaluateRelevance(inp: RelevanceInputs): DomainRelevance | null 
 
   const dataFiles = collectDataFiles(inp.dir);
   const soulText = safeRead(join(inp.dir, "soul.md"));
-  const goalsText = safeRead(join(inp.dir, "goals.md"));
+  const goalsText = safeRead(join(inp.dir, "source", "goals.md")) || safeRead(join(inp.dir, "goals.md"));
   const fileNamesLower = dataFiles.map((f) => f.name.toLowerCase());
   const newestDataMtime = dataFiles.reduce((m, f) => Math.max(m, f.mtime), 0);
 

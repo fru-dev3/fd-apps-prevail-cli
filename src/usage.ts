@@ -107,12 +107,16 @@ export interface RecordUsageInput {
   billed?: boolean;
   ts?: number;
   host?: string;
+  // Set "estimated" when the token counts given are a character estimate
+  // (every chat-json usage event is one); otherwise given counts are taken as
+  // the runtime's own.
+  tokenSource?: TokenSource;
 }
 
 function safeHostname(): string { try { return hostname(); } catch { return ""; } }
 
 export function buildEntry(input: RecordUsageInput): UsageEntry {
-  const reported = input.inputTokens != null || input.outputTokens != null;
+  const reported = input.tokenSource !== "estimated" && (input.inputTokens != null || input.outputTokens != null);
   const inTok = input.inputTokens ?? estimateTokens(" ".repeat(input.inputChars ?? 0));
   const outTok = input.outputTokens ?? estimateTokens(" ".repeat(input.outputChars ?? 0));
   const cli = input.cli;

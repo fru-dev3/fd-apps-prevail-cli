@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import {
+  antigravityItem,
   checkpointPath,
+  codexPrompt,
   hostSlug,
   readCheckpoint,
   writeCheckpoint,
@@ -101,5 +103,35 @@ describe("capture-sync checkpoint namespacing", () => {
     // Host B's marks are its own.
     process.env.PREVAIL_HOST_SLUG = "laptop";
     expect(readCheckpoint(vault).prevailLastTs).toBe(500);
+  });
+});
+
+describe("antigravity history", () => {
+  test("keeps the workspace, conversation and time", () => {
+    expect(antigravityItem({ display: " foo the bar ", timestamp: 1790000000000, workspace: "/tmp/foo", conversationId: "c-1" })).toEqual({
+      prompt: "foo the bar", session: "c-1", cwd: "/tmp/foo", epochMs: 1790000000000, entry: undefined,
+    });
+    expect(antigravityItem({ display: "/help", type: "slash_command" })).toMatchObject({ session: "antigravity", cwd: "", entry: "slash_command" });
+    expect(antigravityItem({ display: "  " })).toBeNull();
+  });
+
+});
+
+describe("codex rollouts", () => {
+  test("reads both the old and the new typed-prompt shapes, and nothing injected", () => {
+    expect(codexPrompt({ type: "event_msg", payload: { type: "user_message", message: " foo " } })).toBe("foo");
+    expect(codexPrompt({
+      type: "event_msg",
+      payload: { type: "item_completed", item: { type: "UserMessage", content: [{ type: "text", text: "bar" }, { type: "image" }] } },
+    })).toBe("bar");
+    expect(codexPrompt({ type: "event_msg", payload: { type: "item_completed", item: { type: "AgentMessage", content: [{ type: "text", text: "x" }] } } })).toBeNull();
+    expect(codexPrompt({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "injected" }] } })).toBeNull();
+  });
+
+  test("the reader version survives a checkpoint round trip", () => {
+    const vault = makeVault();
+    process.env.PREVAIL_HOST_SLUG = "foo-host";
+    writeCheckpoint(vault, { version: 1, files: {}, prevailLastTs: 0, opencodeLastTs: 0, readers: { codex: 2 } });
+    expect(readCheckpoint(vault).readers).toEqual({ codex: 2 });
   });
 });

@@ -26,8 +26,12 @@ import { dirname, join, resolve as pathResolve } from "node:path";
 import { tryAcquireLock } from "./file-lock.ts";
 import { scanSensitive, findingCategories, readEgressGuard } from "./egress-guard.ts";
 import { auditAction } from "./action-audit.ts";
+import { foreignDomainOf } from "./agent-contract.ts";
 import { classifyAction, type ActionClass } from "./action-policy.ts";
 import { isTrustedFetch, isTrustedReadTool } from "./trusted-sources.ts";
+import { missionScopeSlug } from "./path-safety.ts";
+import { readMission } from "./missions.ts";
+import { ceilingRank } from "./specialists.ts";
 
 export interface PendingAct {
   id: string;
@@ -299,6 +303,41 @@ function consumeGrant(vault: string, hash: string): ActGrant | null {
   return hit;
 }
 
+// ── Engine acts: the engine's own writes that wait in the same queue ───────
+// The Operator's actions and MCP mission writes (create, status, complete)
+// are queued like a connector write, so the user answers them in the Inbox
+// with the same Allow / Deny. A tool name here never starts with mcp__prevail
+// (that prefix is the engine's own read server and always runs).
+export const OPERATOR_TOOL = "mcp__prevail-operator__act";
+export const MISSION_TOOL_PREFIX = "mcp__prevail-missions__";
+
+/**
+ * The gate for an engine act: "allow" when the user approved this exact call
+ * (a grant, consumed now), "declined" when they said no in the last 30
+ * minutes, otherwise it is queued (once) with a readable summary and "queued"
+ * comes back with the act id.
+ */
+export function gateEngineAct(vault: string, domain: string, tool: string, args: unknown, summary: string): { state: "allow" | "declined" | "queued"; id?: string } {
+  const argsJson = JSON.stringify(args ?? {});
+  const hash = actHash(tool, argsJson);
+  if (isDenied(vault, hash)) return { state: "declined" };
+  if (consumeGrant(vault, hash)) {
+    auditAction(vault, { ts: Date.now(), domain, action: summary.slice(0, 280), outcome: "executed", report: `ran under user grant (${tool})` });
+    return { state: "allow" };
+  }
+  // Scan what the act would carry out (its summary), not the JSON wrapping:
+  // JSON's own quote marks read as a verbatim quote.
+  const findings = readEgressGuard() === "on" ? scanSensitive(summary) : [];
+  const rec = addPendingAct(vault, { domain, summary: summary.slice(0, 200), tool, argsJson, categories: findingCategories(findings) });
+  auditAction(vault, { ts: Date.now(), domain, action: summary.slice(0, 280), outcome: "proposed", report: `queued for approval (${tool})` });
+  return { state: "queued", id: rec.id };
+}
+
+/** The pending act with this id, before an answer removes it from the queue. */
+export function pendingAct(vault: string, id: string): PendingAct | null {
+  return readPendingActs(vault).find((a) => a.id === id) ?? null;
+}
+
 // ── Builtin-tool boundary (C1) ───────────────────────────────────────────────
 // The connector gate above covers MCP tools. But an `act` run also hands the
 // model its RUNTIME BUILTINS - Bash, Write, Edit, Read, WebFetch, WebSearch -
@@ -447,6 +486,16 @@ export interface GateDecision {
 }
 
 export function gateToolCall(vault: string, domain: string, toolName: string, toolInput: unknown, vaultLockOn = true, opts: { thread?: string } = {}): GateDecision {
+  // One writer per folder (agent mesh): a domain agent writes only its own
+  // folder, Vault Lock or not. Anything for another domain is a handoff.
+  if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit" || toolName === "NotebookEdit") {
+    const target = pathFromInput(toolInput);
+    const other = target ? foreignDomainOf(vault, domain, target) : null;
+    if (other) {
+      auditAction(vault, { ts: Date.now(), domain, action: `builtin ${toolName}`, outcome: "blocked_by_egress_guard", report: `wrote into ${other}, which ${domain} does not own` });
+      return { action: "deny", reason: `${toolName} into the ${other} folder was blocked: the ${domain} agent writes only its own folder. Hand it off instead: add a task to ${other} (Prevail add_task) that starts "From ${domain}:" with the event, amount, date and source file.` };
+    }
+  }
   // C1: builtins first - the technical Vault Lock boundary.
   const builtin = gateBuiltin(vault, vaultLockOn, toolName, toolInput);
   if (builtin) {
@@ -456,6 +505,13 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
     return builtin;
   }
   if (classifyAct(toolName) === "allow") return { action: "allow" };
+  // A mission's ceiling only tightens (missions-plan.md): a read-only mission
+  // never writes, and below "act" no always-allow rule lets a write run alone.
+  const mission = missionGate(vault, domain);
+  if (mission?.readOnly) {
+    auditAction(vault, { ts: Date.now(), domain, action: actSummary(toolName), outcome: "blocked_by_egress_guard", report: `project ceiling is read (${toolName})` });
+    return { action: "deny", reason: "This project is read-only (its ceiling is read), so this action was NOT run. Tell the user; they can raise the ceiling on the project's Setup tab." };
+  }
   // A trusted remote MCP source's read tools (readOnlyHint at add time) run live.
   if (isTrustedReadTool(vault, toolName)) return { action: "allow" };
   const argsJson = JSON.stringify(toolInput ?? {});
@@ -469,7 +525,7 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
   // An "Always allow" rule covers only the harmless shape: never a
   // consequential call and never one carrying sensitive data. Those fall
   // through to the grant check and the queue like any other.
-  if (hasActRule(vault, toolName, domain) && isAlwaysEligible(toolName, categories)) {
+  if (!mission?.askAlways && hasActRule(vault, toolName, domain) && isAlwaysEligible(toolName, categories)) {
     auditAction(vault, {
       ts: Date.now(), domain, action: actSummary(toolName),
       outcome: "executed", report: `ran under always-allow rule (${toolName})`,
@@ -496,6 +552,17 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
       `This action was NOT run. Prevail queued it for the user's approval under Needs You (id ${rec.id}).${sens} ` +
       `Tell the user what you are trying to do and that it awaits their approval; after they approve, call this exact tool with the exact same arguments to run it. Do not attempt another route. ${actMarker(rec.id)}`,
   };
+}
+
+/** The mission a `_mission-<slug>` chat runs in: is it read-only, and must every write ask? */
+export function missionGate(vault: string, domain: string): { readOnly: boolean; askAlways: boolean } | null {
+  const slug = missionScopeSlug(domain);
+  if (!slug) return null;
+  try {
+    const m = readMission(vault, slug);
+    if (!m) return { readOnly: true, askAlways: true }; // fail closed
+    return { readOnly: ceilingRank(m.ceiling) <= ceilingRank("read"), askAlways: ceilingRank(m.ceiling) < ceilingRank("act") };
+  } catch { return { readOnly: true, askAlways: true }; }
 }
 
 // ── Claude hook settings (what cli-bridge passes as --settings) ──────────────

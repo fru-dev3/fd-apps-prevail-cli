@@ -480,7 +480,7 @@ describe("domain archive (v4 layout)", () => {
   test("archiveDomain moves a v4 domain into _archive and restoreDomain brings it back", async () => {
     const vault = makeV4Vault("travel");
     const live = join(vault, "data", "domains", "travel");
-    const archived = join(vault, "_archive", "travel");
+    const archived = join(vault, "data", "domains", "_archive", "travel");
 
     expect(listArchived(vault)).toEqual([]);
     const res = await archiveDomain(vault, "travel");

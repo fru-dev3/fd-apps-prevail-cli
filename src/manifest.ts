@@ -116,6 +116,8 @@ export interface ManifestConfig {
   skills: string[];
   /** When true, chat turns auto-distill into state.md / decisions.md. */
   autoState: boolean;
+  /** Agent mesh: a pinned domain's tab starts its agent; the rest wake on demand. */
+  pinned: boolean;
 }
 
 export interface HeartbeatRoutine {
@@ -400,6 +402,7 @@ function coerceManifest(raw: unknown, domain: string): DomainManifest {
       lens: strOrNull(cfgRaw.lens),
       skills: strArray(cfgRaw.skills),
       autoState: bool(cfgRaw.autoState, false),
+      pinned: bool(cfgRaw.pinned, false),
     },
     context_score: coerceContextScore(o.context_score),
     goals: strArray(o.goals),
@@ -484,6 +487,7 @@ function defaultManifest(vaultPath: string, domain: string): DomainManifest {
       lens: null,
       skills: [],
       autoState: false,
+      pinned: false,
     },
     context_score: null,
     goals: [],

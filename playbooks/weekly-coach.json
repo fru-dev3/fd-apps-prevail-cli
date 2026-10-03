@@ -1,0 +1,11 @@
+{
+  "id": "weekly-coach",
+  "name": "Weekly review with the team",
+  "goal": "The weekly review as a team: the Sentinel finds what has gone cold or is slipping, the Coach turns each active goal into an if-then plan and names what to let go of, the Steward checks it against the Compass, the Editor writes one page.",
+  "steps": [
+    { "kind": "specialist", "id": "s1", "specialist": "sentinel", "brief": "What has gone cold or is slipping this week, with the evidence." },
+    { "kind": "specialist", "id": "s2", "specialist": "coach", "brief": "For each active goal, one if-then plan for next week; name a stalled goal plainly and offer a replacement.", "uses": ["s1"] },
+    { "kind": "specialist", "id": "s3", "specialist": "steward", "brief": "Does next week's plan fit the Compass? Name any non-negotiable at risk first.", "uses": ["s1", "s2"], "gate": "stop" },
+    { "kind": "specialist", "id": "s4", "specialist": "editor", "brief": "One page: what moved, what drifted, next week's if-then plans, and the calm question.", "uses": ["s1", "s2", "s3"] }
+  ]
+}

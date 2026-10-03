@@ -63,48 +63,34 @@ afterEach(() => {
   else process.env.PREVAIL_CONFIG_DIR = savedCfg;
 });
 
-describe("projects: CRUD and the folder", () => {
-  test("create writes the entity folder with the project frontmatter; it lists as a yours project", () => {
+describe("projects are projects: the old calls still work", () => {
+  const mdir = (slug: string) => join(vault, "data", "missions", slug);
+  test("create makes a project; the first domain owns it", () => {
     const p = createProject(vault, { name: "Foo Trip", outcome: "Back home with photos: done", target: "2026-12-01", domains: ["travel", "Hobbies"], now: NOW });
-    expect(p).toMatchObject({ id: "project/foo-trip", kind: "project", name: "Foo Trip", status: "active", outcome: "Back home with photos: done", target: "2026-12-01", domains: ["travel", "hobbies"], goals: [], relation: "yours", saved: true });
-    const md = readFileSync(join(projDir("foo-trip"), "entity.md"), "utf8");
-    expect(md).toContain("kind: project");
-    expect(md).toContain("status: active");
-    expect(md).toContain("domains: [travel, hobbies]");
-    expect(md).toContain("target: 2026-12-01");
-
-    const listed = searchEntities(readIndex(vault), "", { kind: "project" }).map((e) => summarize(e, vault));
-    expect(listed).toHaveLength(1);
-    expect(listed[0]).toMatchObject({ id: "project/foo-trip", status: "active", target: "2026-12-01", domains: ["travel", "hobbies"], relation: "yours" });
-
-    // Always yours, even against an override.
-    setRelation(vault, "project/foo-trip", "reference");
-    expect(buildIndex(vault).entities.find((e) => e.id === "project/foo-trip")!.relation).toBe("yours");
+    expect(p).toMatchObject({ id: "mission/foo-trip", name: "Foo Trip", status: "active", outcome: "Back home with photos: done", target: "2026-12-01", goals: [] });
+    expect(p.domains).toEqual([{ slug: "travel", role: "owner" }, { slug: "hobbies", role: "consulted" }]);
+    expect(existsSync(join(mdir("foo-trip"), "mission.md"))).toBe(true);
+    expect(existsSync(projDir("foo-trip"))).toBe(false);
+    expect(projectDetail(vault, "project/foo-trip")!.id).toBe("mission/foo-trip");
   });
 
-  test("set edits fields; archive is a status and nothing is deleted; bad input is refused", () => {
+  test("set moves the status; archive is a status and nothing is deleted; bad input is refused", () => {
     createProject(vault, { name: "Bar Build", now: NOW });
-    const p = setProject(vault, "project/bar-build", { status: "paused", outcome: "A working bar", target: "2027-01-31", domains: ["hobbies"] });
-    expect(p).toMatchObject({ status: "paused", outcome: "A working bar", target: "2027-01-31", domains: ["hobbies"] });
-    const cleared = setProject(vault, "bar-build", { target: "", domains: [] });
-    expect(cleared.target).toBeUndefined();
-    expect(cleared.domains).toEqual([]);
+    const p = setProject(vault, "project/bar-build", { status: "paused", outcome: "A working bar", target: "2027-01-31" });
+    expect(p).toMatchObject({ status: "paused", outcome: "A working bar", target: "2027-01-31" });
     expect(setProject(vault, "project/bar-build", { status: "archived" }).status).toBe("archived");
-    expect(existsSync(join(projDir("bar-build"), "entity.md"))).toBe(true);
-    expect(projectDetail(vault, "project/bar-build")!.outcome).toBe("A working bar");
-
-    expect(() => setProject(vault, "project/bar-build", { status: "gone" })).toThrow(/status must be/);
+    expect(existsSync(join(mdir("bar-build"), "mission.md"))).toBe(true);
     expect(() => setProject(vault, "project/bar-build", { target: "soon" })).toThrow(/YYYY-MM-DD/);
-    expect(() => setProject(vault, "project/bar-build", { domains: ["nowhere"] })).toThrow(/no domain "nowhere"/);
-    expect(() => setProject(vault, "project/nope", { status: "done" })).toThrow(/no project/);
-    expect(() => setProject(vault, "person/bar-build", { status: "done" })).toThrow(/not a project/);
+    expect(() => setProject(vault, "project/bar-build", { status: "done" })).toThrow(/close-out/);
+    expect(() => setProject(vault, "project/nope", { status: "paused" })).toThrow(/no project/);
     expect(() => createProject(vault, { name: "Bar Build" })).toThrow(/already exists/);
+    expect(() => createProject(vault, { name: "Baz", domains: ["nowhere"] })).toThrow(/no domain "nowhere"/);
   });
 
-  test("an Intent project is tracked once", () => {
+  test("a prompt project is tracked once", () => {
     const p = createProject(vault, { name: "Qux App", fromIntent: "qux-app", now: NOW });
-    expect(p.intent_project).toBe("qux-app");
-    expect(() => createProject(vault, { name: "Qux App Two", fromIntent: "qux-app" })).toThrow(/already tracked as project\/qux-app/);
+    expect(p.prompt_projects).toEqual(["qux-app"]);
+    expect(() => createProject(vault, { name: "Qux App Two", fromIntent: "qux-app" })).toThrow(/already tracked as mission\/qux-app/);
   });
 });
 
@@ -114,27 +100,31 @@ describe("projects: touches and updates", () => {
     createProject(vault, { name: "Foo Trip", outcome: "Visit the islands", now: NOW });
     createProject(vault, { name: "Bar Build", now: NOW });
     setProject(vault, "project/bar-build", { status: "paused" });
+    // One word each for Travel and Hobbies: a tie, so the model is asked.
+    writeFileSync(join(vault, "data", "domains", "travel", "manifest.json"), JSON.stringify({ identity: { name: "travel" }, routing: { keywords: ["ferry"] } }));
+    writeFileSync(join(vault, "data", "domains", "hobbies", "manifest.json"), JSON.stringify({ identity: { name: "hobbies" }, routing: { keywords: ["saw"] } }));
     let seen: TouchOptions | null = null;
     const classify = async (o: TouchOptions): Promise<TouchResult> => {
       seen = o;
       return {
-        domains: [{ slug: "travel", confidence: 0.9, fact: "Ferry booked" }], entity_facts: { "project/foo-trip": "Ferry booked for the trip" },
-        projects: ["project/foo-trip", "project/bar-build"], unhomed: [{ label: "woodworking", fact: "Needs a saw blade", effort: false }], source: "model",
+        domains: [{ slug: "travel", confidence: 0.9, fact: "Ferry booked" }], entity_facts: { "mission/foo-trip": "Ferry booked for the trip" },
+        projects: ["mission/foo-trip", "mission/bar-build"], unhomed: [{ label: "woodworking", fact: "Needs a saw blade", effort: false }], source: "model",
       };
     };
     const r = await runTouchStep({ vault, home: "general", thread: "t-1", message: MSG, reply: "ok", localOnly: false, incognito: false, classify, now: NOW });
-    expect(seen!.projects!.map((p) => p.id)).toEqual(["project/foo-trip"]);
+    expect(seen!.projects!.map((p) => p.id)).toEqual(["mission/foo-trip"]);
     expect(seen!.projects![0]!.outcome).toBe("Visit the islands");
-    expect(r!.entities).toEqual(["project/foo-trip"]);
-    expect(lines(join(projDir("foo-trip"), "updates.jsonl"))).toEqual([{ ts: NOW, from_domain: "general", thread: "t-1", fact: "Ferry booked for the trip" }]);
-    expect(existsSync(join(projDir("bar-build"), "updates.jsonl"))).toBe(false);
+    expect(r!.entities).toEqual(["mission/foo-trip"]);
+    expect(lines(join(vault, "data", "missions", "foo-trip", "memory", "updates.jsonl"))).toEqual([{ ts: NOW, from_domain: "general", thread: "t-1", fact: "Ferry booked for the trip" }]);
+    expect(existsSync(join(vault, "data", "missions", "bar-build", "memory", "updates.jsonl"))).toBe(false);
     expect(lines(unhomedFile())).toEqual([{ ts: NOW, thread: "t-1", home: "general", label: "woodworking", fact: "Needs a saw blade" }]);
   });
 
-  test("a turn that only has a topic with no home still records it", async () => {
-    const classify = async (): Promise<TouchResult> => ({ domains: [], entity_facts: {}, unhomed: [{ label: "pets", fact: "Adopting a cat", effort: false }], source: "model" });
+  test("a turn no domain's words touch asks no model (code first, cost ceiling)", async () => {
+    let called = 0;
+    const classify = async (): Promise<TouchResult> => { called++; return { domains: [], entity_facts: {}, unhomed: [{ label: "pets", fact: "Adopting a cat", effort: false }], source: "model" }; };
     expect(await runTouchStep({ vault, home: "general", thread: "t-2", message: "We are adopting a cat next month, what do we need?", reply: "ok", localOnly: false, incognito: false, classify, now: NOW })).toBeNull();
-    expect(lines(unhomedFile()).map((l) => l.label)).toEqual(["pets"]);
+    expect(called).toBe(0);
   });
 
   test("the reply parser keeps listed projects and new labels only", () => {
@@ -203,8 +193,8 @@ describe("structure suggestions: the rules", () => {
     createProject(vault, { name: "Already", fromIntent: "tracked", now: NOW });
     const got = suggestStructure(vault, NOW).filter((s) => s.kind === "project");
     expect(got.map((s) => s.id).sort()).toEqual(["project:intent:qux-app", "project:topic:boat-build"]);
-    expect(got.find((s) => s.id === "project:intent:qux-app")).toMatchObject({ title: "Track Qux App as a project?", reason: "3 sittings in your prompts since Aug 31", evidence: [{ ts: NOW - DAY, domain: "hobbies" }] });
-    expect(got.find((s) => s.id === "project:topic:boat-build")!.title).toBe("Track Boat Build as a project?");
+    expect(got.find((s) => s.id === "project:intent:qux-app")).toMatchObject({ title: "Start a project for Qux App?", reason: "3 sittings in your prompts since Aug 31", evidence: [{ ts: NOW - DAY, domain: "hobbies" }] });
+    expect(got.find((s) => s.id === "project:topic:boat-build")!.title).toBe("Start a project for Boat Build?");
   });
 
   test("archive: a domain with no threads, touches or updates in 365 days; never General", () => {
@@ -243,11 +233,11 @@ describe("structure suggestions: accept and dismiss", () => {
     await expect(acceptSuggestion(vault, "domain:pets", { now: NOW })).rejects.toThrow(/no suggestion/);
   });
 
-  test("accept a project: the project entity, linked to its Intent project", async () => {
+  test("accept a project suggestion: the project, linked to its prompt project", async () => {
     intent([{ slug: "qux-app", title: "Qux App", domain: "hobbies" }], { "qux-app": 4 });
     const r = await acceptSuggestion(vault, "project:intent:qux-app", { now: NOW });
-    expect(r).toMatchObject({ ok: true, kind: "project", project: { id: "project/qux-app", intent_project: "qux-app", domains: ["hobbies"], status: "active" } });
-    expect(existsSync(join(projDir("qux-app"), "entity.md"))).toBe(true);
+    expect(r).toMatchObject({ ok: true, kind: "project", project: { id: "mission/qux-app", prompt_projects: ["qux-app"], domains: [{ slug: "hobbies", role: "owner" }], status: "active" } });
+    expect(existsSync(join(vault, "data", "missions", "qux-app", "mission.md"))).toBe(true);
     expect(suggestStructure(vault, NOW).filter((s) => s.kind === "project")).toEqual([]);
   });
 
@@ -262,7 +252,7 @@ describe("structure suggestions: accept and dismiss", () => {
       expect(r).toMatchObject({ ok: true, kind: "archive_domain", domain: "hobbies" });
       backup = r.kind === "archive_domain" ? r.backup : "";
       expect(existsSync(join(home, "data", "domains", "hobbies"))).toBe(false);
-      expect(readFileSync(join(home, "_archive", "hobbies", "memory", "memory.md"), "utf8")).toBe("keep me\n");
+      expect(readFileSync(join(home, "data", "domains", "_archive", "hobbies", "memory", "memory.md"), "utf8")).toBe("keep me\n");
       expect(existsSync(backup)).toBe(true);
     } finally {
       if (backup) rmSync(backup, { force: true });

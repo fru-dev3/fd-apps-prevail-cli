@@ -1,0 +1,11 @@
+{
+  "id": "keep-or-sell",
+  "name": "Keep or sell",
+  "goal": "Decide whether to keep or sell something you own (a property, a car, a stake): what it has done for you, what it is worth each way, and whether selling fits the Compass. Runs in the domain you start it from.",
+  "steps": [
+    { "kind": "specialist", "id": "s1", "specialist": "historian", "brief": "What happened with it since you got it: costs, income, problems, decisions." },
+    { "kind": "specialist", "id": "s2", "specialist": "analyst", "brief": "Keep against sell over five years: cash, return and the costs on each side, from the records.", "uses": ["s1"] },
+    { "kind": "specialist", "id": "s3", "specialist": "steward", "brief": "Which side fits the Compass and the ideal state, and what each costs in values?", "uses": ["s1", "s2"], "gate": "stop" },
+    { "kind": "specialist", "id": "s4", "specialist": "editor", "brief": "One page: the recommendation, the numbers and what would change it.", "uses": ["s1", "s2", "s3"] }
+  ]
+}

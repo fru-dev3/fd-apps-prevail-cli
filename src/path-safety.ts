@@ -76,6 +76,14 @@ export function isSafeEntryName(name: string): boolean {
   return true;
 }
 
+// A child of data/domains that is a domain. `_`-prefixed folders (_archive,
+// and the _log/_meta strays older engines wrote there) and `build` (a
+// misplaced copy of the vault's own build/) never are, so no scan offers them
+// as domains and no score pass gives them a manifest.
+export function isDomainFolderName(name: string): boolean {
+  return isSafeEntryName(name) && !name.startsWith("_") && name !== BUILD_DIR;
+}
+
 // Confirm a resolved child path actually lives under the vault root after
 // symlink resolution. Catches the "symlink escape" case where a vault
 // subdir's symlink points outside the vault. Returns the realpath when
@@ -132,6 +140,17 @@ export const BUILD_DIR = "build";
 // below) and the desktop (paths.rs resolve_domain_base) MUST agree on this, or
 // app chat history would split between apps/ and domains/.
 export const APP_SCOPE_PREFIX = "_app-";
+// Missions (missions-plan.md) live at data/missions/<slug>/. A mission's chat
+// space is keyed `_mission-<slug>` (like `_app-<id>`); jobs name a mission
+// owner `mission/<slug>`. Both resolve to the mission folder, never to a
+// shadow under data/domains/.
+export const MISSIONS_DIR = "missions";
+export const MISSION_SCOPE_PREFIX = "_mission-";
+/** The mission slug of a `_mission-<slug>` or `mission/<slug>` key, else null. */
+export function missionScopeSlug(key: string): string | null {
+  const m = /^(?:_mission-|mission\/)([a-z0-9][a-z0-9-]{0,79})$/.exec(key ?? "");
+  return m ? m[1]! : null;
+}
 export const APP_SCOPE_SUBDIR = "_scope";
 
 // Return the app id for an `_app-<id>` scope key, or null when `domain` is a
@@ -189,6 +208,8 @@ export function resolveDomainDir(vaultPath: string, domain: string): string {
   // them to data/apps/<id>/_scope so no data/domains/_app-<id> shadow appears.
   const scopeId = appScopeId(domain);
   if (scopeId) return join(appsContainer(vaultPath), scopeId, APP_SCOPE_SUBDIR);
+  const mission = missionScopeSlug(domain);
+  if (mission) return join(dataRoot(vaultPath), MISSIONS_DIR, mission);
   const v4 = join(dataRoot(vaultPath), DOMAINS_DIR, domain);
   if (existsSync(v4)) return v4;
   const v3 = join(vaultPath, DOMAINS_DIR, domain);
@@ -208,6 +229,8 @@ export function newDomainDir(vaultPath: string, domain: string): string {
   // is created under data/apps/<id>/_scope, never data/domains/.
   const scopeId = appScopeId(domain);
   if (scopeId) return join(appsContainer(vaultPath), scopeId, APP_SCOPE_SUBDIR);
+  const mission = missionScopeSlug(domain);
+  if (mission) return join(dataRoot(vaultPath), MISSIONS_DIR, mission);
   return join(dataRoot(vaultPath), DOMAINS_DIR, domain);
 }
 

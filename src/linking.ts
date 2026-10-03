@@ -32,9 +32,11 @@ import { readManifest } from "./manifest.ts";
 import { tryAcquireLock } from "./file-lock.ts";
 import { isClientMachine, CLIENT_ROLE_MESSAGE } from "./machine-role.ts";
 import { listDomainDirs, v4ContentPath } from "./vault-layout-v4.ts";
-import { entitiesContainer, resolveDomainDir, runtimePath } from "./path-safety.ts";
-import { TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchProjectOption, type TouchResult, type UnhomedHit } from "./route.ts";
+import { entitiesContainer, missionScopeSlug, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { activeMissions as listActiveMissions } from "./missions.ts";
+import { TOUCH_MAX_DOMAINS, TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchProjectOption, type TouchResult, type UnhomedHit } from "./route.ts";
 import { vappendLine, vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
+import { noteInMemory, scoreDomains, spendModelCall, STRONG, UNHOMED_MIN_CHARS, UNHOMED_PER_DAY } from "./domain-touch.ts";
 
 export interface DomainUpdate { ts: number; from_domain: string; thread: string; fact: string; entities: string[] }
 export interface EntityUpdate { ts: number; from_domain: string; thread: string; fact: string }
@@ -49,6 +51,10 @@ export function domainUpdatesPath(vault: string, slug: string): string {
 }
 
 export function entityUpdatesPath(vault: string, id: string): string | null {
+  // A mission (or the retired project/<slug> id of one that was migrated) keeps
+  // its notes in its own memory/updates.jsonl.
+  const ms = missionScopeSlug(id.replace(/^project\//, "mission/"));
+  if (ms && existsSync(join(resolveDomainDir(vault, `_mission-${ms}`), "mission.md"))) return domainUpdatesPath(vault, `_mission-${ms}`);
   const p = parseEntityId(id);
   return p?.kind ? join(entityDir(vault, p.kind, p.slug), UPDATES) : null;
 }
@@ -98,12 +104,15 @@ export interface RecordTouchInput {
 }
 
 /** Append the update lines and the touch line for one turn. Returns what was written. */
-export function recordTouch(vault: string, t: RecordTouchInput): { domains: { slug: string; fact: string }[]; entities: string[] } {
+export function recordTouch(vault: string, t: RecordTouchInput): { domains: { slug: string; fact: string; line?: string }[]; entities: string[]; ts: number } {
   const ts = t.ts ?? Date.now();
-  const entities = [...new Set(t.entities.map((id) => resolveEntityId(vault, id)))].filter((id) => parseEntityId(id)?.kind);
+  const entities = [...new Set(t.entities.map((id) => (id.startsWith("mission/") ? id : resolveEntityId(vault, id))))].filter((id) => id.startsWith("mission/") || parseEntityId(id)?.kind);
   const domains = t.domains.filter((d) => d.slug !== t.home);
+  const lines = new Map<string, string>();
   for (const d of domains) {
     appendJsonl(domainUpdatesPath(vault, d.slug), { ts, from_domain: t.home, thread: t.thread, fact: d.fact, entities } satisfies DomainUpdate);
+    // The domain's memory grows from every chat: one dated line, quietly (Undo takes it back).
+    try { lines.set(d.slug, noteInMemory(vault, d.slug, { ts, from: t.home, thread: t.thread, fact: d.fact })); } catch { /* the update line is written */ }
   }
   for (const id of entities) {
     const path = entityUpdatesPath(vault, id);
@@ -111,12 +120,13 @@ export function recordTouch(vault: string, t: RecordTouchInput): { domains: { sl
     const fact = t.entityFacts?.[id] ?? domains[0]?.fact ?? t.fallbackFact;
     appendJsonl(path, { ts, from_domain: t.home, thread: t.thread, fact } satisfies EntityUpdate);
     // After a touch, a Yours entity over the threshold gets its page folder.
+    if (id.startsWith("mission/")) continue;
     try { ensureAutoPage(vault, id, undefined, ts); } catch { /* the line is written; the page can wait for refresh */ }
   }
   if (domains.length || entities.length) {
     appendJsonl(touchesPath(vault, t.home), { ts, thread: t.thread, domains: domains.map((d) => d.slug), entities } satisfies TouchLine);
   }
-  return { domains: domains.map((d) => ({ slug: d.slug, fact: d.fact })), entities };
+  return { domains: domains.map((d) => ({ slug: d.slug, fact: d.fact, ...(lines.has(d.slug) ? { line: lines.get(d.slug)! } : {}) })), entities, ts };
 }
 
 // ── The touch step (after a chat turn) ──────────────────────────────────
@@ -142,15 +152,19 @@ export interface TouchStepInput {
   now?: number;
   /** Every tool call on the turn failed (at least one ran). */
   toolsAllFailed?: boolean;
+  /** A mission turn: its attached domains are offered first and marked. */
+  prefer?: string[];
 }
 
-export interface TouchedPayload { domains: { slug: string; fact: string }[]; entities: string[] }
+export interface TouchedPayload { domains: { slug: string; fact: string; line?: string }[]; entities: string[]; ts?: number; by?: "code" | "model" }
 
-/** The active projects, for the touch step. */
+/** The active missions (and any entity project not yet migrated), for the touch step. */
 export function activeProjects(vault: string): TouchProjectOption[] {
-  return readIndex(vault).entities
-    .filter((e) => e.kind === "project" && (e.project?.status ?? "active") === "active")
+  const missions = listActiveMissions(vault).map((m) => ({ id: m.id, name: m.name, aliases: [] as string[], outcome: m.outcome }));
+  const legacy = readIndex(vault).entities
+    .filter((e) => e.kind === "project" && (e.project?.status ?? "active") === "active" && !missions.some((m) => m.id === `mission/${e.id.slice(8)}`))
     .map((e) => ({ id: e.id, name: e.name, aliases: e.aliases, outcome: e.project?.outcome ?? "" }));
+  return [...missions, ...legacy];
 }
 
 // A reply that is mainly an error: empty, led by "error"/"failed", or short and
@@ -213,8 +227,8 @@ export function touchedEntities(yours: TouchEntityOption[], message: string, rep
   return out.slice(0, TOUCH_MAX_ENTITIES);
 }
 
-function domainOptions(vault: string, home: string): { slug: string; description: string }[] {
-  return listDomainDirs(vault)
+function domainOptions(vault: string, home: string, prefer: string[] = []): { slug: string; description: string }[] {
+  const opts = listDomainDirs(vault)
     .map((d) => d.toLowerCase())
     .filter((d) => d !== home && d !== "general" && !d.startsWith("_"))
     .map((slug) => {
@@ -222,6 +236,9 @@ function domainOptions(vault: string, home: string): { slug: string; description
       try { description = (readManifest(vault, slug)?.identity.summary ?? "").replace(/\s+/g, " ").trim().slice(0, 120); } catch { /* none */ }
       return { slug, description };
     });
+  if (!prefer.length) return opts;
+  const first = opts.filter((o) => prefer.includes(o.slug)).map((o) => ({ ...o, description: `part of this project${o.description ? `; ${o.description}` : ""}` }));
+  return [...first, ...opts.filter((o) => !prefer.includes(o.slug))];
 }
 
 /**
@@ -233,7 +250,7 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
   try {
     if (touchSkipReason(i)) return null;
     const home = i.home.toLowerCase();
-    const domains = domainOptions(i.vault, home);
+    const domains = domainOptions(i.vault, home, i.prefer);
     let yours: TouchEntityOption[] = [];
     let projects: TouchProjectOption[] = [];
     try { projects = activeProjects(i.vault); } catch { /* no index yet */ }
@@ -241,28 +258,62 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
     try { yours = yoursEntities(i.vault).filter((e) => !e.id.startsWith("project/") || projects.some((p) => p.id === e.id)); } catch { /* no index yet */ }
     // Even with nothing to link, the step runs: it notices topics with no home.
     const named = touchedEntities(yours, i.message, i.reply);
-    const deadline = i.timeoutMs ?? TOUCH_TIMEOUT_MS;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), deadline); });
-    const res = await Promise.race([
-      i.classify({
-        home, message: i.message, reply: i.reply, domains, provider: i.provider,
-        entities: yours.filter((e) => named.includes(e.id) && !e.id.startsWith("project/")), projects,
-        // The runner kills its own child a little before the step gives up.
-        timeoutMs: Math.max(1_000, deadline - 500),
-      }),
-      timeout,
-    ]);
-    clearTimeout(timer);
-    if (!res) return null;
+    // A mission counts when the user names it.
+    const said = userText(i.message).toLowerCase();
+    for (const p of projects) if (p.id.startsWith("mission/") && p.name.length > 3 && said.includes(p.name.toLowerCase()) && !named.includes(p.id)) named.push(p.id);
+    // Code first: the user's own words against each domain's name and routing
+    // keywords. Clear hits are touches by code; a single hit is a tie the
+    // model breaks, inside the daily ceiling; no hit asks no model.
     const ts = i.now ?? Date.now();
+    const scored = scoreDomains(i.vault, userText(i.message), domains.map((d) => d.slug));
+    // One domain named, even by one word, is no tie: code takes it. Weak hits
+    // beside others are ties the model breaks.
+    const strong = scored.length === 1 ? scored : scored.filter((h) => h.score >= STRONG);
+    const ties = scored.filter((h) => !strong.includes(h));
+    let res: TouchResult | null = { domains: strong.map((h) => ({ slug: h.slug, confidence: 1, fact: h.fact })), entity_facts: {}, source: "none" };
+    let by: "code" | "model" = "code";
+    if (ties.length && spendModelCall(i.vault, ts)) {
+      const deadline = i.timeoutMs ?? TOUCH_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), deadline); });
+      const asked = await Promise.race([
+        i.classify({
+          home, message: i.message, reply: i.reply, domains: domains.filter((d) => ties.some((t) => t.slug === d.slug)), provider: i.provider,
+          entities: yours.filter((e) => named.includes(e.id) && !e.id.startsWith("project/")), projects,
+          // The runner kills its own child a little before the step gives up.
+          timeoutMs: Math.max(1_000, deadline - 500),
+        }),
+        timeout,
+      ]);
+      clearTimeout(timer);
+      if (asked) {
+        by = "model";
+        res = { ...asked, domains: [...res.domains, ...asked.domains.filter((d) => !strong.some((s) => s.slug === d.slug))].slice(0, TOUCH_MAX_DOMAINS) };
+      }
+    }
+    // A turn that names no domain asks no model to route it, but a small daily
+    // allowance still looks for topics with no home, so new domains keep
+    // being suggested (owner's default, 2026-10-02).
+    if (!scored.length && said.length >= UNHOMED_MIN_CHARS && spendModelCall(i.vault, ts, UNHOMED_PER_DAY, "unhomed-budget")) {
+      const deadline = i.timeoutMs ?? TOUCH_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), deadline); });
+      const asked = await Promise.race([
+        i.classify({ home, message: i.message, reply: i.reply, domains: [], provider: i.provider, entities: [], projects: [], timeoutMs: Math.max(1_000, deadline - 500) }),
+        timeout,
+      ]);
+      clearTimeout(timer);
+      // Only its topics with no home are taken; it routes nothing.
+      if (asked?.unhomed?.length) res = { ...res, unhomed: asked.unhomed };
+    }
+    if (!res) return null;
     for (const u of res.unhomed ?? []) {
       appendJsonl(unhomedPath(i.vault), { ts, thread: i.thread, home, label: u.label, fact: u.fact, ...(u.effort ? { effort: true } : {}) } satisfies UnhomedLine);
     }
     const active = new Set(projects.map((p) => p.id));
     // Entities come only from the user's words and the reply's links (named);
     // a project the classifier names counts only when named too.
-    const entities = named.filter((id) => !id.startsWith("project/") || active.has(id)).slice(0, TOUCH_MAX_ENTITIES);
+    const entities = named.filter((id) => !(id.startsWith("project/") || id.startsWith("mission/")) || active.has(id)).filter((id) => id !== home.replace(/^_mission-/, "mission/")).slice(0, TOUCH_MAX_ENTITIES);
     if (!res.domains.length && !entities.length) return null;
     const excerpt = i.message.replace(/\s+/g, " ").trim();
     const w = recordTouch(i.vault, {
@@ -270,7 +321,7 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
       fallbackFact: `Came up in ${labelFor(home)}: ${excerpt.length > 160 ? `${excerpt.slice(0, 157)}...` : excerpt}`,
       ts,
     });
-    return w.domains.length || w.entities.length ? w : null;
+    return w.domains.length || w.entities.length ? { ...w, by } : null;
   } catch {
     return null;
   }
@@ -462,6 +513,20 @@ export async function linkingCommand(cmd: string, a: string[], vaultPath?: strin
   const { resolveDefaultVaultPath } = await import("./vault.ts");
   const vault = get("--vault") ?? vaultPath ?? readConfig()?.vaultPath ?? resolveDefaultVaultPath();
 
+  if (cmd === "updates" && a[0] === "undo") {
+    // Undo a turn's notes: --thread T --ts N --domains a,b (exactly the lines written then).
+    const { unnote, notedLine } = await import("./domain-touch.ts");
+    const ts = Number(get("--ts")); const thread = get("--thread") ?? "";
+    if (!Number.isFinite(ts) || !thread) return fail("usage: prevail updates undo --thread T --ts N --domains a,b");
+    const undone: string[] = [];
+    for (const slug of (get("--domains") ?? "").split(",").map((x) => x.trim()).filter(Boolean)) {
+      const row = readJsonl<DomainUpdate>(domainUpdatesPath(vault, slug)).find((r) => r.ts === ts && r.thread === thread);
+      if (!row) continue;
+      if (unnote(vault, slug, { ts, thread, from: row.from_domain, fact: row.fact, line: notedLine({ ts, from: row.from_domain, thread, fact: row.fact }) })) undone.push(slug);
+    }
+    if (json) out({ ok: true, undone }); else console.log(undone.length ? `Taken back from ${undone.join(", ")}.` : "Nothing to take back.");
+    return 0;
+  }
   if (cmd === "updates") {
     const sinceRaw = get("--since");
     const since = sinceRaw ? Date.parse(sinceRaw) : undefined;
