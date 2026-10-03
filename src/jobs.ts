@@ -47,6 +47,7 @@ import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile } from "./vault-session.ts";
 import { forDomain, getSpecialist, loadSpecialists, readNotebook, appendNotebook, ceilingRank, type Ceiling, type Specialist } from "./specialists.ts";
 import { readMission, type MissionDomain } from "./missions.ts";
+import { leadingMentions } from "./members.ts";
 import { jobCompass, ruleGate, type JobCompass } from "./compass-align.ts";
 import { parseModArgs } from "./cli-args.ts";
 
@@ -331,6 +332,8 @@ export interface DispatchInput {
   now?: number;
   /** A mission turn: dispatch picks only among what the mission brought in. */
   scope?: MissionScope;
+  /** Specialists named on this turn (composer chips, or a group chat's route): one job for all of them. */
+  to?: string[];
 }
 export interface MissionScope { slug: string; name: string; domains: MissionDomain[]; specialists: string[]; apps: string[]; ceiling: Ceiling; budgetLeftUsd: number | null }
 /** Something outside the mission's scope: nothing is read until the user says yes. */
@@ -339,7 +342,6 @@ export interface BringIn { domains: string[]; never: boolean; why: string }
 export interface MissionDraft { name: string; outcome: string; owner?: string; consulted: string[]; specialists: string[]; target?: string }
 export interface Dispatch { kind: "answer" | "job" | "bring-in" | "mission"; job?: Job; confident: boolean; mention?: string; bringIn?: BringIn; mission?: MissionDraft }
 
-const MENTION = /^@([A-Za-z][A-Za-z-]{1,40})\b[:,]?\s*/;
 
 // "Start a mission to...", "I'm going to learn...", "plan my trip to...": an
 // effort with an outcome and an end. Code reads it; the user always says yes.
@@ -375,19 +377,21 @@ export async function dispatch(i: DispatchInput): Promise<Dispatch> {
   const named = (d: string) => new RegExp(`\\b${d.replace(/-/g, "[- ]")}\\b`, "i").test(message);
   const inScope = new Set(sc?.domains.map((d) => d.slug) ?? []);
 
-  // @Researcher by hand: one run of that specialist, owned by this domain (or mission).
-  const m = MENTION.exec(message);
-  if (m) {
-    const s = specs.find((x) => x.on && (x.id === m[1]!.toLowerCase() || x.name.toLowerCase() === m[1]!.toLowerCase()));
-    if (s) {
-      const ask = message.slice(m[0].length).trim() || message;
-      const consulted = sc ? sc.domains.filter((d) => d.role !== "informed").map((d) => d.slug) : [];
-      const job = newJob({ ask, here, thread: i.thread, kind: "mention", owner: here, consulted, informed: [], team: [{ step: 1, specialists: [s.id] }], effort: "standard", why: `handed to the ${s.name} by hand`, now });
-      job.budget = { usd: Math.min(s.budget.usd * s.budget.passes, chief.limits.usd), minutes: Math.min(s.budget.minutes, chief.limits.minutes) };
-      if (sc) job.mission = { slug: sc.slug, ceiling: sc.ceiling, budgetLeftUsd: sc.budgetLeftUsd };
-      decideStart(i.vault, job, specs, chief.limits, true);
-      return { kind: "job", job, confident: true, mention: s.id };
-    }
+  // @Researcher by hand (or "@A @B", or chips): one run of those specialists
+  // side by side, owned by this domain (or mission).
+  const { names, rest } = leadingMentions(message);
+  const find = (n: string) => specs.find((x) => x.on && (x.id === n.toLowerCase() || x.name.toLowerCase() === n.toLowerCase()));
+  const hand = [...new Set([...(i.to ?? []), ...names].map(find).filter((s): s is Specialist => !!s))].slice(0, 4);
+  if (hand.length) {
+    const ask = (names.every((n) => find(n)) ? rest : message).trim() || message;
+    const consulted = sc ? sc.domains.filter((d) => d.role !== "informed").map((d) => d.slug) : [];
+    const who = hand.map((s) => s.name).join(" and ");
+    const job = newJob({ ask, here, thread: i.thread, kind: "mention", owner: here, consulted, informed: [], team: [{ step: 1, specialists: hand.map((s) => s.id) }], effort: "standard", why: `handed to the ${who} by hand`, now });
+    // The budget is the tightest of the team's and the user's limits.
+    job.budget = { usd: Math.min(...hand.map((s) => s.budget.usd * s.budget.passes), chief.limits.usd), minutes: Math.min(...hand.map((s) => s.budget.minutes), chief.limits.minutes) };
+    if (sc) job.mission = { slug: sc.slug, ceiling: sc.ceiling, budgetLeftUsd: sc.budgetLeftUsd };
+    decideStart(i.vault, job, specs, chief.limits, true);
+    return { kind: "job", job, confident: true, mention: hand[0]!.id };
   }
 
   // Inside a mission, a domain the message names that the mission did not

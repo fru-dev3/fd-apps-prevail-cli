@@ -372,6 +372,8 @@ export interface ThreadTurn {
   model: string;
   content: string;
   ts: number;
+  /** A reply's speaker, the members present, its scope and context, recorded when it was written (members.ts). */
+  meta?: { speaker: string; name?: string; members?: string[]; scope?: string; context?: string[] };
 }
 
 // Generate a thread-node id. Distinct prefix from makeSessionId so a node id
@@ -488,6 +490,7 @@ export function readThreadTurns(
           model: typeof obj.model === "string" ? obj.model : "",
           content: obj.content,
           ts: typeof obj.ts === "number" ? obj.ts : 0,
+          ...(obj.meta && typeof obj.meta === "object" && typeof obj.meta.speaker === "string" ? { meta: obj.meta } : {}),
         });
       }
     } catch {
