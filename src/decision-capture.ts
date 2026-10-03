@@ -37,7 +37,7 @@ const PATTERNS: { re: RegExp; lead?: string }[] = [
 const NOT = /\b(should I|should we|whether|maybe|might|thinking about|considering|not sure|if I|what if|would you|can you|could you|help me decide|wondering)\b/i;
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const clean = (s: string) => s.replace(/\s+/g, " ").replace(/[,;:\s]+$/, "").replace(/\s*—\s*/g, ", ").trim();
+const clean = (s: string) => s.replace(/\s+/g, " ").replace(/[,;:\s]+$/, "").replace(/\s*\u2014\s*/g, ", ").trim();
 
 /** The decision the user states in this text, in their words, or null. */
 export function decisionMade(text: string): { what: string; said: string } | null {
