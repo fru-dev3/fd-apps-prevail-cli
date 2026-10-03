@@ -34,7 +34,7 @@ describe("Title Case", () => {
     expect(titleCaseName("3m tape")).toBe("3m Tape");
     expect(titleCaseName("fd-apps")).toBe("fd-apps");
     expect(titleCaseName("faster_whisper")).toBe("faster_whisper");
-    expect(titleCaseName("akwa-cam site")).toBe("Akwa-Cam Site");
+    expect(titleCaseName("foo-cam site")).toBe("Foo-Cam Site");
   });
 
   test("the index shows Title Case and ids never change", () => {

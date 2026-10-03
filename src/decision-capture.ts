@@ -1,6 +1,6 @@
 // Decisions heard in conversation (owner feedback round 1, 2026-10-02: "mine
 // all my conversations and save decisions"). Deciding to archive some
-// projects or to learn piano is a decision; when the user says one in any
+// projects or to learn cello is a decision; when the user says one in any
 // chat, code notices it in their own words and saves a decided record
 // (decision-records.ts) with what, when, the thread and the domain. The
 // thread gets a quiet receipt with Undo; Undo moves the record aside into
@@ -22,7 +22,7 @@ import { vwriteFile } from "./vault-session.ts";
 // Verbs that make "I'll ..." or "I'm going to ..." a decision rather than a step in a task.
 const VERBS = "archive|learn|quit|sell|buy|move to|cancel|hire|fire|join|retire|refinance|enroll in|launch|shut down|wind down|pay off|sign up for|give up|switch to|start learning|start taking|stop working|stop using|stop paying";
 const PATTERNS: { re: RegExp; lead?: string }[] = [
-  // "I've decided to learn piano", "we decided we'll sell the foo car"
+  // "I've decided to learn cello", "we decided we'll sell the foo car"
   { re: /\b(?:I|we)(?:'ve| have)?\s+(?:finally\s+)?decided\s+(?:to\s+|that\s+(?:I|we)(?:'ll| will)\s+|on\s+)?([^.!?\n]{3,160})/i },
   // "I made up my mind: ...", "my decision is to ..."
   { re: /\b(?:I(?:'ve| have)? made up my mind|my decision is|decision made)[:,]?\s+(?:to\s+|that\s+)?([^.!?\n]{3,160})/i },
@@ -30,7 +30,7 @@ const PATTERNS: { re: RegExp; lead?: string }[] = [
   { re: /\b(?:let's|let us|I'm|I am|I'll|I will|we're|we are|we'll)\s+go(?:ing)?\s+with\s+([^.!?\n]{2,140})/i, lead: "Go with " },
   // "I chose the remote job"
   { re: /\bI(?:'ve| have)?\s+(?:chosen|chose|picked|settled on)\s+([^.!?\n]{2,140})/i, lead: "Chose " },
-  // "I'm going to learn piano", "I'll archive the old projects", "from now on I'll stop..."
+  // "I'm going to learn cello", "I'll archive the old projects", "from now on I'll stop..."
   { re: new RegExp(`\\b(?:I(?:'m| am)\\s+(?:going to|gonna)|I(?:'ll| will)|from now on,?\\s+I(?:'ll| will)?)\\s+((?:${VERBS})\\b[^.!?\\n]{2,140})`, "i") },
 ];
 // Not a decision: a question, a maybe, a hypothetical, someone else, or a plan for the assistant.
