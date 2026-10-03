@@ -266,8 +266,10 @@ export async function runTouchStep(i: TouchStepInput): Promise<TouchedPayload | 
     // model breaks, inside the daily ceiling; no hit asks no model.
     const ts = i.now ?? Date.now();
     const scored = scoreDomains(i.vault, userText(i.message), domains.map((d) => d.slug));
-    const strong = scored.filter((h) => h.score >= STRONG);
-    const ties = scored.filter((h) => h.score < STRONG);
+    // One domain named, even by one word, is no tie: code takes it. Weak hits
+    // beside others are ties the model breaks.
+    const strong = scored.length === 1 ? scored : scored.filter((h) => h.score >= STRONG);
+    const ties = scored.filter((h) => !strong.includes(h));
     let res: TouchResult | null = { domains: strong.map((h) => ({ slug: h.slug, confidence: 1, fact: h.fact })), entity_facts: {}, source: "none" };
     let by: "code" | "model" = "code";
     if (ties.length && spendModelCall(i.vault, ts)) {

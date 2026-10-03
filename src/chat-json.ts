@@ -1150,13 +1150,15 @@ export async function chatJsonCommand(
   // native path). stdin is {"message","reply"}; only the after-turn steps run
   // (decisions said, domains noted), and their events are printed.
   if (afterTurnOnly) {
+    // One JSON document out: { ok, events: [decision_saved?, touched?] }.
+    const events: unknown[] = [];
     let body: { message?: unknown; reply?: unknown } = {};
     try { body = JSON.parse(message ?? (await readStdin())); } catch { /* empty */ }
     return afterTurn({
       vaultPath, domain, thread: (threadId ?? "").trim() || "chat", message: typeof body.message === "string" ? body.message : "", reply: typeof body.reply === "string" ? body.reply : "",
       localOnly: localOnly || process.env.PREVAIL_BUNKER === "1", incognito: incognito || process.env.PREVAIL_INCOGNITO === "1",
-      write: (l) => process.stdout.write(`${l}\n`),
-    });
+      write: (l) => events.push(JSON.parse(l)),
+    }).then((code) => { process.stdout.write(`${JSON.stringify({ ok: true, events })}\n`); return code; });
   }
 
   if (message === undefined) {

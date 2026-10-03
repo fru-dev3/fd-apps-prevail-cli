@@ -100,8 +100,9 @@ describe("projects: touches and updates", () => {
     createProject(vault, { name: "Foo Trip", outcome: "Visit the islands", now: NOW });
     createProject(vault, { name: "Bar Build", now: NOW });
     setProject(vault, "project/bar-build", { status: "paused" });
-    // "ferry" is one routing keyword of Travel: a tie, so the model is asked.
+    // One word each for Travel and Hobbies: a tie, so the model is asked.
     writeFileSync(join(vault, "data", "domains", "travel", "manifest.json"), JSON.stringify({ identity: { name: "travel" }, routing: { keywords: ["ferry"] } }));
+    writeFileSync(join(vault, "data", "domains", "hobbies", "manifest.json"), JSON.stringify({ identity: { name: "hobbies" }, routing: { keywords: ["saw"] } }));
     let seen: TouchOptions | null = null;
     const classify = async (o: TouchOptions): Promise<TouchResult> => {
       seen = o;
