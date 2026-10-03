@@ -1092,6 +1092,13 @@ function fileResults(vault: string, job: Job, last: { returns: string; out: Step
   if (f?.decision && oneLine(f.decision)) {
     const d = appendDecision(vault, spaceKey(owner), { type: "job_result", prompt: job.ask, verdict: oneLine(f.decision, 400), source: "job", job: job.id, ts: now });
     add({ domain: owner, kind: "decision", file: rel(decisionsFile(vault, spaceKey(owner))), ref: d.id, text: `decision logged: ${oneLine(f.decision, 120)}` });
+    // A cross-domain call is recorded in every domain it was decided with
+    // (agent mesh, Step 5); informed domains get a note below, not a decision.
+    for (const c of job.domains.consulted) {
+      if (c === owner) continue;
+      const dc = appendDecision(vault, spaceKey(c), { type: "job_result", prompt: job.ask, verdict: oneLine(f.decision, 400), source: "job", job: job.id, ts: now, decided_in: owner } as Parameters<typeof appendDecision>[2]);
+      add({ domain: c, kind: "decision", file: rel(decisionsFile(vault, spaceKey(c))), ref: dc.id, text: `decision logged (decided in ${owner}): ${oneLine(f.decision, 100)}` });
+    }
   }
   const tasks = [...(f.task ? [f.task] : []), ...(f.tasks ?? [])].filter((t) => t?.text && oneLine(t.text)).slice(0, 6);
   const bf = boardFile(vault, owner);

@@ -109,6 +109,8 @@ export function readSpaces(dir = mapDir()): { file: string; space: SpaceFile }[]
   return out;
 }
 
+const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
 /** Rewrite every derived space from the vault. Returns what changed. */
 export function deriveAll(vault: string, dir = mapDir(), opts: { dryRun?: boolean; today?: string } = {}): { id: string; tabs: number; agents: number; changed: boolean }[] {
   const all = readSpaces(dir);
@@ -127,7 +129,7 @@ export function deriveAll(vault: string, dir = mapDir(), opts: { dryRun?: boolea
     const changed = next !== cur;
     if (changed && !opts.dryRun) {
       // Never lose a hand-kept layout: one dated copy per day of change.
-      const bak = `${file}.pre-derive-${opts.today ?? new Date().toISOString().slice(0, 10)}`;
+      const bak = `${file}.pre-derive-${opts.today ?? localDay()}`;
       if (!existsSync(bak)) writeFileSync(bak, cur);
       writeFileSync(file, next);
     }

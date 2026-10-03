@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readDecisions } from "./decisions.ts";
 import {
   adjustJob, codeCheck, dispatch, jobView, learnedStaffing, parseDispatchReply, parseStepOutput, readJob, readReceipts,
   runJob, saveJob, shapeOf, startJob, stopJob, teamFor, undoFiled, type Job,
@@ -155,7 +156,8 @@ describe("running a job", () => {
     const page = join(V, done.result!.page!);
     expect(readFileSync(page, "utf8")).toContain("| Carrier | Price |");
     const filed = readReceipts(V, job.id);
-    expect(filed.map((r) => `${r.domain}:${r.kind}`)).toEqual(["insurance:page", "insurance:decision", "insurance:task", "property:note", "money:note", "tax:note"]);
+    expect(filed.map((r) => `${r.domain}:${r.kind}`)).toEqual(["insurance:page", "insurance:decision", "property:decision", "money:decision", "insurance:task", "property:note", "money:note", "tax:note"]);
+    expect(readDecisions(V, "money").find((d) => d.verdict?.includes("Carrier A"))?.decided_in).toBe("insurance");
     expect(readFileSync(join(D("insurance"), "memory", "tasks.md"), "utf8")).toMatch(/- \[ \] Renew with Carrier A @2026-12-01 \+\d{4}-\d{2}-\d{2} ~src:job:/);
     expect(existsSync(join(D("health"), "memory", "updates.jsonl"))).toBe(false);
     expect(readFileSync(join(D("property"), "memory", "updates.jsonl"), "utf8")).toContain("Premiums drop");
@@ -169,6 +171,8 @@ describe("running a job", () => {
     expect(readFileSync(join(D("insurance"), "memory", "tasks.md"), "utf8")).not.toContain("Carrier A");
     expect(readFileSync(join(D("insurance"), "memory", "tasks.md"), "utf8")).toContain("Existing foo task");
     expect(readFileSync(join(D("property"), "memory", "updates.jsonl"), "utf8").trim()).toBe("");
+    // The decision went into every consulted domain, and Undo took each one out.
+    expect(readDecisions(V, "money").some((d) => d.verdict?.includes("Carrier A"))).toBe(false);
     expect(readReceipts(V, job.id).every((r) => r.undone)).toBe(true);
   });
   test("a self-check miss gets another pass; the code check needs sources", async () => {

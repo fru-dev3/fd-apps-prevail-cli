@@ -15,6 +15,9 @@
 // build/_meta/events/checkins/<YYYY-MM>.<host>.jsonl, so it reaches every Mac
 // the same way the AI and git events do, and feeds the m-calm metric.
 
+import { listDomainDirs } from "./vault-layout-v4.ts";
+import { readTasks } from "./tasks.ts";
+import { parseHandoff } from "./agent-contract.ts";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { computeMetrics, dayOf, eventsRoot, fmt, glance, glanceIds, hostSlug, weekOf, type Glance, type GlanceRow } from "./metrics.ts";
@@ -103,6 +106,8 @@ export interface ReviewCard {
   commitments?: { src: string; text: string; due?: string; person?: string; quote: string }[];
   /** Missions MS4: one line per active mission. */
   missions?: string[];
+  /** Agent mesh: handoffs between domains still open, the chief of staff watching the boards. */
+  handoffs?: string | null;
   /** Today T3: everything falling behind (the radar), most urgent first. */
   radar?: { key: string; kind: string; text: string; evidence: string; due?: string }[];
   /** Goals G4: each chosen initiative against its expectations, with the explanation and a proposed change; the quarterly review when owed. */
@@ -189,11 +194,29 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     commitments: await commitmentLines(vault),
     radar: await radarLines(vault, now),
     missions: await (async () => { try { return (await import("./mission-progress.ts")).missionReviewLines(vault, now); } catch { return []; } })(),
+    handoffs: handoffLine(vault),
     ...(await initiativeLines(vault, now)),
     experiment: await (async () => { try { return (await import("./stories.ts")).experimentThisWeek(vault, now); } catch { return null; } })(),
     time: await (async () => { try { return await (await import("./time.ts")).timeReview(vault, now); } catch { return null; } })(),
     ...(await qualitativeLines(vault, c, week, now)),
   };
+}
+
+/** Open "From <domain>:" tasks across every board: who handed what to whom. */
+export function handoffLine(vault: string): string | null {
+  try {
+    const pairs = new Map<string, number>();
+    for (const d of listDomainDirs(vault)) {
+      for (const t of readTasks(resolveDomainDir(vault, d))) {
+        if (t.done || t.trashed) continue;
+        const h = parseHandoff(t.text);
+        if (h) pairs.set(`${h.from} to ${d}`, (pairs.get(`${h.from} to ${d}`) ?? 0) + 1);
+      }
+    }
+    if (!pairs.size) return null;
+    const n = [...pairs.values()].reduce((a, b) => a + b, 0);
+    return `${n} handoff${n === 1 ? "" : "s"} between domains still open: ${[...pairs].map(([k, v]) => `${k}${v > 1 ? ` (${v})` : ""}`).join(", ")}.`;
+  } catch { return null; }
 }
 
 async function qualitativeLines(vault: string, c: Awaited<ReturnType<typeof computeMetrics>>, week: string, now: number): Promise<Pick<ReviewCard, "asked" | "hypothesis" | "guardrails">> {
@@ -250,6 +273,7 @@ export function reviewText(r: ReviewCard): string {
   if (r.asked?.ladder) out.push("Once a quarter: on a ladder from 0 (worst possible life) to 10 (best possible), where do you stand now, and where in five years?");
   if (r.asked?.who5) out.push("This month's WHO-5 is waiting (five quick questions about the last two weeks).");
   for (const m of r.missions ?? []) out.push(`Project: ${m}`);
+  if (r.handoffs) out.push(`Handoffs: ${r.handoffs}`);
   for (const x of r.initiatives ?? []) out.push(`Initiative: ${x.explanation}${x.proposal ? ` ${x.proposal}` : ""}`);
   if (r.experiment) out.push(`Experiment: ${r.experiment.text}`);
   if (r.time) {

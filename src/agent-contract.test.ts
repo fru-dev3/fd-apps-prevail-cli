@@ -134,3 +134,11 @@ describe("MCP domain scope", () => {
     expect(list.tools.some((t) => t.name === "connect_app")).toBe(false);
   });
 });
+
+describe("the chief of staff watches open handoffs", () => {
+  test("the weekly review counts open From lines per pair", async () => {
+    const { handoffLine } = await import("./review.ts");
+    const line = handoffLine(V);
+    expect(line).toContain("orchard to ledger");
+  });
+});
