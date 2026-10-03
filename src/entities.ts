@@ -54,9 +54,11 @@ import { vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
 // A project is an effort with an outcome and an end (projects.ts). It lives in
 // the same folder layout, is always "yours", and is only ever created by hand
 // (or an accepted suggestion), never by tagging.
-export type EntityKind = "person" | "place" | "org" | "thing" | "project";
-export const ENTITY_KINDS: EntityKind[] = ["person", "place", "org", "thing", "project"];
-export const KIND_DIR: Record<EntityKind, string> = { person: "people", place: "places", org: "orgs", thing: "things", project: "projects" };
+// An event (ia.ts) is a dated happening the user keeps a page for: only ever
+// created by the user (by talking, or from their calendar), never by tagging.
+export type EntityKind = "person" | "place" | "org" | "thing" | "project" | "event";
+export const ENTITY_KINDS: EntityKind[] = ["person", "place", "org", "thing", "project", "event"];
+export const KIND_DIR: Record<EntityKind, string> = { person: "people", place: "places", org: "orgs", thing: "things", project: "projects", event: "events" };
 
 export type MentionSource = "thread" | "prompt" | "brief";
 
@@ -186,7 +188,7 @@ function webDomainOf(names: string[]): string | undefined {
 // ---------------------------------------------------------------------------
 // (a) links in thread / brief markdown
 
-const LINK_RE = /\[([^\]\n]{1,200})\]\(prevail:\/\/(person|place|org|thing)\/([^)\s]+)\)/gi;
+const LINK_RE = /\[([^\]\n]{1,200})\]\(prevail:\/\/(person|place|org|thing|event)\/([^)\s]+)\)/gi;
 
 export interface RawLink { kind: EntityKind; value: string; label: string; snippet: string }
 
@@ -404,7 +406,7 @@ function parseTagAnswer(out: string, ids: string[]): Record<string, TagEntity[]>
         const name = typeof (e as TagEntity)?.name === "string" ? clean((e as TagEntity).name).slice(0, 120) : "";
         const kind = (e as TagEntity)?.kind;
         const slug = slugify(name);
-        if (!name || !slug || !isKind(kind) || kind === "project" || seen.has(slug)) continue;
+        if (!name || !slug || !isKind(kind) || kind === "project" || kind === "event" || seen.has(slug)) continue;
         seen.add(slug);
         list.push({ name, kind });
       }
@@ -809,6 +811,8 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
     const override = overrides[id];
     const rel = kind === "project"
       ? { relation: "yours" as const, confidence: 1, reason: "A project you track." }
+      : kind === "event" && page
+      ? { relation: "yours" as const, confidence: 1, reason: "An event you keep." }
       : override
       ? { relation: override, confidence: 1, reason: override === "yours" ? "You marked this as yours." : "You marked this as a reference." }
       : scoreRelation({ ...sig, acted });
@@ -1072,7 +1076,7 @@ function resolveForWrite(idx: EntityIndex, idOrName: string, kindHint?: string):
   if (rec) return { kind: rec.kind, slug: rec.id.slice(rec.id.indexOf("/") + 1), rec };
   const p = redirectParsed(idx.merged, parseEntityId(idOrName));
   const kind = p?.kind ?? (isKind(kindHint) ? kindHint : null);
-  if (!p || !kind) throw new Error(`unknown entity "${idOrName}": use <kind>/<name> with kind person, place, org or thing`);
+  if (!p || !kind) throw new Error(`unknown entity "${idOrName}": use <kind>/<name> with kind person, place, org, thing or event`);
   return { kind, slug: p.slug, rec: null };
 }
 
@@ -1757,7 +1761,7 @@ export async function refreshEntities(vault: string, o: RefreshEntitiesOptions =
 // ---------------------------------------------------------------------------
 // text renderings (CLI + MCP)
 
-const KIND_LABEL: Record<EntityKind, string> = { person: "Person", place: "Place", org: "Company or product", thing: "Thing", project: "Project" };
+const KIND_LABEL: Record<EntityKind, string> = { person: "Person", place: "Place", org: "Product", thing: "Thing", project: "Project", event: "Event" };
 
 export function entityContextText(d: EntityDetail, maxMentions = 12): string {
   const out: string[] = [`# ${d.name} (${KIND_LABEL[d.kind]}, id ${d.id})`];

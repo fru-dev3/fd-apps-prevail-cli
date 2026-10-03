@@ -186,9 +186,9 @@ describe("pages", () => {
     const detail = entityDetail(vault, readIndex(vault), "Blue kayak")!;
     expect(detail.id).toBe("thing/blue-kayak");
     const text = entityContextText(entityDetail(vault, readIndex(vault), "org/acme")!);
-    expect(text).toContain("# acme (Company or product, id org/acme)");
+    expect(text).toContain("# acme (Product, id org/acme)");
     expect(text).toContain("quoted the roof");
-    expect(() => saveEntity(vault, "nobody-known", { now: NOW })).toThrow(/kind person, place, org or thing/);
+    expect(() => saveEntity(vault, "nobody-known", { now: NOW })).toThrow(/kind person, place, org, thing or event/);
   });
 
   test("saving a one-conversation entity makes it digest-worthy", async () => {
