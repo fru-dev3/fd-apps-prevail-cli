@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runChatJson } from "./chat-json.ts";
 import { readAutosave, setAutosave } from "./config.ts";
 import { buildIndex, findEntity, readIndex, readPage, readRelations, refreshEntities, saveEntity, scoreRelation, setRelation } from "./entities.ts";
-import { catchUpCount, consolidate, readUpdates, recordTouch, replaceSection, replyIsError, runTouchStep, TOUCH_MAX_ENTITIES, touchSkipReason, touchedEntities, userText } from "./linking.ts";
+import { catchUpCount, consolidate, readUnhomed, readUpdates, recordTouch, replaceSection, replyIsError, runTouchStep, TOUCH_MAX_ENTITIES, touchSkipReason, touchedEntities, userText } from "./linking.ts";
 import { fromUpdates } from "./recommendations.ts";
 import { classifyTouches, parseTouchReply, TOUCH_FACT_CHARS, type TouchOptions, type TouchResult } from "./route.ts";
 import type { DecisionProvider } from "./decision.ts";
@@ -153,6 +153,25 @@ describe("the touched event and update lines", () => {
     expect(ins[0]).toMatchObject({ from_domain: "general", thread: "t-foo", fact: "insurance: claim not released", entities: [] });
     expect(lines(dom("general", "memory", "touches.jsonl"))[0]).toMatchObject({ thread: "t-foo", domains: ["legal", "insurance"], entities: [] });
     expect(readFileSync(dom("legal", "memory", "memory.md"), "utf8")).toContain(`: ${MSG} (from General, thread t-foo)`);
+  });
+
+  test("a turn that names no domain routes nothing, but a small daily allowance still notices topics with no home", async () => {
+    writeFileSync(dom("insurance", "manifest.json"), JSON.stringify({ identity: { name: "insurance" }, routing: { keywords: ["claim", "adjuster"] } }));
+    const LONG = "I keep thinking about building a foo workbench in the garage over the winter, with proper vises and storage.";
+    const seen: string[][] = [];
+    const classify = async (o: TouchOptions): Promise<TouchResult> => { seen.push(o.domains.map((d) => d.slug)); return { domains: [{ slug: "insurance", confidence: 1, fact: "never taken" }], entity_facts: {}, unhomed: [{ label: "woodworking", fact: "a foo workbench" }], source: "model" }; };
+    const step = { vault, home: "general", thread: "t-wood", reply: "Sounds good.", incognito: false, localOnly: false, classify };
+    // Small talk with no domain asks nothing.
+    await runTouchStep({ ...step, message: "ok, sounds good to me" });
+    expect(seen).toEqual([]);
+    // A real no-hit turn: the model sees no domains, routes nothing, and its topic is kept.
+    const r = await runTouchStep({ ...step, message: LONG });
+    expect(seen).toEqual([[]]);
+    expect(r?.domains ?? []).toEqual([]);
+    expect(readUnhomed(vault).map((u) => u.label)).toEqual(["woodworking"]);
+    // The allowance is small: after ten looks today, no more.
+    for (let n = 0; n < 12; n++) await runTouchStep({ ...step, thread: `t-${n}`, message: LONG });
+    expect(seen.length).toBe(10);
   });
 
   test("no classifier in tests means no step; skips and timeouts emit nothing", async () => {
