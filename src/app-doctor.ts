@@ -490,5 +490,9 @@ export async function dailyStackPass(vault: string, opts: DoctorOpts = {}): Prom
   const month = dayOf(now).slice(0, 7);
   const reviewPath = join(vault, "data", "domains", "general", "memory", "reviews", `stack-${month}.md`);
   const review = existsSync(reviewPath) ? undefined : writeStackReview(vault, stack, cards, now);
+  // Apps A5: with the month's review, the said vs used diff for tool-stack.md (waits for the user's yes).
+  if (review) { try { await (await import("./stack-said.ts")).writeStackDiff(vault, now); } catch { /* no stated stack */ } }
+  // Exports dropped in an app's inbox come in as quoted history.
+  try { await (await import("./ai-imports.ts")).importInbox(vault, now); } catch { /* nothing waiting */ }
   return { ran: true, cards: cards.length, raised, ...(review ? { review } : {}) };
 }

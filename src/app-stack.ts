@@ -247,6 +247,9 @@ export async function appStackCommand(argv: string[], vault: string): Promise<nu
       return 0;
     }
     if (sub === "doctor") { const d = await import("./app-doctor.ts"); return d.appsDoctorCommand(argv, vault, args.json); }
+    // Apps A5: exports imported as quoted data, and the stated stack against the used one.
+    if (sub === "imports") return (await import("./ai-imports.ts")).importsCommand(argv.slice(1), vault);
+    if (sub === "stack-diff") return (await import("./stack-said.ts")).stackDiffCommand(argv.slice(1), vault);
     if (["stack", "cards", "card", "review", "offboard"].includes(sub)) {
       const d = await import("./app-doctor.ts");
       if (sub === "offboard") { const p = d.offboardingDraft(vault, args.pos[1] ?? ""); if (args.json) out({ ok: true, path: p }); else console.log(`Drafted ${p} (nothing was cancelled or sent).`); return 0; }
@@ -282,4 +285,4 @@ export async function appStackCommand(argv: string[], vault: string): Promise<nu
   return 1;
 }
 
-export const STACK_SUBCOMMANDS = ["scan", "usage", "unknown", "map", "records", "money", "charges", "doctor", "stack", "cards", "card", "review", "offboard"];
+export const STACK_SUBCOMMANDS = ["scan", "usage", "unknown", "map", "records", "money", "charges", "doctor", "stack", "cards", "card", "review", "offboard", "imports", "stack-diff"];

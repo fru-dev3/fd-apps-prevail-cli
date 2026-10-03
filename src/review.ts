@@ -92,6 +92,9 @@ export interface ReviewCard {
   interruptions: { used: number; budget: number };
   /** One line about the stack (apps plan A4): what needs you, else what is in use. */
   apps: string | null;
+  /** Apps A5: the quarterly export reminder (off unless turned on) and the stack diff waiting for a yes. */
+  exportReminder?: string | null;
+  stackDiff?: string | null;
   /** Metrics M4: the quarterly ladder and the optional monthly WHO-5 when due; one hypothesis to answer yes or no; guards slipping. */
   asked: { ladder: boolean; who5: boolean };
   hypothesis: { key: string; text: string } | null;
@@ -180,6 +183,9 @@ export async function weeklyReview(vault: string, opts: { now?: number; week?: s
     waited: waitedForReview(vault, week).map((w) => ({ kind: w.kind, text: w.text })),
     interruptions: { used: usedThisWeek(vault, now), budget: INTERRUPTION_BUDGET },
     apps: await appsLine(vault, now),
+    // Apps A5: the quarterly export reminder, only when the user turned it on.
+    exportReminder: await (async () => { try { return (await import("./ai-imports.ts")).exportReminderLine(vault, now); } catch { return null; } })(),
+    stackDiff: await (async () => { try { const d = (await import("./stack-said.ts")).readStackDiff(vault); return d && !d.accepted && d.items.length ? `${d.items.length} change${d.items.length === 1 ? "" : "s"} to your stated tool stack (said vs used, ${d.month})` : null; } catch { return null; } })(),
     commitments: await commitmentLines(vault),
     radar: await radarLines(vault, now),
     missions: await (async () => { try { return (await import("./mission-progress.ts")).missionReviewLines(vault, now); } catch { return []; } })(),
