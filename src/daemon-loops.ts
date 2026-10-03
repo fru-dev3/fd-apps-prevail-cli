@@ -616,7 +616,8 @@ export async function runOneLoop(
   const domainIntents = readDomainIntents(root, domainLabel);
   const clis = await detectClis();
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
-  if (!cli) return empty("no CLI available to run loops", loop.name);
+  // A playbook loop finds its own CLI when its playbook runs.
+  if (!cli && !loop.playbook) return empty("no CLI available to run loops", loop.name);
   // Per-loop model override wins over the global loops model.
   const runModel = (loop.model && loop.model.trim()) ? loop.model.trim() : (cfg.model || "");
 
@@ -1005,8 +1006,9 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
   const domainIntents = readDomainIntents(resolve(cfg.vaultPath), domainLabel);
 
   const clis = await detectClis();
+  // A playbook loop runs its playbook, which finds its own CLI; only the
+  // steward and briefing loops below need one here.
   const cli = clis.find((c) => c.kind === cfg.provider) ?? clis[0];
-  if (!cli) throw new Error("no CLI available to run loops");
 
   const rt = readRuntime(domainDir);
   let advanced = 0;
@@ -1020,6 +1022,7 @@ async function runDomain(domainDir: string, cfg: LoopsConfig, now: number): Prom
         if (pr?.ok) advanced += 1;
         continue;
       }
+      if (!cli) throw new Error("no CLI available to run loops");
       // Briefing loops synthesize + deliver a digest on their cadence (no steward pass).
       if (loop.kind === "briefing") {
         const bModel = (loop.model && loop.model.trim()) ? loop.model.trim() : (cfg.model || "");
