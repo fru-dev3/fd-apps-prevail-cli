@@ -2,6 +2,7 @@
 // (non-negotiables, capacity, dominance), even swaps by code, choosing two
 // that install running playbooks, the weekly expectation check and the
 // quarterly review. Invented Compass only.
+import { readLoops } from "./daemon-loops.ts";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -105,8 +106,9 @@ describe("choose: two initiatives become running playbooks the user only had to 
     const a = await choosePath(V, survivors[0]!.id, { now: NOW });
     const b = await choosePath(V, survivors[1]!.id, { now: NOW });
     expect([a.playbooks.length, b.playbooks.length]).toEqual([1, 1]);
-    const loops = JSON.parse(readFileSync(join(D("foo"), "_loops.json"), "utf8")).loops as { playbook: string; cadence: string; enabled: boolean; autonomy: string }[];
-    expect(loops.map((l) => [l.playbook, l.cadence, l.enabled])).toEqual([[a.playbooks[0], "daily", true], [b.playbooks[0], "weekly", true]]);
+    // Playbooks replace loops: each chosen playbook carries its own schedule in the goal's domain.
+    const loops = readLoops(V, D("foo"));
+    expect(loops.map((l) => [l.playbook, l.cadence, l.enabled]).sort((x, y) => String(x[1]).localeCompare(String(y[1])))).toEqual([[a.playbooks[0], "daily", true], [b.playbooks[0], "weekly", true]]);
     const pb = JSON.parse(readFileSync(join(V, "build", "playbooks", `${a.playbooks[0]}.json`), "utf8"));
     expect(pb).toMatchObject({ goalId: "g-curious", pathId: survivors[0]!.id, domain: "foo" });
     const board = readFileSync(join(D("foo"), "memory", "tasks.md"), "utf8");
@@ -124,8 +126,8 @@ describe("choose: two initiatives become running playbooks the user only had to 
     }
     // Retiring one stops its loop; nothing is deleted.
     expect((await retirePath(V, survivors[1]!.id, "not for me", NOW)).loops).toBe(1);
-    const after = JSON.parse(readFileSync(join(D("foo"), "_loops.json"), "utf8")).loops as { enabled: boolean }[];
-    expect(after.map((l) => l.enabled)).toEqual([true, false]);
+    const after = readLoops(V, D("foo"));
+    expect([a.playbooks[0], b.playbooks[0]].map((id) => after.find((l) => l.playbook === id)!.enabled)).toEqual([true, false]);
     expect(existsSync(join(V, "build", "playbooks", `${b.playbooks[0]}.json`))).toBe(true);
   });
 });

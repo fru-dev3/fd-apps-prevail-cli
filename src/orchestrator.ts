@@ -51,7 +51,31 @@ export type PlaybookStep =
   // to `output`; with appendTo, also added to the end of that file.
   | { kind: "glance"; domain: string; output: string; appendTo?: string; label?: string }
   | { kind: "specialist"; id?: string; specialist?: string; specialists?: string[]; brief: string; domain?: string; uses?: string[]; gate?: "stop" | null; approval?: "ask" | null; label?: string }
-  | { kind: "task"; id?: string; text: string; domain?: string; due?: string; label?: string };
+  | { kind: "task"; id?: string; text: string; domain?: string; due?: string; label?: string }
+  // A loop carried over into a playbook (playbooks replace loops): the loop's
+  // own definition, run by the same loop runner, so it behaves as it did.
+  | { kind: "loop"; id?: string; loop: Record<string, unknown> & { id: string }; label?: string };
+
+/**
+ * When a playbook runs on its own: the schedule a loop had (cadence or an
+ * event), its switches and its last run. `space` is the domain, app or
+ * mission it runs in; `loop` the loop id it came from (and the key of its
+ * run history), so a hub still reading _loops.json runs it once, not twice.
+ */
+export interface PlaybookSchedule {
+  space: string;
+  loop?: string;
+  cadence: "continuous" | "daily" | "weekly" | "monthly";
+  on?: string;
+  enabled: boolean;
+  status?: "active" | "paused" | "done" | "staged";
+  autonomy?: "suggest" | "tasks" | "ask" | "auto";
+  model?: string;
+  lastRunTs: number | null;
+  createdTs?: number;
+  /** The day it was carried over from a loop. */
+  migrated?: string;
+}
 
 export interface Playbook {
   id: string;
@@ -66,6 +90,10 @@ export interface Playbook {
   pathId?: string;
   /** Where it came from: a job id, when saved from one. */
   from?: string;
+  /** Runs on its own on this schedule (yours only; built-in playbooks get a small wrapper). */
+  schedule?: PlaybookSchedule;
+  /** The space's desired state, kept from the loops file it came from. */
+  desiredState?: string;
 }
 
 export interface StepResult {
@@ -119,6 +147,7 @@ function stepLabel(step: PlaybookStep, i: number): string {
   if (step.kind === "glance") return `glance → ${step.domain}/${step.output}`;
   if (step.kind === "specialist") return `${(step.specialists ?? [step.specialist ?? "?"]).join(" + ")}: ${step.brief.slice(0, 48)}`;
   if (step.kind === "task") return `task: ${step.text.slice(0, 48)}`;
+  if (step.kind === "loop") return String(step.loop.name ?? step.loop.id);
   return `synthesize → ${step.domain}/${step.output}`;
 }
 
@@ -180,6 +209,12 @@ export async function runPlaybook(
         }
       } else if (step.kind === "task") {
         runTaskStep(step, playbook, ctx, res);
+      } else if (step.kind === "loop") {
+        // The loop runner applies the loop's own autonomy, approvals and history.
+        const { runOneLoop } = await import("./daemon-loops.ts");
+        const r = await runOneLoop({ vaultPath: ctx.vault, intervalSec: 3600, provider: ctx.provider, model: ctx.model }, playbook.schedule?.space ?? ctx.domain ?? playbook.domain ?? "general", step.loop.id);
+        res.ok = r.ok;
+        res.note = r.error ?? r.note;
       } else {
         await runSynthesizeStep(step, ctx, cli, collected, res);
         collected.push(...res.outputs);

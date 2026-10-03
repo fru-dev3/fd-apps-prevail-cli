@@ -428,7 +428,7 @@ export async function retirePath(vault: string, pathId: string, because: string,
   const { setTrigger } = await import("./playbooks.ts");
   let loops = 0;
   for (const inst of readInstalls(vault).filter((x) => x.path === pathId)) {
-    for (const [i, id] of inst.playbooks.entries()) { try { setTrigger(vault, id, inst.loops[i]?.domain ?? "general", { cadence: "weekly", enabled: false }); loops++; } catch { /* gone */ } }
+    for (const [i, id] of inst.playbooks.entries()) { try { setTrigger(vault, id, inst.loops[i]?.domain ?? "general", { enabled: false }); loops++; } catch { /* gone */ } }
   }
   return { loops };
 }
