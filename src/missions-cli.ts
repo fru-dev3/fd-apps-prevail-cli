@@ -15,7 +15,8 @@ const USAGE = [
   "prevail projects create --name N [--outcome O] [--target YYYY-MM-DD] [--owner d] [--consult d]... [--inform d]...",
   "        [--app a]... [--specialist s]... [--person id]... [--budget-usd N] [--milestone T]... [--from-prompt-project slug] --json",
   "prevail projects create --from-draft --json   (stdin: the draft from projects draft; checked again)",
-  "prevail projects draft --json   (stdin: {\"turns\":[{\"role\":\"user\",\"text\":\"...\"}],\"draft\":{...}}; creates nothing)",
+  "prevail projects draft --json   (stdin: {\"turns\":[{\"role\":\"user\",\"text\":\"...\"}],\"draft\":{...},\"kind\":\"trip|purchase|learning|build|remodel\"}; creates nothing)",
+  "prevail projects starters --json   (the starters per kind: opening, specialists, milestones, questions)",
   "prevail projects show <slug> --json",
   "prevail projects set <slug> [--name N] [--outcome O] [--target D] [--cadence C] [--ceiling C] [--notes T] [--local-only true|false]",
   "        [--match-calendar a,b] [--match-email-from a,b] [--match-merchants a,b] --json",
@@ -88,12 +89,14 @@ export async function missionsCommand(argv: string[], vault: string): Promise<nu
     }
     // Chat-first New mission: the fields from what was said, checked; never creates.
     if (sub === "draft") {
-      let input: { turns?: unknown; draft?: unknown } = {};
-      try { input = JSON.parse(readFileSync(0, "utf8") || "{}"); } catch { return fail("draft reads JSON on stdin: {turns, draft}"); }
+      let input: { turns?: unknown; draft?: unknown; kind?: unknown } = {};
+      try { input = JSON.parse(readFileSync(0, "utf8") || "{}"); } catch { return fail("draft reads JSON on stdin: {turns, draft, kind?}"); }
       const { draftMission } = await import("./mission-draft.ts");
-      out(await draftMission(vault, { turns: Array.isArray(input.turns) ? input.turns as never : [], draft: (input.draft && typeof input.draft === "object" ? input.draft : {}) as never }));
+      out(await draftMission(vault, { turns: Array.isArray(input.turns) ? input.turns as never : [], draft: (input.draft && typeof input.draft === "object" ? input.draft : {}) as never, ...(typeof input.kind === "string" ? { kind: input.kind } : {}) }));
       return 0;
     }
+    // Starters per kind: a trip, a purchase, learning, a build, a remodel.
+    if (sub === "starters") { out((await import("./mission-draft.ts")).STARTERS); return 0; }
     if (!slug && sub !== "migrate") return fail(`usage:\n${USAGE}`);
     if (sub === "show") return show(missionView(vault, slug));
     if (sub === "set") {

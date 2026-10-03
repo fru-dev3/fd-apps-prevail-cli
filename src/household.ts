@@ -20,11 +20,12 @@
 //     (never deleted) and turns every scope off.
 // Nothing here is about a real person: tests and fixtures use invented ones.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildRoot, runtimePath } from "./path-safety.ts";
 import { items, parseCompass, readCompass, type CompassDoc } from "./compass.ts";
 import { parseModArgs } from "./cli-args.ts";
+import { listMissionSlugs, readMission } from "./missions.ts";
 
 export type Scope = "compass" | "metrics";
 export const SCOPES: Scope[] = ["compass", "metrics"];
@@ -191,7 +192,20 @@ export function householdView(vault: string) {
     members: h.map((m) => ({ id: m.id, name: m.name, relation: m.relation, added: m.added, consent: Object.fromEntries(SCOPES.map((s) => [s, !!m.consent[s]?.on])), hasCompass: consented(vault, m.id, "compass") && existsSync(join(householdDir(vault), m.id, "compass.md")) })),
     shared: readShared(vault).map(({ line, ...g }) => ({ ...g, names: g.members.map((x) => (x === "me" ? "You" : h.find((m) => m.id === x)?.name ?? x)) })),
     conflicts: peopleConflicts(vault),
+    // Shared projects (missions with a household member who said yes).
+    projects: (() => { try { return sharedProjects(vault); } catch { return []; } })(),
   };
+}
+
+/** Projects a household member was brought into (their own yes was required to join). */
+export function sharedProjects(vault: string): { slug: string; name: string; members: string[] }[] {
+  const out: { slug: string; name: string; members: string[] }[] = [];
+  for (const slug of listMissionSlugs(vault)) {
+    const m = readMission(vault, slug);
+    const members = (m?.people ?? []).filter((p) => p.startsWith("household/")).map((p) => p.slice("household/".length));
+    if (m && members.length) out.push({ slug, name: m.name, members });
+  }
+  return out;
 }
 
 // ── CLI: prevail compass household ... ─────────────────────────────────────

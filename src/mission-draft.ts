@@ -28,6 +28,28 @@ export interface MissionDraft {
   match?: { calendar?: string[]; email_from?: string[]; merchants?: string[] };
 }
 export interface Dropped { field: string; value: string; why: string }
+
+// Starters per kind (missions-plan MS5): a trip, a purchase, learning, a
+// build, a remodel. Each is an opening for the composer, the specialists such
+// a project usually wants, its usual milestones and the questions that matter
+// most for it. The template only seeds the draft; every field is checked like
+// any other, and nothing starts without the user's go.
+export type StarterKind = "trip" | "purchase" | "learning" | "build" | "remodel";
+export interface Starter { kind: StarterKind; label: string; opening: string; specialists: string[]; milestones: string[]; ask: string[]; match?: { calendar?: string[] } }
+export const STARTERS: Starter[] = [
+  { kind: "trip", label: "A trip", opening: "Plan a trip to ", specialists: ["researcher", "planner", "scout"], milestones: ["Dates and budget set", "Travel booked", "Where to stay booked", "Packed and ready"], ask: ["Where to, and when?", "About how much should it cost?"], match: { calendar: ["flight", "hotel"] } },
+  { kind: "purchase", label: "A purchase", opening: "Buy a ", specialists: ["researcher", "analyst", "negotiator"], milestones: ["What it must do, written down", "Three options compared", "Decided", "Bought and set up"], ask: ["What must it do for you?", "What is the most you would spend?"] },
+  { kind: "learning", label: "Learning", opening: "Learn to ", specialists: ["tutor", "coach", "researcher"], milestones: ["First lesson", "A practice routine that sticks", "First piece or skill done", "Shown to someone"], ask: ["What does good enough look like?", "How many hours a week can you give it?"] },
+  { kind: "build", label: "A build", opening: "Ship ", specialists: ["planner", "builder", "auditor"], milestones: ["Scope written", "A first working version", "Tested", "Shipped"], ask: ["What is the smallest version worth shipping?", "By when?"] },
+  { kind: "remodel", label: "A remodel", opening: "Remodel the ", specialists: ["researcher", "analyst", "liaison", "negotiator"], milestones: ["Plan and budget", "Three quotes", "Contractor chosen", "Work done", "Final walk-through"], ask: ["Which room, and what should change?", "What budget, with a cushion?"] },
+];
+
+/** A kind's template as draft fields (checked like any others). */
+export function starterDraft(kind: string): MissionDraft {
+  const st = STARTERS.find((x) => x.kind === kind);
+  if (!st) return {};
+  return { specialists: [...st.specialists], milestones: st.milestones.map((title) => ({ title })), ...(st.match ? { match: st.match } : {}) };
+}
 export interface DraftReply {
   draft: MissionDraft;
   /** Fields this turn filled or changed. */
@@ -216,16 +238,22 @@ export function buildDraftPrompt(turns: DraftTurn[], draft: MissionDraft, ctx: D
   return { system, prompt };
 }
 
-export async function draftMission(vault: string, i: { turns: DraftTurn[]; draft?: MissionDraft; now?: number; runner?: RouteRunner; ctx?: DraftContext }): Promise<DraftReply> {
+export async function draftMission(vault: string, i: { turns: DraftTurn[]; draft?: MissionDraft; now?: number; runner?: RouteRunner; ctx?: DraftContext; kind?: string }): Promise<DraftReply> {
   const ctx = i.ctx ?? draftContext(vault, i.now);
   const turns = (i.turns ?? []).filter((t) => t && (t.role === "user" || t.role === "assistant") && typeof t.text === "string" && t.text.trim());
   const userText = turns.filter((t) => t.role === "user").map((t) => t.text).join("\n");
+  // A starter's template seeds what the draft does not have yet (a kind the
+  // user picked); the user's own fields always win. Checked again here.
+  const seed = i.kind ? starterDraft(i.kind) : {};
+  const base: MissionDraft = { ...seed, ...(i.draft ?? {}) };
   // The previous draft was checked once already; check it again, the vault may have moved.
-  const prev = validateFields(i.draft ?? {}, ctx, userText).fields;
+  const prev = validateFields(base, ctx, userText).fields;
   let parsed: Record<string, unknown> | null = null;
   if (turns.some((t) => t.role === "user")) {
     const runner = i.runner ?? (await import("./route.ts")).claudeRouteRunner;
-    const { system, prompt } = buildDraftPrompt(turns, prev, ctx);
+    const { system, prompt: p0 } = buildDraftPrompt(turns, prev, ctx);
+    const st = STARTERS.find((x) => x.kind === i.kind);
+    const prompt = st ? `${p0}\nThis is ${st.label.toLowerCase()}. The milestones and specialists above are the usual ones for it; keep, drop or rename them as the conversation says. Ask first, one at a time: ${st.ask.join(" ")}` : p0;
     // One retry: a reply that does not parse (or a timeout) is usually a one-off.
     for (let n = 0; n < 2 && !parsed; n++) {
       try { parsed = parseModelJson(await runner({ system, prompt, timeoutMs: 45_000 })); } catch { parsed = null; }

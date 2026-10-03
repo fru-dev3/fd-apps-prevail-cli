@@ -164,3 +164,16 @@ describe("a household, with consent per person", () => {
     expect(() => addShared(V, { title: "Foo", members: ["bo-bar"] })).toThrow(/not in the household/);
   });
 });
+
+describe("shared projects", () => {
+  beforeEach(seed);
+  test("someone in the household joins a project only after their own yes", async () => {
+    const { createMission, attach } = await import("./missions.ts");
+    createMission(V, { name: "Kitchen foo", outcome: "A new foo kitchen", domains: [{ slug: "general", role: "owner" }], now: T("2026-10-02") });
+    addMember(V, { name: "Ada Foo" });
+    expect(() => attach(V, "kitchen-foo", "person", "household/ada-foo")).toThrow(/own yes/);
+    setConsent(V, "ada-foo", "compass", true, { confirm: "Ada Foo" });
+    attach(V, "kitchen-foo", "person", "household/ada-foo");
+    expect(householdView(V).projects).toEqual([{ slug: "kitchen-foo", name: "Kitchen foo", members: ["ada-foo"] }]);
+  });
+});

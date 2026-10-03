@@ -27,7 +27,7 @@ import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
 import { appendJsonl, readJsonl } from "./linking.ts";
-import { dataRoot, MISSIONS_DIR, resolveDomainDir } from "./path-safety.ts";
+import { buildRoot, dataRoot, MISSIONS_DIR, resolveDomainDir } from "./path-safety.ts";
 import { listDomainDirs, V4_MARKER } from "./vault-layout-v4.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { CEILINGS, type Ceiling } from "./specialists.ts";
@@ -500,12 +500,27 @@ export function attach(vault: string, ref: string, kind: AttachKind, value: stri
   if (kind === "domain") m.domains = checkDomains(vault, [...m.domains, parseDomainArg(v)]);
   else if (kind === "app") m.apps = uniq([...m.apps, v]);
   else if (kind === "specialist") m.specialists = uniq([...m.specialists, v.toLowerCase()]);
-  else if (kind === "person") m.people = uniq([...m.people, v.includes("/") ? v : `person/${v}`]);
+  else if (kind === "person") {
+    // A shared project (Goals G5): someone in the household joins only with their own yes (their Compass shared).
+    if (v.startsWith("household/")) {
+      const id = v.slice("household/".length);
+      if (!existsSync(join(buildRoot(vault), "household.json")) || !householdConsented(vault, id)) throw new Error("a shared project needs that person's own yes: they share their Compass first (Compass, Household)");
+    }
+    m.people = uniq([...m.people, v.includes("/") ? v : `person/${v}`]);
+  }
   else if (kind === "entity") m.entities = uniq([...m.entities, v]);
   else if (kind === "prompt-project") m.prompt_projects = uniq([...m.prompt_projects, v]);
   else if (kind === "repo") m.repos = uniq([...m.repos, v]);
   save(vault, m, now);
   return missionView(vault, m.slug, now)!;
+}
+
+/** Household consent, read without importing the household module at load time. */
+function householdConsented(vault: string, id: string): boolean {
+  try {
+    const h = JSON.parse(readFileSync(join(buildRoot(vault), "household.json"), "utf8")) as { members?: { id: string; removed?: string; consent?: { compass?: { on?: boolean } } }[] };
+    return !!h.members?.some((m) => m.id === id && !m.removed && m.consent?.compass?.on);
+  } catch { return false; }
 }
 export function detach(vault: string, ref: string, kind: AttachKind, value: string, now = Date.now()): MissionView {
   const m = readMission(vault, ref);

@@ -158,3 +158,22 @@ describe("the vault side", () => {
     expect(existsSync(join(V, "data", "missions", "no-name"))).toBe(false);
   });
 });
+
+describe("starters per kind", () => {
+  beforeEach(seed);
+  test("a kind seeds its usual milestones and specialists, the model is told what to ask first, and the user's own fields win", async () => {
+    let seen = "";
+    const runner = async (r: { prompt: string }) => { seen = r.prompt; return JSON.stringify({ fields: { name: "Remodel the foo kitchen", outcome: "A kitchen we cook in", target: "2027-04-30", milestones: [{ title: "Plan and budget" }, { title: "Three quotes" }] }, say: "A kitchen remodel.", question: "What budget, with a cushion?" }); };
+    const r = await draftMission(V, { turns: [{ role: "user", text: "Remodel the foo kitchen by spring" }], kind: "remodel", runner, now: NOW });
+    expect(seen).toContain("This is a remodel.");
+    expect(seen).toContain("Which room, and what should change?");
+    expect(r.draft.specialists).toEqual(["researcher", "analyst", "liaison", "negotiator"]);
+    expect(r.draft.milestones!.map((m) => m.title)).toEqual(["Plan and budget", "Three quotes"]);
+    expect(r.question).toBe("What budget, with a cushion?");
+    const own = await draftMission(V, { turns: [{ role: "user", text: "Plan a trip to Foo Island" }], kind: "trip", draft: { specialists: ["researcher"] }, runner: async () => "{}", now: NOW });
+    expect(own.draft.specialists).toEqual(["researcher"]);
+    expect(own.draft.milestones!.length).toBe(4);
+    const none = await draftMission(V, { turns: [{ role: "user", text: "Something" }], kind: "nope", runner: async () => "{}", now: NOW });
+    expect(none.draft.milestones).toBeUndefined();
+  });
+});
