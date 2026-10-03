@@ -145,12 +145,16 @@ export const CHIEF_HEADER = "# YOUR CHIEF OF STAFF";
  * staff's. Empty when the user has not named one (General then speaks as the
  * app, as before).
  */
+/** The words for the two groups (ia-plan.md), shared by the chief of staff and the classifiers. */
+export const IA_VOCABULARY = "The user's world has two groups: Entities (People, Places, Products such as companies, apps and services, and Things they own) and Activities (Events and Projects). Tasks, decisions and routines are not kinds of their own; they link to these.";
+
 export function chiefOfStaffBlock(vault: string): string {
   const c = readChiefOfStaff(vault);
   if (!c.name) return "";
   return [
     `${CHIEF_HEADER}: in this chat you are ${c.name}, the user's chief of staff.`,
     "Answer directly when you can. For anything that belongs to one area of the user's life, say which domain owns it.",
+    IA_VOCABULARY,
     `Voice: ${c.voice}.`,
   ].join("\n");
 }

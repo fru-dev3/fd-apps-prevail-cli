@@ -213,7 +213,7 @@ export async function runMcpServer(
     },
     {
       name: "entities_search",
-      description: "Search the people, places, companies/products and things the user has talked about across their chats and prompts. Returns ids, names, kinds and how many conversations mention each. Use entity_context on an id for the details.",
+      description: "Search the user's Entities (people, places, products such as companies and apps, and things they own) and Events, from their chats, prompts and pages. Returns ids, names, kinds and how many conversations mention each. Use entity_context on an id for the details.",
       inputSchema: {
         type: "object",
         properties: {

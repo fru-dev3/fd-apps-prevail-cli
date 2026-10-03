@@ -568,7 +568,7 @@ export function buildTouchPrompt(o: { message: string; reply: string; domains: T
     'If it concerns nothing, reply {"domains":[],"entity_facts":{},"projects":[],"unhomed":[]}.',
   ].join("\n");
   const ents = o.entities.length
-    ? `The user's own people, places and things (id = name):\n${o.entities.slice(0, 60).map((e) => `- ${e.id} = ${[e.name, ...e.aliases.slice(0, 3)].join(" / ")}`).join("\n")}\n\n`
+    ? `The user's own entities and events (people, places, products, things and events; id = name):\n${o.entities.slice(0, 60).map((e) => `- ${e.id} = ${[e.name, ...e.aliases.slice(0, 3)].join(" / ")}`).join("\n")}\n\n`
     : "";
   const projs = projects.length
     ? `The user's active projects (id = name: what done looks like):\n${projects.map((p) => `- ${p.id} = ${[p.name, ...p.aliases.slice(0, 2)].join(" / ")}${p.outcome ? `: ${p.outcome}` : ""}`).join("\n")}\n\n`
