@@ -70,3 +70,20 @@ describe("backfill", () => {
     expect(readdirSync(dir).length).toBe(2);
   });
 });
+
+describe("backfill from the prompts captured from other AI tools", () => {
+  test("typed prompts only: an agent's instructions, pasted output and other people's decisions are skipped", () => {
+    const dir = join(V, "build", "_meta", "prompts");
+    mkdirSync(dir, { recursive: true });
+    const row = (prompt: string, ms: number) => JSON.stringify({ ts: new Date(ms).toISOString(), epoch_ms: ms, tool: "claude", session: "abcd1234-ef", prompt });
+    writeFileSync(join(dir, "claude.jsonl"), [
+      row("ok let's go with the foo tracker name.", Date.parse("2026-09-26T10:00:00Z")),
+      row("You are agent 7. I've decided to quit the bar club.", 1),
+      row("**Plan**\nI'm going to quit the foo gym", 2),
+      row("Sam has decided to sell the foo boat.", 3),
+    ].join("\n"));
+    const r = backfillDecisions(V);
+    expect(r.found.map((f) => [f.what, f.thread, f.decided])).toEqual([["Go with the foo tracker name", "claude-abcd1234", "2026-09-26"]]);
+  });
+});
+
