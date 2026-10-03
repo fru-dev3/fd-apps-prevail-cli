@@ -455,7 +455,7 @@ export const COMPASS_HEADER = "# COMPASS";
 export function compassBlock(vault: string, opts: { local?: boolean } = {}): string {
   if (!existsSync(compassPath(vault))) return "";
   const doc = readCompass(vault);
-  const ok = (x: { tokens: Record<string, string>; flags?: string[] }) => !isProposed(x) && (opts.local || !x.flags?.includes("local"));
+  const ok = (x: { tokens: Record<string, string>; flags?: string[] }) => !isProposed(x) && x.tokens.status !== "archived" && (opts.local || !x.flags?.includes("local"));
   const parts: string[] = [];
   const m = mission(doc);
   if (m && m.text && !isProposed(m)) parts.push(`Purpose: ${m.text.replace(/^>\s*/gm, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()}`);

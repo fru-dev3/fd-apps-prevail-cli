@@ -442,6 +442,8 @@ async function dailyMetrics(root: string, now = Date.now()): Promise<void> {
     const lt = await import("./lifetime.ts");
     const fs = lt.freshStarts(root, now);
     await lt.freshStartPass(root, now);
+    // Once a year, by code: this year's review page, saved for the user to answer.
+    await lt.yearlyAuto(root, now);
     if (fs.some((f) => f.kind === "new-year" || f.kind === "birthday")) {
       const st = await import("./stories.ts");
       // On a new year, the year that just ended; on a birthday, this year so far.

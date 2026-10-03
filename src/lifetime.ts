@@ -15,12 +15,15 @@
 //     matter). With --draft a model sketches each life from the user's own
 //     notes, and code keeps a sketch only when its quote is found verbatim in
 //     them. Nothing here writes the Compass: the page asks, the user answers.
+//     It walks fixed dimensions (DIMENSIONS) so years compare, and the hub
+//     writes the current year's page once a year by itself (yearlyAuto, from
+//     the daily pass); the user edits it (saveYearly keeps the text before).
 //   History  every value and role across compass.versions/ and the ledger:
 //     when it appeared, each rank change, when it was dropped, and why.
 //   Export  build/exports/compass-constitution-<date>.md: confirmed lines
 //     only, never ~local ones, as plain prose and lists.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildRoot, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { compassVersions, isProposed, items, mission, parseCompass, readCompass, readLedger, type CompassDoc, type CompassItem } from "./compass.ts";
@@ -150,6 +153,16 @@ export const ODYSSEY = [
 ] as const;
 export interface OdysseySketch { key: string; sketch: string; quote: string; from: string }
 
+/** The fixed dimensions every yearly review walks, the same each year so years compare. */
+export const DIMENSIONS = [
+  { key: "health", title: "Health", ask: "Body, sleep and energy this year." },
+  { key: "relationships", title: "Relationships", ask: "The people closest to you this year." },
+  { key: "work", title: "Work", ask: "What you made and how the work felt." },
+  { key: "money", title: "Money", ask: "Earning, spending, saving and peace about it." },
+  { key: "growth", title: "Growth", ask: "What you learned and how you changed." },
+  { key: "joy", title: "Joy", ask: "Play, rest and what made the year good." },
+] as const;
+
 export function odysseyPrompt(sources: { path: string; text: string }[]): string {
   return [
     "You help a person prepare their yearly review. Sketch three possible lives for the next five years, in two or three sentences each, from their own notes:",
@@ -216,6 +229,10 @@ export async function yearlyReview(vault: string, o: { year?: number; now?: numb
     ...(roles.length ? roles.map(line) : ["None confirmed yet."]),
     "Which role needs more of you next year, and which less?",
     "",
+    "## The year across your life",
+    "Rate each from 1 to 5 and say why in a line.",
+    ...DIMENSIONS.flatMap((d) => ["", `### ${d.title}`, d.ask, "Your answer:"]),
+    "",
     "## Three odyssey lives",
     ...ODYSSEY.flatMap((x) => {
       const s = sketches.find((k) => k.key === x.key);
@@ -232,6 +249,39 @@ export async function yearlyReview(vault: string, o: { year?: number; now?: numb
     if (!existsSync(file)) writeFileSync(file, text);
   }
   return { year, file, values, roles, purpose, sketches, text };
+}
+
+export const reviewsDir = (vault: string) => join(resolveDomainDir(vault, "general"), "memory", "reviews");
+const yearFile = (vault: string, year: number) => join(reviewsDir(vault), `year-${year}.md`);
+
+/** Every saved yearly review, newest first. */
+export function listYearly(vault: string): { year: number; file: string; updated: number }[] {
+  const dir = reviewsDir(vault);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).flatMap((f) => { const m = /^year-(\d{4})\.md$/.exec(f); if (!m) return []; let updated = 0; try { updated = statSync(join(dir, f)).mtimeMs; } catch { /* gone */ } return [{ year: Number(m[1]), file: join(dir, f), updated }]; }).sort((a, b) => b.year - a.year);
+}
+
+/** Once a year, by code: the current year's review is written when it does not exist yet (never overwritten). */
+export async function yearlyAuto(vault: string, now = Date.now()): Promise<{ written: number | null }> {
+  const year = new Date(now).getUTCFullYear();
+  if (existsSync(yearFile(vault, year))) return { written: null };
+  await yearlyReview(vault, { year, now, write: true });
+  return { written: existsSync(yearFile(vault, year)) ? year : null };
+}
+
+/** The user's edit of a saved review; the text before is kept in reviews/.versions/. */
+export function saveYearly(vault: string, year: number, text: string, now = Date.now()): string {
+  if (!Number.isInteger(year) || year < 1900 || year > 3000) throw new Error("a year like 2026");
+  if (!text.trim()) throw new Error("the review is empty");
+  if (text.length > 200_000) throw new Error("the review is too long");
+  const file = yearFile(vault, year);
+  if (existsSync(file)) {
+    const vdir = join(reviewsDir(vault), ".versions");
+    mkdirSync(vdir, { recursive: true });
+    writeFileSync(join(vdir, `year-${year}-${new Date(now).toISOString().replace(/[:.]/g, "-")}.md`), readText(file));
+  } else mkdirSync(reviewsDir(vault), { recursive: true });
+  writeFileSync(file, text.endsWith("\n") ? text : `${text}\n`);
+  return file;
 }
 
 // ── Export as a constitution ────────────────────────────────────────────────
@@ -284,6 +334,16 @@ export async function lifetimeCommand(sub: string, argv: string[], vault: string
     return 0;
   }
   if (sub === "export") { const r = exportConstitution(vault); if (args.json) out(r); else { process.stdout.write(r.text); console.error(`saved ${r.file}`); } return 0; }
+  if (sub === "yearly" && args.pos[1] === "list") { const l = listYearly(vault).map((x) => ({ ...x, text: readText(x.file) })); if (args.json) out(l); else for (const x of l) console.log(`${x.year}  ${x.file}`); return 0; }
+  if (sub === "yearly" && args.pos[1] === "auto") { const r = await yearlyAuto(vault); if (args.json) out(r); else console.log(r.written ? `Wrote the ${r.written} review.` : "This year's review is already there."); return 0; }
+  if (sub === "yearly" && args.pos[1] === "save") {
+    try {
+      const text = args.get("file") === "-" ? await (async () => { const cs: Buffer[] = []; for await (const c of process.stdin) cs.push(c as Buffer); return Buffer.concat(cs).toString("utf8"); })() : args.get("text") ?? "";
+      const file = saveYearly(vault, Number(args.get("year")), text);
+      if (args.json) out({ ok: true, file }); else console.log(`Saved ${file}`);
+      return 0;
+    } catch (e) { if (args.json) { out({ ok: false, error: (e as Error).message }); return 0; } console.error((e as Error).message); return 1; }
+  }
   if (sub === "yearly") {
     let run: ((p: string) => Promise<string>) | undefined;
     if (args.has("draft")) {
@@ -298,7 +358,7 @@ export async function lifetimeCommand(sub: string, argv: string[], vault: string
     if (args.json) out(r); else process.stdout.write(r.text);
     return 0;
   }
-  console.error("usage: prevail compass yearly [--year Y] [--draft] [--write] | fresh [--pass] | history | export [--json]");
+  console.error("usage: prevail compass yearly [--year Y] [--draft] [--write] | yearly list | yearly auto | yearly save --year Y --file - | fresh [--pass] | history | export [--json]");
   return 1;
 }
 

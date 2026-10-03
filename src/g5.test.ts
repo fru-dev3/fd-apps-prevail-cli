@@ -5,7 +5,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compassHistory, constitutionText, exportConstitution, freshStartPass, freshStarts, yearlyReview } from "./lifetime.ts";
+import { compassHistory, constitutionText, exportConstitution, freshStartPass, freshStarts, listYearly, saveYearly, yearlyAuto, yearlyReview } from "./lifetime.ts";
 import { confirm, readCompass, saveCompass, items } from "./compass.ts";
 import { noteSaid, topCandidates, answerCandidate } from "./said.ts";
 
@@ -108,5 +108,21 @@ describe("history, the yearly review and the export", () => {
     expect(t).not.toMatch(/—/);
     const e = exportConstitution(V, T("2026-10-02"));
     expect(e.file.endsWith("build/exports/compass-constitution-2026-10-02.md")).toBe(true);
+  });
+});
+
+describe("the yearly review runs once a year by itself", () => {
+  beforeEach(seed);
+  test("auto writes this year's page across the fixed dimensions once; an edit keeps the text before; years list newest first", async () => {
+    expect(await yearlyAuto(V, T("2026-10-02"))).toEqual({ written: 2026 });
+    expect(await yearlyAuto(V, T("2026-12-30"))).toEqual({ written: null });
+    const page = readFileSync(listYearly(V)[0]!.file, "utf8");
+    for (const d of ["Health", "Relationships", "Work", "Money", "Growth", "Joy"]) expect(page).toContain(`### ${d}`);
+    await yearlyAuto(V, T("2027-01-03"));
+    expect(listYearly(V).map((x) => x.year)).toEqual([2027, 2026]);
+    saveYearly(V, 2026, `${page}\nMore lake.\n`, T("2026-12-31"));
+    expect(readFileSync(listYearly(V)[1]!.file, "utf8")).toContain("More lake.");
+    expect(readdirSync(join(V, "data", "domains", "general", "memory", "reviews", ".versions")).length).toBe(1);
+    expect(() => saveYearly(V, 2026, "  ")).toThrow(/empty/);
   });
 });

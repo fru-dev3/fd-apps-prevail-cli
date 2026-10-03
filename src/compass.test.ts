@@ -117,6 +117,17 @@ describe("WOOP before a goal goes active", () => {
   });
 });
 
+describe("archived lines", () => {
+  test("an archived role is out of the chat block and the chain", async () => {
+    mkdirSync(join(V, "build"), { recursive: true });
+    writeFileSync(join(V, "build", "compass.md"), "# Compass\n~schema:2\n\n## Roles\n- Coach ~id:r-coach ~status:archived\n- Parent ~id:r-parent\n");
+    expect(compassBlock(V)).toContain("Roles: Parent");
+    expect(compassBlock(V)).not.toContain("Coach");
+    const { compassTree } = await import("./compass-chain.ts");
+    expect(compassTree(V).nodes.some((n) => n.id === "r-coach")).toBe(false);
+  });
+});
+
 describe("confirm, drop, versions and the ledger", () => {
   test("confirming a proposed goal makes it the user's (active after its WOOP); dropping removes it but keeps a version and the ledger", () => {
     seed();

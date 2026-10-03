@@ -152,7 +152,8 @@ function missionsLite(vault: string): MissionLite[] {
 /** The whole chain as a tree: every node with its parents and children, and what is not linked per level. */
 export function compassTree(vault: string, o: { confirmedOnly?: boolean; tasks?: boolean } = {}): ChainTree {
   const doc = readCompass(vault);
-  const keep = (x: { tokens: Record<string, string> }) => !o.confirmedOnly || !isProposed(x);
+  // An archived line (a role the user put away) is out of the chain.
+  const keep = (x: { tokens: Record<string, string> }) => x.tokens.status !== "archived" && (!o.confirmedOnly || !isProposed(x));
   const nodes = new Map<string, ChainNode>();
   const add = (n: Omit<ChainNode, "children" | "linked"> & { linked?: boolean }) => { const full: ChainNode = { children: [], linked: n.parents.length > 0, ...n }; nodes.set(n.id, full); return full; };
   const status = (x: { tokens: Record<string, string> }, kind: string) => x.tokens.status ?? (kind === "goal" ? "active" : "confirmed");
