@@ -870,6 +870,8 @@ export interface ToolEvent {
 
 export interface ChatTurn {
   prompt: string;
+  /** How to write the reply (the desktop's link format): system channel, never context. */
+  outputHint?: string;
   cwd: string;
   cli: AvailableCli;
   model: string;
@@ -1076,7 +1078,7 @@ export function runChatTurn(turn: ChatTurn): Promise<string> {
   return runChatTurnInner(turn);
 }
 
-async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, allowTools, onInit, incognito }: ChatTurn): Promise<string> {
+async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, allowTools, onInit, incognito, outputHint }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1230,7 +1232,8 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
   // channel (in claudeSystem below); CLIs without a system-prompt flag get it
   // prepended to the prompt so it still governs the turn.
   const promptNoEmDash = cli.kind !== "claude" ? buildNoEmDashPreamble() : "";
-  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptGoals + promptOmega + promptSyncedApps + promptNoEmDash + buildFrameworkPreamble(framework) + prompt;
+  const promptOutputHint = outputHint && cli.kind !== "claude" ? `${outputHint}\n\n` : "";
+  let framedPrompt = promptVaultLock + promptConstitution + promptDomainIdeal + promptGoals + promptOmega + promptSyncedApps + promptNoEmDash + promptOutputHint + buildFrameworkPreamble(framework) + prompt;
   // A prompt that begins with '-' makes the runtime CLI's option parser treat the
   // whole thing as an unknown flag (e.g. `claude -p` -> "unknown option '---...'",
   // codex's positional, agy/gemini -p). Our injected context headers ("--- extra:
@@ -1284,7 +1287,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     // inherits it. The constitution leads (highest precedence), then the
     // operating manual. The constitution is included even in bare mode, where
     // the manual is intentionally null.
-    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, goalsPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, manualForClaude].filter(Boolean).join("\n\n");
+    const claudeSystem = [vaultLockPreamble, constitution, domainIdealPreamble, goalsPreamble, omegaPreamble, syncedAppsPreamble, NO_EM_DASH_DIRECTIVE, outputHint ?? null, manualForClaude].filter(Boolean).join("\n\n");
     if (claudeSystem && isFirst) args.push("--append-system-prompt", claudeSystem);
     // Execution turns for a user-approved action: let the agent actually use its
     // tools/connectors (file ops, bash, MCP). In headless -p there's no TTY to

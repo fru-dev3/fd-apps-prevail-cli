@@ -226,6 +226,11 @@ export interface ChatJsonOptions {
   // Incognito: nothing about this conversation spreads past its own thread
   // (no touch step). Also PREVAIL_INCOGNITO=1.
   incognito?: boolean;
+  // How the reply should be written (the desktop's prevail:// link format, so
+  // its chips render). Output format only, never context: it goes to the
+  // system channel (or ahead of the prompt for CLIs without one), so the
+  // turn's context stays what the scope resolver built (--output-hint).
+  outputHint?: string;
   // Test seams: stand-ins for engine detection, the model turn and the
   // ~/.prevail message log. Production never sets these.
   deps?: {
@@ -759,6 +764,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     incognito: !!opts.incognito,
     googleAccount: googlePick,
     inheritUserMcp: opts.inheritUserMcp || appIds.length > 0,
+    ...(opts.outputHint?.trim() ? { outputHint: opts.outputHint.trim().slice(0, 8000) } : {}),
     // The referenced apps' read tools, pre-allowed (headless Claude refuses
     // anything not allowed up front). Writes still queue at the act gate.
     ...(() => { const r = appReadTools(apps, appIds); return r.length ? { appReadTools: r } : {}; })(),
@@ -950,6 +956,7 @@ export async function chatJsonCommand(
   let scopeApp: string | undefined;
   let mission: string | undefined;
   let incognito = false;
+  let outputHint: string | undefined;
   let vaultPath = vaultOverride ?? "";
 
   for (let i = 0; i < args.length; i++) {
@@ -987,6 +994,7 @@ export async function chatJsonCommand(
     else if (a.startsWith("--ref-domain=")) refDomains.push(a.slice("--ref-domain=".length));
     else if (a === "--local-only") localOnly = true;
     else if (a === "--incognito") incognito = true;
+    else if (a === "--output-hint") { outputHint = next; i++; }
     else if (a === "--web") { const v = (next ?? "").toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; i++; }
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
     else if (a === "--route-bias") { routeBias = next; i++; }
@@ -1046,6 +1054,7 @@ export async function chatJsonCommand(
     googleAccount,
     inheritUserMcp,
     threadId,
+    ...(outputHint ? { outputHint } : {}),
     entity,
     apps,
     scopeApp,

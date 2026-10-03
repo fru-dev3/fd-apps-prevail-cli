@@ -77,3 +77,12 @@ test("entity turn", async () => {
 test("domain turn with a referenced app and domain", async () => {
   expect(await capture({ domain: "homestead", apps: ["paint-shop"], refDomains: ["money"] })).toMatchSnapshot();
 });
+
+// The desktop ChatPanel's scope (missions-plan MS1 leftover): a domain chat no
+// longer adds its own context, it sends the typed text with the flags below.
+// The model must get exactly the "domain turn" snapshot above.
+test("a desktop domain turn (ChatPanel scope) gets the domain turn's context, byte for byte", async () => {
+  const desktop = await capture({ domain: "homestead", webAccess: "allow", localOnly: false, inheritUserMcp: false, incognito: false, apps: [], refDomains: [], entity: [], threadId: "foo-thread", outputHint: "# OUTPUT FORMAT: write foo links." });
+  expect(desktop).toEqual(await capture({ domain: "homestead" }));
+  expect(desktop.prompt).toBe("What should I do this weekend?");
+});
