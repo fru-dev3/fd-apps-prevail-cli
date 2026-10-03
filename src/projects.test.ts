@@ -100,6 +100,8 @@ describe("projects: touches and updates", () => {
     createProject(vault, { name: "Foo Trip", outcome: "Visit the islands", now: NOW });
     createProject(vault, { name: "Bar Build", now: NOW });
     setProject(vault, "project/bar-build", { status: "paused" });
+    // "ferry" is one routing keyword of Travel: a tie, so the model is asked.
+    writeFileSync(join(vault, "data", "domains", "travel", "manifest.json"), JSON.stringify({ identity: { name: "travel" }, routing: { keywords: ["ferry"] } }));
     let seen: TouchOptions | null = null;
     const classify = async (o: TouchOptions): Promise<TouchResult> => {
       seen = o;
@@ -117,10 +119,11 @@ describe("projects: touches and updates", () => {
     expect(lines(unhomedFile())).toEqual([{ ts: NOW, thread: "t-1", home: "general", label: "woodworking", fact: "Needs a saw blade" }]);
   });
 
-  test("a turn that only has a topic with no home still records it", async () => {
-    const classify = async (): Promise<TouchResult> => ({ domains: [], entity_facts: {}, unhomed: [{ label: "pets", fact: "Adopting a cat", effort: false }], source: "model" });
+  test("a turn no domain's words touch asks no model (code first, cost ceiling)", async () => {
+    let called = 0;
+    const classify = async (): Promise<TouchResult> => { called++; return { domains: [], entity_facts: {}, unhomed: [{ label: "pets", fact: "Adopting a cat", effort: false }], source: "model" }; };
     expect(await runTouchStep({ vault, home: "general", thread: "t-2", message: "We are adopting a cat next month, what do we need?", reply: "ok", localOnly: false, incognito: false, classify, now: NOW })).toBeNull();
-    expect(lines(unhomedFile()).map((l) => l.label)).toEqual(["pets"]);
+    expect(called).toBe(0);
   });
 
   test("the reply parser keeps listed projects and new labels only", () => {

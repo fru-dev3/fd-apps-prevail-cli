@@ -72,7 +72,7 @@ import {
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
   type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route"
-    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start" | "filed" | "decision_offer" | "told" | "speaker";
+    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start" | "filed" | "decision_offer" | "decision_saved" | "told" | "speaker";
   thread: string;
   ts: number;
   domain?: string;
@@ -138,8 +138,12 @@ export interface ChatEvent {
   // touched: the other domains this exchange concerns, one fact line each, and
   // the user's own entities it named (ids). `domains` never holds the
   // conversation's own domain.
-  domains?: { slug: string; fact: string }[];
+  domains?: { slug: string; fact: string; line?: string }[];
   entities?: string[];
+  /** touched: "code" when the words decided it, "model" when a tie went to the model. */
+  by?: "code" | "model";
+  // decision_saved: a decision the user stated, saved as a decided record (Undo moves it aside).
+  decisionSaved?: { domain: string; slug: string; what: string; decided: string };
   // job: the chief of staff staffed this message as a job (jobs.ts). The
   // turn's reply is one line; the card polls `prevail job show <id>`.
   // bring_in: a mission turn reached outside the mission; the user says yes
@@ -982,9 +986,19 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     model: ranModel,
   });
 
+  // A decision the user states ("I've decided to...", "I'm going to learn
+  // piano"), in any chat, is saved as a decided record with this thread; the
+  // reply gets a quiet receipt with Undo (decision-capture.ts, code only).
+  let savedDecision = false;
+  if (!opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
+    try {
+      const c = (await import("./decision-capture.ts")).captureDecision(vaultPath, { text: userText(message), domain: scope.mission ? (scope.mission.domains[0]?.slug ?? "general") : opts.domain, thread: threadId ?? sessionId });
+      if (c) { savedDecision = true; emit({ type: "decision_saved", thread, ts: Date.now(), decisionSaved: { domain: c.domain, slug: c.slug, what: c.what, decided: c.decided } }); }
+    } catch { /* never blocks a turn */ }
+  }
   // A message that deliberates ("should I...?") gets a one-tap offer to open
   // a decision record (Today T4); nothing is opened without the user's yes.
-  if (!opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !scopeApp && scope.kind !== "entity") {
+  if (!savedDecision && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !scopeApp && scope.kind !== "entity") {
     try {
       const offer = (await import("./decisions-open.ts")).decisionOffer(vaultPath, userText(message), opts.domain);
       if (offer) emit({ type: "decision_offer", thread, ts: Date.now(), decisionOffer: offer });
@@ -1019,7 +1033,8 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       // The decision layer narrows candidates only when it is live.
       provider: layer?.live ? layer.provider : null,
     });
-    if (touched) emit({ type: "touched", thread, ts: Date.now(), domains: touched.domains, entities: touched.entities });
+    // ts is the touch time: Undo takes back exactly the lines written at it.
+    if (touched) emit({ type: "touched", thread, ts: touched.ts ?? Date.now(), by: touched.by, domains: touched.domains, entities: touched.entities });
   }
   return 0;
 }
@@ -1052,6 +1067,7 @@ export async function chatJsonCommand(
   let scopeApp: string | undefined;
   let mission: string | undefined;
   let incognito = false;
+  let afterTurnOnly = false;
   let outputHint: string | undefined;
   let vaultPath = vaultOverride ?? "";
 
@@ -1094,6 +1110,7 @@ export async function chatJsonCommand(
     else if (a.startsWith("--member=")) members.push(a.slice("--member=".length));
     else if (a === "--local-only") localOnly = true;
     else if (a === "--incognito") incognito = true;
+    else if (a === "--after-turn") afterTurnOnly = true;
     else if (a === "--output-hint") { outputHint = next; i++; }
     else if (a === "--web") { const v = (next ?? "").toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; i++; }
     else if (a.startsWith("--web=")) { const v = a.slice("--web=".length).toLowerCase(); if (v === "allow" || v === "deny") webAccess = v; }
@@ -1127,6 +1144,19 @@ export async function chatJsonCommand(
         process.stderr.write(`prevail chat: --entity ${old} is the project ${mission} now (use --mission ${mission})\n`);
       }
     }
+  }
+
+  // --after-turn: a turn the desktop ran itself (a General chat on the
+  // native path). stdin is {"message","reply"}; only the after-turn steps run
+  // (decisions said, domains noted), and their events are printed.
+  if (afterTurnOnly) {
+    let body: { message?: unknown; reply?: unknown } = {};
+    try { body = JSON.parse(message ?? (await readStdin())); } catch { /* empty */ }
+    return afterTurn({
+      vaultPath, domain, thread: (threadId ?? "").trim() || "chat", message: typeof body.message === "string" ? body.message : "", reply: typeof body.reply === "string" ? body.reply : "",
+      localOnly: localOnly || process.env.PREVAIL_BUNKER === "1", incognito: incognito || process.env.PREVAIL_INCOGNITO === "1",
+      write: (l) => process.stdout.write(`${l}\n`),
+    });
   }
 
   if (message === undefined) {
@@ -1177,3 +1207,33 @@ async function readStdin(): Promise<string> {
     return "";
   }
 }
+
+/**
+ * The after-turn steps on their own, for a turn the desktop ran itself:
+ * a decision the user stated is saved (decision_saved) and the domains the
+ * words concern are noted (touched). The same steps a turn through the
+ * engine runs; nothing else. Never throws.
+ */
+export async function afterTurn(o: {
+  vaultPath: string; domain: string; thread: string; message: string; reply: string;
+  localOnly: boolean; incognito: boolean; write: (line: string) => void;
+  classify?: typeof classifyTouches | null;
+}): Promise<number> {
+  const emit = (e: Record<string, unknown>) => o.write(JSON.stringify(e));
+  if (o.incognito || !o.message.trim()) return 0;
+  const said = userText(o.message);
+  try {
+    const c = (await import("./decision-capture.ts")).captureDecision(o.vaultPath, { text: said, domain: o.domain, thread: o.thread });
+    if (c) emit({ type: "decision_saved", thread: o.thread, ts: Date.now(), decisionSaved: { domain: c.domain, slug: c.slug, what: c.what, decided: c.decided } });
+  } catch { /* never blocks */ }
+  let manifestLocal = false;
+  try { manifestLocal = readManifest(o.vaultPath, o.domain)?.privacy.localOnly ?? false; } catch { /* no manifest */ }
+  const touched = await runTouchStep({
+    vault: o.vaultPath, home: o.domain, thread: o.thread, message: o.message, reply: o.reply,
+    localOnly: o.localOnly || manifestLocal, incognito: o.incognito,
+    classify: o.classify === undefined ? classifyTouches : o.classify ?? (async () => ({ domains: [], entity_facts: {}, source: "none" as const })),
+  });
+  if (touched) emit({ type: "touched", thread: o.thread, ts: touched.ts ?? Date.now(), by: touched.by, domains: touched.domains, entities: touched.entities });
+  return 0;
+}
+

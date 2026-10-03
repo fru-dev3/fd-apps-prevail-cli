@@ -137,16 +137,22 @@ describe("the touched event and update lines", () => {
     entity_facts: {}, source: "model",
   });
 
-  test("touched comes after done, and the lines land in every touched place", async () => {
-    const r = await turn(stub);
+  test("touched comes after done, and the lines land in every touched place: code first, the model only for a tie", async () => {
+    writeFileSync(dom("insurance", "manifest.json"), JSON.stringify({ identity: { name: "insurance" }, routing: { keywords: ["claim", "adjuster"] } }));
+    writeFileSync(dom("legal", "manifest.json"), JSON.stringify({ identity: { name: "legal" }, routing: { keywords: ["lawyer", "settlement"] } }));
+    let asked: string[] = [];
+    const r = await turn(async (o) => { asked = o.domains.map((d) => d.slug); return stub(o); });
+    // Legal has two hits (code); insurance one (a tie: only it goes to the model).
+    expect(asked).toEqual(["insurance"]);
     expect(r.code).toBe(0);
     expect(r.events.map((e) => e.type)).toEqual(["start", "user", "assistant", "usage", "done", "touched"]);
     const t = r.events.at(-1);
-    expect(t).toMatchObject({ type: "touched", thread: "t-foo", domains: [{ slug: "insurance", fact: "insurance: claim not released" }, { slug: "legal", fact: "legal: claim not released" }], entities: [] });
+    expect(t).toMatchObject({ type: "touched", thread: "t-foo", by: "model", domains: [{ slug: "legal", fact: MSG }, { slug: "insurance", fact: "insurance: claim not released" }], entities: [] });
     const ins = lines(dom("insurance", "memory", "updates.jsonl"));
     expect(ins).toHaveLength(1);
     expect(ins[0]).toMatchObject({ from_domain: "general", thread: "t-foo", fact: "insurance: claim not released", entities: [] });
-    expect(lines(dom("general", "memory", "touches.jsonl"))[0]).toMatchObject({ thread: "t-foo", domains: ["insurance", "legal"], entities: [] });
+    expect(lines(dom("general", "memory", "touches.jsonl"))[0]).toMatchObject({ thread: "t-foo", domains: ["legal", "insurance"], entities: [] });
+    expect(readFileSync(dom("legal", "memory", "memory.md"), "utf8")).toContain(`: ${MSG} (from General, thread t-foo)`);
   });
 
   test("no classifier in tests means no step; skips and timeouts emit nothing", async () => {
@@ -274,7 +280,9 @@ describe("daily consolidation", () => {
     expect(state).toContain("## Open items\n\n- renew");
     const mem = readFileSync(dom("insurance", "memory", "memory.md"), "utf8");
     expect(mem).toContain("## Across your life\n\n- 2026-09-19 · from Realestate: Settlement not released");
-    expect(mem).not.toContain("Lawyer engaged");
+    expect(mem.split("## Across your life")[1]).not.toContain("Lawyer engaged");
+    // Every touch is also a dated line in the domain's memory, with its thread.
+    expect(mem).toContain("## Noted from conversations\n- 2026-09-17: Claim open at the Foo house (from Realestate, thread ");
     expect(readPage(vault, "place", "foo-house")!.discussed).toContain("**Across your life**\n- 2026-09-19 · from Realestate: Roof leak");
     expect(lines(dom("insurance", "memory", "updates.jsonl"))).toHaveLength(4);
 
