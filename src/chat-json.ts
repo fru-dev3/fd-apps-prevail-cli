@@ -836,10 +836,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // turn bounded by its own and the user's time limit. Nothing here can act.
   if (memberTurn) {
     const { getSpecialist, forDomain } = await import("./specialists.ts");
-    emit({ type: "start", thread, ts: startTs, domain: opts.domain, engine });
-    emit({ type: "user", thread, ts: startTs, role: "user", text: message });
-    writeThreadTurn(vaultPath, opts.domain, sessionId, userTurn);
-    persist({ domain: opts.domain, session_id: sessionId, role: "user", content: message, ts: startTs, cli: cli.kind, model });
+    // The start and user events and the user turn are already out (above).
     const owner = scope.kind === "domain" ? opts.domain || "general" : "general";
     const names = (opts.members ?? []).map((x) => getSpecialist(vaultPath, x)?.name ?? x);
     const said: { name: string; text: string }[] = [];
@@ -861,7 +858,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       let text = "";
       try {
         text = await runTurn({
-          ...turnBase, prompt, model, isFirst: true, act: false, allowTools: mb.memberTools(spec), onTool,
+          ...turnBase, prompt, model, isFirst: true, act: false, allowTools: mb.memberTools(spec), noShell: true, onTool,
           signal: AbortSignal.timeout(Math.min(spec.budget.minutes, chiefCfg.limits.minutes) * 60_000),
           onChunk: (delta: string) => { if (!delta) return; text += delta; emit({ type: "delta", thread, ts: Date.now(), text: delta }); },
         });

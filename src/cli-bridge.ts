@@ -937,6 +937,10 @@ export interface ChatTurn {
   // Read, Grep and Glob). Anything not in READ_ONLY_BUILTINS is ignored, so
   // this can never grant a tool that writes or runs commands.
   allowTools?: string[];
+  // Claude only: no shell on this turn (--disallowedTools Bash). A specialist
+  // answering in a group chat reads with its read-only tools and never runs a
+  // command, not even one that would ask first.
+  noShell?: boolean;
   // Incognito: none of the user's context (constitution, profile, goals, omega,
   // domain ideal) is added by the engine. The desktop already leaves its own
   // blocks out; without this the engine added the constitution back.
@@ -1082,7 +1086,7 @@ export function runChatTurn(turn: ChatTurn): Promise<string> {
   return runChatTurnInner(turn);
 }
 
-async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, allowTools, onInit, incognito, outputHint }: ChatTurn): Promise<string> {
+async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, signal, onChunk, onTool, maxOutputChars, guard, webAccess, googleAccount, inheritUserMcp, remoteMcp, fetchHosts, appReadTools, allowTools, noShell, onInit, incognito, outputHint }: ChatTurn): Promise<string> {
   // Fix #10: sanitize em dashes out of STREAMED deltas too, so the live UI
   // never shows them. The final returned reply is sanitized again below (the
   // authoritative, code-block-aware pass). Per-delta stripping is best-effort
@@ -1303,7 +1307,8 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     // stays unavailable even in skip-permissions mode), so this is a HARD block,
     // not a request. WebSearch + WebFetch are the only built-ins that make
     // outbound requests. The WEB_DENY_NOTE in the system prompt is belt-and-braces.
-    if (webMode === "deny") args.push("--disallowedTools", "WebSearch", "WebFetch");
+    const deny = [...(webMode === "deny" ? ["WebSearch", "WebFetch"] : []), ...(noShell ? ["Bash"] : [])];
+    if (deny.length) args.push("--disallowedTools", ...deny);
     // Agent-facing MCP servers: connected stdio MCP servers (the user's own
     // local MCP apps, integration "mcp" with a mcpSetup.command) plus the gated
     // google_workspace connector and prevail_acts, injected on EVERY turn so the

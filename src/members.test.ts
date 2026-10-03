@@ -23,7 +23,7 @@ function seed() {
 }
 
 const detectClis = async () => [{ kind: "claude", bin: "/bin/false", label: "claude" }] as never;
-type Turn = { prompt: string; allowTools?: string[]; act?: boolean; onChunk?: (d: string) => void };
+type Turn = { prompt: string; allowTools?: string[]; act?: boolean; noShell?: boolean; onChunk?: (d: string) => void };
 function fakeTurn(log: Turn[]) {
   return (async (t: Turn) => {
     log.push(t);
@@ -96,6 +96,7 @@ describe("group chat in a thread", () => {
   test("two members in General: one turn the Researcher answers, the next the Planner, each as itself", async () => {
     const log: Turn[] = [];
     const a = await turn({ message: "what are the best foo carriers for renters?", members: ["researcher", "planner"], log });
+    expect(a.filter((e) => e.type === "start").length).toBe(1);
     const sp = a.filter((e) => e.type === "speaker");
     expect(sp.map((e) => e.speaker.id)).toEqual(["researcher"]);
     const reply = a.find((e) => e.type === "assistant");
@@ -109,6 +110,7 @@ describe("group chat in a thread", () => {
     const b = await turn({ message: "lay out the schedule and next steps for the foo move", members: ["researcher", "planner"], log });
     expect(b.filter((e) => e.type === "speaker").map((e) => e.speaker.id)).toEqual(["planner"]);
     // Stored with each turn, so it survives later membership changes.
+    expect(threadFile().filter((t) => t.role === "user").length).toBe(2);
     const saved = threadFile().filter((t) => t.role === "assistant");
     expect(saved.map((t) => t.meta.speaker)).toEqual(["researcher", "planner"]);
     expect(saved[1].meta.members).toEqual(["researcher", "planner"]);
@@ -125,6 +127,7 @@ describe("group chat in a thread", () => {
     expect(log[0]!.prompt).toContain("You are the Planner");
     expect(log[0]!.prompt).toContain("The user asked you by name.");
     expect(log[0]!.allowTools ?? []).not.toContain("Bash");
+    expect(log[0]!.noShell).toBe(true);
     expect(dispatched).toEqual([]);
     expect(routed).toBe(0);
     // The chip path: the same with no "@" in the text.

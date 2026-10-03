@@ -315,6 +315,9 @@ describe("a specialist's read-only tools reach the runtime", () => {
     const bt = b.slice(b.indexOf("--allowedTools") + 1);
     expect(bt).toContain("Read");
     expect(bt).not.toContain("WebSearch");
+    // A group chat member: no shell at all, denied up front beside the web lockdown.
+    const c = (await runChatTurn({ prompt: "hi", cwd, cli, model: "", isFirst: true, bare: true, webAccess: "deny", allowTools: ["Read"], noShell: true })).split("\n");
+    expect(c.slice(c.indexOf("--disallowedTools") + 1, c.indexOf("--disallowedTools") + 4)).toEqual(["WebSearch", "WebFetch", "Bash"]);
     rmSync(dir, { recursive: true, force: true });
   });
 });
