@@ -22,7 +22,7 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { countFiles } from "./vault-data-layout.ts";
-import { resolveDomainDir, DOMAINS_DIR, dataRoot } from "./path-safety.ts";
+import { resolveDomainDir, DOMAINS_DIR, dataRoot, isDomainFolderName } from "./path-safety.ts";
 
 export const V4_MARKER = ".prevail-layout-v4";
 
@@ -191,7 +191,7 @@ export function listDomainDirs(vaultPath: string): string[] {
   for (const c of containers) {
     if (!existsSync(c)) continue;
     for (const de of readdirSync(c, { withFileTypes: true })) {
-      if (de.isDirectory() && !de.name.startsWith(".") && !de.name.startsWith("_")) names.add(de.name);
+      if (de.isDirectory() && isDomainFolderName(de.name)) names.add(de.name);
     }
   }
   return [...names];

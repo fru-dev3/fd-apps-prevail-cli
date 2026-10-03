@@ -172,7 +172,7 @@ export async function runPlaybook(
         const stop = await runSpecialistStep(step, i, runId, playbook, ctx, typed, res);
         collected.push(...res.outputs);
         if (stop) {
-          auditAction(auditRoot(ctx.vault), { ts: Date.now(), domain: playbook.domain ?? "", action: `${label}: ${res.note}`.slice(0, 280), outcome: "proposed", provider: ctx.provider, model: ctx.model || undefined });
+          auditAction(ctx.vault, { ts: Date.now(), domain: playbook.domain ?? "", action: `${label}: ${res.note}`.slice(0, 280), outcome: "proposed", provider: ctx.provider, model: ctx.model || undefined });
           emit(ctx, { phase: "step_done", index: i, ok: res.ok, decision: res.decision, note: res.note, outputs: res.outputs });
           steps.push(res);
           emit(ctx, { phase: "gated", index: i, note: res.note });
@@ -191,7 +191,7 @@ export async function runPlaybook(
 
     // Audit + activity for every step, whatever the outcome.
     const outcome: ActionOutcome = res.decision === "auto" ? (res.ok ? "executed" : "error") : "proposed";
-    auditAction(auditRoot(ctx.vault), { ts: Date.now(), domain: step.kind === "agent" || step.kind === "synthesize" ? (step as { domain?: string }).domain ?? playbook.domain ?? "" : playbook.domain ?? "", action: `${label}: ${res.note}`.slice(0, 280), outcome, provider: ctx.provider, model: ctx.model || undefined });
+    auditAction(ctx.vault, { ts: Date.now(), domain: step.kind === "agent" || step.kind === "synthesize" ? (step as { domain?: string }).domain ?? playbook.domain ?? "" : playbook.domain ?? "", action: `${label}: ${res.note}`.slice(0, 280), outcome, provider: ctx.provider, model: ctx.model || undefined });
     logActivity(ctx.vault, { type: "playbook_step", domain: playbook.domain, title: label, detail: res.note, status: res.ok ? "ok" : res.decision === "auto" ? "error" : "pending", ref: runId });
     emit(ctx, { phase: "step_done", index: i, ok: res.ok, decision: res.decision, note: res.note, outputs: res.outputs });
     steps.push(res);
@@ -379,13 +379,6 @@ function safeDomainDir(vault: string, domain: string): string {
 // Bundled playbooks ship beside the binary (like skill-packs); a user can
 // override or add their own under build/playbooks/<id>.json (the older
 // <vault>/_playbooks/ is still read).
-// The action audit ledger sits beside the live domains on a v4 vault
-// (data/domains/_log, where the act gate writes it), never at the vault root.
-function auditRoot(vault: string): string {
-  const d = join(vault, "data", "domains");
-  return existsSync(d) ? d : vault;
-}
-
 export function jobsDir(vault: string, runId: string): string {
   return join(runtimePath(vault, "_meta"), "jobs", runId);
 }

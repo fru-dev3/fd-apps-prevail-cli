@@ -76,6 +76,14 @@ export function isSafeEntryName(name: string): boolean {
   return true;
 }
 
+// A child of data/domains that is a domain. `_`-prefixed folders (_archive,
+// and the _log/_meta strays older engines wrote there) and `build` (a
+// misplaced copy of the vault's own build/) never are, so no scan offers them
+// as domains and no score pass gives them a manifest.
+export function isDomainFolderName(name: string): boolean {
+  return isSafeEntryName(name) && !name.startsWith("_") && name !== BUILD_DIR;
+}
+
 // Confirm a resolved child path actually lives under the vault root after
 // symlink resolution. Catches the "symlink escape" case where a vault
 // subdir's symlink points outside the vault. Returns the realpath when

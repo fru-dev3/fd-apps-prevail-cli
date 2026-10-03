@@ -4,7 +4,7 @@ import { DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-s
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
+import { isDomainFolderName, isSafeEntryName, resolveSafeChild, validateVaultPath } from "./path-safety.ts";
 import { readManifest } from "./manifest.ts";
 
 export type ViewKey = "state" | "loops" | "quickstart" | "prompts" | "skills";
@@ -215,7 +215,7 @@ export function scanVault(vaultPath: string): Domain[] {
   for (const domainsRoot of domainsRoots) {
     if (!existsSync(domainsRoot)) continue;
     for (const e of readdirSync(domainsRoot, { withFileTypes: true })) {
-      if (!e.isDirectory() || !isSafeEntryName(e.name) || seen.has(e.name)) continue;
+      if (!e.isDirectory() || !isDomainFolderName(e.name) || seen.has(e.name)) continue;
       seen.add(e.name);
       candidates.push({ name: e.name, dir: join(domainsRoot, e.name), parent: domainsRoot });
     }

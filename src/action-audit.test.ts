@@ -23,3 +23,21 @@ describe("action-audit — append-only ledger of consequential actions (C1/O94)"
     expect(rec.report).not.toContain("sk-zzzzzzzzzzzzz");
   });
 });
+
+describe("action-audit lands in build/_log whatever root a caller hands in", () => {
+  test("the domains or apps container resolves to the vault, never a data/domains/_log", () => {
+    const { mkdirSync, existsSync, readdirSync } = require("node:fs") as typeof import("node:fs");
+    const { join } = require("node:path") as typeof import("node:path");
+    const v = mkdtempSync(`${tmpdir()}/prevail-audit-v4-`);
+    mkdirSync(join(v, "build"), { recursive: true });
+    mkdirSync(join(v, "data", "domains", "garden"), { recursive: true });
+    mkdirSync(join(v, "data", "apps"), { recursive: true });
+    auditAction(join(v, "data", "domains"), { ts: 1, domain: "garden", action: "a", outcome: "executed" });
+    auditAction(join(v, "data", "apps"), { ts: 2, domain: "garden", action: "b", outcome: "executed" });
+    auditAction(v, { ts: 3, domain: "garden", action: "c", outcome: "executed" });
+    expect(existsSync(join(v, "data", "domains", "_log"))).toBe(false);
+    expect(existsSync(join(v, "data", "apps", "_log"))).toBe(false);
+    expect(readdirSync(join(v, "build", "_log")).some((f) => f.startsWith("action-audit"))).toBe(true);
+    expect(readActionAudit(join(v, "data", "domains")).map((r) => r.action)).toEqual(["a", "b", "c"]);
+  });
+});

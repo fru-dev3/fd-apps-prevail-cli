@@ -107,3 +107,23 @@ describe("app/domain parity scaffolding", () => {
     rmSync(ROOT, { recursive: true, force: true });
   });
 });
+
+describe("data/domains strays are never domains", () => {
+  test("_log, _meta, _archive and build are skipped by every scan", () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+    const { join } = require("node:path") as typeof import("node:path");
+    const { homedir } = require("node:os") as typeof import("node:os");
+    const { scanVault } = require("./vault.ts") as typeof import("./vault.ts");
+    const { listDomainDirs } = require("./vault-layout-v4.ts") as typeof import("./vault-layout-v4.ts");
+    // validateVaultPath refuses /var/folders, so the vault sits under home.
+    mkdirSync(join(homedir(), ".prevail-test-tmp"), { recursive: true });
+    const v = mkdtempSync(join(homedir(), ".prevail-test-tmp", "prevail-strays-"));
+    for (const d of ["garden", "_log", "_meta", "_archive", "build"]) {
+      mkdirSync(join(v, "data", "domains", d), { recursive: true });
+      writeFileSync(join(v, "data", "domains", d, "manifest.json"), "{}");
+    }
+    expect(scanVault(v).map((d) => d.name)).toEqual(["garden"]);
+    expect(listDomainDirs(v)).toEqual(["garden"]);
+    require("node:fs").rmSync(v, { recursive: true, force: true });
+  });
+});
