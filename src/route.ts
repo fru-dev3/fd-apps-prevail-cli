@@ -25,6 +25,7 @@
 // to the model path as examples, and a correction on the same thread pins that
 // thread's domains outright.
 
+import { ownerFor, readContracts } from "./agent-contract.ts";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 
@@ -38,7 +39,7 @@ export interface RouteHit {
   confidence: number;
 }
 
-export type RouteSource = "typesafe" | "model" | "correction" | "none";
+export type RouteSource = "typesafe" | "model" | "correction" | "contract" | "none";
 
 export interface RouteCandidateScore {
   slug: string;
@@ -372,6 +373,17 @@ interface Classified {
 }
 
 async function classify(opts: RouteOptions, text: string, domains: string[]): Promise<Classified | null> {
+  // Declared owner first (agent.md `owns`): no model call when one domain's
+  // contract plainly claims the subject. A tie or no match falls through.
+  const owner = opts.vault ? ownerFor(text, readContracts(opts.vault), domains) : null;
+  if (owner) {
+    return {
+      domains: [{ slug: owner.domain, confidence: 1 }],
+      ranked: [{ slug: owner.domain, score: 1 }],
+      reason: `${labelFor(owner.domain).toLowerCase()} owns ${owner.matched}`,
+      source: "contract",
+    };
+  }
   if (opts.provider) {
     const res = await evaluateDecision(opts.provider, text.slice(0, ROUTE_MAX_TEXT), { route: buildRouteQuestion(domains) });
     const a = res?.answers.route;

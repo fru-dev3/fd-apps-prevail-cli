@@ -1,4 +1,7 @@
 import { hostname } from "node:os";
+import { scopeFromEnv, scopeToolCall, scopedTools, validScope } from "./mcp-scope.ts";
+import { parseHandoff } from "./agent-contract.ts";
+import { logActivity } from "./activity.ts";
 import { existsSync } from "node:fs";
 // Every vault read goes through the crypto-aware reader: on an encrypted vault
 // a raw readFileSync handed MCP clients ciphertext for every read tool.
@@ -42,7 +45,7 @@ import { mcpConfigPath, readOrCreateMcpToken } from "./mcp-config.ts";
 // responses. ALL logging goes to stderr (anything on stdout that isn't
 // valid JSON-RPC crashes the client). No exceptions.
 
-interface JsonRpcReq {
+export interface JsonRpcReq {
   jsonrpc: "2.0";
   id?: number | string | null;
   method: string;
@@ -56,7 +59,7 @@ interface JsonRpcRes {
   error?: { code: number; message: string; data?: unknown };
 }
 
-interface McpTool {
+export interface McpTool {
   name: string;
   description: string;
   inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[] };
@@ -144,7 +147,415 @@ export async function runMcpServer(
 
   log(`starting · vault=${vaultPath}${requireToken ? " · network (token required)" : " · stdio"}`);
 
-  const tools: McpTool[] = [
+  const scope = scopeFromEnv();
+  if (scope && !validScope(vaultPath, scope)) {
+    log(`PREVAIL_DOMAIN="${scope}" is not a domain in this vault`);
+    process.exit(1);
+  }
+  const tools = mcpTools();
+
+  // Print the token-discovery hint once, on stderr, so a human launching the
+  // server in network mode can find their token. Never on stdout - that
+  // channel is reserved for valid JSON-RPC frames. Skipped over stdio (no
+  // token is required there).
+  if (requireToken) {
+    log(`send your token in _meta.authorization. Token: prevail-<...> (${mcpConfigPath()})`);
+  }
+
+  for await (const line of readStdinLines()) {
+    let req: JsonRpcReq;
+    try {
+      req = JSON.parse(line) as JsonRpcReq;
+    } catch {
+      log(`malformed JSON-RPC: ${line.slice(0, 200)}`);
+      continue;
+    }
+    const id = req.id ?? null;
+    // Auth check - only in network mode, and initialize is always exempt
+    // (it's the handshake). Over stdio (requireToken=false) the token is not
+    // required, so generic stdio clients work without attaching `_meta`.
+    if (requireToken && req.method !== "initialize" && !isAuthorized(req, token)) {
+      if (req.id !== undefined && req.id !== null) {
+        send({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32001,
+            message:
+              "unauthorized - prevail MCP requires a valid token; see ~/.prevail/mcp.json",
+          },
+        });
+      }
+      continue;
+    }
+    try {
+      const result = await dispatch(req, tools, vaultPath, scope);
+      // Notifications have id=null and expect no response.
+      if (req.id !== undefined && req.id !== null) {
+        send({ jsonrpc: "2.0", id, result });
+      }
+    } catch (err) {
+      const e = err as Error;
+      send({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32000, message: e.message ?? "tool error" },
+      });
+    }
+  }
+}
+
+// Pull the bearer token off a JSON-RPC request and verify it against the
+// persisted server token in constant time. Accepts either MCP's
+// `_meta.authorization` convention or a top-level `authorization` field
+// (some clients put it there). Both must be `prevail-<hex>`.
+function isAuthorized(req: JsonRpcReq, expectedToken: string): boolean {
+  const params = (req.params ?? {}) as Record<string, unknown> & {
+    _meta?: Record<string, unknown>;
+  };
+  const fromMeta = typeof params._meta?.authorization === "string"
+    ? (params._meta!.authorization as string)
+    : null;
+  const fromTop = typeof params.authorization === "string"
+    ? (params.authorization as string)
+    : null;
+  const raw = fromMeta ?? fromTop;
+  if (!raw) return false;
+  const prefix = "prevail-";
+  if (!raw.startsWith(prefix)) return false;
+  const presented = raw.slice(prefix.length);
+  // timingSafeEqual requires equal length - guard up front so we never
+  // throw + leak timing via the catch path.
+  if (presented.length !== expectedToken.length) return false;
+  try {
+    return timingSafeEqual(
+      Buffer.from(presented, "utf8"),
+      Buffer.from(expectedToken, "utf8"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Inspect process.ppid to confirm the parent is something we expect to
+// see launching a stdio MCP server (a TTY-attached shell, an IDE/agent
+// binary, a known MCP host). Anything else gets refused unless the user
+// passed --unsafe-detach. The check is conservative on purpose: a false
+// positive (refusing a legitimate launch) is cheaper than a false
+// negative (silently serving cron / a random daemon).
+interface ParentVerdict {
+  ok: boolean;
+  message: string;
+}
+
+const KNOWN_PARENT_HINTS = [
+  "vscode",
+  "Code Helper",
+  "Code.app",
+  "cursor",
+  "Cursor.app",
+  "jetbrains",
+  "intellij",
+  "claude",
+  "Claude",
+  "ides",
+  // Common MCP host launchers - Goose, Continue, Cline, mcp-cli, the
+  // official @modelcontextprotocol/inspector + sdk.
+  "goose",
+  "continue",
+  "cline",
+  "mcp",
+];
+
+function verifyParentProcess(): ParentVerdict {
+  // A TTY-attached stdin is the easy path: the user typed `prevail mcp`
+  // themselves. We don't need to know who the parent is in that case.
+  if (process.stdin.isTTY === true) {
+    return { ok: true, message: "tty parent" };
+  }
+  const ppid = process.ppid;
+  if (typeof ppid !== "number" || ppid <= 0) {
+    return {
+      ok: false,
+      message:
+        "prevail mcp refuses to run from detached / unknown parent (no ppid available). " +
+        "If you're sure this is intentional, pass --unsafe-detach.",
+    };
+  }
+  let cmd = "";
+  try {
+    // ps is portable across macOS + Linux; argv-array form so prompt
+    // content / paths with spaces can never be interpreted as shell.
+    const proc = Bun.spawnSync({
+      cmd: ["ps", "-o", "command=", "-p", String(ppid)],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    cmd = (proc.stdout?.toString() ?? "").trim();
+  } catch {
+    cmd = "";
+  }
+  const lower = cmd.toLowerCase();
+  for (const hint of KNOWN_PARENT_HINTS) {
+    if (cmd.includes(hint) || lower.includes(hint.toLowerCase())) {
+      return { ok: true, message: `known parent: ${cmd}` };
+    }
+  }
+  return {
+    ok: false,
+    message:
+      `prevail mcp refuses to run from detached / unknown parent ` +
+      `(PID ${ppid}, command ${cmd || "<unknown>"}). ` +
+      `If you're sure this is intentional, pass --unsafe-detach.`,
+  };
+}
+
+export async function dispatch(req: JsonRpcReq, tools: McpTool[], vaultPath: string, scope: string | null = null): Promise<unknown> {
+  switch (req.method) {
+    case "initialize": {
+      const p = (req.params ?? {}) as { clientInfo?: { name?: string } };
+      mcpClientSurface = normalizeClientSurface(p.clientInfo?.name);
+      log(`client: ${mcpClientSurface}${p.clientInfo?.name ? ` (${p.clientInfo.name})` : ""}`);
+      return {
+        protocolVersion: PROTOCOL_VERSION,
+        serverInfo: SERVER_INFO,
+        capabilities: { tools: {} },
+      };
+    }
+    case "notifications/initialized":
+      // Spec-required notification from the client after init. No response.
+      return undefined;
+    case "tools/list":
+      return { tools: scopedTools(scope, tools) };
+    case "tools/call": {
+      const p = (req.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
+      const name = p.name ?? "";
+      const verdict = scopeToolCall(vaultPath, scope, name, p.arguments ?? {});
+      if (!verdict.ok) throw new Error(verdict.error);
+      const content = await callTool(name, verdict.args, vaultPath);
+      return { content };
+    }
+    case "ping":
+      return {};
+    default:
+      throw new Error(`method not found: ${req.method}`);
+  }
+}
+
+interface McpContent {
+  type: "text";
+  text: string;
+}
+
+async function callTool(name: string, args: Record<string, unknown>, vaultPath: string): Promise<McpContent[]> {
+  switch (name) {
+    case "council":
+      return wrapText(await tCouncil(args, vaultPath));
+    case "chat":
+      return wrapText(await tChat(args, vaultPath));
+    case "list_domains":
+      return wrapText(tListDomains(vaultPath));
+    case "read_state":
+      return wrapText(tReadState(args, vaultPath));
+    case "read_log":
+      return wrapText(tReadLog(args, vaultPath));
+    case "read_intents":
+      return wrapText(tReadIntents(args, vaultPath));
+    case "read_decisions":
+      return wrapText(tReadDecisions(args, vaultPath));
+    case "entities_search": {
+      const en = await import("./entities.ts");
+      const idx = en.readIndex(vaultPath).generated_ts ? en.readIndex(vaultPath) : en.buildIndex(vaultPath);
+      const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(200, Math.floor(args.limit)) : 20;
+      const hits = en.searchEntities(idx, typeof args.query === "string" ? args.query : "", { kind: typeof args.kind === "string" ? args.kind : undefined, limit });
+      if (!hits.length) return wrapText("No matching entities.");
+      return wrapText(hits.map((e) => `${e.id}  ${e.name} (${e.kind})  ${e.conversations} conversations${e.saved ? ", saved" : ""}`).join("\n"));
+    }
+    case "entity_context": {
+      const en = await import("./entities.ts");
+      const idx = en.readIndex(vaultPath).generated_ts ? en.readIndex(vaultPath) : en.buildIndex(vaultPath);
+      const d = en.entityDetail(vaultPath, idx, typeof args.id === "string" ? args.id : "");
+      return wrapText(d ? en.entityContextText(d) : `No entity "${String(args.id ?? "")}".`);
+    }
+    case "list_projects": {
+      const { readProjectsIndex } = await import("./prompt-projects.ts");
+      const idx = readProjectsIndex(vaultPath);
+      if (!idx) return wrapText("No projects yet. Run `prevail projects build`.");
+      const projects = idx.projects.map(({ keys: _k, tools: _t, monthly: _m, ...p }) => p);
+      return wrapText(JSON.stringify({ generated_ts: idx.generated_ts, model: idx.model, projects, recommendations: idx.recommendations }, null, 2));
+    }
+    case "read_project": {
+      const { replayPrompt } = await import("./prompt-projects.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      try { return wrapText(replayPrompt(vaultPath, slug, args.with_prompts === true)); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "create_mission":
+    case "set_mission_status":
+    case "complete_mission":
+      return wrapText(await (await import("./missions-mcp.ts")).missionWriteTool(vaultPath, name as import("./missions-mcp.ts").MissionWrite, args));
+    case "list_missions": {
+      const { listMissions } = await import("./missions.ts");
+      const st = typeof args.status === "string" ? args.status : "all";
+      const l = listMissions(vaultPath, { status: st as "all" });
+      if (!l.length) return wrapText("No projects yet.");
+      return wrapText(JSON.stringify(l.map((m) => ({ id: m.id, name: m.name, status: m.status, outcome: m.outcome, target: m.target, domains: m.domains, milestones: `${m.progress.milestones.done} of ${m.progress.milestones.total}`, budget: m.progress.budget.planned ? `$${m.progress.budget.used} of $${m.progress.budget.planned}` : null, days_left: m.progress.days.left })), null, 2));
+    }
+    case "read_mission": {
+      const { missionView, missionTasks } = await import("./missions.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      const v = missionView(vaultPath, slug);
+      if (!v) return wrapText(`No project "${slug}".`);
+      const { readFileSync } = await import("node:fs");
+      const { resolveDomainDir } = await import("./path-safety.ts");
+      let log: string[] = [];
+      try { log = readFileSync(`${resolveDomainDir(vaultPath, `_mission-${v.slug}`)}/memory/log.md`, "utf8").split("\n").filter((l) => l.startsWith("- ")).slice(0, 10); } catch { /* none */ }
+      const today = new Date().toISOString().slice(0, 10);
+      return wrapText(JSON.stringify({ ...v, next_events: v.links.calendar.filter((e) => e.start.slice(0, 10) >= today).slice(0, 5), open_tasks: missionTasks(vaultPath, v.slug).filter((t) => !t.done), recent_log: log }, null, 2));
+    }
+    case "mission_context": {
+      const { resolveScope, leadText } = await import("./scope.ts");
+      try { const sc = await resolveScope(vaultPath, { mission: typeof args.slug === "string" ? args.slug : "" }); return wrapText(leadText(sc.blocks)); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "mission_log": {
+      const { logLine, readMission } = await import("./missions.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      const m = readMission(vaultPath, slug);
+      if (!m) return wrapText(`No project "${slug}".`);
+      const text = String(args.text ?? "").trim();
+      if (!text) return wrapText("text is required");
+      return wrapText(`Logged: ${logLine(vaultPath, m.slug, text)}`);
+    }
+    case "intent_findings":
+    case "mirror_findings": {
+      const { readFindings, findingsText } = await import("./mirror.ts");
+      return wrapText(findingsText(readFindings(vaultPath)));
+    }
+    case "project_restart": {
+      const { restartText } = await import("./project-restart.ts");
+      const slug = typeof args.slug === "string" ? args.slug : "";
+      const format = args.format === "intent" || args.format === "raw" ? args.format : "handoff";
+      try { return wrapText(restartText(vaultPath, slug, format, { withPrompts: args.with_prompts === true })); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "read_metrics":
+      return wrapText(await tReadMetrics(args, vaultPath));
+    case "metric_series":
+      return wrapText(await tMetricSeries(args, vaultPath));
+    case "read_compass":
+      return wrapText(await tReadCompass(args, vaultPath));
+    case "check_alignment": {
+      const ca = await import("./compass-align.ts");
+      const action = String(args.action ?? "").slice(0, 2000);
+      if (!action.trim()) throw new Error("action is required");
+      const domain = typeof args.domain === "string" && /^[a-z0-9][a-z0-9_-]{0,60}$/.test(args.domain) ? args.domain : "general";
+      const gate = ca.ruleGate(vaultPath, action);
+      const jc = ca.jobCompass(vaultPath, { ask: action, domains: { owner: domain, consulted: [] } });
+      const open = ca.openConflicts(vaultPath).slice(0, 5);
+      const lines = [
+        gate ? `Non-negotiable: ${gate.decision === "block" ? "BLOCKED" : "asks first"}, ${gate.reason}.` : "Touches no non-negotiable that code can check.",
+        jc.serves.length ? `Serves: ${jc.serves.map((x) => x.title).join(", ")}.` : "Serves no Compass goal in this domain (unlinked).",
+        ...(jc.costs.length ? [`Watch: ${jc.costs.map((x) => `${x.title} (${x.why})`).join("; ")}.`] : []),
+        ...(open.length ? ["Open conflicts:", ...open.map((c) => `- ${c.question} Evidence: ${c.evidence.join("; ")}`)] : []),
+      ];
+      return wrapText(lines.join("\n"));
+    }
+    case "read_today": {
+      const t = await import("./today.ts");
+      const c = t.composeToday(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(c, null, 2) : t.todayText(c));
+    }
+    case "tell": {
+      const t = await import("./tell.ts");
+      const text = String(args.text ?? "").trim();
+      if (!text) throw new Error("text is required");
+      const r = await t.tell(vaultPath, text, { surface: "mcp", ...(typeof args.domain === "string" && args.domain ? { domain: args.domain } : {}), ...(typeof args.mission === "string" && args.mission ? { mission: args.mission } : {}) });
+      return wrapText(`${t.toldReply(r)} (id ${r.id}; undo with: prevail tell undo ${r.id})`);
+    }
+    case "what_am_i_forgetting": {
+      const t = await import("./tell.ts");
+      const f = await t.forgetting(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(f, null, 2) : t.forgettingText(f));
+    }
+    case "read_time": {
+      const t = await import("./time.ts");
+      const r = await t.timeReview(vaultPath);
+      if (args.format === "json") return wrapText(JSON.stringify(r, null, 2));
+      const w = r.thisWeek;
+      return wrapText([w.connected ? `This week: ${w.hours} h on the calendar, ${w.meetings} h of meetings, ${w.focus} h focus, ${w.afterHours} h after hours.` : w.note ?? "", ...w.byValue.map((v) => `- ${v.title}: ${v.hours} h (${v.share}%, rank ${v.rank})`), ...w.lines, r.warning ?? "", ...r.holds.map((h) => `Waiting for a yes: ${h.title}, ${h.start}`), ...r.declines.map((d) => `Drafted, yours to send: ${d.body}`)].filter(Boolean).join("\n"));
+    }
+    case "weekly_review": {
+      const r = await import("./review.ts");
+      const card = await r.weeklyReview(vaultPath);
+      return wrapText(args.format === "json" ? JSON.stringify(card, null, 2) : r.reviewText(card));
+    }
+    case "log_checkin": {
+      const r = await import("./review.ts");
+      try { const c = r.checkin(vaultPath, Number(args.calm), typeof args.note === "string" ? args.note : undefined); return wrapText(`Recorded calm ${c.calm} for the week of ${c.week}.`); } catch (e) { return wrapText((e as Error).message); }
+    }
+    case "list_specialists": {
+      const { loadSpecialists } = await import("./specialists.ts");
+      return wrapText(loadSpecialists(vaultPath).map((x) => `${x.on ? "on " : "off"} ${x.name}: returns ${x.returns}, ceiling ${x.ceiling}${x.mandate ? `. ${x.mandate}` : ""}`).join("\n"));
+    }
+    case "hand_off": {
+      const j = await import("./jobs.ts");
+      const message = typeof args.message === "string" ? args.message : "";
+      if (!message.trim()) return wrapText("message is required");
+      const d = await j.dispatch({ vault: vaultPath, message, domain: typeof args.domain === "string" ? args.domain : "general", trigger: "cli" });
+      if (d.kind !== "job" || !d.job) return wrapText("That reads as a question, not a job; answer it directly.");
+      j.saveJob(vaultPath, d.job);
+      if (d.job.startsAlone) j.startJob(vaultPath, d.job.id);
+      return wrapText(JSON.stringify({ ...d.job, status: d.job.startsAlone ? "running" : d.job.status }, null, 2));
+    }
+    case "list_jobs": {
+      const j = await import("./jobs.ts");
+      if (typeof args.id === "string" && args.id) return wrapText(JSON.stringify(j.jobView(vaultPath, args.id) ?? { error: "no such job" }, null, 2));
+      return wrapText(j.listJobs(vaultPath, 30).map((x) => `${x.status.padEnd(14)} ${x.id}  ${x.domains.owner}  ${x.ask.slice(0, 80)}`).join("\n") || "No jobs yet.");
+    }
+    case "open_decisions": {
+      const d = await import("./decision-records.ts");
+      // Gut first: a recommendation is shown only after the user's gut call (decisionView).
+      const { decisionView } = await import("./decisions-open.ts");
+      const open = d.listDecisions(vaultPath).map(decisionView).map((r) => `${r.due ?? "no date"}  ${r.domain}/${r.slug}: ${r.question}${r.gut ? ` (gut: ${r.gut})` : ""}${r.recommendation ? ` (recommendation: ${r.recommendation}, ${r.confidence ?? "medium"} confidence)` : r.recommendationReady ? " (a recommendation is ready once they give a gut call)" : ""}`);
+      return wrapText([...(open.length ? open : ["No open decisions."]), "", "Calibration:", d.calibrationText(vaultPath) || "no retros yet"].join("\n"));
+    }
+    case "read_recommendations":
+      return wrapText(tReadRecommendations(vaultPath));
+    case "read_surface":
+      return wrapText(await tReadSurface(args, vaultPath));
+    case "read_memory":
+      return wrapText(tReadMemory(args, vaultPath));
+    case "list_tasks":
+      return wrapText(tListTasks(args, vaultPath));
+    case "add_task":
+      return wrapText(tAddTask(args, vaultPath));
+    case "update_task":
+      return wrapText(tUpdateTask(args, vaultPath));
+    case "log_decision":
+      return wrapText(tLogDecision(args, vaultPath));
+    case "list_loops":
+      return wrapText(tListLoops(args, vaultPath));
+    case "run_loop":
+      return wrapText(await tRunLoop(args, vaultPath));
+    case "approve_loop_action":
+      return wrapText(await tApproveLoopAction(args, vaultPath));
+    case "list_apps":
+      return wrapText(tListApps(vaultPath) + tListMirrorApps(vaultPath));
+    case "vault_status":
+      return wrapText(tVaultStatus(vaultPath));
+    case "sync_app":
+      return wrapText(await tSyncApp(args, vaultPath));
+    case "list_playbooks":
+      return wrapText(await tListPlaybooks(vaultPath));
+    case "run_playbook":
+      return wrapText(await tRunPlaybook(args, vaultPath));
+    case "connect_app":
+      return wrapText(await tConnectApp(args, vaultPath));
+    default:
+      throw new Error(`unknown tool: ${name}`);
+  }
+}
+
+export function mcpTools(): McpTool[] {
+  return [
     {
       name: "council",
       description:
@@ -417,7 +828,7 @@ export async function runMcpServer(
     },
     {
       name: "add_task",
-      description: "Add a task to a domain's task list. Use after a decision or council verdict to capture the concrete next step. Returns whether it was added (false if a duplicate already exists).",
+      description: "Add a task to a domain's task list. Use after a decision or council verdict to capture the concrete next step. A session scoped to one domain (PREVAIL_DOMAIN) may add to ANOTHER domain only as a handoff: the task is written \"From <your domain>: <event> | amount | date | source\". Returns whether it was added (false if a duplicate already exists).",
       inputSchema: {
         type: "object",
         properties: {
@@ -425,6 +836,9 @@ export async function runMcpServer(
           text: { type: "string", description: "The task, phrased as a doable action." },
           due: { type: "string", description: "Optional due date YYYY-MM-DD." },
           priority: { type: "string", description: "Optional: high | critical." },
+          amount: { type: "string", description: "Handoff only: the amount involved, e.g. $12,400." },
+          date: { type: "string", description: "Handoff only: when the event happened, YYYY-MM-DD." },
+          source: { type: "string", description: "Handoff only: the file in your own folder it came from, e.g. source/statement.pdf." },
         },
         required: ["domain", "text"],
       },
@@ -535,404 +949,6 @@ export async function runMcpServer(
       },
     },
   ];
-
-  // Print the token-discovery hint once, on stderr, so a human launching the
-  // server in network mode can find their token. Never on stdout - that
-  // channel is reserved for valid JSON-RPC frames. Skipped over stdio (no
-  // token is required there).
-  if (requireToken) {
-    log(`send your token in _meta.authorization. Token: prevail-<...> (${mcpConfigPath()})`);
-  }
-
-  for await (const line of readStdinLines()) {
-    let req: JsonRpcReq;
-    try {
-      req = JSON.parse(line) as JsonRpcReq;
-    } catch {
-      log(`malformed JSON-RPC: ${line.slice(0, 200)}`);
-      continue;
-    }
-    const id = req.id ?? null;
-    // Auth check - only in network mode, and initialize is always exempt
-    // (it's the handshake). Over stdio (requireToken=false) the token is not
-    // required, so generic stdio clients work without attaching `_meta`.
-    if (requireToken && req.method !== "initialize" && !isAuthorized(req, token)) {
-      if (req.id !== undefined && req.id !== null) {
-        send({
-          jsonrpc: "2.0",
-          id,
-          error: {
-            code: -32001,
-            message:
-              "unauthorized - prevail MCP requires a valid token; see ~/.prevail/mcp.json",
-          },
-        });
-      }
-      continue;
-    }
-    try {
-      const result = await dispatch(req, tools, vaultPath);
-      // Notifications have id=null and expect no response.
-      if (req.id !== undefined && req.id !== null) {
-        send({ jsonrpc: "2.0", id, result });
-      }
-    } catch (err) {
-      const e = err as Error;
-      send({
-        jsonrpc: "2.0",
-        id,
-        error: { code: -32000, message: e.message ?? "tool error" },
-      });
-    }
-  }
-}
-
-// Pull the bearer token off a JSON-RPC request and verify it against the
-// persisted server token in constant time. Accepts either MCP's
-// `_meta.authorization` convention or a top-level `authorization` field
-// (some clients put it there). Both must be `prevail-<hex>`.
-function isAuthorized(req: JsonRpcReq, expectedToken: string): boolean {
-  const params = (req.params ?? {}) as Record<string, unknown> & {
-    _meta?: Record<string, unknown>;
-  };
-  const fromMeta = typeof params._meta?.authorization === "string"
-    ? (params._meta!.authorization as string)
-    : null;
-  const fromTop = typeof params.authorization === "string"
-    ? (params.authorization as string)
-    : null;
-  const raw = fromMeta ?? fromTop;
-  if (!raw) return false;
-  const prefix = "prevail-";
-  if (!raw.startsWith(prefix)) return false;
-  const presented = raw.slice(prefix.length);
-  // timingSafeEqual requires equal length - guard up front so we never
-  // throw + leak timing via the catch path.
-  if (presented.length !== expectedToken.length) return false;
-  try {
-    return timingSafeEqual(
-      Buffer.from(presented, "utf8"),
-      Buffer.from(expectedToken, "utf8"),
-    );
-  } catch {
-    return false;
-  }
-}
-
-// Inspect process.ppid to confirm the parent is something we expect to
-// see launching a stdio MCP server (a TTY-attached shell, an IDE/agent
-// binary, a known MCP host). Anything else gets refused unless the user
-// passed --unsafe-detach. The check is conservative on purpose: a false
-// positive (refusing a legitimate launch) is cheaper than a false
-// negative (silently serving cron / a random daemon).
-interface ParentVerdict {
-  ok: boolean;
-  message: string;
-}
-
-const KNOWN_PARENT_HINTS = [
-  "vscode",
-  "Code Helper",
-  "Code.app",
-  "cursor",
-  "Cursor.app",
-  "jetbrains",
-  "intellij",
-  "claude",
-  "Claude",
-  "ides",
-  // Common MCP host launchers - Goose, Continue, Cline, mcp-cli, the
-  // official @modelcontextprotocol/inspector + sdk.
-  "goose",
-  "continue",
-  "cline",
-  "mcp",
-];
-
-function verifyParentProcess(): ParentVerdict {
-  // A TTY-attached stdin is the easy path: the user typed `prevail mcp`
-  // themselves. We don't need to know who the parent is in that case.
-  if (process.stdin.isTTY === true) {
-    return { ok: true, message: "tty parent" };
-  }
-  const ppid = process.ppid;
-  if (typeof ppid !== "number" || ppid <= 0) {
-    return {
-      ok: false,
-      message:
-        "prevail mcp refuses to run from detached / unknown parent (no ppid available). " +
-        "If you're sure this is intentional, pass --unsafe-detach.",
-    };
-  }
-  let cmd = "";
-  try {
-    // ps is portable across macOS + Linux; argv-array form so prompt
-    // content / paths with spaces can never be interpreted as shell.
-    const proc = Bun.spawnSync({
-      cmd: ["ps", "-o", "command=", "-p", String(ppid)],
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    cmd = (proc.stdout?.toString() ?? "").trim();
-  } catch {
-    cmd = "";
-  }
-  const lower = cmd.toLowerCase();
-  for (const hint of KNOWN_PARENT_HINTS) {
-    if (cmd.includes(hint) || lower.includes(hint.toLowerCase())) {
-      return { ok: true, message: `known parent: ${cmd}` };
-    }
-  }
-  return {
-    ok: false,
-    message:
-      `prevail mcp refuses to run from detached / unknown parent ` +
-      `(PID ${ppid}, command ${cmd || "<unknown>"}). ` +
-      `If you're sure this is intentional, pass --unsafe-detach.`,
-  };
-}
-
-async function dispatch(req: JsonRpcReq, tools: McpTool[], vaultPath: string): Promise<unknown> {
-  switch (req.method) {
-    case "initialize": {
-      const p = (req.params ?? {}) as { clientInfo?: { name?: string } };
-      mcpClientSurface = normalizeClientSurface(p.clientInfo?.name);
-      log(`client: ${mcpClientSurface}${p.clientInfo?.name ? ` (${p.clientInfo.name})` : ""}`);
-      return {
-        protocolVersion: PROTOCOL_VERSION,
-        serverInfo: SERVER_INFO,
-        capabilities: { tools: {} },
-      };
-    }
-    case "notifications/initialized":
-      // Spec-required notification from the client after init. No response.
-      return undefined;
-    case "tools/list":
-      return { tools };
-    case "tools/call": {
-      const p = (req.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
-      const name = p.name ?? "";
-      const args = p.arguments ?? {};
-      const content = await callTool(name, args, vaultPath);
-      return { content };
-    }
-    case "ping":
-      return {};
-    default:
-      throw new Error(`method not found: ${req.method}`);
-  }
-}
-
-interface McpContent {
-  type: "text";
-  text: string;
-}
-
-async function callTool(name: string, args: Record<string, unknown>, vaultPath: string): Promise<McpContent[]> {
-  switch (name) {
-    case "council":
-      return wrapText(await tCouncil(args, vaultPath));
-    case "chat":
-      return wrapText(await tChat(args, vaultPath));
-    case "list_domains":
-      return wrapText(tListDomains(vaultPath));
-    case "read_state":
-      return wrapText(tReadState(args, vaultPath));
-    case "read_log":
-      return wrapText(tReadLog(args, vaultPath));
-    case "read_intents":
-      return wrapText(tReadIntents(args, vaultPath));
-    case "read_decisions":
-      return wrapText(tReadDecisions(args, vaultPath));
-    case "entities_search": {
-      const en = await import("./entities.ts");
-      const idx = en.readIndex(vaultPath).generated_ts ? en.readIndex(vaultPath) : en.buildIndex(vaultPath);
-      const limit = typeof args.limit === "number" && args.limit > 0 ? Math.min(200, Math.floor(args.limit)) : 20;
-      const hits = en.searchEntities(idx, typeof args.query === "string" ? args.query : "", { kind: typeof args.kind === "string" ? args.kind : undefined, limit });
-      if (!hits.length) return wrapText("No matching entities.");
-      return wrapText(hits.map((e) => `${e.id}  ${e.name} (${e.kind})  ${e.conversations} conversations${e.saved ? ", saved" : ""}`).join("\n"));
-    }
-    case "entity_context": {
-      const en = await import("./entities.ts");
-      const idx = en.readIndex(vaultPath).generated_ts ? en.readIndex(vaultPath) : en.buildIndex(vaultPath);
-      const d = en.entityDetail(vaultPath, idx, typeof args.id === "string" ? args.id : "");
-      return wrapText(d ? en.entityContextText(d) : `No entity "${String(args.id ?? "")}".`);
-    }
-    case "list_projects": {
-      const { readProjectsIndex } = await import("./prompt-projects.ts");
-      const idx = readProjectsIndex(vaultPath);
-      if (!idx) return wrapText("No projects yet. Run `prevail projects build`.");
-      const projects = idx.projects.map(({ keys: _k, tools: _t, monthly: _m, ...p }) => p);
-      return wrapText(JSON.stringify({ generated_ts: idx.generated_ts, model: idx.model, projects, recommendations: idx.recommendations }, null, 2));
-    }
-    case "read_project": {
-      const { replayPrompt } = await import("./prompt-projects.ts");
-      const slug = typeof args.slug === "string" ? args.slug : "";
-      try { return wrapText(replayPrompt(vaultPath, slug, args.with_prompts === true)); } catch (e) { return wrapText((e as Error).message); }
-    }
-    case "create_mission":
-    case "set_mission_status":
-    case "complete_mission":
-      return wrapText(await (await import("./missions-mcp.ts")).missionWriteTool(vaultPath, name as import("./missions-mcp.ts").MissionWrite, args));
-    case "list_missions": {
-      const { listMissions } = await import("./missions.ts");
-      const st = typeof args.status === "string" ? args.status : "all";
-      const l = listMissions(vaultPath, { status: st as "all" });
-      if (!l.length) return wrapText("No projects yet.");
-      return wrapText(JSON.stringify(l.map((m) => ({ id: m.id, name: m.name, status: m.status, outcome: m.outcome, target: m.target, domains: m.domains, milestones: `${m.progress.milestones.done} of ${m.progress.milestones.total}`, budget: m.progress.budget.planned ? `$${m.progress.budget.used} of $${m.progress.budget.planned}` : null, days_left: m.progress.days.left })), null, 2));
-    }
-    case "read_mission": {
-      const { missionView, missionTasks } = await import("./missions.ts");
-      const slug = typeof args.slug === "string" ? args.slug : "";
-      const v = missionView(vaultPath, slug);
-      if (!v) return wrapText(`No project "${slug}".`);
-      const { readFileSync } = await import("node:fs");
-      const { resolveDomainDir } = await import("./path-safety.ts");
-      let log: string[] = [];
-      try { log = readFileSync(`${resolveDomainDir(vaultPath, `_mission-${v.slug}`)}/memory/log.md`, "utf8").split("\n").filter((l) => l.startsWith("- ")).slice(0, 10); } catch { /* none */ }
-      const today = new Date().toISOString().slice(0, 10);
-      return wrapText(JSON.stringify({ ...v, next_events: v.links.calendar.filter((e) => e.start.slice(0, 10) >= today).slice(0, 5), open_tasks: missionTasks(vaultPath, v.slug).filter((t) => !t.done), recent_log: log }, null, 2));
-    }
-    case "mission_context": {
-      const { resolveScope, leadText } = await import("./scope.ts");
-      try { const sc = await resolveScope(vaultPath, { mission: typeof args.slug === "string" ? args.slug : "" }); return wrapText(leadText(sc.blocks)); } catch (e) { return wrapText((e as Error).message); }
-    }
-    case "mission_log": {
-      const { logLine, readMission } = await import("./missions.ts");
-      const slug = typeof args.slug === "string" ? args.slug : "";
-      const m = readMission(vaultPath, slug);
-      if (!m) return wrapText(`No project "${slug}".`);
-      const text = String(args.text ?? "").trim();
-      if (!text) return wrapText("text is required");
-      return wrapText(`Logged: ${logLine(vaultPath, m.slug, text)}`);
-    }
-    case "intent_findings":
-    case "mirror_findings": {
-      const { readFindings, findingsText } = await import("./mirror.ts");
-      return wrapText(findingsText(readFindings(vaultPath)));
-    }
-    case "project_restart": {
-      const { restartText } = await import("./project-restart.ts");
-      const slug = typeof args.slug === "string" ? args.slug : "";
-      const format = args.format === "intent" || args.format === "raw" ? args.format : "handoff";
-      try { return wrapText(restartText(vaultPath, slug, format, { withPrompts: args.with_prompts === true })); } catch (e) { return wrapText((e as Error).message); }
-    }
-    case "read_metrics":
-      return wrapText(await tReadMetrics(args, vaultPath));
-    case "metric_series":
-      return wrapText(await tMetricSeries(args, vaultPath));
-    case "read_compass":
-      return wrapText(await tReadCompass(args, vaultPath));
-    case "check_alignment": {
-      const ca = await import("./compass-align.ts");
-      const action = String(args.action ?? "").slice(0, 2000);
-      if (!action.trim()) throw new Error("action is required");
-      const domain = typeof args.domain === "string" && /^[a-z0-9][a-z0-9_-]{0,60}$/.test(args.domain) ? args.domain : "general";
-      const gate = ca.ruleGate(vaultPath, action);
-      const jc = ca.jobCompass(vaultPath, { ask: action, domains: { owner: domain, consulted: [] } });
-      const open = ca.openConflicts(vaultPath).slice(0, 5);
-      const lines = [
-        gate ? `Non-negotiable: ${gate.decision === "block" ? "BLOCKED" : "asks first"}, ${gate.reason}.` : "Touches no non-negotiable that code can check.",
-        jc.serves.length ? `Serves: ${jc.serves.map((x) => x.title).join(", ")}.` : "Serves no Compass goal in this domain (unlinked).",
-        ...(jc.costs.length ? [`Watch: ${jc.costs.map((x) => `${x.title} (${x.why})`).join("; ")}.`] : []),
-        ...(open.length ? ["Open conflicts:", ...open.map((c) => `- ${c.question} Evidence: ${c.evidence.join("; ")}`)] : []),
-      ];
-      return wrapText(lines.join("\n"));
-    }
-    case "read_today": {
-      const t = await import("./today.ts");
-      const c = t.composeToday(vaultPath);
-      return wrapText(args.format === "json" ? JSON.stringify(c, null, 2) : t.todayText(c));
-    }
-    case "tell": {
-      const t = await import("./tell.ts");
-      const text = String(args.text ?? "").trim();
-      if (!text) throw new Error("text is required");
-      const r = await t.tell(vaultPath, text, { surface: "mcp", ...(typeof args.domain === "string" && args.domain ? { domain: args.domain } : {}), ...(typeof args.mission === "string" && args.mission ? { mission: args.mission } : {}) });
-      return wrapText(`${t.toldReply(r)} (id ${r.id}; undo with: prevail tell undo ${r.id})`);
-    }
-    case "what_am_i_forgetting": {
-      const t = await import("./tell.ts");
-      const f = await t.forgetting(vaultPath);
-      return wrapText(args.format === "json" ? JSON.stringify(f, null, 2) : t.forgettingText(f));
-    }
-    case "read_time": {
-      const t = await import("./time.ts");
-      const r = await t.timeReview(vaultPath);
-      if (args.format === "json") return wrapText(JSON.stringify(r, null, 2));
-      const w = r.thisWeek;
-      return wrapText([w.connected ? `This week: ${w.hours} h on the calendar, ${w.meetings} h of meetings, ${w.focus} h focus, ${w.afterHours} h after hours.` : w.note ?? "", ...w.byValue.map((v) => `- ${v.title}: ${v.hours} h (${v.share}%, rank ${v.rank})`), ...w.lines, r.warning ?? "", ...r.holds.map((h) => `Waiting for a yes: ${h.title}, ${h.start}`), ...r.declines.map((d) => `Drafted, yours to send: ${d.body}`)].filter(Boolean).join("\n"));
-    }
-    case "weekly_review": {
-      const r = await import("./review.ts");
-      const card = await r.weeklyReview(vaultPath);
-      return wrapText(args.format === "json" ? JSON.stringify(card, null, 2) : r.reviewText(card));
-    }
-    case "log_checkin": {
-      const r = await import("./review.ts");
-      try { const c = r.checkin(vaultPath, Number(args.calm), typeof args.note === "string" ? args.note : undefined); return wrapText(`Recorded calm ${c.calm} for the week of ${c.week}.`); } catch (e) { return wrapText((e as Error).message); }
-    }
-    case "list_specialists": {
-      const { loadSpecialists } = await import("./specialists.ts");
-      return wrapText(loadSpecialists(vaultPath).map((x) => `${x.on ? "on " : "off"} ${x.name}: returns ${x.returns}, ceiling ${x.ceiling}${x.mandate ? `. ${x.mandate}` : ""}`).join("\n"));
-    }
-    case "hand_off": {
-      const j = await import("./jobs.ts");
-      const message = typeof args.message === "string" ? args.message : "";
-      if (!message.trim()) return wrapText("message is required");
-      const d = await j.dispatch({ vault: vaultPath, message, domain: typeof args.domain === "string" ? args.domain : "general", trigger: "cli" });
-      if (d.kind !== "job" || !d.job) return wrapText("That reads as a question, not a job; answer it directly.");
-      j.saveJob(vaultPath, d.job);
-      if (d.job.startsAlone) j.startJob(vaultPath, d.job.id);
-      return wrapText(JSON.stringify({ ...d.job, status: d.job.startsAlone ? "running" : d.job.status }, null, 2));
-    }
-    case "list_jobs": {
-      const j = await import("./jobs.ts");
-      if (typeof args.id === "string" && args.id) return wrapText(JSON.stringify(j.jobView(vaultPath, args.id) ?? { error: "no such job" }, null, 2));
-      return wrapText(j.listJobs(vaultPath, 30).map((x) => `${x.status.padEnd(14)} ${x.id}  ${x.domains.owner}  ${x.ask.slice(0, 80)}`).join("\n") || "No jobs yet.");
-    }
-    case "open_decisions": {
-      const d = await import("./decision-records.ts");
-      // Gut first: a recommendation is shown only after the user's gut call (decisionView).
-      const { decisionView } = await import("./decisions-open.ts");
-      const open = d.listDecisions(vaultPath).map(decisionView).map((r) => `${r.due ?? "no date"}  ${r.domain}/${r.slug}: ${r.question}${r.gut ? ` (gut: ${r.gut})` : ""}${r.recommendation ? ` (recommendation: ${r.recommendation}, ${r.confidence ?? "medium"} confidence)` : r.recommendationReady ? " (a recommendation is ready once they give a gut call)" : ""}`);
-      return wrapText([...(open.length ? open : ["No open decisions."]), "", "Calibration:", d.calibrationText(vaultPath) || "no retros yet"].join("\n"));
-    }
-    case "read_recommendations":
-      return wrapText(tReadRecommendations(vaultPath));
-    case "read_surface":
-      return wrapText(await tReadSurface(args, vaultPath));
-    case "read_memory":
-      return wrapText(tReadMemory(args, vaultPath));
-    case "list_tasks":
-      return wrapText(tListTasks(args, vaultPath));
-    case "add_task":
-      return wrapText(tAddTask(args, vaultPath));
-    case "update_task":
-      return wrapText(tUpdateTask(args, vaultPath));
-    case "log_decision":
-      return wrapText(tLogDecision(args, vaultPath));
-    case "list_loops":
-      return wrapText(tListLoops(args, vaultPath));
-    case "run_loop":
-      return wrapText(await tRunLoop(args, vaultPath));
-    case "approve_loop_action":
-      return wrapText(await tApproveLoopAction(args, vaultPath));
-    case "list_apps":
-      return wrapText(tListApps(vaultPath) + tListMirrorApps(vaultPath));
-    case "vault_status":
-      return wrapText(tVaultStatus(vaultPath));
-    case "sync_app":
-      return wrapText(await tSyncApp(args, vaultPath));
-    case "list_playbooks":
-      return wrapText(await tListPlaybooks(vaultPath));
-    case "run_playbook":
-      return wrapText(await tRunPlaybook(args, vaultPath));
-    case "connect_app":
-      return wrapText(await tConnectApp(args, vaultPath));
-    default:
-      throw new Error(`unknown tool: ${name}`);
-  }
 }
 
 function wrapText(s: string): McpContent[] {
@@ -1230,6 +1246,8 @@ function tAddTask(args: Record<string, unknown>, vaultPath: string): string {
   const due = typeof args.due === "string" ? args.due : undefined;
   const priority = typeof args.priority === "string" ? args.priority : undefined;
   const added = appendTask(domainDir(vaultPath, domain.name), text, { due, priority });
+  const handoff = added ? parseHandoff(text) : null;
+  if (handoff) logActivity(vaultPath, { type: "task_filed", domain: domain.name, title: `Handoff from ${handoff.from} to ${domain.name}`, detail: text, status: "ok", ref: "handoff" });
   return added
     ? `Added to ${domain.name}: "${text}".`
     : `Not added - a task like "${text}" already exists in ${domain.name}.`;

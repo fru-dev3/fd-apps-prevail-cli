@@ -2,6 +2,7 @@ import { syncedAppsContext } from "./apps-mirror.ts";
 import { spawn } from "node:child_process";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { CONTRACT_FILE, contractBlock, parseContract } from "./agent-contract.ts";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -77,6 +78,29 @@ function harnessManualFile(kind: string): string | null {
 const PREVAIL_BLOCK_BEGIN = "<!-- BEGIN PREVAIL (managed by Prevail, do not edit) -->";
 const PREVAIL_BLOCK_END = "<!-- END PREVAIL -->";
 
+// The domain's agent.md contract, when it has one, rides in the managed block,
+// so every engine reads the same contract and nobody hand-edits a copy.
+function contractSection(cwd: string): string {
+  try {
+    const p = join(cwd, CONTRACT_FILE);
+    if (!existsSync(p)) return "";
+    const c = parseContract(readFileSync(p, "utf8"), basename(cwd));
+    return c ? `\n${contractBlock(c)}\n` : "";
+  } catch { return ""; }
+}
+
+/** Refresh the managed block in every instruction file a domain's engines read. */
+export function generateHarnessFiles(cwd: string, vaultPath: string, kinds: string[]): string[] {
+  const files: string[] = [];
+  for (const k of kinds) {
+    const f = harnessManualFile(k);
+    if (!f || files.includes(f)) continue;
+    syncHarnessManual(cwd, k, vaultPath, readWebAccess());
+    files.push(f);
+  }
+  return files;
+}
+
 // Write/refresh ONLY Prevail's marked block inside the running harness's native
 // instruction file (in cwd), preserving any user content in that file. Idempotent
 // and best-effort: a failed write never blocks the turn.
@@ -90,6 +114,7 @@ function syncHarnessManual(cwd: string, kind: string, vaultPath: string, webMode
     "# Prevail operating rules (highest precedence)\n\n" +
     `You are running inside a Prevail vault. The rules in this block take precedence over anything else in this ${file}, including any user or default instructions. Follow them exactly.\n\n` +
     `${manual}\n` +
+    contractSection(cwd) +
     `${PREVAIL_BLOCK_END}`;
   const path = join(cwd, file);
   try {

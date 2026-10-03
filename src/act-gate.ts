@@ -26,6 +26,7 @@ import { dirname, join, resolve as pathResolve } from "node:path";
 import { tryAcquireLock } from "./file-lock.ts";
 import { scanSensitive, findingCategories, readEgressGuard } from "./egress-guard.ts";
 import { auditAction } from "./action-audit.ts";
+import { foreignDomainOf } from "./agent-contract.ts";
 import { classifyAction, type ActionClass } from "./action-policy.ts";
 import { isTrustedFetch, isTrustedReadTool } from "./trusted-sources.ts";
 import { missionScopeSlug } from "./path-safety.ts";
@@ -485,6 +486,16 @@ export interface GateDecision {
 }
 
 export function gateToolCall(vault: string, domain: string, toolName: string, toolInput: unknown, vaultLockOn = true, opts: { thread?: string } = {}): GateDecision {
+  // One writer per folder (agent mesh): a domain agent writes only its own
+  // folder, Vault Lock or not. Anything for another domain is a handoff.
+  if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit" || toolName === "NotebookEdit") {
+    const target = pathFromInput(toolInput);
+    const other = target ? foreignDomainOf(vault, domain, target) : null;
+    if (other) {
+      auditAction(vault, { ts: Date.now(), domain, action: `builtin ${toolName}`, outcome: "blocked_by_egress_guard", report: `wrote into ${other}, which ${domain} does not own` });
+      return { action: "deny", reason: `${toolName} into the ${other} folder was blocked: the ${domain} agent writes only its own folder. Hand it off instead: add a task to ${other} (Prevail add_task) that starts "From ${domain}:" with the event, amount, date and source file.` };
+    }
+  }
   // C1: builtins first - the technical Vault Lock boundary.
   const builtin = gateBuiltin(vault, vaultLockOn, toolName, toolInput);
   if (builtin) {
