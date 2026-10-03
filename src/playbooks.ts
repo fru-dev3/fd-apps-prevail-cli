@@ -16,21 +16,30 @@ import { listDomainDirs } from "./vault-layout-v4.ts";
 import { listPlaybooks, loadPlaybook, userPlaybookDirs, type Playbook, type PlaybookStep } from "./orchestrator.ts";
 import { jobDir, jobView, listJobs, readJob, type Job } from "./jobs.ts";
 import { loadSpecialists, type Specialist } from "./specialists.ts";
+import { loopOfPlaybook, migrateLoops, nextRun, scheduledPlaybooks, verifyMigration } from "./daemon-loops.ts";
 import { parseModArgs } from "./cli-args.ts";
 
-export type PlaybookGroup = "running" | "yours" | "drafts" | "built-in";
+export type PlaybookGroup = "running" | "scheduled" | "yours" | "drafts" | "built-in";
+/** When a playbook runs on its own (playbooks replace loops). nextRunTs is null when it waits for an event or is off. */
+export interface ScheduleView { space: string; cadence: string; on?: string; enabled: boolean; status: string; autonomy: string; lastRunTs: number | null; nextRunTs: number | null; loop?: string }
 export interface StepRow { n: number; kind: PlaybookStep["kind"]; label: string; specialists: string[]; returns: string[]; gate: boolean; ask: boolean; domain?: string }
-export interface PlaybookRow { id: string; name: string; goal: string; domain?: string; group: PlaybookGroup; source: "yours" | "built-in"; draft: boolean; steps: number; running: boolean; lastRun?: { ts: number; status: string } }
+export interface PlaybookRow { id: string; name: string; goal: string; domain?: string; group: PlaybookGroup; source: "yours" | "built-in"; draft: boolean; steps: number; running: boolean; lastRun?: { ts: number; status: string }; schedule?: ScheduleView }
 export interface PlaybookViewT extends PlaybookRow { rows: StepRow[]; triggers: { domain: string; loop: string; cadence: string; enabled: boolean; on?: string }[]; runs: { id: string; status: string; ts: number; summary?: string }[]; goalId?: string; pathId?: string; from?: string }
 
 const yoursDir = (vault: string) => join(buildRoot(vault), "playbooks");
 const isYours = (vault: string, id: string) => userPlaybookDirs(vault).some((d) => existsSync(join(d, `${id}.json`)));
 
-function rowsOf(pb: Playbook, specs: Specialist[]): StepRow[] {
+function rowsOf(vault: string, pb: Playbook, specs: Specialist[]): StepRow[] {
+  const autonomy = pb.schedule?.autonomy ?? "suggest";
   return pb.steps.map((s, i) => {
     if (s.kind === "specialist") {
       const ids = s.specialists ?? (s.specialist ? [s.specialist] : []);
       return { n: i + 1, kind: s.kind, label: s.label ?? s.brief, specialists: ids, returns: ids.map((x) => specs.find((y) => y.id === x)?.returns ?? "?"), gate: s.gate === "stop", ask: s.approval === "ask", ...(s.domain ? { domain: s.domain } : {}) };
+    }
+    if (s.kind === "loop") {
+      const l = s.loop as { name?: string; purpose?: string; kind?: string; playbook?: string };
+      const label = l.playbook ? `Runs the playbook ${loadPlaybook(vault, l.playbook)?.name ?? l.playbook}` : (l.purpose || l.name || s.loop.id);
+      return { n: i + 1, kind: s.kind, label: String(label).slice(0, 200), specialists: [], returns: [l.kind === "briefing" ? "page" : l.kind === "scout" ? "list" : "tasks"], gate: false, ask: autonomy === "ask" };
     }
     const label = s.label ?? (s.kind === "skill" ? `${s.app}: ${s.skill}` : s.kind === "agent" ? s.goal.slice(0, 120) : s.kind === "task" ? s.text : s.kind === "glance" ? "This week in numbers" : s.instruction.slice(0, 120));
     const returns = s.kind === "glance" || s.kind === "synthesize" ? ["page"] : s.kind === "task" ? ["task"] : s.kind === "skill" ? ["data"] : ["result"];
@@ -52,20 +61,35 @@ export function playbookRows(vault: string): PlaybookRow[] {
     const running = runs.some((j) => j.status === "running");
     const yours = isYours(vault, p.id);
     const draft = !!pb.draft;
-    out.push({ id: pb.id, name: pb.name, goal: pb.goal, ...(pb.domain ? { domain: pb.domain } : {}), group: running ? "running" : draft ? "drafts" : yours ? "yours" : "built-in", source: yours ? "yours" : "built-in", draft, steps: pb.steps.length, running, ...(runs[0] ? { lastRun: { ts: runs[0].created, status: runs[0].status } } : {}) });
+    const schedule = yours && pb.schedule ? scheduleView(pb as Playbook & { schedule: NonNullable<Playbook["schedule"]> }) : undefined;
+    const lastRun = runs[0] ? { ts: runs[0].created, status: runs[0].status } : schedule?.lastRunTs ? { ts: schedule.lastRunTs, status: "done" } : undefined;
+    out.push({ id: pb.id, name: pb.name, goal: pb.goal, ...(pb.domain ? { domain: pb.domain } : {}), group: running ? "running" : draft ? "drafts" : schedule ? "scheduled" : yours ? "yours" : "built-in", source: yours ? "yours" : "built-in", draft, steps: pb.steps.length, running, ...(lastRun ? { lastRun } : {}), ...(schedule ? { schedule } : {}) });
   }
-  const order: PlaybookGroup[] = ["running", "yours", "drafts", "built-in"];
+  const order: PlaybookGroup[] = ["running", "scheduled", "yours", "drafts", "built-in"];
   return out.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group) || a.name.localeCompare(b.name));
 }
 
-/** The loops that run a playbook, across domains. */
+/** The schedule of a playbook, as the runner sees it (next run from its cadence and last run). */
+export function scheduleView(pb: Playbook & { schedule: NonNullable<Playbook["schedule"]> }): ScheduleView {
+  const l = loopOfPlaybook(pb);
+  return { space: pb.schedule.space, cadence: l.cadence, ...(l.on ? { on: l.on } : {}), enabled: l.enabled, status: l.status ?? "active", autonomy: l.autonomy ?? "suggest", lastRunTs: l.lastRunTs, nextRunTs: nextRun(l), loop: l.id };
+}
+
+/** What runs a playbook on its own: its own schedule, a scheduled playbook that runs it, or a loop not yet carried over. */
 export function playbookTriggers(vault: string, id: string): PlaybookViewT["triggers"] {
   const out: PlaybookViewT["triggers"] = [];
+  const seen = new Set<string>();
+  for (const x of scheduledPlaybooks(vault)) {
+    const l = loopOfPlaybook(x.pb);
+    if (x.pb.id !== id && l.playbook !== id) continue;
+    seen.add(`${x.pb.schedule.space}/${l.id}`);
+    out.push({ domain: x.pb.schedule.space, loop: l.id, cadence: l.on ? `on ${l.on}` : l.cadence ?? "", enabled: l.enabled !== false, ...(l.on ? { on: l.on } : {}) });
+  }
   for (const d of listDomainDirs(vault)) {
     if (d.startsWith("_")) continue;
     try {
       const doc = JSON.parse(readFileSync(join(resolveDomainDir(vault, d), "_loops.json"), "utf8")) as { loops?: { id: string; playbook?: string; cadence?: string; enabled?: boolean; on?: string }[] };
-      for (const l of doc.loops ?? []) if (l.playbook === id) out.push({ domain: d, loop: l.id, cadence: l.on ? `on ${l.on}` : l.cadence ?? "", enabled: l.enabled !== false, ...(l.on ? { on: l.on } : {}) });
+      for (const l of doc.loops ?? []) if (l.playbook === id && !seen.has(`${d}/${l.id}`)) out.push({ domain: d, loop: l.id, cadence: l.on ? `on ${l.on}` : l.cadence ?? "", enabled: l.enabled !== false, ...(l.on ? { on: l.on } : {}) });
     } catch { /* no loops */ }
   }
   return out;
@@ -77,7 +101,7 @@ export function playbookView(vault: string, id: string): PlaybookViewT | null {
   const row = playbookRows(vault).find((r) => r.id === id);
   const specs = loadSpecialists(vault);
   const runs = runsOf(vault, id).slice(0, 20).map((j) => ({ id: j.id, status: j.status, ts: j.created, ...(j.result?.summary ? { summary: j.result.summary } : j.why ? { summary: j.why } : {}) }));
-  return { ...(row ?? { id, name: pb.name, goal: pb.goal, group: "built-in" as const, source: "built-in" as const, draft: !!pb.draft, steps: pb.steps.length, running: false }), rows: rowsOf(pb, specs), triggers: playbookTriggers(vault, id), runs, ...(pb.goalId ? { goalId: pb.goalId } : {}), ...(pb.pathId ? { pathId: pb.pathId } : {}), ...(pb.from ? { from: pb.from } : {}) };
+  return { ...(row ?? { id, name: pb.name, goal: pb.goal, group: "built-in" as const, source: "built-in" as const, draft: !!pb.draft, steps: pb.steps.length, running: false }), rows: rowsOf(vault, pb, specs), triggers: playbookTriggers(vault, id), runs, ...(pb.goalId ? { goalId: pb.goalId } : {}), ...(pb.pathId ? { pathId: pb.pathId } : {}), ...(pb.from ? { from: pb.from } : {}) };
 }
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "playbook";
@@ -180,27 +204,36 @@ export function markSeen(vault: string, runId: string): void {
 }
 
 /**
- * Put a playbook on a schedule or an event in a domain (or mission): a loop
- * in that space's _loops.json with playbook (and on, for an event). An
- * existing loop for the same playbook is updated, never doubled.
+ * Put a playbook on a schedule or an event in a domain (or mission). One of
+ * yours carries the schedule itself; a built-in one gets a small playbook of
+ * yours that runs it (pb-<id>), so the built-in file is never copied. An
+ * existing schedule is updated, never doubled.
  */
-export function setTrigger(vault: string, id: string, space: string, o: { cadence?: "daily" | "weekly" | "monthly"; on?: string; enabled?: boolean; autonomy?: "ask" | "auto" }): { domain: string; loop: string } {
-  if (!loadPlaybook(vault, id)) throw new Error(`no playbook ${id}`);
-  if (!o.cadence && !o.on) throw new Error("a trigger needs a cadence (daily, weekly, monthly) or an event (on: <radar kind>)");
+export function setTrigger(vault: string, id: string, space: string, o: { cadence?: "daily" | "weekly" | "monthly"; on?: string; enabled?: boolean; autonomy?: "ask" | "auto" }): { domain: string; loop: string; playbook: string } {
+  const pb = loadPlaybook(vault, id);
+  if (!pb) throw new Error(`no playbook ${id}`);
+  if (!o.cadence && !o.on && o.enabled === undefined) throw new Error("a trigger needs a cadence (daily, weekly, monthly) or an event (on: <radar kind>)");
   if (o.on && !/^(commitment|waiting|routine|relationship|goal|path|admin|domain|decision|mission|rule)(:[^\n]{1,60})?$/.test(o.on)) throw new Error(`unknown event ${o.on}`);
-  const dir = resolveDomainDir(vault, space);
-  if (!dir || !existsSync(dir)) throw new Error(`no domain or project ${space}`);
-  const file = join(dir, "_loops.json");
-  let doc: { schema?: number; desiredState?: string; loops: Record<string, unknown>[] } = { schema: 1, desiredState: "", loops: [] };
-  try { doc = JSON.parse(readFileSync(file, "utf8")); doc.loops ??= []; } catch { /* new file */ }
-  const loopId = `pb-${id}`.slice(0, 60);
+  const dir = resolveDomainDir(vault, space.startsWith("mission/") ? `_mission-${space.slice(8)}` : space);
+  if (!space.startsWith("mission/") && (!dir || !existsSync(dir))) throw new Error(`no domain or project ${space}`);
   const now = Date.now();
-  let l = doc.loops.find((x) => x.id === loopId || (x.playbook === id && !!x.on === !!o.on));
-  if (!l) { l = { id: loopId, name: `Playbook: ${loadPlaybook(vault, id)!.name}`, purpose: loadPlaybook(vault, id)!.goal.slice(0, 200), kind: "steward", type: "open", condition: "", evaluation: "", actions: [], status: "active", lastRunTs: null, createdTs: now }; doc.loops.push(l); }
-  Object.assign(l, { playbook: id, cadence: o.cadence ?? (l.cadence as string | undefined) ?? "weekly", autonomy: o.autonomy ?? (l.autonomy as string | undefined) ?? "auto", enabled: o.enabled ?? true });
-  if (o.on) l.on = o.on; else delete l.on;
-  writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
-  return { domain: space, loop: String(l.id) };
+  const yours = isYours(vault, id);
+  // A scheduled playbook that already runs this one in that space (a carried-over loop, or a wrapper).
+  const existing = scheduledPlaybooks(vault, space).find((x) => x.pb.id === id || loopOfPlaybook(x.pb).playbook === id);
+  const target: Playbook = existing ? existing.pb : yours ? pb : { id: `pb-${id}`.slice(0, 80), name: pb.name, goal: pb.goal, domain: space, steps: [{ kind: "loop", id: "s1", label: pb.name, loop: { id: `pb-${id}`.slice(0, 60), name: `Playbook: ${pb.name}`, purpose: pb.goal.slice(0, 200), kind: "steward", type: "open", condition: "", evaluation: "", actions: [], playbook: id, createdTs: now } }] };
+  const prev = target.schedule;
+  target.schedule = {
+    space, ...(prev?.loop ? { loop: prev.loop } : {}),
+    cadence: o.cadence ?? prev?.cadence ?? "weekly",
+    ...(o.on ? { on: o.on } : o.cadence ? {} : prev?.on ? { on: prev.on } : {}),
+    enabled: o.enabled ?? true, status: prev?.status ?? "active",
+    autonomy: o.autonomy ?? prev?.autonomy ?? "auto",
+    ...(prev?.model ? { model: prev.model } : {}),
+    lastRunTs: prev?.lastRunTs ?? null, createdTs: prev?.createdTs ?? now,
+  };
+  mkdirSync(yoursDir(vault), { recursive: true });
+  writeFileSync(existing?.file ?? join(yoursDir(vault), `${target.id}.json`), `${JSON.stringify(target, null, 2)}\n`);
+  return { domain: space, loop: loopOfPlaybook(target as Playbook & { schedule: NonNullable<Playbook["schedule"]> }).id, playbook: target.id };
 }
 
 export async function playbooksCommand(argv: string[], vault: string): Promise<number> {
@@ -216,11 +249,23 @@ export async function playbooksCommand(argv: string[], vault: string): Promise<n
     if (sub === "seen") { markSeen(vault, args.pos[1] ?? ""); if (args.json) out({ ok: true }); return 0; }
     if (sub === "trigger") {
       const cad = args.get("cadence") as "daily" | "weekly" | "monthly" | undefined;
-      const r = setTrigger(vault, args.pos[1] ?? "", args.get("domain") ?? "general", { ...(cad ? { cadence: cad } : {}), ...(args.get("on") ? { on: args.get("on") } : {}), ...(args.has("off") ? { enabled: false } : {}), ...(args.get("autonomy") === "ask" ? { autonomy: "ask" as const } : {}) });
+      const r = setTrigger(vault, args.pos[1] ?? "", args.get("domain") ?? "general", { ...(cad ? { cadence: cad } : {}), ...(args.get("on") ? { on: args.get("on") } : {}), ...(args.has("off") ? { enabled: false } : args.has("resume") ? { enabled: true } : {}), ...(args.get("autonomy") === "ask" ? { autonomy: "ask" as const } : {}) });
       if (args.json) out({ ok: true, ...r }); else console.log(`${args.pos[1]} runs from ${r.domain}/${r.loop}`);
       return 0;
     }
+    if (sub === "migrate-loops") {
+      const r = migrateLoops(vault, { dryRun: args.has("dry-run") });
+      const v = r.dryRun ? null : verifyMigration(vault);
+      if (args.json) out({ ok: !v || v.differ.length === 0, ...r, ...(v ? { verify: v } : {}) });
+      else {
+        console.log(`${r.dryRun ? "Would carry" : "Carried"} ${r.migrated.length} loop${r.migrated.length === 1 ? "" : "s"} into playbooks (${r.already} already were).`);
+        if (v) console.log(`Checked ${v.checked}: ${v.same} run the same${v.differ.length ? `, ${v.differ.length} differ` : ""}.`);
+        for (const d of v?.differ ?? []) console.log(`  ${d.space}/${d.loop}: ${d.why}`);
+      }
+      return v && v.differ.length ? 1 : 0;
+    }
+    if (sub === "verify-loops") { const v = verifyMigration(vault); if (args.json) out(v); else console.log(`Checked ${v.checked}: ${v.same} run the same, ${v.differ.length} differ.`); return v.differ.length ? 1 : 0; }
     if (sub === "adopt") { const pb = adoptPlaybook(vault, args.pos[1] ?? ""); if (args.json) out({ ok: true, playbook: pb }); else console.log(`${pb.id} is one of yours now`); return 0; }
   } catch (e) { return fail((e as Error).message); }
-  return fail("usage: prevail playbooks rows | show <id> | save <job-id> [--name N] [--adopt] | adopt <id> | inbox | seen <run-id> | trigger <id> --domain d (--cadence daily|weekly|monthly | --on <radar kind>[:words]) [--off] [--json]");
+  return fail("usage: prevail playbooks rows | show <id> | save <job-id> [--name N] [--adopt] | adopt <id> | inbox | seen <run-id> | trigger <id> --domain d (--cadence daily|weekly|monthly | --on <radar kind>[:words]) [--off|--resume] | migrate-loops [--dry-run] | verify-loops [--json]");
 }

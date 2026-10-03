@@ -147,7 +147,9 @@ async function mechanicFacts(vault: string, _owner: string, now: number): Promis
     if (d.startsWith("_")) continue;
     const dir = resolveDomainDir(vault, d);
     try {
-      const doc = JSON.parse(readText(join(dir, "_loops.json"))) as { loops?: { id: string; name?: string; enabled?: boolean; status?: string; cadence?: string; lastRunTs?: number | null }[] };
+      // Playbooks replace loops: the loops as the runner sees them (a carried-over loop's last run is on its playbook).
+      const { readLoops } = await import("./daemon-loops.ts");
+      const doc = { loops: readLoops(vault, dir) };
       const rt = (() => { try { return JSON.parse(readText(join(dir, "_loops_runtime.json"))) as { loops?: Record<string, { history?: { ts: number; note?: string }[] }> }; } catch { return {}; } })();
       for (const l of doc.loops ?? []) {
         if (l.enabled === false || (l.status && l.status !== "active")) continue;
