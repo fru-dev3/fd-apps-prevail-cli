@@ -122,6 +122,8 @@ describe("data/domains strays are never domains", () => {
       mkdirSync(join(v, "data", "domains", d), { recursive: true });
       writeFileSync(join(v, "data", "domains", d, "manifest.json"), "{}");
     }
+    mkdirSync(join(v, "build"), { recursive: true });
+    writeFileSync(join(v, "build", "ideal-state.md"), "# Constitution\n");
     expect(scanVault(v).map((d) => d.name)).toEqual(["garden"]);
     expect(listDomainDirs(v)).toEqual(["garden"]);
     require("node:fs").rmSync(v, { recursive: true, force: true });

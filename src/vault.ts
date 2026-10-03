@@ -42,6 +42,7 @@ export interface ManifestSummary {
 
 const NON_DOMAIN_DIRS = new Set([
   "data",    // v4 container (its domains/ + apps/ are scanned separately, not it)
+  "build",   // the vault's own app-support folder (its ideal-state.md is the constitution)
   "domains", // v3 container (its children are scanned separately, not it)
   "apps",    // app manifests live here, never a domain
   "entities", // people, places, orgs and things (data/entities), never a domain
