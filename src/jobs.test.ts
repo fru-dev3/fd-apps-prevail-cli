@@ -192,7 +192,22 @@ describe("running a job", () => {
     saveJob(V, job);
     const done = await runJob(V, job.id, { detectClis, runChatTurn: fakeTurn([]) as never });
     expect(done.status).toBe("failed");
-    expect(done.note).toMatch(/budget reached/);
+    expect(done.note).toMatch(/the job's money ran out at the/);
+  });
+  test("a step that runs out of its own time says so, not that the job's budget was reached", async () => {
+    const job = await insuranceJob();
+    job.budget = { usd: 3, minutes: 30 };
+    saveJob(V, job);
+    // The clock jumps 7 minutes on every model call, so the first step's pass
+    // eats its whole step limit and returns nothing usable.
+    let t = Date.parse("2026-10-02T12:00:00Z");
+    const now = () => t;
+    const turn = async () => { t += 7 * 60_000; return ""; };
+    const done = await runJob(V, job.id, { detectClis, runChatTurn: turn as never, now });
+    expect(done.status).toBe("failed");
+    expect(done.note).not.toMatch(/budget reached|money ran out/);
+    expect(done.note).toMatch(/used its \d+-minute step limit without a usable result/);
+    expect(done.note).toMatch(/the job was at \$0\.\d\d of \$3/);
   });
   test("a gate that says it does not fit stops before the Editor", async () => {
     const job = await insuranceJob();

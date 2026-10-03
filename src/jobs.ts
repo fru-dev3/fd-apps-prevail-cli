@@ -863,7 +863,15 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
         if (job!.budget.usd - usd <= 0.01 || leftMs < 20_000) {
           if (out) break;
           record.status = "failed"; writeStep(dir, idx, sid, record);
-          return { ok: false, status: "failed", note: `budget reached at the ${spec.name} ($${usd.toFixed(2)} of $${job!.budget.usd}, ${Math.round((clock() - startMs) / 60_000)} of ${job!.budget.minutes} minutes)` };
+          // Say which limit stopped it: the job's money, or this step's own time
+          // (a specialist's minutes, or what the job could spare it). The job
+          // totals alone read as "under budget" when the step clock ran out.
+          const moneyOut = job!.budget.usd - usd <= 0.01;
+          const stepMin = Math.round(Math.min(spec.budget.minutes * 60_000, stepMs) / 60_000);
+          const why = moneyOut
+            ? `the job's money ran out at the ${spec.name} ($${usd.toFixed(2)} of $${job!.budget.usd})`
+            : `the ${spec.name} used its ${stepMin}-minute step limit without a usable result${missing.length ? ` (${missing.join("; ")})` : ""}`;
+          return { ok: false, status: "failed", note: `${why}; the job was at $${usd.toFixed(2)} of $${job!.budget.usd}, ${Math.round((clock() - startMs) / 60_000)} of ${job!.budget.minutes} minutes` };
         }
         job!.progress!.push({ step: st.step, specialist: sid, pass });
         saveJob(vault, job!);
