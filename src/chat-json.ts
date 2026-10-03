@@ -72,7 +72,7 @@ import {
 // importing a generated type) so chat-json owns its wire contract.
 export interface ChatEvent {
   type: "start" | "user" | "delta" | "assistant" | "tool" | "usage" | "error" | "done" | "route"
-    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start" | "filed" | "decision_offer" | "told";
+    | "routed" | "app_unavailable" | "app_needs_auth" | "touched" | "job" | "bring_in" | "mission_start" | "filed" | "decision_offer" | "told" | "speaker";
   thread: string;
   ts: number;
   domain?: string;
@@ -155,6 +155,10 @@ export interface ChatEvent {
   /** A deliberation noticed in chat (Today T4): offer to open a decision record. */
   decisionOffer?: { question: string; domain: string; due: string };
   job?: { id: string; status: string; startsAlone: boolean; askReason?: string; owner: string; consulted: string[]; informed: string[]; team: { step: number; specialists: string[]; gate?: boolean }[]; effort: string; budget: { usd: number; minutes: number }; why: string; mention?: string };
+  /** speaker: who writes the next reply in a group chat (members.ts); the deltas after it are theirs. */
+  speaker?: { id: string; name: string; why?: string };
+  /** On an assistant event: who spoke, the members present, the scope and the context, as stored with the turn. */
+  meta?: import("./members.ts").TurnMeta;
 }
 
 // Options for one JSON chat turn.
@@ -231,6 +235,11 @@ export interface ChatJsonOptions {
   // system channel (or ahead of the prompt for CLIs without one), so the
   // turn's context stays what the scope resolver built (--output-hint).
   outputHint?: string;
+  // Group chat (members.ts): specialists named on this turn by chip (--to,
+  // repeatable; routed in code before any model call, in every scope) and the
+  // thread's members (--member, repeatable), who answer the turns that concern them.
+  to?: string[];
+  members?: string[];
   // Test seams: stand-ins for engine detection, the model turn and the
   // ~/.prevail message log. Production never sets these.
   deps?: {
@@ -245,6 +254,9 @@ export interface ChatJsonOptions {
     // The chief of staff's dispatch (jobs.ts). Off in tests unless given.
     dispatch?: typeof import("./jobs.ts").dispatch;
     startJob?: (vault: string, id: string) => void;
+    // The cheap model that breaks a tie between members and writes the chief's
+    // closing line. Off in tests unless given.
+    routeRunner?: import("./route.ts").RouteRunner | null;
   };
   // Where to write each NDJSON line. Defaults to process.stdout. Injectable
   // for tests.
@@ -393,10 +405,42 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     if ((opts.model ?? "").trim() !== "auto") opts = { ...opts, model: "" };
   }
 
+  // Group chat: explicit @names and chips route in code, before any model call
+  // and in every scope; otherwise the thread's members whose work this is.
+  // A member answers in the thread as itself; long or costly work becomes a
+  // job card (dispatch below). Ceilings are checked again before each answer.
+  const mb = await import("./members.ts");
+  const { readChiefOfStaff: readChief } = await import("./chief-of-staff.ts");
+  const chiefCfg = readChief(vaultPath);
+  const routeRunner = opts.deps ? (opts.deps.routeRunner ?? null) : (await import("./route.ts")).claudeRouteRunner;
+  let memberTurn: Awaited<ReturnType<typeof mb.routeTurn>> | null = null;
+  let handTo: string[] = [];
+  {
+    const r = await mb.routeTurn(vaultPath, { message: mb.visibleText(message), to: opts.to, members: opts.members, runner: routeRunner });
+    if (r.route.length) {
+      const { estimateUsd } = await import("./jobs.ts");
+      const { getSpecialist } = await import("./specialists.ts");
+      const leadLen = leadText(scope.blocks, opts.preamble).length + message.length;
+      // Costly: one answer would go past the member's or the user's dollar limit.
+      const costly = r.route.some((x) => { const sp = getSpecialist(vaultPath, x.specialist); return !sp || estimateUsd(cli!.kind, leadLen + 6000, 8000) > Math.min(sp.budget.usd * sp.budget.passes, chiefCfg.limits.usd); });
+      const outside = r.route.some((x) => !!getSpecialist(vaultPath, x.specialist)?.outside);
+      const canJob = scope.dispatch.allowed && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !opts.localOnly && !turnGuard.localOnly;
+      if (canJob && (mb.longWork(r.ask) || costly || outside)) handTo = r.route.map((x) => x.specialist);
+      else memberTurn = r;
+    }
+  }
+  const turnMeta = (speaker: string, name: string): import("./members.ts").TurnMeta => ({
+    speaker, name,
+    ...(opts.members?.length ? { members: [...new Set(opts.members)] } : {}),
+    scope: scope.kind === "mission" ? `project/${scope.mission!.slug}` : scope.kind === "entity" ? (scope.entityIds[0] ?? scope.label) : scope.label || "general",
+    ...(() => { const c = [...scope.appIds.map((a) => `app/${a}`), ...scope.entityIds.filter((e) => scope.kind !== "entity" || e !== scope.entityIds[0]), ...(opts.refDomains ?? []).map((d) => `domain/${d}`)]; return c.length ? { context: c } : {}; })(),
+  });
+  const chiefName = chiefCfg.name ?? "Chief of staff";
+
   // The Compass conversation lives in the chief of staff's chat (General):
   // "set up my Compass" starts or resumes it, and while it is active each
   // message is an answer. Code only, no model: the reply is the next question.
-  if (opts.domain === "general" && !scopeApp && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
+  if (!memberTurn && !handTo.length && opts.domain === "general" && !scopeApp && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
     const iv = await import("./interview.ts");
     const said = userText(message).trim();
     const trigger = iv.isInterviewTrigger(said);
@@ -417,7 +461,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // A promise told to the chief of staff ("remind me I owe Sam the deck by
   // Friday") is filed at once on this domain's board, with a receipt and Undo;
   // code only, no model call (Today T2).
-  if (!scopeApp && scope.kind !== "entity" && scope.kind !== "app" && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
+  if (!memberTurn && !handTo.length && !scopeApp && scope.kind !== "entity" && scope.kind !== "app" && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
     const said = userText(message).trim();
     const cm = await import("./commitments.ts");
     const told = cm.toldCommitment(said, Date.now());
@@ -446,7 +490,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
   // Today T6: "What am I forgetting?" lists every open loop, and an explicit
   // "remind me to / note that / todo" is filed at once with a receipt and
   // Undo. Code only, no model call.
-  if (!scopeApp && scope.kind !== "entity" && scope.kind !== "app" && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
+  if (!memberTurn && !handTo.length && !scopeApp && scope.kind !== "entity" && scope.kind !== "app" && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1") {
     const said = userText(message).trim();
     const tl = await import("./tell.ts");
     const isForget = tl.FORGETTING.test(said) && said.length < 140;
@@ -486,16 +530,15 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     const dispatchFn = opts.deps ? opts.deps.dispatch : (await import("./jobs.ts")).dispatch;
     const said = userText(message);
     const localTurn = !!opts.localOnly || turnGuard.localOnly;
-    if (dispatchFn && scope.dispatch.allowed && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !localTurn) {
-      const { readChiefOfStaff } = await import("./chief-of-staff.ts");
-      const mode = readChiefOfStaff(vaultPath).handoff;
-      if (mode !== "off" || said.trim().startsWith("@")) {
+    if (!memberTurn && dispatchFn && scope.dispatch.allowed && !opts.incognito && process.env.PREVAIL_INCOGNITO !== "1" && !localTurn) {
+      const mode = chiefCfg.handoff;
+      if (mode !== "off" || said.trim().startsWith("@") || handTo.length) {
         let d: Awaited<ReturnType<NonNullable<typeof dispatchFn>>> | null = null;
         const ms = scope.mission;
         // A domain the user brought in for this question (--ref-domain) counts as read for this turn.
         const forThisTurn = (opts.refDomains ?? []).filter((x) => x && !ms?.domains.some((y) => y.slug === x)).map((slug) => ({ slug, role: "consulted" as const }));
         const missionScope = ms ? { slug: ms.slug, name: ms.name, domains: [...ms.domains, ...forThisTurn], specialists: ms.specialists, apps: ms.apps, ceiling: ms.ceiling, budgetLeftUsd: scope.dispatch.budgetLeftUsd ?? null } : undefined;
-        try { d = await dispatchFn({ vault: vaultPath, message: said, domain: opts.domain, thread: (opts.threadId ?? "").trim() || sessionId, ...(missionScope ? { scope: missionScope } : {}) }); } catch { d = null; }
+        try { d = await dispatchFn({ vault: vaultPath, message: handTo.length ? mb.visibleText(message) : said, domain: opts.domain, thread: (opts.threadId ?? "").trim() || sessionId, ...(missionScope ? { scope: missionScope } : {}), ...(handTo.length ? { to: handTo } : {}) }); } catch { d = null; }
         // A card the user answers: bring a domain into the mission, or start a
         // mission. Nothing outside the scope is read and nothing starts without a yes.
         if ((d?.kind === "bring-in" && d.bringIn) || (d?.kind === "mission" && d.mission)) {
@@ -789,6 +832,58 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       return { ...(Object.keys(t.remoteMcp).length ? { remoteMcp: t.remoteMcp } : {}), ...(t.fetchHosts.length ? { fetchHosts: t.fetchHosts } : {}) };
     })(),
   };
+  // Group chat: each routed member answers in turn, as itself, on one read-only
+  // turn bounded by its own and the user's time limit. Nothing here can act.
+  if (memberTurn) {
+    const { getSpecialist, forDomain } = await import("./specialists.ts");
+    emit({ type: "start", thread, ts: startTs, domain: opts.domain, engine });
+    emit({ type: "user", thread, ts: startTs, role: "user", text: message });
+    writeThreadTurn(vaultPath, opts.domain, sessionId, userTurn);
+    persist({ domain: opts.domain, session_id: sessionId, role: "user", content: message, ts: startTs, cli: cli.kind, model });
+    const owner = scope.kind === "domain" ? opts.domain || "general" : "general";
+    const names = (opts.members ?? []).map((x) => getSpecialist(vaultPath, x)?.name ?? x);
+    const said: { name: string; text: string }[] = [];
+    let chars = 0;
+    const speak = (id: string, name: string, text: string, why?: string) => {
+      const ts = Date.now();
+      const meta = turnMeta(id, name);
+      emit({ type: "assistant", thread, ts, role: "assistant", text, engine, speaker: { id, name, ...(why ? { why } : {}) }, meta });
+      writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: userTurn.id, role: "assistant", cli: cli.kind, model, content: text, ts, meta });
+      persist({ domain: opts.domain, session_id: sessionId, role: "assistant", content: text, ts, cli: cli.kind, model });
+    };
+    for (const r of memberTurn.route) {
+      const base = getSpecialist(vaultPath, r.specialist);
+      const { spec, notes } = base ? forDomain(vaultPath, base, owner) : { spec: null, notes: "" };
+      const why = spec ? mb.cannotAnswer(spec) : `the ${r.name} is not available`;
+      emit({ type: "speaker", thread, ts: Date.now(), speaker: { id: why ? "chief" : r.specialist, name: why ? chiefName : r.name, why: r.why } });
+      if (why || !spec) { const t = `I did not pass this on: ${why}.`; emit({ type: "delta", thread, ts: Date.now(), text: t }); speak("chief", chiefName, t); continue; }
+      const prompt = `${mb.memberPrompt(spec, { notes, chief: chiefCfg.name, members: names, earlier: said, explicit: memberTurn.explicit })}\n\n---\n\n${modelPrompt}`;
+      let text = "";
+      try {
+        text = await runTurn({
+          ...turnBase, prompt, model, isFirst: true, act: false, allowTools: mb.memberTools(spec), onTool,
+          signal: AbortSignal.timeout(Math.min(spec.budget.minutes, chiefCfg.limits.minutes) * 60_000),
+          onChunk: (delta: string) => { if (!delta) return; text += delta; emit({ type: "delta", thread, ts: Date.now(), text: delta }); },
+        });
+      } catch (err) { text = text || `(${(err as Error)?.message ?? "no answer"})`; }
+      chars += prompt.length + text.length;
+      speak(spec.id, spec.name, text, r.why);
+      said.push({ name: spec.name, text });
+    }
+    // The chief of staff speaks only when the members disagree or the user must decide.
+    if (said.length > 1 && routeRunner) {
+      const line = await mb.closingLine(routeRunner, memberTurn.ask, said);
+      if (line) {
+        emit({ type: "speaker", thread, ts: Date.now(), speaker: { id: "chief", name: chiefName } });
+        emit({ type: "delta", thread, ts: Date.now(), text: line });
+        speak("chief", chiefName, line);
+      }
+    }
+    emit({ type: "usage", thread, ts: Date.now(), usage: estimateUsage(cli.kind, chars, 0) });
+    emit({ type: "done", thread, ts: Date.now() });
+    return 0;
+  }
+
   try {
     if (cascadePlan) {
       // 1) Cheap pass, BUFFERED (no deltas) so it can be discarded silently if we
@@ -857,6 +952,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     role: "assistant",
     text: reply,
     engine: finalEngine,
+    ...(opts.members?.length ? { speaker: { id: "chief", name: chiefName }, meta: turnMeta("chief", chiefName) } : {}),
   });
 
   // usage (heuristic — see estimateUsage)
@@ -876,6 +972,7 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     model: ranModel,
     content: reply,
     ts: doneTs,
+    meta: turnMeta("chief", chiefName),
   };
   writeThreadTurn(vaultPath, opts.domain, sessionId, assistantTurn);
   persist({
@@ -953,6 +1050,8 @@ export async function chatJsonCommand(
   const entity: string[] = [];
   const apps: string[] = [];
   const refDomains: string[] = [];
+  const to: string[] = [];
+  const members: string[] = [];
   let scopeApp: string | undefined;
   let mission: string | undefined;
   let incognito = false;
@@ -992,6 +1091,10 @@ export async function chatJsonCommand(
     else if (a.startsWith("--mission=")) mission = a.slice("--mission=".length);
     else if (a === "--ref-domain") { refDomains.push(next ?? ""); i++; }
     else if (a.startsWith("--ref-domain=")) refDomains.push(a.slice("--ref-domain=".length));
+    else if (a === "--to") { to.push(next ?? ""); i++; }
+    else if (a.startsWith("--to=")) to.push(a.slice("--to=".length));
+    else if (a === "--member") { members.push(next ?? ""); i++; }
+    else if (a.startsWith("--member=")) members.push(a.slice("--member=".length));
     else if (a === "--local-only") localOnly = true;
     else if (a === "--incognito") incognito = true;
     else if (a === "--output-hint") { outputHint = next; i++; }
@@ -1061,6 +1164,8 @@ export async function chatJsonCommand(
     mission,
     refDomains,
     incognito,
+    ...(to.length ? { to: to.filter(Boolean) } : {}),
+    ...(members.length ? { members: members.filter(Boolean) } : {}),
   });
 }
 
