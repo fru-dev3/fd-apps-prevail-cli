@@ -21,7 +21,7 @@ import { appendDecision, readDecisions, domainDir, runtimeFile } from "./decisio
 import { buildRecommendations } from "./recommendations.ts";
 import { runSurface } from "./surface.ts";
 import { readTasks, writeTasks, setTaskStatus, effectiveStatus } from "./tasks.ts";
-import { appendTask, runOneLoop, executeAction, DEFAULT_LOOPS, type LoopsConfig } from "./daemon-loops.ts";
+import { appendTask, runOneLoop, executeAction, readLoops, DEFAULT_LOOPS, type LoopsConfig } from "./daemon-loops.ts";
 import { gateAction } from "./broker.ts";
 import { isAuto } from "./autonomy.ts";
 import { syncApp } from "./daemon-sync.ts";
@@ -871,7 +871,7 @@ export function mcpTools(): McpTool[] {
     },
     {
       name: "list_loops",
-      description: "List a domain's standing loops (self-driving routines): id, name, purpose, cadence, autonomy level, and whether enabled.",
+      description: "List a domain's scheduled playbooks (what used to be loops): id, name, purpose, cadence or event, autonomy level, and whether enabled.",
       inputSchema: {
         type: "object",
         properties: { domain: { type: "string" } },
@@ -880,7 +880,7 @@ export function mcpTools(): McpTool[] {
     },
     {
       name: "run_loop",
-      description: "Run one loop now (by id or name). The loop evaluates the domain's current state and returns proposed next actions; depending on the loop's autonomy it may file tasks or queue approvals. Returns the note + proposed actions + any tasks created.",
+      description: "Run one scheduled playbook now (by its id or name from list_loops). It evaluates the domain's current state and returns proposed next actions; depending on the loop's autonomy it may file tasks or queue approvals. Returns the note + proposed actions + any tasks created.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1302,22 +1302,14 @@ function loopsCfg(vaultPath: string, providerKind: string): LoopsConfig {
 
 function tListLoops(args: Record<string, unknown>, vaultPath: string): string {
   const domain = resolveDomain(vaultPath, args.domain);
-  let f = join(domain.path, "_loops.json");
-  if (!existsSync(f)) f = join(domainDir(vaultPath, domain.name), "_loops.json");
-  if (!existsSync(f)) return `(no loops defined for ${domain.name})`;
-  let loops: Array<Record<string, unknown>> = [];
-  try {
-    const doc = JSON.parse(vreadFile(f)) as { loops?: Array<Record<string, unknown>> };
-    loops = Array.isArray(doc.loops) ? doc.loops : [];
-  } catch {
-    return `(could not read loops for ${domain.name})`;
-  }
-  if (!loops.length) return `(no loops defined for ${domain.name})`;
+  // Playbooks replace loops: a scheduled playbook is listed as the loop it runs as.
+  const loops = readLoops(vaultPath, existsSync(join(domain.path, "_loops.json")) ? domain.path : domainDir(vaultPath, domain.name));
+  if (!loops.length) return `(nothing scheduled for ${domain.name})`;
   const lines = loops.map((l) => {
     const state = l.enabled === false ? "disabled" : (l.status ?? "active");
-    return `- (${l.id}) ${l.name}  [${l.cadence}, autonomy:${l.autonomy ?? "suggest"}, ${state}]\n  ${l.purpose ?? ""}`;
+    return `- (${l.id}) ${l.name}  [${l.on ? `on ${l.on}` : l.cadence}, autonomy:${l.autonomy ?? "suggest"}, ${state}]\n  ${l.purpose ?? ""}`;
   });
-  return `# Loops - ${domain.name} (${loops.length})\n${lines.join("\n")}`;
+  return `# Scheduled playbooks - ${domain.name} (${loops.length})\n${lines.join("\n")}`;
 }
 
 async function tRunLoop(args: Record<string, unknown>, vaultPath: string): Promise<string> {
