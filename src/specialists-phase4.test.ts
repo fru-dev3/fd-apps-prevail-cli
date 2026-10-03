@@ -1,6 +1,5 @@
 // Specialists Phase 4: the Negotiator, Liaison, Tutor and Confidant are on
-// with typed checks; packs per vertical install presets that never go past
-// their base; custom specialists are made by talking with every field checked
+// with typed checks; a preset never goes past its base; custom specialists are made by talking with every field checked
 // in code; outside agents are allowlisted endpoints that get only the brief,
 // and only after the user's yes. Invented people and data only; no network.
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
@@ -8,7 +7,6 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { codeCheck, dispatch, parseStepOutput, readJob, readReceipts, runJob, saveJob, shapeOf, startJob, teamFor, undoFiled } from "./jobs.ts";
 import { getSpecialist, loadSpecialists } from "./specialists.ts";
-import { installPack, packState, getPack, uninstallPackSpecialists } from "./packs.ts";
 import { createSpecialist, draftSpecialist, validateSpecDraft, callOutside, OUTSIDE_TOOL } from "./specialists-custom.ts";
 import { approvePendingAct, readPendingActs } from "./act-gate.ts";
 import { afterActAnswer, isEngineAct } from "./engine-acts.ts";
@@ -71,31 +69,12 @@ describe("the last four specialists", () => {
   });
 });
 
-describe("packs per vertical", () => {
+describe("presets", () => {
   beforeEach(seed);
-  test("installing a pack adds presets on their base, Compass proposals and metrics; again adds nothing", async () => {
-    const r = await installPack(V, "investors");
-    expect(r.added.map((a) => a.part).sort()).toEqual(["compass", "compass", "compass", "metrics", "metrics", "metrics", "metrics", "specialists", "specialists"]);
-    const deal = getSpecialist(V, "deal-analyst")!;
-    expect(deal).toMatchObject({ base: "analyst", pack: "investors", ceiling: "read", returns: "numbers", builtIn: false, on: true });
-    const props = readFileSync(join(V, "build", "_meta", "compass", "proposals.jsonl"), "utf8");
-    expect(props).toContain('"src":"pack"');
-    expect(props).toContain("not your words");
-    expect(readFileSync(join(V, "build", "metrics.md"), "utf8")).toContain("~id:m-cash-months");
-    const again = await installPack(V, "investors");
-    expect(again.added).toEqual([]);
-    expect((await packState(V, getPack("investors")!)).specialists).toEqual(["deal-analyst", "diligence"]);
-  });
   test("a preset never goes past its base, even when its file says so", () => {
     mkdirSync(join(V, "build", "specialists"), { recursive: true });
     writeFileSync(join(V, "build", "specialists", "foo-preset.md"), "---\nid: foo-preset\nname: Foo preset\nbase: researcher\nceiling: act\ntools: [web, vault-read, shell]\n---\n## Mandate\nFoo research.\n");
     expect(getSpecialist(V, "foo-preset")).toMatchObject({ ceiling: "read", tools: ["web", "vault-read"], method: getSpecialist(V, "researcher")!.method });
-  });
-  test("uninstall moves a pack's own files aside and keeps the user's", async () => {
-    await installPack(V, "consultants", { only: "specialists" });
-    expect(await uninstallPackSpecialists(V, "consultants")).toEqual(["proposal-writer", "client-liaison"]);
-    expect(existsSync(join(V, "build", "specialists", "proposal-writer.md"))).toBe(false);
-    expect(readdirSync(join(V, "build", "specialists", ".versions")).length).toBe(2);
   });
 });
 

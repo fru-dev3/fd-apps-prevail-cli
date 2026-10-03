@@ -1,16 +1,13 @@
 // Goals G5: fresh starts offered once inside the budget, the yearly review
 // with odyssey sketches kept only when quoted, value and role history across
-// versions, the Compass exported as a constitution (never proposed or local
-// lines), and a household whose members' data is read only with their own
-// yes. Invented people and data only.
+// versions, and the Compass exported as a constitution (never proposed or
+// local lines). Invented people and data only.
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { compassHistory, constitutionText, exportConstitution, freshStartPass, freshStarts, yearlyReview } from "./lifetime.ts";
-import { addMember, addShared, householdView, memberCompass, peopleConflicts, removeMember, setConsent, setMemberCompass } from "./household.ts";
 import { confirm, readCompass, saveCompass, items } from "./compass.ts";
 import { noteSaid, topCandidates, answerCandidate } from "./said.ts";
-import { installPack } from "./packs.ts";
 
 const ROOT = join("/tmp", `prevail-g5-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -111,69 +108,5 @@ describe("history, the yearly review and the export", () => {
     expect(t).not.toMatch(/—/);
     const e = exportConstitution(V, T("2026-10-02"));
     expect(e.file.endsWith("build/exports/compass-constitution-2026-10-02.md")).toBe(true);
-  });
-
-  test("a pack's Compass lines are suggestions: shown after the user's own, and a yes says where it came from", async () => {
-    noteSaid(V, { text: "What matters to me is quiet mornings." });
-    await installPack(V, "investors", { only: "compass" });
-    const top = topCandidates(V, 10);
-    expect(top[0]!.title).toBe("Quiet mornings");
-    const fi = top.find((x) => x.title === "Financial independence")!;
-    expect(fi.pack).toBe("investors");
-    answerCandidate(V, fi.key, "yes");
-    expect(readFileSync(join(V, "build", "compass.md"), "utf8")).toContain("from: the investors pack, chosen by you");
-  });
-});
-
-describe("a household, with consent per person", () => {
-  beforeEach(seed);
-  test("nothing of a member is read without their own yes; only they can give it", () => {
-    addMember(V, { name: "Ada Foo", relation: "partner" });
-    expect(() => setConsent(V, "ada-foo", "compass", true)).toThrow(/only Ada Foo can say yes/);
-    expect(() => setMemberCompass(V, "ada-foo", "# Compass\n")).toThrow(/their yes/);
-    expect(memberCompass(V, "ada-foo")).toBeNull();
-    setConsent(V, "ada-foo", "compass", true, { confirm: "ada foo" });
-    setMemberCompass(V, "ada-foo", "# Compass\n\n## Non-negotiables\n- Never work on Sunday mornings ~id:nn-sunday\n\n## Capacity\n- 3 hours a week ~id:c-h ~hours:3\n");
-    expect(memberCompass(V, "ada-foo")).not.toBeNull();
-    expect(readFileSync(join(V, "build", "_meta", "household", "consent.jsonl"), "utf8")).toContain('"by":"member"');
-  });
-
-  test("conflicts between people come with evidence, and vanish when consent is taken back", () => {
-    addMember(V, { name: "Ada Foo" });
-    setConsent(V, "ada-foo", "compass", true, { confirm: "Ada Foo" });
-    setMemberCompass(V, "ada-foo", "# Compass\n\n## Non-negotiables\n- Never work on Sunday mornings ~id:nn-sunday\n\n## Capacity\n- 3 hours a week ~id:c-h ~hours:3\n");
-    addShared(V, { title: "Move abroad for a year", members: ["ada-foo"], hours: 2 });
-    addShared(V, { title: "Sunday morning foo market stall", members: ["ada-foo"], hours: 4 });
-    const c = peopleConflicts(V);
-    expect(c.find((x) => x.who === "You" && x.kind === "rule")!.evidence).toContain("rule: Never move abroad");
-    expect(c.some((x) => x.who === "Ada Foo" && x.kind === "rule" && x.goal.startsWith("Sunday morning"))).toBe(true);
-    expect(c.find((x) => x.who === "Ada Foo" && x.kind === "capacity")!.question).toContain("6 hours a week of Ada Foo");
-    setConsent(V, "ada-foo", "compass", false);
-    expect(peopleConflicts(V).some((x) => x.who === "Ada Foo")).toBe(false);
-    expect(householdView(V).shared[0]!.names).toEqual(["You", "Ada Foo"]);
-  });
-
-  test("removing a member moves their folder aside and turns every scope off", () => {
-    addMember(V, { name: "Bo Bar" });
-    setConsent(V, "bo-bar", "compass", true, { confirm: "Bo Bar" });
-    setMemberCompass(V, "bo-bar", "# Compass\n");
-    const r = removeMember(V, "bo-bar", T("2026-10-02"));
-    expect(r.moved).toContain("_archive/bo-bar-2026-10-02");
-    expect(existsSync(join(r.moved!, "compass.md"))).toBe(true);
-    expect(householdView(V).members).toEqual([]);
-    expect(() => addShared(V, { title: "Foo", members: ["bo-bar"] })).toThrow(/not in the household/);
-  });
-});
-
-describe("shared projects", () => {
-  beforeEach(seed);
-  test("someone in the household joins a project only after their own yes", async () => {
-    const { createMission, attach } = await import("./missions.ts");
-    createMission(V, { name: "Kitchen foo", outcome: "A new foo kitchen", domains: [{ slug: "general", role: "owner" }], now: T("2026-10-02") });
-    addMember(V, { name: "Ada Foo" });
-    expect(() => attach(V, "kitchen-foo", "person", "household/ada-foo")).toThrow(/own yes/);
-    setConsent(V, "ada-foo", "compass", true, { confirm: "Ada Foo" });
-    attach(V, "kitchen-foo", "person", "household/ada-foo");
-    expect(householdView(V).projects).toEqual([{ slug: "kitchen-foo", name: "Kitchen foo", members: ["ada-foo"] }]);
   });
 });

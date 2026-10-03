@@ -105,7 +105,7 @@ export function noteSaid(vault: string, i: { text: string; thread?: string; doma
   return { candidates, stated };
 }
 
-interface Row { ts: number; src?: string; pack?: string; kind: string; title?: string; text: string; status: string; key?: string; source?: { thread?: string | null; domain?: string | null } }
+interface Row { ts: number; src?: string; kind: string; title?: string; text: string; status: string; key?: string; source?: { thread?: string | null; domain?: string | null } }
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const candidateKey = (kind: string, title: string) => `${kind}:${norm(title)}`;
 
@@ -115,12 +115,12 @@ function readRows(vault: string): Row[] {
   return readFileSync(p, "utf8").split("\n").flatMap((l) => { try { return l.trim() ? [JSON.parse(l) as Row] : []; } catch { return []; } });
 }
 
-export interface TopCandidate { key: string; kind: Candidate["kind"]; title: string; quote: string; count: number; lastTs: number; threads: number; pack?: string }
+export interface TopCandidate { key: string; kind: Candidate["kind"]; title: string; quote: string; count: number; lastTs: number; threads: number }
 
 /** The candidates heard most often, not already in the Compass and not answered. */
 export function topCandidates(vault: string, n = 3): TopCandidate[] {
-  // A pack's suggestions (G5) come after anything the user said themselves.
-  const rows = readRows(vault).filter((r) => r.src === "chat" || r.src === "coach" || r.src === "pack" || r.key);
+  // Only what the user said (packs were removed by the owner, 2026-10-02).
+  const rows = readRows(vault).filter((r) => r.src === "chat" || r.src === "coach" || r.key);
   const answered = new Set(rows.filter((r) => r.key && (r.status === "accepted" || r.status === "dismissed")).map((r) => r.key!));
   const have = new Set(items(readCompass(vault)).map((it) => candidateKey(it.kind, it.title)));
   const by = new Map<string, TopCandidate & { th: Set<string> }>();
@@ -128,8 +128,8 @@ export function topCandidates(vault: string, n = 3): TopCandidate[] {
     if (r.status !== "candidate" || !r.title) continue;
     const k = candidateKey(r.kind, r.title);
     if (answered.has(k) || have.has(k)) continue;
-    const c = by.get(k) ?? { key: k, kind: r.kind as Candidate["kind"], title: r.title, quote: r.text, count: 0, lastTs: 0, threads: 0, th: new Set<string>(), ...(r.src === "pack" && r.pack ? { pack: r.pack } : {}) };
-    if (r.src !== "pack") { c.count++; delete c.pack; }
+    const c = by.get(k) ?? { key: k, kind: r.kind as Candidate["kind"], title: r.title, quote: r.text, count: 0, lastTs: 0, threads: 0, th: new Set<string>() };
+    c.count++;
     if (r.ts > c.lastTs) { c.lastTs = r.ts; c.quote = r.text; }
     c.th.add(r.source?.thread ?? String(r.ts));
     by.set(k, c);
@@ -137,9 +137,8 @@ export function topCandidates(vault: string, n = 3): TopCandidate[] {
   return [...by.values()].map(({ th, ...c }) => ({ ...c, threads: th.size })).sort((a, b) => b.count - a.count || b.lastTs - a.lastTs).slice(0, n);
 }
 
-/** A pack's suggestion is the pack's words, not the user's: it says so on the line. */
 function fieldsFor(c: TopCandidate): CompassItem["fields"] {
-  return c.pack ? [{ key: "from", value: `the ${c.pack} pack, chosen by you` }] : [{ key: "words", value: JSON.stringify(c.quote) }, { key: "from", value: `chat, heard ${c.count} time${c.count === 1 ? "" : "s"}` }];
+  return [{ key: "words", value: JSON.stringify(c.quote) }, { key: "from", value: `chat, heard ${c.count} time${c.count === 1 ? "" : "s"}` }];
 }
 
 /** Yes adds the line to the Compass, confirmed, in the user's own words. Not now dismisses it. */
@@ -154,7 +153,7 @@ export function answerCandidate(vault: string, key: string, answer: "yes" | "no"
   const id = compassId(kind, c.title);
   const it: CompassItem = { kind, id, title: c.title, done: kind === "goal" ? false : null, tokens: kind === "goal" ? { status: "confirmed" } : kind === "value" ? { rank: String(items(doc, "value").length + 1) } : {}, flags: [], fields: fieldsFor(c), paths: [], raw: [] };
   addItem(doc, it);
-  saveCompass(vault, doc, [{ id, from: "candidate", to: kind === "goal" ? "confirmed" : "confirmed", reason: c.pack ? `yes to a ${c.pack} pack suggestion` : "yes in the weekly review", evidence: [c.quote], by: "user" }], now);
+  saveCompass(vault, doc, [{ id, from: "candidate", to: kind === "goal" ? "confirmed" : "confirmed", reason: "yes in the weekly review", evidence: [c.quote], by: "user" }], now);
   return { added: id };
 }
 

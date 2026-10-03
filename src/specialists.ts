@@ -71,8 +71,6 @@ export interface Specialist {
   source?: string;
   /** A preset: the built-in it is built on (its ceiling, tools and checks are the ceiling here). */
   base?: string;
-  /** The vertical pack that installed it. */
-  pack?: string;
   /**
    * An outside agent (a remote MCP tool over HTTPS). It gets only the brief,
    * never the vault; every call waits for the user's yes; at most perDay calls
@@ -157,7 +155,6 @@ export function parseSpecialist(text: string, base?: Specialist): Specialist | n
     on: fm.on === undefined ? (base?.on ?? true) : String(fm.on) !== "false",
     builtIn: !!base?.builtIn,
     ...(typeof fm.base === "string" && fm.base ? { base: fm.base } : base?.base ? { base: base.base } : {}),
-    ...(typeof fm.pack === "string" && fm.pack ? { pack: fm.pack } : {}),
     ...(typeof fm.endpoint === "string" && fm.endpoint
       ? { outside: { endpoint: fm.endpoint, tool: String(fm.tool ?? "ask"), perDay: Math.max(1, Math.min(50, Number(fm.calls_per_day ?? 5) || 5)) } }
       : {}),
@@ -560,7 +557,7 @@ export function loadSpecialists(vault: string): Specialist[] {
 }
 
 /**
- * The limits on a specialist the user (or a pack) made, in code: a preset
+ * The limits on a specialist the user made, in code: a preset
  * never goes past the built-in it is built on (ceiling, tools); a custom one
  * never acts on its own; an outside agent reads nothing from the vault and
  * stops at draft.
@@ -684,7 +681,6 @@ export function serializeSpecialist(s: Specialist): string {
     ...(s.doneWhen.length ? ["done_when:", ...s.doneWhen.map((d) => `  - ${d}`)] : []),
     ...(s.on ? [] : ["on: false"]),
     ...(s.base ? [`base: ${s.base}`] : []),
-    ...(s.pack ? [`pack: ${s.pack}`] : []),
     ...(s.outside ? [`endpoint: ${s.outside.endpoint}`, `tool: ${s.outside.tool}`, `calls_per_day: ${s.outside.perDay}`] : []),
   ];
   return `---\n${fm.join("\n")}\n---\n## Mandate\n${s.mandate}\n## Method\n${s.method}\n## Never\n${s.never}\n`;
