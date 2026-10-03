@@ -845,8 +845,10 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     const names = (opts.members ?? []).map((x) => getSpecialist(vaultPath, x)?.name ?? x);
     const said: { name: string; text: string }[] = [];
     let chars = 0;
+    const { noteInvolvement, readInvolvement } = await import("./involvement.ts");
     const speak = (id: string, name: string, text: string, why?: string) => {
       const ts = Date.now();
+      if (id !== "chief") noteInvolvement(vaultPath, { ts, specialist: id, name, method: "answered", domain: owner, thread: threadId ?? sessionId, ask: memberTurn.ask });
       const meta = turnMeta(id, name);
       emit({ type: "assistant", thread, ts, role: "assistant", text, engine, speaker: { id, name, ...(why ? { why } : {}) }, meta });
       writeThreadTurn(vaultPath, opts.domain, sessionId, { id: makeTurnId(), parentId: userTurn.id, role: "assistant", cli: cli.kind, model, content: text, ts, meta });
@@ -858,7 +860,11 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
       const why = spec ? mb.cannotAnswer(spec) : `the ${r.name} is not available`;
       emit({ type: "speaker", thread, ts: Date.now(), speaker: { id: why ? "chief" : r.specialist, name: why ? chiefName : r.name, why: r.why } });
       if (why || !spec) { const t = `I did not pass this on: ${why}.`; emit({ type: "delta", thread, ts: Date.now(), text: t }); speak("chief", chiefName, t); continue; }
-      const prompt = `${mb.memberPrompt(spec, { notes, chief: chiefCfg.name, members: names, earlier: said, explicit: memberTurn.explicit })}\n\n---\n\n${modelPrompt}`;
+      // Its own context: what it learned in this domain (its notebook) and the work it did lately.
+      let notebook: string[] = [];
+      try { notebook = (await import("./specialists.ts")).readNotebook(vaultPath, owner, spec.id).slice(-12); } catch { /* none */ }
+      const lately = readInvolvement(vaultPath, spec.id, 6).map((x) => `${new Date(x.ts).toISOString().slice(0, 10)} ${x.method}${x.ask ? `: ${x.ask}` : ""}`);
+      const prompt = `${mb.memberPrompt(spec, { notes, chief: chiefCfg.name, members: names, earlier: said, explicit: memberTurn.explicit, notebook, lately })}\n\n---\n\n${modelPrompt}`;
       let text = "";
       try {
         text = await runTurn({

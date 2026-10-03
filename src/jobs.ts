@@ -31,6 +31,7 @@
 //     domain's updates.jsonl. Each write has a receipt for Undo.
 
 import { spawn } from "node:child_process";
+import { methodFor, noteInvolvement } from "./involvement.ts";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { classifyAction } from "./action-policy.ts";
@@ -903,6 +904,7 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
       record.status = missing.length ? "done-with-gaps" : "done";
       record.notebook = appendNotebook(vault, job!.domains.owner, sid, out.notebook);
       writeStep(dir, idx, sid, record);
+      noteInvolvement(vault, { specialist: sid, name: spec.name, method: methodFor(spec.returns), domain: job!.domains.owner, job: job!.id, ...(job!.origin.thread ? { thread: job!.origin.thread } : {}), ask: job!.ask, ts: clock() });
       return { ok: true, sid, spec, out };
     };
     for (let si = 0; si < job.team.length; si++) {
@@ -1175,7 +1177,13 @@ function fileResults(vault: string, job: Job, last: { returns: string; out: Step
       add({ domain: "compass", kind: "candidate", file: rel(pp), ref: row, text: `proposed for your Compass: ${oneLine(c.title, 80)} (waits for your yes)` });
     }
   }
-  if (rows.length) writeReceipts(vault, job.id, rows);
+  if (rows.length) {
+    writeReceipts(vault, job.id, rows);
+    // The specialist whose result was filed did the filing.
+    const lastStep = job.team[job.team.length - 1];
+    const sid = lastStep?.specialists[lastStep.specialists.length - 1];
+    if (sid) noteInvolvement(vault, { specialist: sid, name: sid.charAt(0).toUpperCase() + sid.slice(1), method: "filed", domain: job.domains.owner, job: job.id, ...(job.origin.thread ? { thread: job.origin.thread } : {}), ask: job.ask, ts: now });
+  }
 }
 
 /** Open task texts on a board, lower-cased, so a filing never doubles a line. */
