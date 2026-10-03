@@ -281,6 +281,24 @@ export function profilePath(vault: string): string {
 }
 
 /** The user's profile: build/user.md, then the older names the app once wrote. */
+export const MEMORY_HEADER = "# LONG-TERM MEMORY";
+// The desktop's own header for the same block (chatpanel memoryPreamble), so a
+// desktop turn that already carries it never gets it twice.
+const DESKTOP_MEMORY_HEADER = "--- Long-term memory (";
+
+/**
+ * A domain's long-term memory (memory/memory.md, or a pre-v4 _memory.md) for a
+ * chat turn that runs in that domain's folder. `cwd` is the domain folder.
+ * Empty for a project or app space (their scope brings its own memory), when
+ * the prompt already carries the block, or when nothing is recorded.
+ */
+export function memoryBlock(cwd: string, domain: string, prompt: string, cap = 4000): string {
+  if (!domain || domain.startsWith("_") || prompt.includes(MEMORY_HEADER) || prompt.includes(DESKTOP_MEMORY_HEADER)) return "";
+  const text = (readText(join(cwd, "memory", "memory.md")) || readText(join(cwd, "_memory.md"))).trim();
+  if (!text) return "";
+  return `${MEMORY_HEADER} (${domain}): what this space has learned across sessions. Use it as background; the user's words in this turn win.\n${text.slice(0, cap)}`;
+}
+
 export function readProfile(vault: string): string {
   const b = buildRoot(vault);
   for (const p of [join(b, "user.md"), join(b, "_profile.md"), join(b, "profile.md"), join(vault, "user.md"), join(vault, "profile.md")]) {

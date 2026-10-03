@@ -86,3 +86,14 @@ test("a desktop domain turn (ChatPanel scope) gets the domain turn's context, by
   expect(desktop).toEqual(await capture({ domain: "homestead" }));
   expect(desktop.prompt).toBe("What should I do this weekend?");
 });
+
+// Long-term memory: a desktop domain turn sends only the typed text, so the
+// engine adds the domain's memory/memory.md; a prompt that already carries the
+// desktop's own memory block (General, entity and app chats) gets it once.
+test("a domain turn carries the domain's long-term memory, once", async () => {
+  const d = await capture({ domain: "homestead" });
+  expect(d.userContext).toContain("# LONG-TERM MEMORY (homestead)");
+  expect(d.userContext).toContain("Paint dries slowly in autumn.");
+  const desk = await capture({ domain: "homestead", message: "--- Long-term memory (homestead) ---\nPaint dries slowly in autumn.\n\nHi" });
+  expect(desk.userContext).not.toContain("# LONG-TERM MEMORY");
+});

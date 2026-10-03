@@ -21,7 +21,11 @@ Life goals:
 ## homestead goals
 - Paint the shed @2026-11-01
 ## Life goals
-- Walk every day"
+- Walk every day
+
+# LONG-TERM MEMORY (homestead): what this space has learned across sessions. Use it as background; the user's words in this turn win.
+# Memory
+Paint dries slowly in autumn."
 ,
 }
 `;
@@ -45,7 +49,10 @@ Life goals:
 
 # GOALS: what the user is working toward. Keep advice consistent with these; say so when a request works against one.
 ## Life goals
-- Walk every day"
+- Walk every day
+
+# LONG-TERM MEMORY (general): what this space has learned across sessions. Use it as background; the user's words in this turn win.
+# General"
 ,
 }
 `;
@@ -103,7 +110,10 @@ Life goals:
 
 # GOALS: what the user is working toward. Keep advice consistent with these; say so when a request works against one.
 ## Life goals
-- Walk every day"
+- Walk every day
+
+# LONG-TERM MEMORY (general): what this space has learned across sessions. Use it as background; the user's words in this turn win.
+# General"
 ,
 }
 `;
@@ -146,7 +156,11 @@ Life goals:
 ## homestead goals
 - Paint the shed @2026-11-01
 ## Life goals
-- Walk every day"
+- Walk every day
+
+# LONG-TERM MEMORY (homestead): what this space has learned across sessions. Use it as background; the user's words in this turn win.
+# Memory
+Paint dries slowly in autumn."
 ,
 }
 `;

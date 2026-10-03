@@ -10,7 +10,7 @@ import { readResponseFramework, readWebAccess, vaultLockActive } from "./config.
 import { buildFrameworkPreamble, getFramework } from "./framework.ts";
 import { resolveModelForDomain } from "./privacy.ts";
 import { APP_SCOPE_PREFIX, APP_SCOPE_SUBDIR, buildRoot, vaultRootForCwd } from "./path-safety.ts";
-import { GOALS_HEADER, domainOfCwd, goalsBlock, readProfile } from "./goals.ts";
+import { GOALS_HEADER, domainOfCwd, goalsBlock, memoryBlock, readProfile } from "./goals.ts";
 import { CHIEF_HEADER, chiefOfStaffBlock } from "./chief-of-staff.ts";
 import { COMPASS_HEADER, compassBlock } from "./compass.ts";
 import { buildHarnessArgs } from "./harness-profiles.ts";
@@ -220,6 +220,10 @@ export function buildUserContext(vaultRoot: string, cwd: string, prompt: string,
       const g = domain ? goalsBlock(vaultRoot, domain) : "";
       if (g) parts.push(g);
     }
+    // The domain's long-term memory: the desktop used to add it itself; since
+    // a desktop domain turn sends only the typed text, the engine owns it.
+    const mem = memoryBlock(cwd, domain, prompt);
+    if (mem) parts.push(mem);
   } catch { /* context is a nicety; the turn still runs */ }
   return parts.join("\n\n");
 }
