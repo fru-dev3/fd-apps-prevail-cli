@@ -15,11 +15,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "no
 import { join } from "node:path";
 import { decisionsDir, listDecisions, renderRecord, type DecisionRecord } from "./decision-records.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
-import { resolveDomainDir } from "./path-safety.ts";
+import { resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { scoreDomains } from "./domain-touch.ts";
 import { vwriteFile } from "./vault-session.ts";
 
 // Verbs that make "I'll ..." or "I'm going to ..." a decision rather than a step in a task.
-const VERBS = "archive|learn|quit|sell|buy|move|cancel|drop|hire|fire|leave|join|close|launch|retire|refinance|rent|lease|invest|enroll|commit to|shut down|wind down|pay off|stop|start learning|start taking|switch to|sign up for|give up";
+const VERBS = "archive|learn|quit|sell|buy|move to|cancel|hire|fire|join|retire|refinance|enroll in|launch|shut down|wind down|pay off|sign up for|give up|switch to|start learning|start taking|stop working|stop using|stop paying";
 const PATTERNS: { re: RegExp; lead?: string }[] = [
   // "I've decided to learn piano", "we decided we'll sell the foo car"
   { re: /\b(?:I|we)(?:'ve| have)?\s+(?:finally\s+)?decided\s+(?:to\s+|that\s+(?:I|we)(?:'ll| will)\s+|on\s+)?([^.!?\n]{3,160})/i },
@@ -48,6 +49,10 @@ export function decisionMade(text: string): { what: string; said: string } | nul
       if (!m) continue;
       const what = clean(m[1]!).replace(/^(?:to|that)\s+/i, "").replace(/\s+(?:for now|I think|I guess)$/i, "");
       if (!p.lead && what.split(" ").length < 2) continue;
+      // "I'll stop it", "go with that": a pronoun alone says nothing on its own.
+      if (/^(?:\w+\s+)?(?:it|this|that|them|those|these|one)\b(?:\s+\w+)?$/i.test(what)) continue;
+      // "I chose years ago": a time, not a choice.
+      if (p.lead && /^(?:years?|months?|weeks?|days?|a while|long|to)\b/i.test(what)) continue;
       return { what: cap(`${p.lead ?? ""}${p.lead ? what.replace(/^the\s+/i, "the ") : what}`).slice(0, 160), said: s.slice(0, 300) };
     }
   }
@@ -124,11 +129,11 @@ function threadTurns(file: string): { turns: Turn[]; created: number } {
   return { turns, created };
 }
 
-export interface BackfillResult { threads: number; found: Captured[]; saved: number }
+export interface BackfillResult { threads: number; prompts: number; found: Captured[]; saved: number }
 
 /** Read every thread in every domain and save the decisions the user stated. Dry run writes nothing. */
-export function backfillDecisions(vault: string, o: { dryRun?: boolean; now?: number } = {}): BackfillResult {
-  const out: BackfillResult = { threads: 0, found: [], saved: 0 };
+export function backfillDecisions(vault: string, o: { dryRun?: boolean; now?: number; streams?: boolean } = {}): BackfillResult {
+  const out: BackfillResult = { threads: 0, prompts: 0, found: [], saved: 0 };
   const seen = new Set<string>();
   for (const d of listDomainDirs(vault)) {
     const base = resolveDomainDir(vault, d);
@@ -155,6 +160,34 @@ export function backfillDecisions(vault: string, o: { dryRun?: boolean; now?: nu
           const c = captureDecision(vault, { text: turn.content, domain, thread: slug, now: when });
           if (c) { out.found.push(c); out.saved++; }
         }
+      }
+    }
+  }
+  // The prompts captured from the user's other AI tools (build/_meta/prompts),
+  // typed by the user: short, not pasted output, not an agent's instructions.
+  if (o.streams !== false) {
+    const dir = runtimePath(vault, join("_meta", "prompts"));
+    const domains = listDomainDirs(vault).filter((d) => !d.startsWith("_") && d !== "general");
+    const typed = new Set<string>();
+    if (existsSync(dir)) for (const f of readdirSync(dir).filter((x) => x.endsWith(".jsonl")).sort()) {
+      for (const l of readFileSync(join(dir, f), "utf8").split("\n")) {
+        let row: { prompt?: unknown; epoch_ms?: unknown; ts?: unknown; tool?: unknown; session?: unknown };
+        try { row = JSON.parse(l); } catch { continue; }
+        const text = typeof row.prompt === "string" ? row.prompt.trim() : "";
+        if (!text || text.length > 3000 || /^(-\n)?You are\b/.test(text) || /\*\*|```|^\s*[|#>-]/m.test(text) || typed.has(text)) continue;
+        typed.add(text);
+        const when = Number(row.epoch_ms) || Date.parse(String(row.ts ?? "")) || (o.now ?? Date.now());
+        const thread = `${String(row.tool ?? "ai").replace(/[^a-z0-9-]/gi, "")}-${String(row.session ?? "").replace(/[^a-z0-9]/gi, "").slice(0, 8)}`;
+        const top = scoreDomains(vault, text, domains)[0];
+        const domain = top && top.score >= 2 ? top.slug : "general";
+        out.prompts++;
+        if (o.dryRun) {
+          const m = decisionMade(text);
+          if (m && !out.found.some((x) => similar(x.what, m.what) >= 0.8)) out.found.push({ domain, slug: "", what: m.what, decided: ymd(when), thread });
+          continue;
+        }
+        const c = captureDecision(vault, { text, domain, thread, now: when });
+        if (c) { out.found.push(c); out.saved++; }
       }
     }
   }
