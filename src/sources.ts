@@ -109,7 +109,12 @@ export async function sourcesCommand(argv: string[], vault: string): Promise<num
   const args = parseModArgs(argv);
   const sub = args.pos[0] ?? "list";
   const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
-  if (sub === "list") {
+  // Knowledge sources (knowledge-sources.ts): add, list, check, remove, use,
+  // read, query. The consent list below is `sources list --consent`.
+  if (["add", "check", "remove", "use", "read", "query"].includes(sub) || (sub === "list" && !args.has("consent"))) {
+    return (await import("./knowledge-cli.ts")).knowledgeCommand(sub, args, vault);
+  }
+  if (sub === "list" || (sub === "consent" && !args.pos[1])) {
     const rows = listSources(vault);
     if (args.json) out(rows);
     else for (const r of rows) console.log(`${r.on ? "on " : "off"} w${r.wave} ${r.id.padEnd(15)} ${r.state}${r.note ? `  (${r.note})` : ""}`);
@@ -131,7 +136,7 @@ export async function sourcesCommand(argv: string[], vault: string): Promise<num
     if (args.json) out(res); else for (const [k, v] of Object.entries(res)) console.log(`${k.padEnd(15)} ${JSON.stringify(v)}`);
     return 0;
   }
-  console.error("usage: prevail sources list | consent <id> on|off | sync [<id>] [--backfill] [--json]");
+  console.error("usage: prevail sources add|list|check|remove|use|read|query ... (knowledge sources) | list --consent | consent <id> on|off | sync [<id>] [--backfill] [--json]");
   return 1;
 }
 

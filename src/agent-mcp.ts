@@ -105,6 +105,16 @@ function buildAgentMcpServers(
     } catch {
       // gws detection must never break agent wiring.
     }
+    // The user's knowledge sources, read-only (sources-mcp.ts): only when this
+    // Mac trusts at least one, so a vault without sources injects nothing new.
+    try {
+      const { readRegistry } = require("./trusted-sources.ts") as typeof import("./trusted-sources.ts");
+      if (Object.keys(readRegistry(vaultPath)).length) {
+        mcpServers["prevail_sources"] = { command: process.execPath, args: ["sources-mcp", "--vault", vaultPath] };
+      }
+    } catch {
+      // never let source wiring break a turn.
+    }
     // Prevail's OWN action primitives (create_skill / create_loop / remember).
     // Always wired in when we know the vault, so an agentic run saves skills,
     // loops, and memory into THIS vault — never the host model's native skill
