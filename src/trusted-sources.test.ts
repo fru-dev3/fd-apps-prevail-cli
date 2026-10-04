@@ -100,9 +100,9 @@ test("mcp-remote: probe lists tools with read classification; manifest, registry
   expect(r.probe.ok).toBe(true);
   expect(r.probe.server).toEqual({ name: "foo-mcp", version: "0.1", protocol: "2025-06-18" });
   expect(r.probe.tools).toEqual([
-    { name: "list_foos", kind: "read", read_only_hint: true },
-    { name: "foo_spec", kind: "read", read_only_hint: true },
-    { name: "drop_foo", kind: "write", read_only_hint: false },
+    { name: "list_foos", kind: "read", read_only_hint: true, required: 0 },
+    { name: "foo_spec", kind: "read", read_only_hint: true, required: 0 },
+    { name: "drop_foo", kind: "write", read_only_hint: false, required: 0 },
   ]);
   expect(calls).toContain("notifications/initialized");
   expect(r.app).toMatchObject({ id: "foo-context", trusted: true, integration: "mcp-remote", urls: [mcpUrl], status: "connected", runtime: "claude" });
