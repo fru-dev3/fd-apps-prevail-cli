@@ -1394,8 +1394,8 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     // below like any connector: registered reads run and are logged, anything
     // else queues. A web/links source lets WebFetch GET its hosts only.
     try {
-      const { remoteMcpConfig } = await import("./trusted-sources.ts");
-      const inline = remoteMcpConfig(remoteMcp ?? {});
+      const { remoteMcpConfig, remoteMcpTokens } = await import("./trusted-sources.ts");
+      const inline = remoteMcpConfig(remoteMcp ?? {}, vaultPath ? remoteMcpTokens(vaultPath, Object.keys(remoteMcp ?? {})) : {});
       if (inline) {
         toolsInjected = true;
         mcpConfigs.push(inline);

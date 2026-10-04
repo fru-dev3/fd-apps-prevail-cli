@@ -74,8 +74,10 @@ export interface MirrorApp {
   trusted?: boolean;
   // Whether this Mac's registry trusts it (false: synced from another Mac).
   trusted_here?: boolean;
-  integration?: "mcp-remote" | "web" | "links";
+  integration?: "mcp-remote" | "web" | "links" | "folder" | "database";
   urls?: string[];
+  // A folder or database source: where it is (a database URL never carries its password).
+  location?: string;
   source?: { title?: string; llms?: string; endpoints?: { path: string; summary?: string }[] };
 }
 
