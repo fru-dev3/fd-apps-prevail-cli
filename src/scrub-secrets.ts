@@ -4,7 +4,7 @@
 // secret: it reports counts per file kind only.
 //
 //   bun src/scrub-secrets.ts --vault <copy> --expect <copy> [--dry-run]
-//   bun src/scrub-secrets.ts --config --expect ~/PrevailVault --backup-dir ~/.prevail/backups
+//   bun src/scrub-secrets.ts --config --expect ~/vault --backup-dir ~/.prevail/backups
 //
 // --expect must equal the resolved vault (a guard against scrubbing the wrong
 // folder). With --backup-dir, every file it changes is first copied into a
