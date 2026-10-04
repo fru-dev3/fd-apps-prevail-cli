@@ -857,8 +857,14 @@ async function runBriefingLoop(p: {
     const pendingAll = Object.values(rt.loops).flatMap((e) => e.pending.map((x) => x.text));
 
     onPhase("think", `Writing the briefing with ${runModel || cli.label}`);
-    const prompt = buildBriefingDigestPrompt(domainLabel, loop, state, memory, taskRollup, pendingAll);
-    const output = (await runChatTurn({ prompt, cwd: domainDir, cli, model: runModel, isFirst: true, bare: true, guard: LOOP_GUARD, signal: AbortSignal.timeout(LOOP_TURN_TIMEOUT_MS) })).trim();
+    // The knowledge sources in scope for this domain (briefings on) lead the
+    // prompt, read under the ceilings; the provenance line is added in code.
+    const { briefingKnowledge } = await import("./briefings.ts");
+    const known = await briefingKnowledge(root, { domain: basename(domainDir), prompt: buildBriefingDigestPrompt(domainLabel, loop, state, memory, taskRollup, pendingAll) });
+    const prompt = known.prompt;
+    let output = (await runChatTurn({ prompt, cwd: domainDir, cli, model: runModel, isFirst: true, bare: true, guard: LOOP_GUARD, signal: AbortSignal.timeout(LOOP_TURN_TIMEOUT_MS) })).trim();
+    const footer = (await import("./knowledge-sources.ts")).sourcesFooter(known.reads);
+    if (footer) output = `${output}\n\n${footer}`;
 
     onPhase("apply", `Delivering to ${channel}`);
     // Synthetic briefing entry so we reuse the same delivery code paths.

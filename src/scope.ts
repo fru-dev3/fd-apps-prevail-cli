@@ -69,6 +69,21 @@ export interface ResolvedScope {
   privacy: { localOnly: boolean };
   goals: { ids: string[] };
   mission?: Mission;
+  /** The knowledge sources in this scope (their note is a block; MCP and web
+   *  ones are attached to the turn like a referenced source). */
+  sources?: string[];
+}
+
+/** The note on the knowledge sources in scope, and their ids. Nothing when
+ *  there are none, so a vault without sources gets byte-identical context. */
+function knowledgeScope(vault: string, use: { domain?: string; project?: string }): { block?: ContextBlock; ids: string[] } {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ks = require("./knowledge-sources.ts") as typeof import("./knowledge-sources.ts");
+    const list = ks.sourcesFor(vault, use);
+    const text = ks.knowledgeNote(list);
+    return text ? { block: { source: "knowledge", text }, ids: list.map((s) => s.id) } : { ids: [] };
+  } catch { return { ids: [] }; }
 }
 
 const APP_ID_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
@@ -133,12 +148,15 @@ export async function resolveScope(vault: string, i: ScopeInput): Promise<Resolv
     try { const p = missionPointer(vault, key, i.message); if (p) blocks.push({ source: "missions", text: p }); } catch { /* a pointer is a nicety */ }
   }
   const kind = scopeApp ? "app" : entityIds.length ? "entity" : "domain";
+  const known = kind === "domain" ? knowledgeScope(vault, { domain: key || "general" }) : { ids: [] };
+  if (known.block) blocks.push(known.block);
   return {
     kind, key, domain, cwd: domain.path, label: scopeApp ? scopeApp : domain.name, appIds, apps, entityIds, blocks,
     // Dispatch runs on domain turns only; never on an app or entity chat.
     dispatch: { allowed: kind === "domain", defaultOwner: key || "general" },
     privacy: { localOnly: false },
     goals: { ids: [] },
+    ...(known.ids.length ? { sources: known.ids } : {}),
   };
 }
 
@@ -286,8 +304,11 @@ async function resolveMission(vault: string, slug: string, i: ScopeInput): Promi
   const peopleBlocks = await namedBlocks(vault, { entityIds: people, appIds: [], apps, self: key, entityBudget: MISSION_PEOPLE_BUDGET });
   const rest = await namedBlocks(vault, { entityIds: named.filter((x) => !people.includes(x)), appIds, apps, googleAccount: i.googleAccount, refDomains: i.refDomains, self: key, entityBudget: ENTITY_BUDGET });
   blocks.push(...peopleBlocks, ...rest);
+  const known = knowledgeScope(vault, { project: slug });
+  if (known.block) blocks.push(known.block);
 
   return {
+    ...(known.ids.length ? { sources: known.ids } : {}),
     kind: "mission", key,
     domain: { name: key, path: dir, hasState: existsSync(join(dir, "memory", "state.md")), openLoopCount: 0, stateMtime: null, skills: [] },
     cwd: dir, label: v.name, appIds, apps, entityIds: uniq([...people, ...named]), blocks,

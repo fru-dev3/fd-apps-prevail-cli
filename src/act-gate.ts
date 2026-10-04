@@ -107,7 +107,7 @@ export function actHash(tool: string, argsJson: string): string {
 // ── Classification ───────────────────────────────────────────────────────────
 // Engine-owned servers gate their own writes (google_workspace queues, prevail
 // tools write only inside the vault); everything they do is allowed here.
-const ENGINE_OWNED = /^mcp__(google_workspace|prevail)(__|$)/;
+const ENGINE_OWNED = /^mcp__(google_workspace|prevail|prevail_sources)(__|$)/;
 
 // Read-shaped verbs: run live. Matched against the tool's last segment.
 // NOTE: `export` and `download` are deliberately NOT read verbs. An

@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
 } from "node:fs";
+import { maskDeep } from "./secret-redact.ts";
 
 const DATA_DIR = join(homedir(), ".prevail");
 const SESSIONS_DIR = join(DATA_DIR, "sessions");
@@ -447,7 +448,8 @@ export function writeThreadTurn(
     }
     const file = threadJsonlPath(vaultPath, domain, sessionId);
     const isNew = !existsSync(file);
-    appendFileSync(file, JSON.stringify(turn) + "\n");
+    // Secrets never enter the vault.
+    appendFileSync(file, JSON.stringify(maskDeep(turn).value) + "\n");
     // SECURITY: thread transcripts contain the full conversation including
     // anything the operator pasted. Lock to owner-only on first create, same
     // posture as the sessions.db / prompt logs above.

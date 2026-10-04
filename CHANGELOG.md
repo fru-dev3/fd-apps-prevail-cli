@@ -7,6 +7,16 @@ The release page on GitHub mirrors the same notes for each tag:
 
 ---
 
+## [1.10.7] - 2026-10-04 · Knowledge sources, secrets masked, safer profiles
+
+### Added
+- **Knowledge sources**: `prevail sources add|list|check|use|remove` for MCP servers, websites and feeds, folders and read-only databases (SQLite, Postgres). Briefings and playbooks read the sources in scope and cite them. Read-only is enforced in code; secrets go to the Keychain.
+- A small daily allowance notices topics with no home on turns that name no domain.
+
+### Changed
+- Passwords, keys, tokens and card numbers are masked wherever text enters the vault (capture, threads, entities, decisions, notes, sources), plus a one-time `scrub-secrets` tool.
+- A playbook loop runs without a local AI CLI; a stopped job names the limit that stopped it.
+
 ## [1.10.6] - 2026-10-03 · Compass, specialists, Entities and Activities, projects
 
 ### Added

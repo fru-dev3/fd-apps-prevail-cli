@@ -51,7 +51,7 @@ import { readRouteOverrides, type RouteOverride } from "./route-learning.ts";
 import { updateMirrorStatus } from "./apps-mirror.ts";
 import { appReadTools, initAppProblems, appToolAccess, mirrorApps, planAppRouting } from "./app-scope.ts";
 import type { MirrorApp } from "./apps-mirror.ts";
-import { turnSources } from "./trusted-sources.ts";
+import { trustedSourceApps, turnSources } from "./trusted-sources.ts";
 import { APP_SCOPE_PREFIX } from "./path-safety.ts";
 import { isCliKind } from "./config.ts";
 import { classifyTouches } from "./route.ts";
@@ -832,7 +832,9 @@ export async function runChatJson(opts: ChatJsonOptions): Promise<number> {
     } : {}),
     // Referenced trusted sources: remote MCP servers and fetchable hosts.
     ...(() => {
-      const t = turnSources(apps.filter((a) => appIds.includes(a.id)));
+      // Plus the knowledge sources in this scope (scope.ts), when trusted here.
+      const scoped = scope.sources?.length ? trustedSourceApps(vaultPath).filter((a) => scope.sources!.includes(a.id) && !appIds.includes(a.id)) : [];
+      const t = turnSources([...apps.filter((a) => appIds.includes(a.id)), ...scoped]);
       return { ...(Object.keys(t.remoteMcp).length ? { remoteMcp: t.remoteMcp } : {}), ...(t.fetchHosts.length ? { fetchHosts: t.fetchHosts } : {}) };
     })(),
   };

@@ -47,6 +47,7 @@ import { displayLine, parseJsonAnswer, runModelOnce, SYNTH_DEFAULTS, type ModelC
 import { tryAcquireLock } from "./file-lock.ts";
 import { readAutosave, type AutosaveMode } from "./config.ts";
 import { vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
+import { maskDeep, maskSecrets } from "./secret-redact.ts";
 
 // ---------------------------------------------------------------------------
 // contract types
@@ -135,9 +136,10 @@ function readJson<T>(path: string, fallback: T): T {
   try { return JSON.parse(vreadFile(path)) as T; } catch { return fallback; }
 }
 
+// Secrets never enter the vault: every index, cache and page is masked on write.
 function writeJson(path: string, v: unknown) {
   mkdirSync(dirname(path), { recursive: true });
-  vwriteFile(path, `${JSON.stringify(v, null, 2)}\n`);
+  vwriteFile(path, `${JSON.stringify(maskDeep(v).value, null, 2)}\n`);
 }
 
 export function slugify(name: string): string {
@@ -441,8 +443,8 @@ function parseTagAnswer(out: string, ids: string[]): Record<string, TagEntity[]>
 function snippetFor(s: SittingLike, name: string): string {
   const low = name.toLowerCase();
   const hit = s.prompts.find((p) => p.text.toLowerCase().includes(low));
-  if (!hit) return displayLine(s.prompts[0]?.text ?? "", 240);
-  const flat = displayLine(hit.text, 100000);
+  if (!hit) return maskSecrets(displayLine(s.prompts[0]?.text ?? "", 240));
+  const flat = displayLine(maskSecrets(hit.text), 100000);
   return windowAround(flat, name, 240);
 }
 
@@ -669,7 +671,7 @@ export function writePage(vault: string, kind: EntityKind, slug: string, d: Page
   const flat = flatPath(vault, kind, slug);
   if (!existsSync(p) && existsSync(flat)) migrateOne(flat, p);
   mkdirSync(dirname(p), { recursive: true });
-  vwriteFile(p, renderPage(d));
+  vwriteFile(p, maskSecrets(renderPage(d)));
 }
 
 // Move one flat page into its folder. Never overwrites: when entity.md is

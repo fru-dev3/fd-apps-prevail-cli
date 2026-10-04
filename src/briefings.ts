@@ -30,6 +30,10 @@ export interface BriefingEntry {
   // Extra delivery channels beyond log/telegram. Each routes through a hook the
   // caller supplies (wired to a connected email/drive app); inert if no hook.
   channels?: ("email" | "drive")[];
+  // Knowledge sources (knowledge-sources.ts): the ones this briefing reads by
+  // name. Absent: the sources in scope for its domain with briefings on.
+  // "none" alone turns source reading off for this briefing.
+  sources?: string[];
   enabled: boolean;
   last_run: number | null;
   created_at: number;
@@ -82,6 +86,21 @@ export interface BriefingResult {
   output: string; // verdict (council) or reply (single)
   delivered: { log: boolean; telegram: number; channels?: Record<string, string> };
   error?: string;
+  /** The knowledge sources read for this run, and how each went. */
+  sources?: import("./knowledge-sources.ts").RunRead[];
+}
+
+/** Read a briefing's knowledge sources under the ceilings: the prompt it runs
+ *  with (sources first) and the reads. Never throws. */
+export async function briefingKnowledge(vaultPath: string, entry: Pick<BriefingEntry, "domain" | "prompt" | "sources">, deps: { fetch?: (input: string, init?: RequestInit) => Promise<Response> } = {}): Promise<{ prompt: string; reads: import("./knowledge-sources.ts").RunRead[] }> {
+  if (entry.sources?.length === 1 && entry.sources[0] === "none") return { prompt: entry.prompt, reads: [] };
+  try {
+    const ks = await import("./knowledge-sources.ts");
+    const list = ks.sourcesFor(vaultPath, entry.sources?.length ? { names: entry.sources } : { domain: entry.domain, briefing: true });
+    if (!list.length) return { prompt: entry.prompt, reads: [] };
+    const k = await ks.knowledgeForRun(vaultPath, list, { query: entry.prompt, fetch: deps.fetch });
+    return { prompt: k.block ? `${k.block}\n\n---\n\n${entry.prompt}` : entry.prompt, reads: k.reads };
+  } catch { return { prompt: entry.prompt, reads: [] }; }
 }
 
 // Route a finished briefing to every configured channel. Pure of the model
@@ -171,6 +190,9 @@ export async function runBriefing(
 
   let output: string;
   let cliLabel: string;
+  // The knowledge sources in scope lead the prompt; the output cites them.
+  const known = await briefingKnowledge(vaultPath, entry);
+  const prompt = known.prompt;
   try {
     if (entry.mode === "council") {
       const panel = buildCouncilPanel(clis);
@@ -185,7 +207,7 @@ export async function runBriefing(
         };
       }
       const result = await runCouncilOneShot({
-        prompt: entry.prompt,
+        prompt,
         cwd: domain.path,
         panelists: panel,
         signal,
@@ -196,7 +218,7 @@ export async function runBriefing(
     } else {
       const cli = clis.find((c) => c.kind === "claude") ?? clis[0]!;
       output = await runChatTurn({
-        prompt: entry.prompt,
+        prompt,
         cwd: domain.path,
         cli,
         model: "",
@@ -217,9 +239,13 @@ export async function runBriefing(
     };
   }
 
+  // The provenance line is added in code, so the citation never depends on the model.
+  const { sourcesFooter } = await import("./knowledge-sources.ts");
+  const footer = sourcesFooter(known.reads);
+  if (footer) output = `${output.trimEnd()}\n\n${footer}`;
   const delivered = await deliverBriefing(entry, output, ts, cliLabel, domain.path, deliverTelegram, hooks);
 
-  return { id: entry.id, ts, domain: entry.domain, output, delivered };
+  return { id: entry.id, ts, domain: entry.domain, output, delivered, ...(known.reads.length ? { sources: known.reads } : {}) };
 }
 
 // Fire any briefing whose cron is due. Returns the entries that ran so the
