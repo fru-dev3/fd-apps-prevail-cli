@@ -51,6 +51,7 @@ import { basename, delimiter, dirname, join } from "node:path";
 import { hostSlug } from "./capture.ts";
 import { appsContainer, runtimePath } from "./path-safety.ts";
 import PRICES from "./ai-prices.json" with { type: "json" };
+import { redactSecrets } from "./secret-redact.ts";
 
 // ── Prices ──────────────────────────────────────────────────────────────────
 
@@ -101,11 +102,11 @@ export interface AiRecord {
 
 const h = (s: string) => createHash("sha1").update(s).digest("hex").slice(0, 16);
 
-// Anything that looks like a credential never lands in the vault.
-const SECRET = /(sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|-----BEGIN|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{10,}|AIza[0-9A-Za-z_-]{30,})/;
+// Anything that looks like a credential never lands in the vault (the shared
+// masker; a field holding one is dropped whole).
 export function scrub(s: string | undefined): string | undefined {
   if (s === undefined) return undefined;
-  return SECRET.test(s) ? "[redacted]" : s;
+  return redactSecrets(s).count ? "[redacted]" : s;
 }
 
 // ── Roots (overridable for tests) ───────────────────────────────────────────

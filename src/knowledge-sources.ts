@@ -31,6 +31,7 @@ import {
   dbQuery, dbTables, isDirPath, parseDbLocation, probePage, readFolderFile, readWeb, walkFolder,
   type DbEngine,
 } from "./source-readers.ts";
+import { maskSecrets } from "./secret-redact.ts";
 
 export type KnowledgeKind = "mcp" | "web" | "folder" | "database";
 export const KNOWLEDGE_KINDS: readonly KnowledgeKind[] = ["mcp", "web", "folder", "database"];
@@ -390,7 +391,12 @@ function secretOf(vault: string, id: string): string | undefined {
 
 /** A source's text for a briefing or playbook: what is newest or most on
  *  topic, capped at `cap` characters. Read-only, this Mac's allowlist only. */
+// What a source returns is masked before it reaches a run, a thread or the vault.
 export async function readForRun(vault: string, src: KnowledgeSource, o: { query?: string; cap: number; signal?: AbortSignal; fetch?: Fetch }): Promise<string> {
+  return maskSecrets(await readForRunRaw(vault, src, o));
+}
+
+async function readForRunRaw(vault: string, src: KnowledgeSource, o: { query?: string; cap: number; signal?: AbortSignal; fetch?: Fetch }): Promise<string> {
   const e = readRegistry(vault)[src.id];
   if (!e) throw new Error("not trusted on this Mac");
   const cap = o.cap;

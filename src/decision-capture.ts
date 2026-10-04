@@ -18,6 +18,7 @@ import { listDomainDirs } from "./vault-layout-v4.ts";
 import { resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { scoreDomains } from "./domain-touch.ts";
 import { vwriteFile } from "./vault-session.ts";
+import { maskSecrets } from "./secret-redact.ts";
 
 // Verbs that make "I'll ..." or "I'm going to ..." a decision rather than a step in a task.
 const VERBS = "archive|learn|quit|sell|buy|move to|cancel|hire|fire|join|retire|refinance|enroll in|launch|shut down|wind down|pay off|sign up for|give up|switch to|start learning|start taking|stop working|stop using|stop paying";
@@ -74,7 +75,7 @@ export interface Captured { domain: string; slug: string; what: string; decided:
 
 /** Save a decided record for a decision heard in a chat turn. Null when there is none, or it is already saved. */
 export function captureDecision(vault: string, i: { text: string; domain: string; thread: string; now?: number }): Captured | null {
-  const d = decisionMade(i.text);
+  const d = decisionMade(maskSecrets(i.text));
   if (!d) return null;
   const now = i.now ?? Date.now();
   const domain = i.domain && !i.domain.startsWith("_") ? i.domain : "general";
@@ -90,7 +91,7 @@ export function captureDecision(vault: string, i: { text: string; domain: string
     sections: { Context: `Said in a conversation: "${d.said}"`, Decision: `${d.what}\n\nDecided ${decided}, in conversation.` },
   };
   mkdirSync(dir, { recursive: true });
-  vwriteFile(r.file, renderRecord(r));
+  vwriteFile(r.file, maskSecrets(renderRecord(r)));
   return { domain, slug, what: d.what, decided, thread: i.thread };
 }
 

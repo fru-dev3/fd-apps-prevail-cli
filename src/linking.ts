@@ -37,6 +37,7 @@ import { activeMissions as listActiveMissions } from "./missions.ts";
 import { TOUCH_MAX_DOMAINS, TOUCH_MIN_MESSAGE, labelFor, type TouchEntityOption, type TouchHit, type TouchOptions, type TouchProjectOption, type TouchResult, type UnhomedHit } from "./route.ts";
 import { vappendLine, vreadFile, vwriteFile, vwriteFileAtomic } from "./vault-session.ts";
 import { noteInMemory, scoreDomains, spendModelCall, STRONG, UNHOMED_MIN_CHARS, UNHOMED_PER_DAY } from "./domain-touch.ts";
+import { maskDeep } from "./secret-redact.ts";
 
 export interface DomainUpdate { ts: number; from_domain: string; thread: string; fact: string; entities: string[] }
 export interface EntityUpdate { ts: number; from_domain: string; thread: string; fact: string }
@@ -75,7 +76,7 @@ export function readUnhomed(vault: string): UnhomedLine[] {
 export function appendJsonl(path: string, row: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const lock = tryAcquireLock(`${path}.lock`);
-  try { vappendLine(path, `${JSON.stringify(row)}\n`); } finally { lock?.release(); }
+  try { vappendLine(path, `${JSON.stringify(maskDeep(row).value)}\n`); } finally { lock?.release(); }
 }
 
 export function readJsonl<T>(path: string): T[] {
