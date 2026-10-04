@@ -45,8 +45,10 @@ export type PlaybookStep =
   | { kind: "skill"; app: string; skill: string; inputs?: Record<string, unknown>; label?: string }
   // output: the file (in its domain, {date} allowed) the step must write; it
   // then counts as done only when that file exists, and later steps read it.
-  | { kind: "agent"; goal: string; domain?: string; web?: boolean; label?: string; output?: string }
-  | { kind: "synthesize"; domain: string; output: string; instruction: string; label?: string }
+  // sources: the knowledge sources the step reads by name (absent: the ones in
+  // scope for its domain with briefings on; ["none"]: none).
+  | { kind: "agent"; goal: string; domain?: string; web?: boolean; label?: string; output?: string; sources?: string[] }
+  | { kind: "synthesize"; domain: string; output: string; instruction: string; label?: string; sources?: string[] }
   // The week's metrics glance, computed by code (never written by a model),
   // to `output`; with appendTo, also added to the end of that file.
   | { kind: "glance"; domain: string; output: string; appendTo?: string; label?: string }
@@ -175,6 +177,25 @@ export async function runPlaybook(
 
   const clis = await detectClis();
   const cli: AvailableCli | undefined = clis.find((c) => c.kind === ctx.provider) ?? clis[0];
+  // Knowledge sources for agent and synthesize steps: read once per run and
+  // per set of sources, under the read ceilings (knowledge-sources.ts).
+  const knowCache = new Map<string, Promise<string>>();
+  const know: Know = (domain, names) => {
+    if (names?.length === 1 && names[0] === "none") return Promise.resolve("");
+    const key = names?.length ? `n:${names.join(",")}` : `d:${domain ?? playbook.domain ?? "general"}`;
+    if (!knowCache.has(key)) {
+      knowCache.set(key, (async () => {
+        try {
+          const ks = await import("./knowledge-sources.ts");
+          const list = ks.sourcesFor(ctx.vault, names?.length ? { names } : { domain: domain ?? playbook.domain ?? "general", briefing: true });
+          if (!list.length) return "";
+          const k = await ks.knowledgeForRun(ctx.vault, list, { query: playbook.goal });
+          return k.block;
+        } catch { return ""; }
+      })());
+    }
+    return knowCache.get(key)!;
+  };
 
   for (let i = 0; i < playbook.steps.length; i++) {
     if (ctx.signal?.aborted) {
@@ -192,7 +213,7 @@ export async function runPlaybook(
         await runSkillStep(step, ctx, res);
         collected.push(...res.outputs);
       } else if (step.kind === "agent") {
-        await runAgentStep(step, ctx, cli, runDir, collected, res);
+        await runAgentStep(step, ctx, cli, runDir, collected, res, know);
         collected.push(...res.outputs);
       } else if (step.kind === "glance") {
         await runGlanceStep(step, ctx, res);
@@ -216,7 +237,7 @@ export async function runPlaybook(
         res.ok = r.ok;
         res.note = r.error ?? r.note;
       } else {
-        await runSynthesizeStep(step, ctx, cli, collected, res);
+        await runSynthesizeStep(step, ctx, cli, collected, res, know);
         collected.push(...res.outputs);
       }
     } catch (e) {
@@ -272,7 +293,10 @@ async function runSkillStep(step: Extract<PlaybookStep, { kind: "skill" }>, ctx:
 
 // An agent step is a Claude-CLI turn with act:true — full file/shell/web tooling.
 // Gated by the classified intent of its goal.
-async function runAgentStep(step: Extract<PlaybookStep, { kind: "agent" }>, ctx: OrchestratorCtx, cli: AvailableCli | undefined, runDir: string, collected: string[], res: StepResult): Promise<void> {
+type Know = (domain?: string, names?: string[]) => Promise<string>;
+const withKnowledge = (block: string, prompt: string) => (block ? `${block}\n\n---\n\n${prompt}` : prompt);
+
+async function runAgentStep(step: Extract<PlaybookStep, { kind: "agent" }>, ctx: OrchestratorCtx, cli: AvailableCli | undefined, runDir: string, collected: string[], res: StepResult, know: Know = async () => ""): Promise<void> {
   const gate = gateAction(step.goal, { vault: ctx.vault, autonomousActs: ctx.autonomousActs });
   res.decision = gate.decision;
   if (gate.decision !== "auto") { res.note = gate.reason ?? gate.decision; return; }
@@ -283,7 +307,7 @@ async function runAgentStep(step: Extract<PlaybookStep, { kind: "agent" }>, ctx:
   const outAbs = output ? resolve(cwd, output.replace(/^\/+/, "")) : "";
   if (outAbs && !outAbs.startsWith(cwd)) { res.note = "refusing to write outside the domain"; return; }
   const deliver = outAbs ? `\n\nWrite your result to: ${outAbs} (create folders as needed). The step counts as done only when that file exists.` : "";
-  const prompt = `You are executing one step of an autonomous playbook on the user's behalf.\n\nGoal: ${expandOutput(step.goal)}${context}${deliver}\n\nWork in: ${cwd}. Use your tools. Stay strictly within this goal: do not take consequential actions (money, sends, deletes) and do not go beyond what was asked.`;
+  const prompt = withKnowledge(await know(step.domain, step.sources), `You are executing one step of an autonomous playbook on the user's behalf.\n\nGoal: ${expandOutput(step.goal)}${context}${deliver}\n\nWork in: ${cwd}. Use your tools. Stay strictly within this goal: do not take consequential actions (money, sends, deletes) and do not go beyond what was asked.`);
   const out = await runChatTurn({ prompt, cwd, cli, model: ctx.model || "", isFirst: true, bare: false, act: true, webAccess: step.web ? "allow" : "deny", signal: ctx.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS), maxOutputChars: 8000 });
   if (outAbs) {
     res.ok = existsSync(outAbs);
@@ -299,7 +323,7 @@ async function runAgentStep(step: Extract<PlaybookStep, { kind: "agent" }>, ctx:
 
 // A synthesize step reads everything gathered and writes a summary doc into a
 // domain. Writing a doc is a reversible action; still gated for consistency.
-async function runSynthesizeStep(step: Extract<PlaybookStep, { kind: "synthesize" }>, ctx: OrchestratorCtx, cli: AvailableCli | undefined, collected: string[], res: StepResult): Promise<void> {
+async function runSynthesizeStep(step: Extract<PlaybookStep, { kind: "synthesize" }>, ctx: OrchestratorCtx, cli: AvailableCli | undefined, collected: string[], res: StepResult, know: Know = async () => ""): Promise<void> {
   const gate = gateAction(`write summary document ${step.output}`, { vault: ctx.vault, autonomousActs: ctx.autonomousActs });
   res.decision = gate.decision;
   if (gate.decision !== "auto") { res.note = gate.reason ?? gate.decision; return; }
@@ -309,7 +333,7 @@ async function runSynthesizeStep(step: Extract<PlaybookStep, { kind: "synthesize
   const outAbs = resolve(domainDir, output.replace(/^\/+/, ""));
   if (!outAbs.startsWith(domainDir)) { res.note = "refusing to write outside the domain"; return; }
   const sources = collected.length ? collected.map((p) => `- ${p}`).join("\n") : "(no prior data — note what's missing)";
-  const prompt = `You are the synthesis step of an autonomous playbook. Read the data files below and write a single clear markdown summary to: ${outAbs}\n\nData files:\n${sources}\n\nInstruction: ${step.instruction}\n\nWrite the file with your file tool. Be concise and concrete; cite the numbers. Do not take any other action.`;
+  const prompt = withKnowledge(await know(step.domain, step.sources), `You are the synthesis step of an autonomous playbook. Read the data files below and write a single clear markdown summary to: ${outAbs}\n\nData files:\n${sources}\n\nInstruction: ${step.instruction}\n\nWrite the file with your file tool. Be concise and concrete; cite the numbers. Do not take any other action.`);
   await runChatTurn({ prompt, cwd: domainDir, cli, model: ctx.model || "", isFirst: true, bare: false, act: true, webAccess: "deny", signal: ctx.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS), maxOutputChars: 4000 });
   if (existsSync(outAbs)) { res.ok = true; res.outputs.push(outAbs); res.note = `wrote ${output}`; }
   else { res.note = "synthesis produced no file"; }
