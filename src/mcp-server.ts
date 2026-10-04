@@ -539,6 +539,14 @@ async function callTool(name: string, args: Record<string, unknown>, vaultPath: 
       return wrapText(await tApproveLoopAction(args, vaultPath));
     case "list_apps":
       return wrapText(tListApps(vaultPath) + tListMirrorApps(vaultPath));
+    // Knowledge sources, read-only (knowledge-sources.ts enforces every limit).
+    case "list_knowledge_sources":
+    case "read_knowledge_source":
+    case "query_knowledge_database": {
+      const { sourceToolCall } = await import("./knowledge-sources.ts");
+      const tool = name === "list_knowledge_sources" ? "list_sources" : name === "read_knowledge_source" ? "read_source" : "query_database";
+      return wrapText(await sourceToolCall(vaultPath, tool, args));
+    }
     case "vault_status":
       return wrapText(tVaultStatus(vaultPath));
     case "sync_app":
@@ -901,6 +909,21 @@ export function mcpTools(): McpTool[] {
         },
         required: ["domain", "action"],
       },
+    },
+    {
+      name: "list_knowledge_sources",
+      description: "List the user's knowledge sources (MCP servers, sites and feeds, folders, databases) trusted on this Mac, with what each is used for. Read-only.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "read_knowledge_source",
+      description: "Read one knowledge source, read-only: a folder's files (path optional, confined to the folder), a site or feed (same site only), a database's tables, or one registered read tool of an MCP source (tool, arguments).",
+      inputSchema: { type: "object", properties: { source: { type: "string" }, path: { type: "string" }, url: { type: "string" }, tool: { type: "string" }, arguments: { type: "object" } }, required: ["source"] },
+    },
+    {
+      name: "query_knowledge_database",
+      description: "Run one read-only SELECT on a database knowledge source (at most 200 rows; anything but a single SELECT is refused).",
+      inputSchema: { type: "object", properties: { source: { type: "string" }, sql: { type: "string" } }, required: ["source", "sql"] },
     },
     {
       name: "list_apps",

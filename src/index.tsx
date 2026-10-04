@@ -151,6 +151,7 @@ interface Args {
   gwsMcpAccount: string | null;
   actsMcp: boolean;
   actsMcpDomain: string | null;
+  sourcesMcp: boolean;
   gws: boolean;
   gwsArgs: string[];
   role: boolean;
@@ -295,6 +296,7 @@ function parseArgs(argv: string[]): Args {
   let gwsMcpAccount: string | null = null;
   let actsMcp = false;
   let actsMcpDomain: string | null = null;
+  let sourcesMcp = false;
   let gws = false;
   let gwsArgs: string[] = [];
   let role = false;
@@ -585,11 +587,12 @@ function parseArgs(argv: string[]): Args {
         else if (f.startsWith("--account=")) { gwsMcpAccount = f.slice("--account=".length); }
       }
       break;
-    } else if (a === "acts-mcp") {
+    } else if (a === "acts-mcp" || a === "sources-mcp") {
       // Prevail's own action-primitive MCP server the agent launches:
       // `prevail acts-mcp --vault <path> [--domain <d>]`. Same launch-flag shape
       // as gws-mcp (parse --vault / --domain inline before break).
-      actsMcp = true;
+      // `prevail sources-mcp --vault <path>`: the read-only knowledge sources.
+      if (a === "sources-mcp") sourcesMcp = true; else actsMcp = true;
       for (let j = i + 1; j < argv.length; j++) {
         const f = argv[j];
         if (f === "--vault" || f === "-d") { if (argv[j + 1]) { vaultPath = resolve(process.cwd(), argv[j + 1]); j++; } }
@@ -756,6 +759,7 @@ function parseArgs(argv: string[]): Args {
     gwsMcpAccount,
     actsMcp,
     actsMcpDomain,
+    sourcesMcp,
     gws,
     gwsArgs,
     role,
@@ -1355,10 +1359,12 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
     let mode: "single" | "council" = "single";
     let deliver: "log" | "telegram" | "both" = "log";
     let channels: ("email" | "drive")[] = [];
+    let sources: string[] = [];
     for (let i = 1; i < args.length; i++) {
       const a = args[i];
       const v = args[i + 1];
-      if (a === "--cron" && v) { cron = v; i++; }
+      if (a === "--sources" && v) { sources = v.split(",").map((s) => s.trim()).filter(Boolean); i++; }
+      else if (a === "--cron" && v) { cron = v; i++; }
       else if (a === "--domain" && v) { domain = v; i++; }
       else if (a === "--prompt" && v) { prompt = v; i++; }
       else if (a === "--name" && v) { name = v; i++; }
@@ -1372,7 +1378,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
       }
     }
     if (!cron || !domain || !prompt) {
-      console.error('usage: prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver telegram|both] [--channels email,drive]');
+      console.error('usage: prevail briefing add --cron "<cron>" --domain <name> --prompt "<text>" [--mode council] [--deliver telegram|both] [--channels email,drive] [--sources id,id|none]');
       process.exit(1);
     }
     if (!isValidCron(cron)) {
@@ -1393,6 +1399,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
       mode,
       deliver,
       channels: channels.length ? channels : undefined,
+      ...(sources.length ? { sources } : {}),
       enabled: true,
       last_run: null,
       created_at: Date.now(),
@@ -1481,6 +1488,7 @@ async function briefingCommand(args: string[], vaultOverride: string | null): Pr
       ? Object.entries(r.delivered.channels).map(([k, v]) => `${k}: ${v}`).join(", ")
       : "";
     console.log(`delivered to log: ${r.delivered.log}, telegram: ${r.delivered.telegram}${chLine ? ", channels: " + chLine : ""}`);
+    if (r.sources?.length) console.log(`sources: ${r.sources.map((x) => `${x.name} ${x.ok ? `(${x.chars} chars, ${x.ms} ms)` : `(not read: ${x.error})`}`).join(", ")}`);
     return;
   }
 
@@ -3272,7 +3280,7 @@ async function appsCommand(a: string[], vaultPath?: string | null): Promise<void
       // A trusted source: the user's own site, read-only (trusted-sources.ts).
       const urls = a.flatMap((x, i) => (x === "--url" && a[i + 1] ? [a[i + 1]!] : x.startsWith("--url=") ? [x.slice(6)] : []));
       const { addSource } = await import("./trusted-sources.ts");
-      const r = await addSource(vault, { kind: get("--kind") ?? "", urls, name: get("--name") ?? "" });
+      const r = await addSource(vault, { kind: get("--kind") ?? "", urls, name: get("--name") ?? "", ...(get("--location") ? { location: get("--location") } : {}) });
       if (json) { out(r); return; }
       console.log(`${r.adopted ? "adopted" : "added"} ${r.app.id} (${r.app.integration}): ${r.probe.ok ? "reachable" : `check failed: ${r.probe.error}`}`);
       for (const t of r.probe.tools ?? []) console.log(`  ${t.kind.padEnd(6)} ${t.name}`);
@@ -7371,6 +7379,14 @@ async function main() {
     const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
     const { runGwsMcpServer } = await import("./gws-mcp.ts");
     await runGwsMcpServer(vault, args.gwsMcpDomain ?? undefined, args.gwsMcpAccount ?? undefined);
+    return;
+  }
+  if (args.sourcesMcp) {
+    // The read-only knowledge sources (list_sources / read_source / query_database).
+    const cfg = readConfig();
+    const vault = args.vaultPath ?? cfg?.vaultPath ?? bundledDemoVaultPath();
+    const { runSourcesMcpServer } = await import("./sources-mcp.ts");
+    await runSourcesMcpServer(vault);
     return;
   }
   if (args.actsMcp) {
