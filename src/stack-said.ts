@@ -13,7 +13,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { appsContainer, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { productDir, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { parseModArgs } from "./cli-args.ts";
 
 export interface ListedTool { tool: string; keys: string[]; status: string; line: number; section: string }
@@ -79,7 +79,7 @@ export async function computeStackDiff(vault: string, now = Date.now()): Promise
   // An app is also known by its sites and bundles (claude.ai, chatgpt.com, linkedin.com).
   const aka = (id: string): string[] => {
     try {
-      const m = JSON.parse(readFileSync(join(appsContainer(vault), id, "manifest.json"), "utf8")) as { identifiers?: { domains?: string[] }; aliases?: string[] };
+      const m = JSON.parse(readFileSync(join(productDir(vault, id), "manifest.json"), "utf8")) as { identifiers?: { domains?: string[] }; aliases?: string[] };
       return [...(m.aliases ?? []), ...(m.identifiers?.domains ?? []).map((d) => d.replace(/\.(com|ai|io|tech|app|org|net|dev|co)$/, "").replace(/^www\./, ""))];
     } catch { return []; }
   };

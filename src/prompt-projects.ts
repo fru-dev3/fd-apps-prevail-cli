@@ -29,7 +29,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSafeModelId, scrubbedEnv, sanitizeEmDashes } from "./cli-bridge.ts";
-import { runtimePath } from "./path-safety.ts";
+import { isAppFolder, productFolders, runtimePath } from "./path-safety.ts";
 import { loadCorpus, monthOf, readCorpusConfig, type CorpusStats, type PromptRec } from "./prompt-corpus.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 
@@ -739,7 +739,7 @@ function listSkills(vault: string): string[] {
 }
 
 function listApps(vault: string): string[] {
-  try { return readdirSync(join(vault, "data", "apps"), { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith(".") && !d.name.startsWith("_")).map((d) => d.name); } catch { return []; }
+  try { return productFolders(vault).filter((f) => isAppFolder(f.dir)).map((f) => f.id); } catch { return []; }
 }
 
 // The prompt a user hands a new model to rebuild a project: the brief, and

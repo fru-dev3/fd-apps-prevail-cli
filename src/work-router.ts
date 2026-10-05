@@ -99,7 +99,10 @@ export function buildCatalog(vault: string, o: Partial<Pick<Catalog, "machines" 
   } catch { /* no index */ }
   let apps: Catalog["apps"] = [];
   // App records come from their manifests, never their data.
-  try { apps = appRecords(vault).map((a) => ({ id: a.id, title: a.title })); } catch { /* none */ }
+  try { apps = appRecords(vault).filter((a) => !a.archived).map((a) => ({ id: a.id, title: a.title })); } catch { /* none */ }
+  // A product that carries an app is one home: its app chat (the app
+  // destination) lives on the product's page, so its entity row is dropped.
+  for (const a of apps) entities.delete(`product/${a.id}`);
   const specialists = loadSpecialists(vault).filter((s) => s.on).map((s) => ({ id: s.id, name: s.name, mandate: s.mandate.replace(/\s+/g, " ").slice(0, 100) }));
   const here = o.here ?? "local";
   return {
@@ -207,7 +210,7 @@ export function buildWorkPrompt(text: string, cat: Catalog): { system: string; p
     "Route each task to exactly one destination from the lists you are given, by id. Never invent an id.",
     "When a task needs a home that is not listed (a life area, a project, a person or other entity, an app, a specialist), still route it to the closest listed home, and name what is missing in `missing`.",
     "Reply with ONLY one JSON object, no prose and no code fence:",
-    '{"goals":[{"text":"<the goal in the user\'s words>","tasks":[{"text":"<one task, an imperative line with every name, date and amount the user said>","dest":{"kind":"domain|project|folder|entity|app","id":"<listed id>"},"alternatives":[{"kind":"...","id":"..."}],"confidence":<0..1>,"why":"<one short line>","specialists":["<listed specialist id>"],"shape":"find|plan|do|understand|make|act|negotiate|learn|relate|reflect","flags":{"open_ended":<bool>,"decision":<bool>,"money":<bool>,"numbers":<bool>},"effort":"quick|standard|deep","agent":"<agent kind, only when the user asked for one>","machine":"<machine label, only when the user named one or the work is deep>","missing":[{"kind":"domain|project|entity|app|specialist","name":"<short name>","why":"<one line>","draft":{"kind":"<for an entity only: person|place|org|thing|event>"}}]}]}]}',
+    '{"goals":[{"text":"<the goal in the user\'s words>","tasks":[{"text":"<one task, an imperative line with every name, date and amount the user said>","dest":{"kind":"domain|project|folder|entity|app","id":"<listed id>"},"alternatives":[{"kind":"...","id":"..."}],"confidence":<0..1>,"why":"<one short line>","specialists":["<listed specialist id>"],"shape":"find|plan|do|understand|make|act|negotiate|learn|relate|reflect","flags":{"open_ended":<bool>,"decision":<bool>,"money":<bool>,"numbers":<bool>},"effort":"quick|standard|deep","agent":"<agent kind, only when the user asked for one>","machine":"<machine label, only when the user named one or the work is deep>","missing":[{"kind":"domain|project|entity|app|specialist","name":"<short name>","why":"<one line>","draft":{"kind":"<for an entity only: person|place|product|thing|event>"}}]}]}]}',
     "`missing` is only for a home the work should have and does not (a life area, project, person, thing, app or specialist); never for a detail the prompt leaves out, like a file path or a date.",
     "For a missing entity, say what it is in draft.kind: a pet, a car or a gadget is a thing, a business is an org, only a human is a person.",
     "A project's code work goes to its folder (kind folder, the repo path as id). A person, place, product, thing or event the user names goes to that entity when it is listed.",

@@ -3,15 +3,15 @@
 // call belongs to, and the per-app access log.
 //
 // Files:
-//   <vault>/data/apps/<id>/_log/access.jsonl   one line per MCP call the act-gate
+//   <vault>/data/entities/products/<id>/_log/access.jsonl   one line per MCP call the act-gate
 //                                              hook saw for that app (reads too)
-//   <vault>/data/apps/<id>/_scope/_threads/    the app's own chat threads
+//   <vault>/data/entities/products/<id>/_scope/_threads/    the app's own chat threads
 //                                              (frontmatter `app: <id>`)
 //
 // The access log never holds a message body or an unredacted sensitive value:
 // each line carries the argument keys plus short, scanned values.
 
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   appDir,
@@ -31,7 +31,7 @@ import { scanLinks } from "./entities.ts";
 import { tryAcquireLock } from "./file-lock.ts";
 import { boundGoogleAccountLabel } from "./vault.ts";
 import { GOOGLE_APP_RE, accountEmail, classifyGwsCommand, googleAccounts } from "./gws-gateway.ts";
-import { APP_SCOPE_PREFIX, appsContainer, resolveDomainDir } from "./path-safety.ts";
+import { APP_SCOPE_PREFIX, productFolders, productWriteDir, resolveDomainDir } from "./path-safety.ts";
 import { vappendLine, vreadFile } from "./vault-session.ts";
 
 // ── Runtimes ─────────────────────────────────────────────────────────────────
@@ -329,7 +329,7 @@ export function recordAppAccess(
       ...(account ? { account: account.slice(0, 256) } : {}),
       summary: summarizeArgs(toolInput),
     };
-    const path = accessLogPath(vault, hit.appId);
+    const path = join(productWriteDir(vault, hit.appId), "_log", "access.jsonl");
     mkdirSync(join(path, ".."), { recursive: true });
     // One write of one short line (O_APPEND); the lock covers the encrypted
     // vault's read-modify-write append.
@@ -350,7 +350,7 @@ export function readAccessLog(vault: string, f: AccessFilter = {}): (AccessLine 
   let ids: string[] = [];
   if (f.app) ids = [f.app];
   else {
-    try { ids = readdirSync(appsContainer(vault)).filter((d) => !d.startsWith(".") && !d.startsWith("_")); } catch { ids = []; }
+    ids = productFolders(vault).map((f) => f.id);
   }
   const out: (AccessLine & { app: string })[] = [];
   for (const id of ids) {
@@ -380,7 +380,7 @@ export function readAccessLog(vault: string, f: AccessFilter = {}): (AccessLine 
 
 export interface AppThread { slug: string; title: string; updated: number; turns: number }
 
-/** The app's own chat threads (data/apps/<id>/_scope), newest first. */
+/** The app's own chat threads (data/entities/products/<id>/_scope), newest first. */
 export function appThreads(vault: string, id: string): AppThread[] {
   const scope = `_app-${id}`;
   const out: AppThread[] = [];

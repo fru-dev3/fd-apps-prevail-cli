@@ -30,7 +30,7 @@ import { computeUsage, type AppUsage } from "./app-stack.ts";
 import { aiUsageReport, VENDOR } from "./ai-usage.ts";
 import { tryInterrupt } from "./interruptions.ts";
 import { dayOf, hostSlug, readMachineEvents } from "./metrics.ts";
-import { appsContainer, runtimePath } from "./path-safety.ts";
+import { productDir, productsContainer, productWriteDir, runtimePath } from "./path-safety.ts";
 import { classifyGoogleError } from "./source-sync.ts";
 import { vwriteFile } from "./vault-session.ts";
 
@@ -344,7 +344,7 @@ export function detectCards(stack: Stack, now: number): Card[] {
     out.push({ key: cardKey("duplicate", cat, as.map((a) => a.id).sort().join(",")), kind: "duplicate", app: least.id, title: `${as.length} paid ${categoryTitle(cat).toLowerCase()} apps: ${as.map((a) => a.name).join(", ")}`, why: `${least.name}: ${least.usage?.active_days.d30 ?? 0} active days in 30`, actions: ["keep", "review"], urgent: false });
   }
   for (const a of stack.apps) if (a.why.includes("billed twice")) out.push({ key: cardKey("duplicate", a.id, "twice"), kind: "duplicate", app: a.id, title: `${a.name} is billed twice`, why: "two live charges for one app", actions: ["review", "cancel-steps"], urgent: false });
-  if (stack.archived_seen.length) out.push({ key: cardKey("seen-again", stack.archived_seen.join(",")), kind: "seen-again", app: stack.archived_seen[0]!, title: `${stack.archived_seen.length} archived app${stack.archived_seen.length === 1 ? " is" : "s are"} in use again: ${stack.archived_seen.join(", ")}`, why: "move the ones to track back from data/apps/_archive", actions: ["keep", "review"], urgent: false });
+  if (stack.archived_seen.length) out.push({ key: cardKey("seen-again", stack.archived_seen.join(",")), kind: "seen-again", app: stack.archived_seen[0]!, title: `${stack.archived_seen.length} archived app${stack.archived_seen.length === 1 ? " is" : "s are"} in use again: ${stack.archived_seen.join(", ")}`, why: "move the ones to track back from data/entities/products/_archive", actions: ["keep", "review"], urgent: false });
   return out;
 }
 
@@ -446,22 +446,23 @@ export function offboardingDraft(vault: string, id: string, now = Date.now()): s
     "- [ ] Delete the account once the export is safe, if you will not come back.",
     `- [ ] Revoke ${rec.name}'s access to your other accounts: ${Object.values(REVOKE).join("; ")}.`,
     "- [ ] Remove the stored card from the account.",
-    `- [ ] Archive the record: \`prevail apps card <key> archive\` or move data/apps/${id}/ to data/apps/_archive/ (never deleted).`,
+    `- [ ] Archive the record: \`prevail apps card <key> archive\` or move data/entities/products/${id}/ to data/entities/products/_archive/ (never deleted).`,
     "", "## Draft message to the vendor (not sent)", "",
     `Subject: Please cancel my ${rec.name} subscription`, "",
     `Hello, please cancel my ${rec.name} subscription${renew ? ` before the renewal on ${renew}` : ""} and confirm by reply. Please also confirm that my stored payment details are removed. Thank you.`, "",
   ].join("\n");
-  const p = join(appsContainer(vault), id, `offboarding-${day}.md`);
+  const p = join(productWriteDir(vault, id), `offboarding-${day}.md`);
+  mkdirSync(join(p, ".."), { recursive: true });
   vwriteFile(p, body);
   return p;
 }
 
-/** Archive a record: moved to data/apps/_archive/<id>, never deleted. */
+/** Archive a record: moved to data/entities/products/_archive/<id>, never deleted. */
 export function archiveRecord(vault: string, id: string): string {
-  const from = join(appsContainer(vault), id);
-  if (!existsSync(from)) throw new Error(`no app folder: ${id}`);
-  let to = join(appsContainer(vault), "_archive", id);
-  for (let n = 2; existsSync(to); n++) to = join(appsContainer(vault), "_archive", `${id}-${n}`);
+  const from = productDir(vault, id);
+  if (!existsSync(from)) throw new Error(`no product folder: ${id}`);
+  let to = join(productsContainer(vault), "_archive", id);
+  for (let n = 2; existsSync(to); n++) to = join(productsContainer(vault), "_archive", `${id}-${n}`);
   mkdirSync(join(to, ".."), { recursive: true });
   renameSync(from, to);
   return to;

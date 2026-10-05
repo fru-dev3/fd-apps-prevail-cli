@@ -6,11 +6,11 @@
 //     user put in this Mac's Keychain; only streams that match an app record
 //     are kept (apps plan decision 3), as money.recurring events.
 //   - apple-health: an Apple Health export dropped in
-//     data/apps/apple-health/inbox/ (export.zip or export.xml): daily steps,
+//     data/entities/products/apple-health/inbox/ (export.zip or export.xml): daily steps,
 //     sleep, workouts, resting heart rate. One source per day wins (the iPhone
 //     and the Watch both record steps).
 //   - timeline: a Google Maps Timeline export dropped in
-//     data/apps/timeline/inbox/: places per day, new places, days away from
+//     data/entities/products/timeline/inbox/: places per day, new places, days away from
 //     home. Coordinates are used in memory and dropped; places are hashes.
 //   - oura, strava: personal tokens in the Keychain; garmin: an export file.
 
@@ -21,12 +21,12 @@ import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { buildMatcher } from "./app-map.ts";
 import { dayOf, hostSlug, type MetricEvent } from "./metrics.ts";
-import { appsContainer } from "./path-safety.ts";
+import { productDir } from "./path-safety.ts";
 import { sourceDef } from "./sources.ts";
 import { EventBag, keychainSecret, registerReaders, writeSourceEvents, type SyncOpts, type SyncResult } from "./source-sync.ts";
 
 const DAY = 86_400_000;
-const inboxOf = (vault: string, app: string) => join(appsContainer(vault), app, "inbox");
+const inboxOf = (vault: string, app: string) => join(productDir(vault, app), "inbox");
 
 /** Files in an app's inbox, newest first. */
 function inboxFiles(vault: string, app: string, re: RegExp): string[] {

@@ -25,7 +25,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { dataRoot, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { dataRoot, productFolders, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { parseTasks } from "./tasks.ts";
@@ -289,7 +289,7 @@ export function commitmentsFromMail(vault: string, headers: HeaderLite[], now = 
 
 // ── From meeting notes dropped in the vault ─────────────────────────────────
 
-/** Notes files: data/apps/<id>/meetings/*.md and data/domains/<d>/source/meetings/*.md, the last 30 days. */
+/** Notes files: data/entities/products/<id>/meetings/*.md and data/domains/<d>/source/meetings/*.md, the last 30 days. */
 export function meetingFiles(vault: string, now = Date.now()): { file: string; domain: string; mtime: number }[] {
   const out: { file: string; domain: string; mtime: number }[] = [];
   const scan = (dir: string, domain: string) => {
@@ -300,8 +300,7 @@ export function meetingFiles(vault: string, now = Date.now()): { file: string; d
       try { const t = statSync(p).mtimeMs; if (t >= now - 30 * DAY) out.push({ file: p, domain, mtime: t }); } catch { /* unreadable */ }
     }
   };
-  const apps = join(dataRoot(vault), "apps");
-  if (existsSync(apps)) for (const a of readdirSync(apps)) if (!a.startsWith("_")) scan(join(apps, a, "meetings"), "general");
+  for (const { dir } of productFolders(vault)) scan(join(dir, "meetings"), "general");
   for (const d of listDomainDirs(vault)) if (!d.startsWith("_")) scan(join(dataRoot(vault), "domains", d, "source", "meetings"), d);
   return out;
 }

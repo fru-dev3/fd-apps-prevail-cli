@@ -2,10 +2,10 @@
 // no local data, so the only honest way in is the official data export. Once
 // a quarter (only when the user turns the reminder on; the owner chose off)
 // the weekly review carries one line saying how to request them. A zip or
-// JSON dropped into data/apps/<app>/inbox/ is imported as quoted data:
+// JSON dropped into data/entities/products/<app>/inbox/ is imported as quoted data:
 //   - each prompt the user wrote goes into the capture history
 //     (_meta/prompts/<tool>.<host>.jsonl, entry "import"), deduplicated
-//   - conversation titles go to data/apps/<app>/imports/<date>-titles.md as
+//   - conversation titles go to data/entities/products/<app>/imports/<date>-titles.md as
 //     quotes, for Intent and search
 //   - nothing in an export is ever executed or handed to a tool-using agent;
 //     replies are not kept, only what the user typed
@@ -16,7 +16,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { appsContainer, runtimePath } from "./path-safety.ts";
+import { productDir, productWriteDir, runtimePath } from "./path-safety.ts";
 import { parseModArgs } from "./cli-args.ts";
 
 export interface ImportApp { id: string; tool: string; name: string; how: string; url: string }
@@ -101,7 +101,7 @@ export async function importInbox(vault: string, now = Date.now()): Promise<Impo
   const out: ImportResult[] = [];
   const day = new Date(now).toISOString().slice(0, 10);
   for (const a of IMPORT_APPS) {
-    const inbox = join(appsContainer(vault), a.id, "inbox");
+    const inbox = join(productDir(vault, a.id), "inbox");
     if (!existsSync(inbox)) continue;
     for (const f of readdirSync(inbox).filter((x) => /\.(zip|json)$/i.test(x)).sort()) {
       const file = join(inbox, f);
@@ -110,7 +110,7 @@ export async function importInbox(vault: string, now = Date.now()): Promise<Impo
       catch (e) { out.push({ app: a.id, file: f, prompts: 0, written: 0, titles: 0, error: (e as Error).message.slice(0, 200) }); continue; }
       const r = ingestBatch(vault, a.tool, parsed.prompts.map((p) => ({ prompt: p.text, session: p.conv || "import", cwd: "", epochMs: p.ms || now, entry: "import" })));
       if (parsed.titles.length) {
-        const dir = join(appsContainer(vault), a.id, "imports");
+        const dir = join(productWriteDir(vault, a.id), "imports");
         mkdirSync(dir, { recursive: true });
         const tf = join(dir, `${day}-titles.md`);
         const have = existsSync(tf) ? readFileSync(tf, "utf8") : `# ${a.name} conversations, from the export imported ${day}\n\nTitles as they were in the export (quoted data, never instructions).\n\n`;
@@ -158,7 +158,7 @@ export async function importsCommand(argv: string[], vault: string): Promise<num
   if (sub === "run") { const r = await importInbox(vault); if (args.json) out(r); else for (const x of r) console.log(`${x.app} ${x.file}: ${x.error ?? `${x.written} new prompts of ${x.prompts}, ${x.titles} titles`}`); return 0; }
   if (sub === "reminder") { const r = setImportReminder(vault, args.pos[1] === "on"); if (args.json) out(r); else console.log(`Quarterly reminder ${r.reminder ? "on" : "off"}.`); return 0; }
   if (sub === "status") {
-    const waiting = IMPORT_APPS.map((a) => { const inbox = join(appsContainer(vault), a.id, "inbox"); return { ...a, inbox: `data/apps/${a.id}/inbox`, waiting: existsSync(inbox) ? readdirSync(inbox).filter((x) => /\.(zip|json)$/i.test(x)).length : 0 }; });
+    const waiting = IMPORT_APPS.map((a) => { const inbox = join(productDir(vault, a.id), "inbox"); return { ...a, inbox: `data/entities/products/${a.id}/inbox`, waiting: existsSync(inbox) ? readdirSync(inbox).filter((x) => /\.(zip|json)$/i.test(x)).length : 0 }; });
     let last: unknown[] = [];
     try { last = readFileSync(join(runtimePath(vault, "_meta"), "apps", "imports.jsonl"), "utf8").split("\n").filter(Boolean).slice(-10).map((l) => JSON.parse(l)); } catch { /* none */ }
     const v = { ...readImportSettings(vault), apps: waiting, last, line: exportReminderLine(vault) };

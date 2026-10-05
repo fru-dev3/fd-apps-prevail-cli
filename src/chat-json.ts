@@ -226,7 +226,7 @@ export interface ChatJsonOptions {
   // each, runtime routing, and sign-in notices. Rebuilt every turn.
   apps?: string[];
   // The app whose own chat space this thread lives in (--scope-app). Implies
-  // it is referenced too; the turn runs in data/apps/<id>/_scope.
+  // it is referenced too; the turn runs in data/entities/products/<id>/_scope.
   scopeApp?: string;
   // Other domains referenced on this turn (--ref-domain, repeatable): a compact
   // state block each.
@@ -1102,7 +1102,7 @@ export async function chatJsonCommand(
     else if (a === "--entity") { entity.push(next ?? ""); i++; }
     else if (a.startsWith("--entity=")) entity.push(a.slice("--entity=".length));
     // --app <id> (repeatable): reference an app; --scope-app <id>: this thread
-    // belongs to the app (stored in data/apps/<id>/_scope). --ref-domain <slug>
+    // belongs to the app (stored in data/entities/products/<id>/_scope). --ref-domain <slug>
     // (repeatable): reference another domain's state.
     else if (a === "--app") { apps.push(next ?? ""); i++; }
     else if (a.startsWith("--app=")) apps.push(a.slice("--app=".length));

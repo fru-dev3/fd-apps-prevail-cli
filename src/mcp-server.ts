@@ -637,7 +637,7 @@ export function mcpTools(): McpTool[] {
         type: "object",
         properties: {
           query: { type: "string", description: "Name or part of a name; empty lists the most mentioned." },
-          kind: { type: "string", enum: ["person", "place", "org", "thing"] },
+          kind: { type: "string", enum: ["person", "place", "product", "thing"] },
           limit: { type: "number", description: "Max results (default 20)." },
         },
       },

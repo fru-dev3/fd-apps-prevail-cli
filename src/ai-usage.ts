@@ -49,7 +49,7 @@ import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync,
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { hostSlug } from "./capture.ts";
-import { appsContainer, runtimePath } from "./path-safety.ts";
+import { productDir, productWriteDir, runtimePath } from "./path-safety.ts";
 import PRICES from "./ai-prices.json" with { type: "json" };
 import { redactSecrets } from "./secret-redact.ts";
 
@@ -726,7 +726,7 @@ export const VENDOR: Record<string, string> = { claude: "anthropic", codex: "ope
 export interface PlanCost { app: string; amount: number; period: "month" | "year"; monthly: number; source: string }
 export function readPlanCost(vault: string, app: string): PlanCost | null {
   try {
-    const m = JSON.parse(readFileSync(join(appsContainer(vault), app, "manifest.json"), "utf8")) as { cost?: { amount?: number; period?: string; source?: string } };
+    const m = JSON.parse(readFileSync(join(productDir(vault, app), "manifest.json"), "utf8")) as { cost?: { amount?: number; period?: string; source?: string } };
     const c = m.cost;
     if (!c || typeof c.amount !== "number" || c.amount < 0) return null;
     const period = c.period === "year" ? "year" : "month";
@@ -738,11 +738,11 @@ export function readPlanCost(vault: string, app: string): PlanCost | null {
 export function setPlanCost(vault: string, app: string, amount: number, period: "month" | "year"): string {
   if (!/^[a-z0-9][a-z0-9-]{0,60}$/.test(app)) throw new Error(`not an app id: ${app}`);
   if (!Number.isFinite(amount) || amount < 0 || amount > 100_000) throw new Error("amount must be between 0 and 100000");
-  const dir = join(appsContainer(vault), app);
+  const dir = productWriteDir(vault, app);
   mkdirSync(dir, { recursive: true });
   const p = join(dir, "manifest.json");
   let m: Record<string, unknown> = {};
-  try { m = JSON.parse(readFileSync(p, "utf8")); } catch { m = { id: app, name: app, integration: "manual", domains: [] }; }
+  try { m = JSON.parse(readFileSync(join(productDir(vault, app), "manifest.json"), "utf8")); } catch { m = { id: app, name: app, integration: "manual", domains: [] }; }
   m.cost = { amount, period, source: "stated", set: new Date().toISOString().slice(0, 10) };
   writeFileSync(p, `${JSON.stringify(m, null, 2)}\n`);
   return p;

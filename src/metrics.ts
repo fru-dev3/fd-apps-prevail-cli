@@ -30,7 +30,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, join, relative } from "node:path";
-import { buildRoot, dataRoot, runtimePath } from "./path-safety.ts";
+import { buildRoot, dataRoot, productFolders, runtimePath } from "./path-safety.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
 import { parseModArgs } from "./cli-args.ts";
@@ -367,13 +367,10 @@ export function csvRows(text: string): string[][] {
 }
 export const mdy = (s: string) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s); return m ? `${m[3]}-${m[1]}-${m[2]}` : null; };
 
-/** Card statement CSVs in app folders: spend per day and category. Merchant names are read and dropped. */
+/** Card statement CSVs in product folders: spend per day and category. Merchant names are read and dropped. */
 export function spendEvents(vault: string): { events: MetricEvent[]; info: SourceInfo } {
   const by = new Map<string, MetricEvent>();
   const files: string[] = [];
-  const apps = join(dataRoot(vault), "apps");
-  let ids: string[] = [];
-  try { ids = readdirSync(apps); } catch { ids = []; }
   let cur = "";
   const add = (day: string, cat: string, usd: number) => {
     const k = `${day}\t${cat}\t${cur}`;
@@ -382,12 +379,11 @@ export function spendEvents(vault: string): { events: MetricEvent[]; info: Sourc
     e.attrs.usd = Math.round((Number(e.attrs.usd) + usd) * 100) / 100;
     by.set(k, e);
   };
-  for (const id of ids) {
-    if (id.startsWith("_")) continue;
+  for (const { dir } of productFolders(vault)) {
     let fs: string[] = [];
-    try { fs = readdirSync(join(apps, id)).filter((f) => /\.csv$/i.test(f)); } catch { continue; }
+    try { fs = readdirSync(dir).filter((f) => /\.csv$/i.test(f)); } catch { continue; }
     for (const f of fs) {
-      const p = join(apps, id, f);
+      const p = join(dir, f);
       cur = relative(vault, p);
       const rows = csvRows(readText(p));
       const head = (rows[0] ?? []).map((h) => h.toLowerCase());

@@ -1,6 +1,6 @@
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, cpSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { DOMAINS_DIR, appsContainer, dataRoot, resolveDomainDir } from "./path-safety.ts";
+import { DOMAINS_DIR, dataRoot, isAppFolder, legacyProductRoots, productFolders, productsContainer, resolveDomainDir } from "./path-safety.ts";
 import { vreadFile } from "./vault-session.ts";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -41,11 +41,11 @@ export interface ManifestSummary {
 }
 
 const NON_DOMAIN_DIRS = new Set([
-  "data",    // v4 container (its domains/ + apps/ are scanned separately, not it)
+  "data",    // v4 container (its domains/ + entities/ are scanned separately, not it)
   "build",   // the vault's own app-support folder (its ideal-state.md is the constitution)
   "domains", // v3 container (its children are scanned separately, not it)
-  "apps",    // app manifests live here, never a domain
-  "entities", // people, places, orgs and things (data/entities), never a domain
+  "apps",    // legacy app container (before products), never a domain
+  "entities", // people, places, products and things (data/entities), never a domain
   "complete",
   "core",
   "scripts",
@@ -661,14 +661,14 @@ export type ConnectorStatus = "connected" | "configured" | "not-configured" | "e
 
 function communityAppsDirs(vaultPath?: string): string[] {
   const dirs: string[] = [];
-  // The vault's data/apps is the SINGLE source of truth for the user's apps, so
+  // The vault's products store is the SINGLE source of truth for the user's apps, so
   // a single backup of the vault captures everything. When a vault is known we
   // read from there; the machine-local ~/.prevail/apps is only a LEGACY location
   // we migrate OUT of (migrateLegacyAppsIntoVault), never a live source beside
   // the vault. With no vault configured we still read ~/.prevail/apps so a
   // vault-less install keeps working.
   if (vaultPath) {
-    dirs.push(appsContainer(vaultPath));
+    dirs.push(productsContainer(vaultPath), ...legacyProductRoots(vaultPath));
   } else {
     dirs.push(join(homedir(), ".prevail", "apps"));
   }
@@ -733,7 +733,7 @@ export function seedSkillPack(sub: string, dest: string): number {
 
 // Bundled (read-only, ship-with-the-binary) community app roots: the
 // apps/community adjacency only, WITHOUT the user/legacy ~/.prevail/apps or the
-// vault's data/apps. Used to locate an app's SHIPPED starter skills regardless
+// vault's data/entities/products. Used to locate an app's SHIPPED starter skills regardless
 // of whether the app has been scaffolded into a vault.
 function bundledCommunityRoots(): string[] {
   const dirs: string[] = [];
@@ -1024,13 +1024,14 @@ export function scanCommunityApps(vaultPath?: string): AppSkill[] {
     }
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      // "_" dirs (data/apps/_archive, ...) and dot dirs are never apps.
+      // "_" dirs (data/entities/products/_archive, ...) and dot dirs are never apps.
       if (e.name.startsWith("_") || e.name.startsWith(".")) continue;
       if (seen.has(e.name)) continue;
       const root = join(dir, e.name);
       const manifestPath = join(root, "manifest.json");
       const skillPath = join(root, "SKILL.md");
       if (!existsSync(manifestPath) || !existsSync(skillPath)) continue;
+      if (!isAppFolder(root)) continue; // lifecycle archived: a product, not a live app
       let manifestRaw: unknown;
       try {
         manifestRaw = JSON.parse(vreadFile(manifestPath));
@@ -1130,40 +1131,20 @@ function readConnector(root: string): ConnectorState {
 // Vault apps live at <vault>/apps/<id>/ and mirror the domain shape exactly:
 // state.md, open-loops.md, PROMPTS.md, QUICKSTART.md, skills/<skill-id>/SKILL.md.
 function scanVaultApps(vaultPath: string): AppSkill[] {
-  // v4-aware: prefer <vault>/data/apps once migrated, else legacy <vault>/apps.
-  const appsRoot = appsContainer(vaultPath);
-  if (!existsSync(appsRoot)) return [];
+  // Products that carry an app: the new store, then legacy folders (fallback).
   const out: AppSkill[] = [];
   // The enabled flag must round-trip for vault apps too: a user-set override
   // (always writable) wins over the manifest's own enabled field. Without this
   // a disabled vault app would still sync / inject / run loops, because nothing
   // read the flag back off disk. enabled === false means fully inert.
   const overrides = readAppOverrides();
-  let entries: import("node:fs").Dirent[] = [];
-  try {
-    entries = readdirSync(appsRoot, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    // "_" dirs (data/apps/_archive holds archived apps) and dot dirs are never apps.
-    if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
-    const appPath = join(appsRoot, entry.name);
-    // A per-app conversation scope (data/apps/<id>/_scope) can materialize the
-    // app folder even when no real app is installed there yet. Such a shell
-    // holds ONLY underscore/dot entries (_scope, _threads, .system). A REAL app
-    // always has at least one plain content file (manifest.json / state.md /
-    // soul.md / skills). Skip a scope-only shell so a per-app chat never gets
-    // listed as a phantom app (which would also double-list against a bundled
-    // community app of the same id).
-    let hasAppContent = false;
-    try {
-      for (const child of readdirSync(appPath, { withFileTypes: true })) {
-        if (!child.name.startsWith("_") && !child.name.startsWith(".")) { hasAppContent = true; break; }
-      }
-    } catch {}
-    if (!hasAppContent) continue;
+  for (const { id: entryName, dir: appPath } of productFolders(vaultPath)) {
+    const entry = { name: entryName };
+    // A product is an app only when it carries app parts (manifest.json,
+    // SKILL.md, skills/, state.md, soul.md ...) and is not lifecycle archived.
+    // A page-only product (entity.md) or a chat scope shell (_scope) is not an
+    // app, so a per-app chat never gets listed as a phantom app.
+    if (!isAppFolder(appPath)) continue;
     const statePath = join(appPath, "state.md");
     const loopsPath = join(appPath, "open-loops.md");
     const hasState = existsSync(statePath);
@@ -1333,7 +1314,7 @@ export function formatRelativeTime(mtimeMs: number | null): string {
 // One-time, idempotent migration: apps were historically scaffolded into the
 // machine-local ~/.prevail/apps when no vault root was known. The vault's data/
 // folder is the SINGLE source of truth (so one backup of the vault captures
-// every app + domain), so move any such apps into <vault>/data/apps/. Copy then
+// every app + domain), so move any such apps into <vault>/data/entities/products/. Copy then
 // remove, never clobbers an app already in the vault, and skips on any error so
 // a scan never fails because of migration. Returns the ids that were moved.
 export function migrateLegacyAppsIntoVault(vaultPath: string): { moved: string[] } {
@@ -1342,7 +1323,7 @@ export function migrateLegacyAppsIntoVault(vaultPath: string): { moved: string[]
     if (!vaultPath) return { moved };
     const legacy = join(homedir(), ".prevail", "apps");
     if (!existsSync(legacy)) return { moved };
-    const dest = appsContainer(vaultPath); // <vault>/data/apps (v4)
+    const dest = productsContainer(vaultPath);
     mkdirSync(dest, { recursive: true });
     let entries: import("node:fs").Dirent[] = [];
     try { entries = readdirSync(legacy, { withFileTypes: true }); } catch { return { moved }; }
@@ -1352,7 +1333,7 @@ export function migrateLegacyAppsIntoVault(vaultPath: string): { moved: string[]
       // Only migrate real app folders (must carry a manifest), not stray dirs.
       if (!existsSync(join(src, "manifest.json"))) continue;
       const dst = join(dest, e.name);
-      if (existsSync(dst)) continue; // never clobber an app already in the vault
+      if (existsSync(join(dst, "manifest.json"))) continue; // never clobber an app already in the vault
       try {
         cpSync(src, dst, { recursive: true });
         // Verify the manifest landed before removing the original.
@@ -1366,7 +1347,7 @@ export function migrateLegacyAppsIntoVault(vaultPath: string): { moved: string[]
   return { moved };
 }
 
-// Scaffold a new community app under <vault>/data/apps/<id>/ from a catalog
+// Scaffold a new community app under <vault>/data/entities/products/<id>/ from a catalog
 // pick: a manifest.json + SKILL.md + connection.md. The app then shows up in
 // scanCommunityApps() and the desktop's Connected view, "not-configured" until
 // the user authenticates it. Never overwrites an existing app.
@@ -1376,7 +1357,7 @@ export function migrateLegacyAppsIntoVault(vaultPath: string): { moved: string[]
 // MEMORY.md (durable facts), an empty _intents.jsonl ledger, and the agent-owned
 // _journal/ + _threads/ zones. Idempotent and edit-safe: it NEVER clobbers an
 // existing file, so it is safe to call on connect AND re-connect. Writes ONLY
-// under the app dir (data/apps/<id>/), never the vault root. The regenerable
+// under the app dir (data/entities/products/<id>/), never the vault root. The regenerable
 // _surface.json cache is intentionally NOT pre-created here: it is rebuilt on
 // demand with a freshness TTL, so an empty stale copy would serve no purpose.
 export function seedAppParityFiles(appRoot: string, title: string): void {
@@ -1417,7 +1398,7 @@ export function scaffoldCommunityApp(opts: {
   integration: "api" | "oauth" | "browser" | "mcp" | "cli" | "manual";
   domains: string[];
   connection?: string;
-  // The vault the app belongs to. New apps are written under its data/apps so
+  // The vault the app belongs to. New apps are written under its data/entities/products so
   // the vault stays the single source of truth; pass this whenever it's known.
   vaultRoot?: string;
   // Autonomous connect: a verifiable test the engine runs to confirm the
@@ -1436,19 +1417,19 @@ export function scaffoldCommunityApp(opts: {
   if (!/^[a-z0-9][a-z0-9-]{0,48}$/.test(id)) {
     return { ok: false, error: `invalid app id "${opts.id}" (use lowercase letters, digits, hyphens)` };
   }
-  // New apps live in the vault's data/apps (the v4 container) so the vault is the
+  // New apps live in the vault's data/entities/products (the v4 container) so the vault is the
   // single backup-able source of truth. Resolution order: explicit PREVAIL_APPS_DIR
   // override (CI/dev) > the passed vaultRoot > PREVAIL_VAULT_ROOT > the legacy
   // ~/.prevail/apps last-resort fallback only when no vault is known at all.
   const vaultRoot = opts.vaultRoot || process.env.PREVAIL_VAULT_ROOT;
   const base = process.env.PREVAIL_APPS_DIR
-    || (vaultRoot ? appsContainer(vaultRoot) : join(homedir(), ".prevail", "apps"));
+    || (vaultRoot ? productsContainer(vaultRoot) : join(homedir(), ".prevail", "apps"));
   const root = join(base, id);
   // Map a connector pattern to the manifest integration vocabulary.
   const integ = opts.integration === "cli" ? "manual" : opts.integration; // cli runs as a skill, not an auth integration
   if (existsSync(root)) {
     // A folder that exists only to hold the app's conversation scope
-    // (data/apps/<id>/_scope, created when you chat with the app) is not a real
+    // (data/entities/products/<id>/_scope, created when you chat with the app) is not a real
     // app yet: it has no manifest.json. Refuse a re-add only when a real app is
     // already scaffolded here; a bare scope shell falls through to the scaffold
     // below so adding the connector is never blocked by an earlier chat.
@@ -1456,7 +1437,7 @@ export function scaffoldCommunityApp(opts: {
       const manifestPath = join(root, "manifest.json");
       if (existsSync(manifestPath)) {
         // ADOPT, never refuse: the vault is the product, and users (and their
-        // own import pipelines) legitimately create data/apps/<id>/ with skills
+        // own import pipelines) legitimately create data/entities/products/<id>/ with skills
         // and a manifest before ever touching the UI. Connecting from the UI
         // fills ONLY the missing canonical manifest fields and leaves every
         // user file (skills/, data, notes) untouched - forcing a rename/delete
@@ -1807,7 +1788,7 @@ function appSoulPaths(id: string, vaultPath?: string): { primary: string | null;
   const app = scanCommunityApps(vaultPath).find((a) => a.id === cleanId);
   const vaultRoot = vaultPath || process.env.PREVAIL_VAULT_ROOT;
   const base = process.env.PREVAIL_APPS_DIR
-    || (vaultRoot ? appsContainer(vaultRoot) : join(homedir(), ".prevail", "apps"));
+    || (vaultRoot ? productsContainer(vaultRoot) : join(homedir(), ".prevail", "apps"));
   const mirror = join(base, cleanId, "soul.md");
   return { primary: app?.path ? join(app.path, "soul.md") : null, mirror, name: app?.title || cleanId };
 }

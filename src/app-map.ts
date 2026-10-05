@@ -2,7 +2,7 @@
 //
 // A signal is an identifier seen somewhere: a Mac bundle id, a web domain, a
 // card merchant, an email sender, a CLI binary. It maps to one app id by, in
-// order: the identifiers on the app records in data/apps/<id>/manifest.json
+// order: the identifiers on the app records in data/entities/products/<id>/manifest.json
 // (the user's corrections land there, so they win and sync), the built-in
 // alias table below, then nothing: an unmatched signal goes to the unknown
 // inbox (build/_meta/apps/unknown.json) until the user maps or ignores it.
@@ -14,7 +14,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { appsContainer, runtimePath } from "./path-safety.ts";
+import { hasAppContent, productArchiveDirs, productDir, productFolders, productWriteDir, runtimePath } from "./path-safety.ts";
 
 // ── Domains ─────────────────────────────────────────────────────────────────
 
@@ -138,20 +138,22 @@ export interface AppRecord { id: string; name: string; kind?: AppKind; category?
 /** Every app record (and archived ones, flagged), with its identifiers. */
 export function readRecords(vault: string): AppRecord[] {
   const out: AppRecord[] = [];
-  const root = appsContainer(vault);
-  const scan = (dir: string, archived: boolean) => {
-    let ids: string[] = [];
-    try { ids = readdirSync(dir); } catch { return; }
-    for (const id of ids) {
-      if (id.startsWith(".") || id.startsWith("_")) continue;
-      let m: Record<string, unknown> = {};
-      try { m = JSON.parse(readFileSync(join(dir, id, "manifest.json"), "utf8")) as Record<string, unknown>; } catch { if (!existsSync(join(dir, id))) continue; }
-      const ident = (m.identifiers && typeof m.identifiers === "object" ? m.identifiers : {}) as Record<string, string[]>;
-      out.push({ id, name: String(m.name ?? m.title ?? id), kind: m.kind as AppKind | undefined, category: typeof m.category === "string" ? m.category : undefined, identifiers: ident, archived, manifest: m });
-    }
+  const push = (id: string, dir: string, inArchive: boolean) => {
+    // A product with no app parts (a page only) is not an app record.
+    if (!hasAppContent(dir)) return;
+    let m: Record<string, unknown> = {};
+    try { m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Record<string, unknown>; } catch { /* parts without a manifest */ }
+    const ident = (m.identifiers && typeof m.identifiers === "object" ? m.identifiers : {}) as Record<string, string[]>;
+    const archived = inArchive || m.lifecycle === "archived";
+    out.push({ id, name: String(m.name ?? m.title ?? id), kind: m.kind as AppKind | undefined, category: typeof m.category === "string" ? m.category : undefined, identifiers: ident, archived, manifest: m });
   };
-  scan(root, false);
-  scan(join(root, "_archive"), true);
+  for (const { id, dir } of productFolders(vault)) push(id, dir, false);
+  const seen = new Set(out.map((r) => r.id));
+  for (const arch of productArchiveDirs(vault)) {
+    let ids: string[] = [];
+    try { ids = readdirSync(arch); } catch { continue; }
+    for (const id of ids) if (!id.startsWith(".") && !id.startsWith("_") && !seen.has(id)) { seen.add(id); push(id, join(arch, id), true); }
+  }
   return out;
 }
 
@@ -247,18 +249,18 @@ export function correctSignal(vault: string, kind: SignalKind, value: string, ta
 export interface RecordPatch { id: string; name: string; kind?: AppKind; category?: string; surfaces?: string[]; identifiers?: Record<string, string[]>; found_by?: string; first_seen?: string; lifecycle?: string }
 
 /**
- * Create data/apps/<id>/manifest.json or add to it. Existing values are never
+ * Create data/entities/products/<id>/manifest.json or add to it. Existing values are never
  * overwritten: missing fields are filled and identifiers are unioned. Returns
  * "created", "updated" or "unchanged". An archived app is never recreated.
  */
 export function upsertRecord(vault: string, p: RecordPatch): "created" | "updated" | "unchanged" | "archived" {
   if (!APP_ID.test(p.id)) throw new Error(`not an app id: ${p.id}`);
-  const root = appsContainer(vault);
-  if (!existsSync(join(root, p.id)) && existsSync(join(root, "_archive", p.id))) return "archived";
-  const file = join(root, p.id, "manifest.json");
+  const live = productDir(vault, p.id);
+  if (!existsSync(live) && productArchiveDirs(vault).some((a) => existsSync(join(a, p.id)))) return "archived";
+  const file = join(productWriteDir(vault, p.id), "manifest.json");
   let m: Record<string, unknown> = {};
-  const existed = existsSync(file);
-  try { m = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>; } catch { m = {}; }
+  const existed = existsSync(join(live, "manifest.json"));
+  try { m = JSON.parse(readFileSync(join(live, "manifest.json"), "utf8")) as Record<string, unknown>; } catch { m = {}; }
   const before = JSON.stringify(m);
   const fill = (k: string, v: unknown) => { if (v !== undefined && (m[k] === undefined || m[k] === null || m[k] === "")) m[k] = v; };
   fill("id", p.id);

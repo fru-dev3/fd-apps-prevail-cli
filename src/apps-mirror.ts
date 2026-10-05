@@ -12,13 +12,13 @@
 //   <vault>/build/_meta/apps/mirror.json          runtime + connector cache
 //   <vault>/build/_meta/apps/drafts/<id>.json     recipe drafts (not saved yet)
 //   <vault>/build/_meta/apps/sync/<id>.json       sync checkpoint
-//   <vault>/data/apps/<id>/manifest.json          mirror, tools, recipe, domains
+//   <vault>/data/entities/products/<id>/manifest.json          mirror, tools, recipe, domains
 //   <vault>/data/domains/<d>/source/apps/<id>/<YYYY-MM-DD>.json   synced records
 
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { appsContainer, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { productDir, productFolders, productsContainer, productWriteDir, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { withTrustedSources } from "./trusted-sources.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
@@ -503,8 +503,13 @@ export function draftPath(vault: string, id: string): string {
 export function checkpointPath(vault: string, id: string): string {
   return join(metaAppsDir(vault), "sync", `${safeId(id)}.json`);
 }
+/** A connector's product folder, for reading (new store, legacy fallback). */
 export function appDir(vault: string, id: string): string {
-  return join(appsContainer(vault), safeId(id));
+  return productDir(vault, safeId(id));
+}
+/** A connector's product folder, for writing (always the new store). */
+export function appWriteDir(vault: string, id: string): string {
+  return productWriteDir(vault, safeId(id));
 }
 
 function safeId(id: string): string {
@@ -810,13 +815,13 @@ export async function appTools(vault: string, id: string, deps: MirrorDeps = {})
   return mergeApp(vault, { ...app, ...(tools.length ? { tools, tools_checked_at: ts } : {}) });
 }
 
-// Merge a patch into data/apps/<id>/manifest.json, keeping the existing shape
+// Merge a patch into data/entities/products/<id>/manifest.json, keeping the existing shape
 // (id, name/title, description, domains, integration, connection) and adding
 // `mirror`, `tools`, `recipe`.
 export function writeManifestPatch(vault: string, app: MirrorApp, patch: Record<string, unknown>): void {
-  const dir = appDir(vault, app.id);
+  const dir = appWriteDir(vault, app.id);
   const path = join(dir, "manifest.json");
-  const cur = (readJson(path) ?? {}) as Record<string, unknown>;
+  const cur = (readJson(join(appDir(vault, app.id), "manifest.json")) ?? {}) as Record<string, unknown>;
   const next: Record<string, unknown> = { ...(typeof cur === "object" && !Array.isArray(cur) ? cur : {}) };
   next.id ??= app.id;
   next.name ??= app.name;
@@ -1274,18 +1279,12 @@ export interface ArchiveResult {
 }
 
 export function archiveCandidates(vault: string, mirroredIds: Set<string>): { id: string; reason: string }[] {
-  const root = appsContainer(vault);
-  if (!existsSync(root)) return [];
   const out: { id: string; reason: string }[] = [];
-  let ents: import("node:fs").Dirent[] = [];
-  try { ents = readdirSync(root, { withFileTypes: true }); } catch { return []; }
-  for (const e of ents) {
-    if (!e.isDirectory()) continue;
-    if (e.name.startsWith("_") || e.name.startsWith(".")) continue;
-    if (mirroredIds.has(e.name)) continue;
-    const s = scaffoldOnly(join(root, e.name));
+  for (const { id, dir } of productFolders(vault)) {
+    if (mirroredIds.has(id)) continue;
+    const s = scaffoldOnly(dir);
     if (!s.scaffold) continue;
-    out.push({ id: e.name, reason: `${s.why}; never synced; not a mirrored connector` });
+    out.push({ id, reason: `${s.why}; never synced; not a mirrored connector` });
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -1294,14 +1293,13 @@ export function archiveApps(vault: string, mirroredIds: Set<string>, apply: bool
   const candidates = archiveCandidates(vault, mirroredIds);
   const moved: ArchiveResult["moved"] = [];
   if (!apply || !candidates.length) return { candidates, moved };
-  const root = appsContainer(vault);
-  const arch = join(root, "_archive");
+  const arch = join(productsContainer(vault), "_archive");
   mkdirSync(arch, { recursive: true });
   const index = join(arch, "INDEX.md");
-  if (!existsSync(index)) vwriteFile(index, "# Archived apps\n\nApp folders moved here by `prevail apps archive`. Move one back to data/apps/ to restore it.\n\n");
+  if (!existsSync(index)) vwriteFile(index, "# Archived apps\n\nProduct folders moved here by `prevail apps archive`. Move one back to data/entities/products/ to restore it.\n\n");
   const date = localDate(now);
   for (const c of candidates) {
-    const from = join(root, c.id);
+    const from = appDir(vault, c.id);
     let to = join(arch, c.id);
     for (let n = 2; existsSync(to); n++) to = join(arch, `${c.id}-${n}`);
     try {

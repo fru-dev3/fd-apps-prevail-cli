@@ -2,7 +2,7 @@
 // about, with the context of every conversation that touched them.
 //
 // No database and no model in the index. Two sources feed it:
-//   (a) prevail://person|place|org|thing/<name> links the chat model writes
+//   (a) prevail://person|place|product|thing/<name> links the chat model writes
 //       into thread (and brief) markdown across every domain, and
 //   (b) entity tags on prompt sittings, one cheap model call per new sitting
 //       during the Intent refresh (cached by sitting id, so a sitting is
@@ -42,7 +42,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 import { sanitizeEmDashes } from "./cli-bridge.ts";
-import { dataRoot, DOMAINS_DIR, APPS_DIR, entitiesContainer, runtimePath } from "./path-safety.ts";
+import { dataRoot, DOMAINS_DIR, entitiesContainer, legacyProductRoots, productFolders, runtimePath } from "./path-safety.ts";
 import { displayLine, parseJsonAnswer, runModelOnce, SYNTH_DEFAULTS, type ModelChoice, type ModelRunner } from "./prompt-projects.ts";
 import { tryAcquireLock } from "./file-lock.ts";
 import { readAutosave, type AutosaveMode } from "./config.ts";
@@ -57,9 +57,11 @@ import { maskDeep, maskSecrets } from "./secret-redact.ts";
 // (or an accepted suggestion), never by tagging.
 // An event (ia.ts) is a dated happening the user keeps a page for: only ever
 // created by the user (by talking, or from their calendar), never by tagging.
-export type EntityKind = "person" | "place" | "org" | "thing" | "project" | "event";
-export const ENTITY_KINDS: EntityKind[] = ["person", "place", "org", "thing", "project", "event"];
-export const KIND_DIR: Record<EntityKind, string> = { person: "people", place: "places", org: "orgs", thing: "things", project: "projects", event: "events" };
+export type EntityKind = "person" | "place" | "product" | "thing" | "project" | "event";
+export const ENTITY_KINDS: EntityKind[] = ["person", "place", "product", "thing", "project", "event"];
+export const KIND_DIR: Record<EntityKind, string> = { person: "people", place: "places", product: "products", thing: "things", project: "projects", event: "events" };
+// Id heads from before products (org/<slug>, orgs/<slug>, app/<id>): read as product, never written.
+const LEGACY_PRODUCT_HEADS = new Set(["org", "orgs", "app"]);
 
 export type MentionSource = "thread" | "prompt" | "brief";
 
@@ -89,8 +91,8 @@ export interface EntityRec {
   co_mentions: CoMention[]; // top 10
   page?: string; // vault-relative page path when a page exists
   saved?: boolean;
-  domain?: string; // company/product web domain when one is known (org chips)
-  website?: string; // the page's `website:` (set by the user, or inferred for an org)
+  domain?: string; // company/product web domain when one is known (product chips)
+  website?: string; // the page's `website:` (set by the user, or inferred for a product)
   picture?: string; // vault-relative picture path when the folder has one
   relation?: Relation;
   relation_confidence?: number; // 0..1, confidence in `relation`
@@ -180,7 +182,8 @@ export function isKind(k: unknown): k is EntityKind {
   return typeof k === "string" && (ENTITY_KINDS as string[]).includes(k);
 }
 
-// Accepts person/sam, people/sam, org/acme and a bare slug (kind unknown).
+// Accepts person/sam, people/sam, product/acme and a bare slug (kind unknown).
+// Legacy heads (before products): org/<slug>, orgs/<slug> and app/<id> read as product.
 export function parseEntityId(id: string): { kind: EntityKind | null; slug: string } | null {
   const s = id.trim().replace(/^prevail:\/\//, "");
   const i = s.indexOf("/");
@@ -188,7 +191,7 @@ export function parseEntityId(id: string): { kind: EntityKind | null; slug: stri
   const head = s.slice(0, i).toLowerCase();
   let rest = s.slice(i + 1);
   try { rest = decodeURIComponent(rest); } catch { /* keep raw */ }
-  const kind = isKind(head) ? head : ((Object.entries(KIND_DIR).find(([, d]) => d === head)?.[0] as EntityKind | undefined) ?? null);
+  const kind = isKind(head) ? head : LEGACY_PRODUCT_HEADS.has(head) ? "product" : ((Object.entries(KIND_DIR).find(([, d]) => d === head)?.[0] as EntityKind | undefined) ?? null);
   if (!kind) {
     // Not a kind prefix: the whole string is a name.
     const whole = slugify(s);
@@ -212,7 +215,8 @@ function webDomainOf(names: string[]): string | undefined {
 // ---------------------------------------------------------------------------
 // (a) links in thread / brief markdown
 
-const LINK_RE = /\[([^\]\n]{1,200})\]\(prevail:\/\/(person|place|org|thing|event)\/([^)\s]+)\)/gi;
+// `org` is the legacy spelling of product in older chat text, read only.
+const LINK_RE = /\[([^\]\n]{1,200})\]\(prevail:\/\/(person|place|product|org|thing|event)\/([^)\s]+)\)/gi;
 
 export interface RawLink { kind: EntityKind; value: string; label: string; snippet: string }
 
@@ -230,7 +234,7 @@ export function extractLinks(md: string): RawLink[] {
       value = value.replace(/\/+$/, "").trim();
       const label = m[1].replace(/[*_`]+/g, "").trim();
       if (!value) continue;
-      out.push({ kind: m[2].toLowerCase() as EntityKind, value, label, snippet: windowAround(plain, label, 240) });
+      out.push({ kind: (m[2].toLowerCase() === "org" ? "product" : m[2].toLowerCase()) as EntityKind, value, label, snippet: windowAround(plain, label, 240) });
     }
   }
   return out;
@@ -307,12 +311,9 @@ function linkSources(vault: string): { path: string; domain: string; source: Men
     scan(join(base, "_threads"), d, "thread");
     scan(join(base, "memory", "briefs"), d, "brief");
   }
-  let apps: string[] = [];
-  try { apps = readdirSync(join(root, APPS_DIR)); } catch { /* none */ }
-  for (const a of apps) {
-    if (a.startsWith(".")) continue;
-    scan(join(root, APPS_DIR, a, "_scope", "_threads"), `_app-${a}`, "thread");
-    scan(join(root, APPS_DIR, a, "_scope", "memory", "threads"), `_app-${a}`, "thread");
+  for (const { id: a, dir } of productFolders(vault)) {
+    scan(join(dir, "_scope", "_threads"), `_app-${a}`, "thread");
+    scan(join(dir, "_scope", "memory", "threads"), `_app-${a}`, "thread");
   }
   return out;
 }
@@ -407,12 +408,12 @@ export function buildTagPrompt(items: { id: string; text: string }[]): string {
 Kinds:
 - person: a named individual (not "I", "you", "the user", roles, or AI assistants)
 - place: a named city, country, region, address, street, venue or landmark
-- org: a named company, product, brand, app, service or institution
+- product: a named company, product, brand, app, service or institution
 - thing: a specific named object or work (a book, a vehicle model, a property, a device, an event)
 
 Skip generic concepts, programming terms, file names, paths, code identifiers, commands and URLs. Use the fullest proper name as written. At most 12 per sitting. An empty list is fine.
 
-Answer with JSON only: {"<sitting id>": [{"name": "...", "kind": "person|place|org|thing"}], ...} with every sitting id below as a key.
+Answer with JSON only: {"<sitting id>": [{"name": "...", "kind": "person|place|product|thing"}], ...} with every sitting id below as a key.
 
 ${items.map((i) => `## Sitting ${i.id}\n${i.text}`).join("\n\n")}
 `;
@@ -566,7 +567,20 @@ export function pageFile(vault: string, kind: EntityKind, slug: string): string 
   const p = pagePath(vault, kind, slug);
   if (existsSync(p)) return p;
   const flat = flatPath(vault, kind, slug);
-  return existsSync(flat) ? flat : null;
+  if (existsSync(flat)) return flat;
+  // Transition fallback: a product page not migrated yet (legacy folders, read only).
+  if (kind === "product") {
+    for (const root of legacyProductRoots(vault)) {
+      for (const f of [join(root, slug, PAGE_FILE), join(root, `${slug}.md`)]) if (existsSync(f)) return f;
+    }
+  }
+  return null;
+}
+
+/** The folders a kind's pages live in: its kind dir, plus legacy product folders until migrated. */
+function kindRoots(vault: string, kind: EntityKind): string[] {
+  const own = join(entitiesContainer(vault), KIND_DIR[kind]);
+  return kind === "product" ? [own, ...legacyProductRoots(vault)] : [own];
 }
 
 export function parseList(v: string): string[] {
@@ -713,16 +727,17 @@ export interface PageRef { id: string; kind: EntityKind; slug: string; path: str
 
 export function listPages(vault: string): PageRef[] {
   const out: PageRef[] = [];
-  const root = entitiesContainer(vault);
   for (const kind of ENTITY_KINDS) {
-    let names: string[] = [];
-    try { names = readdirSync(join(root, KIND_DIR[kind])); } catch { continue; }
     // Folders (<slug>/entity.md) and pre-folder <slug>.md pages, once each.
     const slugs = new Set<string>();
-    for (const n of names) {
-      if (n.startsWith(".")) continue;
-      if (n.endsWith(".md")) slugs.add(n.slice(0, -3));
-      else if (existsSync(join(root, KIND_DIR[kind], n, PAGE_FILE))) slugs.add(n);
+    for (const dir of kindRoots(vault, kind)) {
+      let names: string[] = [];
+      try { names = readdirSync(dir); } catch { continue; }
+      for (const n of names) {
+        if (n.startsWith(".") || n.startsWith("_")) continue;
+        if (n.endsWith(".md")) slugs.add(n.slice(0, -3));
+        else if (existsSync(join(dir, n, PAGE_FILE))) slugs.add(n);
+      }
     }
     for (const slug of slugs) {
       const doc = readPage(vault, kind, slug);
@@ -850,7 +865,7 @@ export function buildIndex(vault: string, opts: { now?: number } = {}): EntityIn
       ...(page ? { page: page.path, saved: page.doc.saved } : {}),
       ...(page?.doc.website ? { website: page.doc.website } : {}),
       ...(page ? pictureOf(vault, page.kind, page.slug, page.doc) : {}),
-      ...((page?.doc.domain ?? (kind === "org" ? webDomainOf([name, ...aliases]) : undefined)) ? { domain: page?.doc.domain ?? webDomainOf([name, ...aliases]) } : {}),
+      ...((page?.doc.domain ?? (kind === "product" ? webDomainOf([name, ...aliases]) : undefined)) ? { domain: page?.doc.domain ?? webDomainOf([name, ...aliases]) } : {}),
       relation: rel.relation, relation_confidence: rel.confidence, relation_reason: rel.reason,
       ...(sig.home ? { home_domain: sig.home } : {}), user_mentions: sig.userMentions,
       ...(kind === "project" && page ? { project: projectFields(page.doc) } : {}),
@@ -986,7 +1001,7 @@ export function syncPages(vault: string, idx: EntityIndex, now = Date.now(), mod
     if (!doc && !wantsAutoPage(r, mode)) continue;
     if (!doc) doc = newPage(r, false, now);
     const convos = conversationsSection(r);
-    const site = r.kind === "org" && !doc.website ? inferWebsite(r) : undefined;
+    const site = r.kind === "product" && !doc.website ? inferWebsite(r) : undefined;
     if (!isNew && !site && doc.mention_count === r.mention_count && doc.conversations === convos) continue;
     if (site) { doc.website = site; r.website = site; }
     doc.mention_count = r.mention_count;
@@ -1002,8 +1017,8 @@ export function syncPages(vault: string, idx: EntityIndex, now = Date.now(), mod
   return { created, updated };
 }
 
-// An org's website, only from a URL in its own mentions whose registrable
-// domain spells the org's name ("Foo Co" <- https://www.fooco.com/x or
+// A product's website, only from a URL in its own mentions whose registrable
+// domain spells the product's name ("Foo Co" <- https://www.fooco.com/x or
 // foo.com). Never guessed from the name alone; never for other kinds.
 const URL_RE = /\b(?:https?:\/\/|www\.)([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi;
 const SLD = new Set(["co", "com", "org", "net", "ac", "gov", "edu"]);
@@ -1016,8 +1031,8 @@ export function registrableLabel(host: string): string {
 }
 
 export function inferWebsite(r: EntityRec): string | undefined {
-  if (r.kind !== "org") return undefined;
-  const want = new Set([r.name, ...r.aliases].map((n) => nameTokens(n, "org").join("")).filter((n) => n.length >= 3));
+  if (r.kind !== "product") return undefined;
+  const want = new Set([r.name, ...r.aliases].map((n) => nameTokens(n, "product").join("")).filter((n) => n.length >= 3));
   for (const m of r.mentions) {
     URL_RE.lastIndex = 0;
     for (let x = URL_RE.exec(m.snippet); x; x = URL_RE.exec(m.snippet)) {
@@ -1104,7 +1119,7 @@ function resolveForWrite(idx: EntityIndex, idOrName: string, kindHint?: string):
   if (rec) return { kind: rec.kind, slug: rec.id.slice(rec.id.indexOf("/") + 1), rec };
   const p = redirectParsed(idx.merged, parseEntityId(idOrName));
   const kind = p?.kind ?? (isKind(kindHint) ? kindHint : null);
-  if (!p || !kind) throw new Error(`unknown entity "${idOrName}": use <kind>/<name> with kind person, place, org, thing or event`);
+  if (!p || !kind) throw new Error(`unknown entity "${idOrName}": use <kind>/<name> with kind person, place, product, thing or event`);
   return { kind, slug: p.slug, rec: null };
 }
 
@@ -1291,11 +1306,11 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 export interface DuplicateSide { id: string; name: string; kind: EntityKind; mentions: number }
 export interface DuplicateCandidate { pair: string; a: DuplicateSide; b: DuplicateSide; confidence: number; reason: string }
 
-const ORG_SUFFIX = new Set(["inc", "llc", "ltd", "co", "corp", "corporation", "company", "the", "gmbh", "plc", "ag"]);
+const COMPANY_SUFFIX = new Set(["inc", "llc", "ltd", "co", "corp", "corporation", "company", "the", "gmbh", "plc", "ag"]);
 
 function nameTokens(name: string, kind: EntityKind): string[] {
   const t = name.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, " and ").replace(/['’]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
-  const kept = kind === "org" ? t.filter((w) => !ORG_SUFFIX.has(w)) : t;
+  const kept = kind === "product" ? t.filter((w) => !COMPANY_SUFFIX.has(w)) : t;
   return kept.length ? kept : t;
 }
 
@@ -1340,7 +1355,7 @@ function scorePair(x: Shape, y: Shape, containers: Map<string, number>): { confi
   if (aliasHit) { score = 0.75; reason = `${quote(aliasHit.of.rec.name)} is also called ${quote(aliasHit.alias.rec.name)}`; }
   // A one-word name inside a longer one ("Foo" in "Foo Bar"). A bare shared
   // first name: weaker when several longer names contain the same word, and
-  // weaker still for places, orgs and things ("Foo" vs "Foo Maps").
+  // weaker still for places, products and things ("Foo" vs "Foo Maps").
   const [short, long] = x.toks.length === 1 ? [x, y] : [y, x];
   if (!score && short.toks.length === 1 && long.toks.length > 1 && short.norm.length >= 3 && long.toks.includes(short.norm)) {
     const ambiguous = (containers.get(`${A.kind}:${short.norm}`) ?? 0) > 1;
@@ -1675,10 +1690,10 @@ export function ownCorpus(vault: string): Set<string> {
   const domainsDir = existsSync(join(root, DOMAINS_DIR)) ? join(root, DOMAINS_DIR) : root;
   try { for (const d of readdirSync(domainsDir)) if (!d.startsWith(".")) walk(join(domainsDir, d, "source"), 0); } catch { /* none */ }
   try {
-    for (const a of readdirSync(join(root, APPS_DIR))) {
-      if (a.startsWith(".") || budget <= 0) continue;
+    for (const { dir: a } of productFolders(vault)) {
+      if (budget <= 0) continue;
       let raw = "";
-      try { raw = vreadFile(join(root, APPS_DIR, a, "_log", "access.jsonl")).slice(-128 * 1024); } catch { continue; }
+      try { raw = vreadFile(join(a, "_log", "access.jsonl")).slice(-128 * 1024); } catch { continue; }
       for (const line of raw.split("\n")) { try { const s = (JSON.parse(line) as { summary?: unknown }).summary; if (typeof s === "string") feed(s); } catch { /* partial line */ } }
     }
   } catch { /* no apps */ }
@@ -1838,7 +1853,7 @@ export async function refreshEntities(vault: string, o: RefreshEntitiesOptions =
 // ---------------------------------------------------------------------------
 // text renderings (CLI + MCP)
 
-const KIND_LABEL: Record<EntityKind, string> = { person: "Person", place: "Place", org: "Product", thing: "Thing", project: "Project", event: "Event" };
+const KIND_LABEL: Record<EntityKind, string> = { person: "Person", place: "Place", product: "Product", thing: "Thing", project: "Project", event: "Event" };
 
 export function entityContextText(d: EntityDetail, maxMentions = 12): string {
   const out: string[] = [`# ${d.name} (${KIND_LABEL[d.kind]}, id ${d.id})`];

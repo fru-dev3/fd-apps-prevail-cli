@@ -14,7 +14,7 @@ import { syncedAppsContext } from "./apps-mirror.ts";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { v4ContentPath } from "./vault-layout-v4.ts";
 import { join, basename, resolve } from "node:path";
-import { buildRoot, runtimePath } from "./path-safety.ts";
+import { buildRoot, productDir, runtimePath } from "./path-safety.ts";
 import { loadPlaybook, type Playbook } from "./orchestrator.ts";
 import { withLock } from "./file-lock.ts";
 import { vreadFile, vwriteFile } from "./vault-session.ts";
@@ -590,10 +590,10 @@ export async function runOneLoop(
   const dl = domainName.toLowerCase().trim();
   const scanned = scanVault(root).find((d) => d.name.toLowerCase() === dl)?.path;
   // Apps run loops too (app/domain parity): a "Run now" target may be an app id
-  // whose home is data/apps/<id>, not a domain. Resolve it the same way so the
+  // whose home is data/entities/products/<id>, not a domain. Resolve it the same way so the
   // desktop per-loop run works for an app's loop, not just a domain's.
   const scannedApp = scanApps(root).find((a) => a.id.toLowerCase() === dl)?.path;
-  const candidates = [scanned, scannedApp, isGeneral ? gdir : null, join(root, "data", "domains", dl), join(root, "domains", dl), join(root, "data", "apps", dl), join(root, dl)].filter(Boolean) as string[];
+  const candidates = [scanned, scannedApp, isGeneral ? gdir : null, join(root, "data", "domains", dl), join(root, "domains", dl), productDir(root, dl), join(root, dl)].filter(Boolean) as string[];
   const missionDir = dl.startsWith("mission/") ? join(root, "data", "missions", dl.slice(8)) : null;
   const domainDir = candidates.find((d) => existsSync(join(d, "_loops.json"))) ?? missionDir ?? (isGeneral ? gdir : scanned ?? scannedApp ?? join(root, "data", "domains", dl));
   const doc = readDoc(domainDir, root);
@@ -1280,7 +1280,7 @@ export function discoverLoopTargets(root: string): { name: string; path: string 
   };
   for (const d of scanVault(root)) add(d.name, d.path);
   add("general", generalDir(root));
-  // App targets: vault apps (data/apps/<id>) that aren't disabled. They run the
+  // App targets: vault apps (data/entities/products/<id>) that aren't disabled. They run the
   // SAME runDomain path as a domain (reads <dir>/_loops.json, state.md, MEMORY.md).
   for (const a of scanApps(root)) {
     if (a.enabled === false) continue;

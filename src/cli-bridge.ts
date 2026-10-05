@@ -1416,7 +1416,7 @@ async function runChatTurnInner({ prompt, cwd, cli, model, isFirst, bare, act, s
     if (toolsInjected || inheritUserMcp || act) {
       try {
         const { actGateSettingsPath } = await import("./act-gate.ts");
-        // An app's own chat space (data/apps/<id>/_scope) is keyed _app-<id>,
+        // An app's own chat space (data/entities/products/<id>/_scope) is keyed _app-<id>,
         // not "_scope", so its acts and access-log lines name the app scope.
         const scopeKey = basename(cwd) === APP_SCOPE_SUBDIR ? `${APP_SCOPE_PREFIX}${basename(dirname(cwd))}` : basename(cwd) || "general";
         args.push("--settings", actGateSettingsPath(vaultRootForCwd(cwd), scopeKey, vaultLockOn()));

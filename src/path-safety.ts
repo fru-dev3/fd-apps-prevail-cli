@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, mkdirSync, renameSync } from "node:fs";
 import { isAbsolute, join, normalize, resolve, sep, dirname } from "node:path";
 import { homedir } from "node:os";
 
@@ -111,9 +111,13 @@ export function resolveSafeChild(vaultRoot: string, child: string): string | nul
 // with zero migration. New domains are always created under domains/, and the
 // migrate-vault-v3 tool moves legacy domains on the user's terms.
 export const DOMAINS_DIR = "domains";
-export const APPS_DIR = "apps";
-// People, places, orgs and things the owner talks about: data/entities/<kind>/<slug>.md.
+// People, places, products and things the owner talks about: data/entities/<kind>/<slug>/.
 export const ENTITIES_DIR = "entities";
+// Products: one folder per company, data/entities/products/<slug>/, holding its
+// page and, when it has a connector, the app parts (manifest.json, skills,
+// _scope, ...). "App" is a property of a product (manifest.integration), not a
+// place. Archived products sit in products/_archive/<slug>/.
+export const PRODUCTS_DIR = "products";
 
 // ── Vault layout (v4: the `data/` container) ──────────────────────────────────
 // W4 (Monday feedback): "Avoid loose files. Everything should be in a folder.
@@ -133,12 +137,12 @@ export const BUILD_DIR = "build";
 // The desktop gives an open app its OWN thread space keyed `_app-<id>` (App.tsx,
 // chatpanel.tsx) so app chats live in the app's space, independent of any domain.
 // That key is NOT a domain: if it were resolved like one it would materialize a
-// shadow folder under data/domains/_app-<id>, shadowing the real app that lives
-// in data/apps/<id>. Instead we route `_app-<id>` to the app's OWN space under
-// data/apps/<id>/_scope, a contained subfolder that the app scanner ignores (it
-// only reads plain content files at the app root). Both the engine (resolvers
-// below) and the desktop (paths.rs resolve_domain_base) MUST agree on this, or
-// app chat history would split between apps/ and domains/.
+// shadow folder under data/domains/_app-<id>, shadowing the product that lives
+// in data/entities/products/<id>. Instead we route `_app-<id>` to the product's
+// OWN space under data/entities/products/<id>/_scope, a contained subfolder the
+// app scanner ignores (it only reads plain content files at the folder root).
+// Both the engine (resolvers below) and the desktop (paths.rs
+// resolve_domain_base) MUST agree on this, or chat history would split.
 export const APP_SCOPE_PREFIX = "_app-";
 // Missions (missions-plan.md) live at data/missions/<slug>/. A mission's chat
 // space is keyed `_mission-<slug>` (like `_app-<id>`); jobs name a mission
@@ -204,10 +208,10 @@ export function dataRoot(vaultPath: string): string {
 //   3. legacy: <vault>/<d>  (also the write target for a not-yet-created domain)
 // dataRoot() collapses (1) and (2) into one check when no data/ dir exists.
 export function resolveDomainDir(vaultPath: string, domain: string): string {
-  // App-scope keys (`_app-<id>`) belong with the app, not among domains. Route
-  // them to data/apps/<id>/_scope so no data/domains/_app-<id> shadow appears.
+  // App-scope keys (`_app-<id>`) belong with the product, not among domains.
+  // Route them to data/entities/products/<id>/_scope so no domain shadow appears.
   const scopeId = appScopeId(domain);
-  if (scopeId) return join(appsContainer(vaultPath), scopeId, APP_SCOPE_SUBDIR);
+  if (scopeId) return join(productDir(vaultPath, scopeId), APP_SCOPE_SUBDIR);
   const mission = missionScopeSlug(domain);
   if (mission) return join(dataRoot(vaultPath), MISSIONS_DIR, mission);
   const v4 = join(dataRoot(vaultPath), DOMAINS_DIR, domain);
@@ -226,9 +230,9 @@ export function resolveDomainDir(vaultPath: string, domain: string): string {
 // content root (data/domains once migrated, else domains/).
 export function newDomainDir(vaultPath: string, domain: string): string {
   // Same app-scope rerouting as resolveDomainDir: a brand-new `_app-<id>` scope
-  // is created under data/apps/<id>/_scope, never data/domains/.
+  // is created under data/entities/products/<id>/_scope, never data/domains/.
   const scopeId = appScopeId(domain);
-  if (scopeId) return join(appsContainer(vaultPath), scopeId, APP_SCOPE_SUBDIR);
+  if (scopeId) return join(productWriteDir(vaultPath, scopeId), APP_SCOPE_SUBDIR);
   const mission = missionScopeSlug(domain);
   if (mission) return join(dataRoot(vaultPath), MISSIONS_DIR, mission);
   return join(dataRoot(vaultPath), DOMAINS_DIR, domain);
@@ -306,18 +310,110 @@ export function browserProfileDir(connectorId: string, legacyVaultProfileDir?: s
   return dir;
 }
 
-// The apps container inside the vault — under the effective content root.
 // Where entity pages live: <data root>/entities. Sits beside domains/ and apps/.
 export function entitiesContainer(vaultPath: string): string {
   return join(dataRoot(vaultPath), ENTITIES_DIR);
 }
 
-export function appsContainer(vaultPath: string): string {
-  const v4 = join(dataRoot(vaultPath), APPS_DIR);
-  if (existsSync(v4)) return v4;
-  const legacy = join(vaultPath, APPS_DIR);
-  if (existsSync(legacy)) return legacy;
-  return v4; // default new writes to the v4 home
+/** The one store for products: <data>/entities/products. Every write goes here. */
+export function productsContainer(vaultPath: string): string {
+  return join(entitiesContainer(vaultPath), PRODUCTS_DIR);
+}
+
+// ── Legacy product stores (transition fallback, read only) ──────────────────
+// Before the products migration (`prevail migrate products`), apps lived in
+// <data>/apps/<id>/ (or <vault>/apps/ before v4) and company pages in
+// <data>/entities/<legacy page dir>/<slug>/. Until the migration has run on
+// some Mac (its record in build/_meta/migrations/products.<host>.json; the vault
+// syncs it to the others), readers fall back to those trees for a product that
+// has no folder in the new store yet. Nothing ever writes there.
+const LEGACY_APPS_DIR = "apps";
+const LEGACY_PAGES_DIR = "orgs"; // legacy entity kind dir, read only
+
+/** True once the products migration ran on any Mac sharing this vault. */
+export function productsMigrationRecorded(vaultPath: string): boolean {
+  try { return readdirSync(join(buildRoot(vaultPath), "_meta", "migrations")).some((n) => /^products\..+\.json$/.test(n)); } catch { return false; }
+}
+
+/** Legacy roots still read as a fallback (empty once migrated). Apps first, then pages. */
+export function legacyProductRoots(vaultPath: string): string[] {
+  if (productsMigrationRecorded(vaultPath)) return [];
+  const out: string[] = [];
+  const apps = [join(dataRoot(vaultPath), LEGACY_APPS_DIR), join(vaultPath, LEGACY_APPS_DIR)].find((p) => existsSync(p));
+  if (apps) out.push(apps);
+  const pages = join(entitiesContainer(vaultPath), LEGACY_PAGES_DIR);
+  if (existsSync(pages)) out.push(pages);
+  return out;
+}
+
+/** True when legacy trees exist on disk at all (the desktop offers the migration then). */
+export function legacyProductTreesExist(vaultPath: string): boolean {
+  return [join(dataRoot(vaultPath), LEGACY_APPS_DIR), join(vaultPath, LEGACY_APPS_DIR), join(entitiesContainer(vaultPath), LEGACY_PAGES_DIR)].some((p) => existsSync(p));
+}
+
+/**
+ * A product's folder for READING: the new store when it has the folder, else a
+ * legacy folder with that id (transition fallback), else the new path. Writers
+ * use productWriteDir.
+ */
+export function productDir(vaultPath: string, id: string): string {
+  const nu = join(productsContainer(vaultPath), id);
+  if (existsSync(nu)) return nu;
+  for (const root of legacyProductRoots(vaultPath)) {
+    const p = join(root, id);
+    if (existsSync(p)) return p;
+  }
+  return nu;
+}
+
+/** A product's folder for WRITING: always the new store. */
+export function productWriteDir(vaultPath: string, id: string): string {
+  return join(productsContainer(vaultPath), id);
+}
+
+/**
+ * Every product folder, new store first, then legacy folders the new store does
+ * not have yet (fallback). "_" and dot dirs (_archive, _log, ...) are skipped
+ * unless `underscore` is set.
+ */
+export function productFolders(vaultPath: string, opts: { underscore?: boolean } = {}): { id: string; dir: string }[] {
+  const out: { id: string; dir: string }[] = [];
+  const seen = new Set<string>();
+  for (const root of [productsContainer(vaultPath), ...legacyProductRoots(vaultPath)]) {
+    let names: import("node:fs").Dirent[] = [];
+    try { names = readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const e of names) {
+      if (!e.isDirectory() || e.name.startsWith(".") || seen.has(e.name)) continue;
+      if (e.name.startsWith("_") && !opts.underscore) continue;
+      seen.add(e.name);
+      out.push({ id: e.name, dir: join(root, e.name) });
+    }
+  }
+  return out;
+}
+
+/** Archived products: products/_archive/<slug>/ plus, in fallback, the legacy apps archive. */
+export function productArchiveDirs(vaultPath: string): string[] {
+  const out = [join(productsContainer(vaultPath), "_archive")];
+  const legacyApps = legacyProductRoots(vaultPath)[0];
+  if (legacyApps && !legacyApps.endsWith(LEGACY_PAGES_DIR)) out.push(join(legacyApps, "_archive"));
+  return out;
+}
+
+const APP_CONTENT = ["manifest.json", "SKILL.md", "skills", "state.md", "soul.md", "open-loops.md", "MEMORY.md"];
+/** A product folder that carries app parts (a manifest, skills, state ...), archived or not. */
+export function hasAppContent(dir: string): boolean {
+  return APP_CONTENT.some((n) => existsSync(join(dir, n)));
+}
+
+/** A product folder that carries a live app (connector): app parts and not lifecycle archived. */
+export function isAppFolder(dir: string): boolean {
+  if (!hasAppContent(dir)) return false;
+  try {
+    const m = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as { lifecycle?: unknown };
+    if (m && m.lifecycle === "archived") return false;
+  } catch { /* no or unreadable manifest: still an app by its other files */ }
+  return true;
 }
 
 // The vault root that owns a working directory, for CONFINEMENT decisions (the
@@ -334,7 +430,7 @@ export function vaultRootForCwd(cwd: string): string {
     const isRoot =
       existsSync(join(dir, "VAULT.md")) ||
       existsSync(join(dir, DATA_DIR, DOMAINS_DIR)) ||
-      existsSync(join(dir, DATA_DIR, APPS_DIR)) ||
+      existsSync(join(dir, DATA_DIR, ENTITIES_DIR)) ||
       existsSync(join(dir, BUILD_DIR, "_meta"));
     if (isRoot) return dir;
     const up = dirname(dir);

@@ -9,11 +9,10 @@
 // fails a check is dropped (and said why), never guessed. Nothing is created
 // here: the desktop creates the mission only on the user's explicit go.
 
-import { existsSync, readdirSync } from "node:fs";
 
 import { readChiefOfStaff } from "./chief-of-staff.ts";
 import { listPages } from "./entities.ts";
-import { appsContainer } from "./path-safety.ts";
+import { isAppFolder, productFolders } from "./path-safety.ts";
 import type { RouteRunner } from "./route.ts";
 import { loadSpecialists } from "./specialists.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
@@ -91,7 +90,7 @@ export function draftContext(vault: string, now = Date.now()): DraftContext {
   let never: string[] = [];
   try { never = readChiefOfStaff(vault).neverRead; } catch { /* no chief file */ }
   let apps: string[] = [];
-  try { const root = appsContainer(vault); if (existsSync(root)) apps = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".") && !e.name.startsWith("_")).map((e) => e.name); } catch { /* none */ }
+  try { apps = productFolders(vault).filter((f) => isAppFolder(f.dir)).map((f) => f.id); } catch { /* none */ }
   const specialists = loadSpecialists(vault).filter((s) => s.on).map((s) => ({ id: s.id, name: s.name, returns: s.returns }));
   let people: DraftContext["people"] = [];
   try { people = listPages(vault).filter((p) => p.kind === "person").map((p) => ({ id: p.id, name: p.doc.name, aliases: p.doc.aliases ?? [] })); } catch { /* none */ }

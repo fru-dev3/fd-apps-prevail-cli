@@ -26,9 +26,9 @@
 // proposed lines) and from if-then plans on Compass paths.
 
 import { chainText, compassTree, walkUp } from "./compass-chain.ts";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { dataRoot, resolveDomainDir, runtimePath } from "./path-safety.ts";
+import { dataRoot, productFolders, resolveDomainDir, runtimePath } from "./path-safety.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { addItem, compassId, items, readCompass, saveCompass, type CompassItem } from "./compass.ts";
 import { openCommitments, type HeaderLite } from "./commitments.ts";
@@ -287,11 +287,9 @@ export function adminDeadlines(vault: string, now: number): RadarItem[] {
   const out: RadarItem[] = [];
   const today = ymd(now);
   const lead = (due: string) => { const d = days(today, due); return d < 0 ? null : d <= 1 ? 5 : d <= 7 ? 4 : d <= 30 ? 2 : null; };
-  const apps = join(dataRoot(vault), "apps");
-  if (existsSync(apps)) for (const a of readdirSync(apps)) {
-    if (a.startsWith("_")) continue;
+  for (const { id: a, dir } of productFolders(vault)) {
     try {
-      const m = JSON.parse(readText(join(apps, a, "manifest.json"))) as { name?: string; renewal?: { next: string }; trial?: { ends: string } };
+      const m = JSON.parse(readText(join(dir, "manifest.json"))) as { name?: string; renewal?: { next: string }; trial?: { ends: string } };
       for (const [what, due] of [["renews", m.renewal?.next], ["trial ends", m.trial?.ends]] as const) {
         if (!due) continue;
         const sev = lead(due);

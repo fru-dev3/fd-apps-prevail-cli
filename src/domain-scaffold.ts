@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
 import { vwriteFile } from "./vault-session.ts";
 import { join } from "node:path";
-import { appsContainer, newDomainDir, resolveDomainDir } from "./path-safety.ts";
+import { productsContainer, newDomainDir, resolveDomainDir } from "./path-safety.ts";
 import { seedSkillPack } from "./vault.ts";
 import { V4_MARKER, v4ContentPath } from "./vault-layout-v4.ts";
 
@@ -103,9 +103,8 @@ Any constraints, gotchas, or links to related skills.
 export function scaffoldApp(vaultPath: string, rawName: string): ScaffoldResult {
   const name = rawName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   if (!name) return { ok: false, message: "name is empty" };
-  const appsRoot = appsContainer(vaultPath);
-  const dir = join(appsRoot, name);
-  if (existsSync(dir)) return { ok: false, message: `app ${name} already exists` };
+  const dir = join(productsContainer(vaultPath), name);
+  if (existsSync(join(dir, "manifest.json")) || existsSync(join(dir, "state.md"))) return { ok: false, message: `app ${name} already exists` };
 
   try {
     mkdirSync(dir, { recursive: true });

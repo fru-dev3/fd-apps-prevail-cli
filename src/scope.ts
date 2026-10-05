@@ -108,7 +108,7 @@ export async function resolveScope(vault: string, i: ScopeInput): Promise<Resolv
   if (missionSlug) return resolveMission(vault, missionSlug, i);
 
   // An app's own chat space: --scope-app <id> is the `_app-<id>` scope key,
-  // stored under data/apps/<id>/_scope like any other thread space.
+  // stored under data/entities/products/<id>/_scope like any other thread space.
   const scopeApp = (i.scopeApp ?? "").trim() || appScopeId(i.domain ?? "") || "";
   if (scopeApp && !APP_ID_RE.test(scopeApp)) throw new ScopeError(`invalid app id: ${scopeApp}`);
   const key = scopeApp ? `${APP_SCOPE_PREFIX}${scopeApp}` : i.domain ?? "";
@@ -134,7 +134,7 @@ export async function resolveScope(vault: string, i: ScopeInput): Promise<Resolv
   if (!domain) throw new ScopeError(`unknown domain: ${i.domain}`);
   const entityIds = uniq(Array.isArray(i.entity) ? i.entity : [i.entity]);
   // A product's app records join its chat: their block and read tools, like an @app.
-  if (!scopeApp && entityIds.some((id) => id.startsWith("org/"))) {
+  if (!scopeApp && entityIds.some((id) => id.startsWith("product/"))) {
     try {
       const { productAppIds } = await import("./ia.ts");
       for (const id of entityIds) for (const a of productAppIds(vault, id)) if (!appIds.includes(a)) appIds.push(a);

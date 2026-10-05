@@ -36,7 +36,9 @@ export interface ActionAuditEntry {
 // lands in the vault's build/_log.
 export function auditVaultRoot(root: string): string {
   const r = resolve(root);
+  // data/apps is the legacy app container (before products).
   if (basename(dirname(r)) === "data" && (basename(r) === "domains" || basename(r) === "apps")) return dirname(dirname(r));
+  if (basename(r) === "products" && basename(dirname(r)) === "entities" && basename(dirname(dirname(r))) === "data") return dirname(dirname(dirname(r)));
   return r;
 }
 

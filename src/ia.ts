@@ -3,20 +3,22 @@
 //
 //   Entities    People    data/entities/people/<slug>/
 //               Places    data/entities/places/<slug>/
-//               Products  data/entities/orgs/<slug>/ and data/apps/<id>/ (one list)
+//               Products  data/entities/products/<slug>/ (page and app parts in one folder)
 //               Things    data/entities/things/<slug>/ (items the user owns)
 //   Activities  Events    data/entities/events/<slug>/
 //               Projects  data/missions/<slug>/ (stored as missions)
 //
 // Tasks, decisions and routines are not kinds: they stay where they are and
-// relate to these objects by links. Storage does not move: this module is a
-// registry and a set of adapters over the stores that already exist.
+// relate to these objects by links. This module is a registry and a set of
+// adapters over the stores.
 //
-//   Products   an adapter over org pages and app records. Nothing is copied:
-//              an app record matched to its company (same slug, title, web
-//              domain or the manifest's `company`) shows as that company's
-//              row; an app with no company is its own row under org/<slug>,
-//              and its page is written only when the user saves or notes it.
+//   Products   one folder per company (data/entities/products/<slug>/) holds
+//              its page and, when it has a connector, its app parts; "app" is
+//              a property (manifest.integration), not a place. An app record
+//              whose folder differs from its company (same title, web domain
+//              or the manifest's `company`) still shows on that company's row;
+//              an app with no company is its own row under product/<id>, and
+//              its page is written only when the user saves or notes it.
 //   Things     owned items: purchased, warranty, value, maker (a Product),
 //              place (a Place) and a service history, in the page frontmatter.
 //   Events     dated happenings: date, end, time, place, people, project, and
@@ -28,7 +30,7 @@
 //              and shown on both sides, beside the links a page's own fields
 //              and a project's people, entities and apps already make.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -38,7 +40,7 @@ import {
 import { tryAcquireLock } from "./file-lock.ts";
 import { moneyOf, oneQuestion, parseModelJson, realYmd } from "./mission-draft.ts";
 import { attach, createMission, detach, listMissionSlugs, missionSlugify, readLinks, readMilestones, readMission } from "./missions.ts";
-import { appsContainer, buildRoot, entitiesContainer } from "./path-safety.ts";
+import { buildRoot, entitiesContainer, hasAppContent, isAppFolder, productFolders } from "./path-safety.ts";
 import type { RouteRunner } from "./route.ts";
 import { vreadFile, vwriteFileAtomic } from "./vault-session.ts";
 
@@ -60,16 +62,17 @@ export const GROUPS: readonly { id: Group; label: string }[] = [{ id: "entities"
 export const KINDS: readonly KindDef[] = [
   { id: "people", group: "entities", label: "People", singular: "Person", icon: "Users", prefix: "person", store: "data/entities/people/" },
   { id: "places", group: "entities", label: "Places", singular: "Place", icon: "MapPin", prefix: "place", store: "data/entities/places/" },
-  { id: "products", group: "entities", label: "Products", singular: "Product", icon: "Package", prefix: "org", store: "data/entities/orgs/ and data/apps/" },
+  { id: "products", group: "entities", label: "Products", singular: "Product", icon: "Package", prefix: "product", store: "data/entities/products/" },
   { id: "things", group: "entities", label: "Things", singular: "Thing", icon: "Watch", prefix: "thing", store: "data/entities/things/" },
   { id: "events", group: "activities", label: "Events", singular: "Event", icon: "CalendarDays", prefix: "event", store: "data/entities/events/" },
   { id: "projects", group: "activities", label: "Projects", singular: "Project", icon: "FolderKanban", prefix: "mission", store: "data/missions/" },
 ];
 
-/** The kind an id belongs to: person/ place/ org/ app/ thing/ event/ mission/ project/. */
+/** The kind an id belongs to: person/ place/ product/ thing/ event/ mission/ project/ (legacy app/ reads as product/). */
 export function kindOf(id: string): KindDef | null {
   const head = (id.trim().replace(/^prevail:\/\//, "").split("/")[0] ?? "").toLowerCase();
-  const p = head === "app" ? "org" : head === "project" ? "mission" : head;
+  // Legacy heads from before products (app/, org/) read as product/.
+  const p = head === "app" || head === "org" ? "product" : head === "project" ? "mission" : head;
   return KINDS.find((k) => k.prefix === p || k.id === head) ?? null;
 }
 
@@ -93,7 +96,7 @@ export function canonId(vault: string, raw: string, kindHint?: EntityKind): stri
   if (/^app\//i.test(s)) {
     const appId = s.slice(4);
     const row = listProducts(vault).find((p) => p.apps.some((a) => a.id === appId));
-    return row?.id ?? `org/${slugify(appId)}`;
+    return row?.id ?? `product/${slugify(appId)}`;
   }
   const p = parseEntityId(s);
   if (!p) return "";
@@ -101,14 +104,14 @@ export function canonId(vault: string, raw: string, kindHint?: EntityKind): stri
   return kind ? `${kind === "project" ? "mission" : kind}/${p.slug}` : "";
 }
 
-// ── Products: org pages and app records as one list ─────────────────────────
+// ── Products: one list over product folders (page and app parts) ────────────
 
-export interface AppRecord { id: string; title: string; kind?: string; category?: string; domains: string[]; company?: string }
+export interface AppRecord { id: string; title: string; kind?: string; category?: string; domains: string[]; company?: string; integration?: string; archived?: boolean }
 export interface ProductRow {
   id: string; name: string;
-  /** A company the user talks about (an org in the index or with a page). */
+  /** A company the user talks about (a product in the index or with a page). */
   company: boolean;
-  /** The app records this product carries (data/apps/<id>), first is primary. */
+  /** The app records this product carries (data/entities/products/<id>), first is primary. */
   apps: AppRecord[];
   website?: string; domain?: string; picture?: string;
   saved: boolean; has_page: boolean; conversations: number; last_ts: number;
@@ -116,15 +119,14 @@ export interface ProductRow {
 }
 
 const APP_ID_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
-/** Every app record under data/apps: id, title and identity from its manifest, never its data. */
+/** Every app record under data/entities/products: id, title and identity from its manifest, never its data. */
 export function appRecords(vault: string): AppRecord[] {
-  const root = appsContainer(vault);
-  if (!existsSync(root)) return [];
   const out: AppRecord[] = [];
-  for (const e of readdirSync(root, { withFileTypes: true })) {
-    if (!e.isDirectory() || e.name.startsWith("_") || e.name.startsWith(".")) continue;
+  for (const { id: name, dir } of productFolders(vault)) {
+    if (!hasAppContent(dir)) continue; // a page-only product carries no app
+    const e = { name };
     let m: Record<string, unknown> = {};
-    const mp = join(root, e.name, "manifest.json");
+    const mp = join(dir, "manifest.json");
     if (existsSync(mp)) { try { m = JSON.parse(vreadFile(mp)) as Record<string, unknown>; } catch { m = {}; } }
     const ids = (m.identifiers && typeof m.identifiers === "object" ? m.identifiers : {}) as { domains?: unknown };
     const domains = Array.isArray(ids.domains) ? ids.domains.filter((d): d is string => typeof d === "string").map(hostOf).filter(Boolean) : [];
@@ -134,17 +136,19 @@ export function appRecords(vault: string): AppRecord[] {
       ...(typeof m.kind === "string" ? { kind: m.kind } : {}),
       ...(typeof m.category === "string" ? { category: m.category } : {}),
       ...(typeof m.company === "string" && m.company.trim() ? { company: m.company.trim() } : {}),
+      ...(typeof m.integration === "string" && m.integration.trim() ? { integration: m.integration.trim() } : {}),
+      ...(isAppFolder(dir) ? {} : { archived: true }),
     });
   }
   return out.sort((a, b) => a.title.localeCompare(b.title));
 }
 
-/** Products: every company (org) and every app, one row each, an app shown on its company's row. */
+/** Products: every company and every app, one row each, an app shown on its company's row. */
 export function listProducts(vault: string, idx: EntityIndex = indexOf(vault)): ProductRow[] {
   const rows = new Map<string, ProductRow>();
   const byHost = new Map<string, string>();
   for (const e of idx.entities) {
-    if (e.kind !== "org") continue;
+    if (e.kind !== "product") continue;
     rows.set(e.id, {
       id: e.id, name: e.name, company: true, apps: [], saved: !!e.saved, has_page: !!e.page, conversations: e.conversations, last_ts: e.last_ts,
       relation: e.relation ?? "yours", ...(e.website ? { website: e.website } : {}), ...(e.domain ? { domain: e.domain } : {}),
@@ -153,7 +157,7 @@ export function listProducts(vault: string, idx: EntityIndex = indexOf(vault)): 
     for (const h of [hostOf(e.domain), hostOf(e.website)]) if (h && !byHost.has(h)) byHost.set(h, e.id);
   }
   for (const a of appRecords(vault)) {
-    const keys = [a.company, a.id, a.title].map((x) => (x ? `org/${slugify(x)}` : "")).filter(Boolean);
+    const keys = [`product/${a.id}`, ...[a.company, a.id, a.title].map((x) => (x ? `product/${slugify(x)}` : ""))].filter(Boolean);
     const id = keys.find((k) => rows.has(k)) ?? a.domains.map((h) => byHost.get(h)).find((x): x is string => !!x);
     if (id) {
       const r = rows.get(id)!;
@@ -162,17 +166,25 @@ export function listProducts(vault: string, idx: EntityIndex = indexOf(vault)): 
       if (!r.domain && a.domains[0]) r.domain = a.domains[0];
       continue;
     }
-    const own = `org/${slugify(a.title) || slugify(a.id)}`;
-    if (!own.slice(4)) continue;
+    const own = APP_ID_RE.test(a.id) ? `product/${a.id}` : `product/${slugify(a.id) || slugify(a.title)}`;
+    if (own === "product/") continue;
     rows.set(own, { id: own, name: a.title, company: false, apps: [a], saved: false, has_page: false, conversations: 0, last_ts: 0, relation: "yours", ...(a.domains[0] ? { domain: a.domains[0], website: a.domains[0] } : {}) });
     for (const h of a.domains) if (!byHost.has(h)) byHost.set(h, own);
+  }
+  // A product folder with neither a page in the index nor app parts (files
+  // only, e.g. a statement) is still a product.
+  const carried = new Set([...rows.values()].flatMap((r) => r.apps.map((x) => x.id)));
+  for (const { id: name } of productFolders(vault)) {
+    const id = `product/${APP_ID_RE.test(name) ? name : slugify(name)}`;
+    if (id === "product/" || rows.has(id) || carried.has(name)) continue;
+    rows.set(id, { id, name, company: false, apps: [], saved: false, has_page: false, conversations: 0, last_ts: 0, relation: "yours" });
   }
   return [...rows.values()].sort((x, y) => y.conversations - x.conversations || y.last_ts - x.last_ts || x.name.localeCompare(y.name));
 }
 
 /** The app ids a product carries that a chat can open (valid app ids only). */
 export function productAppIds(vault: string, id: string): string[] {
-  if (!/^org\//.test(id)) return [];
+  if (!/^product\//.test(id)) return [];
   const row = listProducts(vault).find((p) => p.id === id);
   return (row?.apps ?? []).map((a) => a.id).filter((x) => APP_ID_RE.test(x));
 }
@@ -220,7 +232,7 @@ function normField(vault: string, key: string, raw: string): string | null {
   if (key === "value") { const n = moneyOf(v); if (n === null) throw new Error(`value must be an amount, not "${v}"`); return String(n); }
   if (key === "calendar") { if (!["ask", "synced", "declined"].includes(v)) throw new Error("calendar is ask, synced or declined"); return v; }
   if (key === "place") { const id = canonId(vault, v.includes("/") ? v : `place/${v}`); if (!id.startsWith("place/")) throw new Error(`place must be a place, not "${v}"`); return yamlStr(id); }
-  if (key === "maker") { const id = canonId(vault, v.includes("/") ? v : `org/${v}`); if (!id.startsWith("org/")) throw new Error(`maker must be a product, not "${v}"`); return yamlStr(id); }
+  if (key === "maker") { const id = canonId(vault, v.includes("/") ? v : `product/${v}`); if (!id.startsWith("product/")) throw new Error(`maker must be a product, not "${v}"`); return yamlStr(id); }
   if (key === "project") {
     const id = canonId(vault, v.includes("/") ? v : `mission/${v}`);
     if (!id.startsWith("mission/") || !readMission(vault, id)) throw new Error(`no project "${v}"`);
@@ -396,7 +408,7 @@ export function nameOf(vault: string, id: string, idx: EntityIndex = indexOf(vau
   if (rec) return rec.name;
   const p = parseEntityId(id);
   if (p?.kind) { const doc = readPage(vault, p.kind, p.slug); if (doc) return doc.name; }
-  if (id.startsWith("org/")) { const row = (products ?? listProducts(vault, idx)).find((r) => r.id === id); if (row) return row.name; }
+  if (id.startsWith("product/")) { const row = (products ?? listProducts(vault, idx)).find((r) => r.id === id); if (row) return row.name; }
   return (p?.slug ?? id).replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -601,7 +613,7 @@ export function objectContextText(vault: string, raw: string): string {
   if (f.warranty) details.push(`Warranty until: ${f.warranty}`);
   if (f.value != null) details.push(`Value: $${f.value}`);
   if (f.service?.length) details.push(`Service history: ${f.service.slice(-8).map((s) => `${s.date} ${s.what}${s.cost != null ? ` ($${s.cost})` : ""}`).join("; ")}`);
-  if (p.kind === "org") {
+  if (p.kind === "product") {
     const row = listProducts(vault, idx).find((r) => r.id === id);
     for (const a of row?.apps ?? []) details.push(`Its app record: ${a.title} (app ${a.id}${a.kind ? `, ${a.kind}` : ""}${a.category ? `, ${a.category}` : ""})`);
   }
@@ -613,8 +625,8 @@ export function objectContextText(vault: string, raw: string): string {
 
 // ── Creating by talking ─────────────────────────────────────────────────────
 
-export type DraftKind = "person" | "place" | "org" | "thing" | "event";
-export const DRAFT_KINDS: DraftKind[] = ["person", "place", "org", "thing", "event"];
+export type DraftKind = "person" | "place" | "product" | "thing" | "event";
+export const DRAFT_KINDS: DraftKind[] = ["person", "place", "product", "thing", "event"];
 export interface ObjectDraft {
   name?: string; notes?: string; website?: string;
   date?: string; end?: string; time?: string; place?: string; people?: string[];
@@ -625,11 +637,11 @@ export interface ObjectDraftReply { draft: ObjectDraft; filled: string[]; droppe
 const DRAFT_FIELDS: Record<DraftKind, (keyof ObjectDraft)[]> = {
   person: ["name", "notes"],
   place: ["name", "notes"],
-  org: ["name", "website", "notes"],
+  product: ["name", "website", "notes"],
   thing: ["name", "purchased", "warranty", "value", "maker", "place", "notes"],
   event: ["name", "date", "end", "time", "place", "people", "notes"],
 };
-const REQUIRED_OF: Record<DraftKind, (keyof ObjectDraft)[]> = { person: ["name"], place: ["name"], org: ["name"], thing: ["name"], event: ["name", "date"] };
+const REQUIRED_OF: Record<DraftKind, (keyof ObjectDraft)[]> = { person: ["name"], place: ["name"], product: ["name"], thing: ["name"], event: ["name", "date"] };
 const ASK: Partial<Record<keyof ObjectDraft, string>> = { name: "What should we call it?", date: "When is it?" };
 const GO_RE = /^\s*(?:ok(?:ay)?[, ]+|yes[, ]+)?(?:go|go ahead|save(?: it)?|create(?: it)?|add(?: it)?|make it|do it|that'?s it|done)\s*[.!]*\s*$/i;
 
@@ -655,7 +667,7 @@ export function checkDraft(vault: string, kind: DraftKind, raw: unknown, userTex
       const n = moneyOf(v); if (n !== null) out.value = n; else drop(k, v, "not an amount");
     } else if (k === "place" || k === "maker") {
       // A name the user said, filed as a place or a product.
-      const s = typeof v === "string" ? v.trim().replace(/^(place|org)\//, "").replace(/-/g, " ") : "";
+      const s = typeof v === "string" ? v.trim().replace(/^(place|product)\//, "").replace(/-/g, " ") : "";
       if (s && said.includes(s.toLowerCase())) out[k] = s; else drop(k, v, "you did not name it");
     } else if (k === "people") {
       const keep = (Array.isArray(v) ? v : [v]).map((x) => (typeof x === "string" ? x.trim().replace(/^person\//, "").replace(/-/g, " ") : "")).filter((x) => { const ok = !!x && said.includes(x.toLowerCase()); if (!ok && x) drop("people", x, "you did not name them"); return ok; });
@@ -667,7 +679,7 @@ export function checkDraft(vault: string, kind: DraftKind, raw: unknown, userTex
   return { fields: out, dropped };
 }
 
-const LABEL: Record<DraftKind, string> = { person: "person", place: "place", org: "product (a company, app or service)", thing: "thing the user owns (a phone, a watch, a car, gear)", event: "event (a dated happening: a birthday, a holiday, a dinner, an appointment)" };
+const LABEL: Record<DraftKind, string> = { person: "person", place: "place", product: "product (a company, app or service)", thing: "thing the user owns (a phone, a watch, a car, gear)", event: "event (a dated happening: a birthday, a holiday, a dinner, an appointment)" };
 
 /** One turn of the "new <kind>" conversation: the fields so far and the one question that matters next. */
 export async function draftObject(vault: string, i: { kind: string; turns: { role: "user" | "assistant"; text: string }[]; draft?: ObjectDraft; runner?: RouteRunner; now?: number }): Promise<ObjectDraftReply> {
@@ -725,7 +737,7 @@ export function createFromObjectDraft(vault: string, kindRaw: string, raw: unkno
   }
   const saved = saveEntity(vault, `${kind}/${slugify(d.name)}`, { name: d.name, kind, now });
   if (kind === "thing") setFields(vault, saved.id, { purchased: d.purchased, warranty: d.warranty, value: d.value != null ? String(d.value) : undefined, maker: d.maker, place: d.place }, { now });
-  if (kind === "org" && d.website) { try { setWebsite(vault, saved.id, d.website, { now }); } catch (e) { dropped.push({ field: "website", value: d.website, why: (e as Error).message }); } }
+  if (kind === "product" && d.website) { try { setWebsite(vault, saved.id, d.website, { now }); } catch (e) { dropped.push({ field: "website", value: d.website, why: (e as Error).message }); } }
   if (d.notes) setNotes(vault, saved.id, d.notes, { now });
   return { id: saved.id, dropped };
 }

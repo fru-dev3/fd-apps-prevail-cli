@@ -1,5 +1,5 @@
 // Trusted sources: the user's own data sites, added as apps that feed the
-// agent READ-ONLY. A trusted source is an ordinary app folder (data/apps/<id>/)
+// agent READ-ONLY. A trusted source is an ordinary app folder (data/entities/products/<id>/)
 // with one of three integration kinds:
 //   mcp-remote  a remote MCP endpoint (streamable HTTP). Its tools are listed
 //               at add time and attached to Claude turns that reference it.
@@ -11,7 +11,7 @@
 //   database    a SQLite file or a Postgres URL, read-only SELECTs only.
 //
 // Files:
-//   <vault>/data/apps/<id>/manifest.json   {id, name, integration, urls, trusted,
+//   <vault>/data/entities/products/<id>/manifest.json   {id, name, integration, urls, trusted,
 //                                          domains, tools?, probe, source?}
 //   <vault>/build/_meta/apps/trusted.json  the allowlist the act gate trusts:
 //                                          per id its kind, urls, hosts and read
@@ -25,12 +25,13 @@
 // sourceSecretName(id); the registry keeps only that name.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, renameSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeSecretFile } from "./secret-file.ts";
 import {
   appDir,
+  appWriteDir,
   buildTool,
   classifyTool,
   localDate,
@@ -40,7 +41,7 @@ import {
   type MirrorTool,
 } from "./apps-mirror.ts";
 import { tryAcquireLock } from "./file-lock.ts";
-import { appsContainer } from "./path-safety.ts";
+import { productFolders, productsContainer } from "./path-safety.ts";
 import { vreadFile, vwriteFileAtomic } from "./vault-session.ts";
 import { readAppSecret } from "./app-secrets.ts";
 import { dbTables, parseDbLocation, probeFolder, probePage, realFolder, type DbEngine } from "./source-readers.ts";
@@ -461,10 +462,8 @@ export function trustedSourceApps(vault: string): MirrorApp[] {
       out.push(toApp(vault, id, e));
     } catch { /* skip a bad entry */ }
   }
-  let names: string[] = [];
-  try { names = readdirSync(appsContainer(vault)); } catch { /* no apps yet */ }
-  for (const id of names) {
-    if (id.startsWith("_") || id.startsWith(".") || reg[id]) continue;
+  for (const { id } of productFolders(vault)) {
+    if (reg[id]) continue;
     try {
       const info = sourceInfo(vault, id, reg);
       if (info) out.push(untrustedHereApp(vault, id, info));
@@ -538,10 +537,10 @@ export async function addSource(vault: string, input: AddSourceInput, deps: { fe
     if (kind === "mcp-remote" && urls.length !== 1) throw new Error("an mcp-remote source takes exactly one --url");
   }
 
-  const dir = appDir(vault, id);
+  const dir = appWriteDir(vault, id);
   const manPath = join(dir, "manifest.json");
   const cur = readManifest(vault, id);
-  if (existsSync(manPath) && !cur) throw new Error(`data/apps/${id}/manifest.json is not valid JSON; fix or move it and retry`);
+  if (existsSync(join(appDir(vault, id), "manifest.json")) && !cur) throw new Error(`data/entities/products/${id}/manifest.json is not valid JSON; fix or move it and retry`);
   // Adopt, never overwrite: a runtime connector or another kind of app keeps its folder.
   if (cur?.mirror) throw new Error(`"${id}" is already a connector mirrored from a runtime; pick another name`);
   if (cur && typeof cur.integration === "string" && cur.integration.trim() && cur.integration !== kind) {
@@ -621,22 +620,22 @@ export async function addSource(vault: string, input: AddSourceInput, deps: { fe
   return { app: toApp(vault, id, readRegistry(vault)[id]!), probe, adopted: !!cur };
 }
 
-/** Archive a trusted source: the folder moves to data/apps/_archive/ (never
+/** Archive a trusted source: the folder moves to data/entities/products/_archive/ (never
  *  deleted) and it leaves the trusted registry. */
 export function removeSource(vault: string, id: string, now: number = Date.now()): { id: string; from: string; to: string } {
   const reg = readRegistry(vault);
   const dir = appDir(vault, id);
   const man = readManifest(vault, id);
   if (!reg[id] && !(man?.trusted === true && isSourceKind(man.integration))) throw new Error(`"${id}" is not a trusted source`);
-  if (!existsSync(dir)) throw new Error(`data/apps/${id} does not exist`);
-  const arch = join(appsContainer(vault), "_archive");
+  if (!existsSync(dir)) throw new Error(`data/entities/products/${id} does not exist`);
+  const arch = join(productsContainer(vault), "_archive");
   mkdirSync(arch, { recursive: true });
   let to = join(arch, id);
   for (let n = 2; existsSync(to); n++) to = join(arch, `${id}-${n}`);
   renameSync(dir, to);
   const index = join(arch, "INDEX.md");
   try {
-    if (!existsSync(index)) vwriteFileAtomic(index, "# Archived apps\n\nApp folders moved here by `prevail apps archive` or `apps remove-source`. Move one back to data/apps/ to restore it.\n\n");
+    if (!existsSync(index)) vwriteFileAtomic(index, "# Archived products\n\nProduct folders moved here by `prevail apps archive` or `apps remove-source`. Move one back to data/entities/products/ to restore it.\n\n");
     appendFileSync(index, `- ${localDate(now)} \`${id}\`${to.endsWith(`/${id}`) ? "" : ` (as ${to.split("/").pop()})`}: trusted source removed\n`);
   } catch { /* the index is best effort */ }
   updateRegistry(vault, (r) => { delete r[id]; });

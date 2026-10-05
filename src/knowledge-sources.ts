@@ -6,7 +6,7 @@
 //   folder    a folder on this Mac (text files only)     integration folder
 //   database  a SQLite file or a Postgres URL (SELECT)   integration database
 //
-// Each source is a trusted-source app folder (data/apps/<id>/manifest.json,
+// Each source is a trusted-source app folder (data/entities/products/<id>/manifest.json,
 // synced) plus this Mac's allowlist entry (build/_meta/apps/trusted.json, never
 // synced). The manifest adds `scope`: whether briefings read it, the domains
 // and projects it serves, and whether the chief of staff (General) uses it.
@@ -20,7 +20,7 @@
 
 import { existsSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { appDir, localDate, type MirrorApp } from "./apps-mirror.ts";
+import { appDir, appWriteDir, localDate, type MirrorApp } from "./apps-mirror.ts";
 import { vwriteFileAtomic } from "./vault-session.ts";
 import { readAppSecret } from "./app-secrets.ts";
 import {
@@ -325,7 +325,7 @@ export async function addKnowledgeSource(vault: string, input: AddKnowledgeInput
 function writeScope(vault: string, id: string, scope: KnowledgeScope): void {
   const man = readManifest(vault, id);
   if (!man) throw new Error(`"${id}" is not a source`);
-  vwriteFileAtomic(join(appDir(vault, id), "manifest.json"), `${JSON.stringify({ ...man, scope, domains: scope.domains }, null, 2)}\n`);
+  vwriteFileAtomic(join(appWriteDir(vault, id), "manifest.json"), `${JSON.stringify({ ...man, scope, domains: scope.domains }, null, 2)}\n`);
 }
 
 /** Change what a source is used for. */

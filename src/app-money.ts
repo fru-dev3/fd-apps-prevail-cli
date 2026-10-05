@@ -3,7 +3,7 @@
 //
 // Sources, all matched to app records (apps plan decision 3: bank data keeps
 // only charges matched to apps):
-//   - card statement CSVs already in the vault (data/apps/<bank>/*.csv), read
+//   - card statement CSVs already in the vault (data/entities/products/<bank>/*.csv), read
 //     in place: recurring series are detected per merchant (weekly, monthly,
 //     quarterly, yearly; similar amounts). Unmatched recurring merchants go to
 //     the unknown inbox on this Mac; nothing else about other charges is kept.
@@ -17,11 +17,11 @@
 // place by metrics through chargeEvents()).
 
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { buildMatcher, KNOWN_APPS, readRecords, type Matcher } from "./app-map.ts";
 import { csvRows, dayOf, hostSlug, mdy, readMachineEvents, type MetricEvent } from "./metrics.ts";
-import { appsContainer, runtimePath } from "./path-safety.ts";
+import { productDir, productFolders, productWriteDir, runtimePath } from "./path-safety.ts";
 import { readMailHeaders, writeSourceEvents, type MailHeader } from "./source-sync.ts";
 import { vreadFile } from "./vault-session.ts";
 
@@ -50,15 +50,11 @@ export function normMerchant(desc: string): string {
 /** Every purchase row in the card statement CSVs, in memory (never written anywhere). Missions match these by merchant. */
 export function cardCharges(vault: string): CardCharge[] {
   const out: CardCharge[] = [];
-  const apps = appsContainer(vault);
-  let ids: string[] = [];
-  try { ids = readdirSync(apps); } catch { return out; }
-  for (const id of ids) {
-    if (id.startsWith("_") || id.startsWith(".")) continue;
+  for (const { dir } of productFolders(vault)) {
     let fs: string[] = [];
-    try { fs = readdirSync(join(apps, id)).filter((f) => /\.csv$/i.test(f)); } catch { continue; }
+    try { fs = readdirSync(dir).filter((f) => /\.csv$/i.test(f)); } catch { continue; }
     for (const f of fs) {
-      const p = join(apps, id, f);
+      const p = join(dir, f);
       const file = relative(vault, p);
       const rows = csvRows(readText(p));
       const head = (rows[0] ?? []).map((h) => h.toLowerCase());
@@ -252,9 +248,9 @@ export function applyMoney(vault: string, money: Map<string, MoneyRecord>): { up
   const recs = new Map(readRecords(vault).filter((r) => !r.archived).map((r) => [r.id, r]));
   for (const [app, mr] of money) {
     if (!recs.has(app)) continue;
-    const p = join(appsContainer(vault), app, "manifest.json");
+    const p = join(productWriteDir(vault, app), "manifest.json");
     let m: Record<string, unknown>;
-    try { m = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>; } catch { continue; }
+    try { m = JSON.parse(readFileSync(join(productDir(vault, app), "manifest.json"), "utf8")) as Record<string, unknown>; } catch { continue; }
     const before = JSON.stringify(m);
     const stated = (m.cost as { source?: string } | undefined)?.source === "stated";
     if (mr.cost && !stated) m.cost = mr.cost;
@@ -268,6 +264,7 @@ export function applyMoney(vault: string, money: Map<string, MoneyRecord>): { up
       m.price_history = [...all.values()].sort((a, b) => a.date.localeCompare(b.date));
     }
     if (JSON.stringify(m) === before) continue;
+    mkdirSync(dirname(p), { recursive: true });
     writeFileSync(`${p}.tmp`, `${JSON.stringify(m, null, 2)}\n`);
     renameSync(`${p}.tmp`, p);
     updated.push(app);

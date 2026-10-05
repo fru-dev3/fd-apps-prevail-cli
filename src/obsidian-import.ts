@@ -10,6 +10,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join, relative, dirname, basename, extname, sep } from "node:path";
+import { productDir, productWriteDir } from "./path-safety.ts";
 
 // Slugify a note/target name to the filename we write it as (Obsidian allows
 // spaces; we keep the name but make the LINK target a .md path). We do NOT
@@ -186,12 +187,13 @@ export function importObsidianVault(opts: {
 // it as connected and it can be re-synced. Merges into any existing manifest,
 // unions the domain, and records the source folder. Idempotent.
 export function adoptObsidianApp(vault: string, domain: string, from: string): void {
-  const dir = join(vault, "data", "apps", "obsidian");
+  const dir = productWriteDir(vault, "obsidian");
   mkdirSync(dir, { recursive: true });
   const manifestPath = join(dir, "manifest.json");
   let manifest: Record<string, unknown> = {};
-  if (existsSync(manifestPath)) {
-    try { manifest = JSON.parse(readFileSync(manifestPath, "utf8")); } catch { manifest = {}; }
+  const readFrom = join(productDir(vault, "obsidian"), "manifest.json");
+  if (existsSync(readFrom)) {
+    try { manifest = JSON.parse(readFileSync(readFrom, "utf8")); } catch { manifest = {}; }
   }
   const domains = new Set<string>([...(Array.isArray(manifest.domains) ? (manifest.domains as string[]) : []), domain]);
   const next = {

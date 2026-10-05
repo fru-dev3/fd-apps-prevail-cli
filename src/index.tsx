@@ -2861,7 +2861,7 @@ async function mirrorCommand(a: string[], vaultPath?: string | null): Promise<vo
 
 // prevail entities [list|show|save|note|threads|duplicates|merge|not-same|set-picture|set-website|files|add-file|
 // migrate-folders|refresh|backfill]: the people, places,
-// orgs and things the owner talks about (entities.ts). With --json every
+// products and things the owner talks about (entities.ts). With --json every
 // subcommand prints exactly one JSON line; errors land in `error`.
 async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<void> {
   const VALUE_FLAGS = new Set(["--vault", "--q", "--kind", "--limit", "--batch", "--model", "--tag-model", "--text", "--name", "--digests", "--file", "--url", "--relation", "--field", "--value", "--date", "--end", "--time", "--place", "--people", "--project", "--notes", "--what", "--cost", "--from", "--to"]);
@@ -2905,12 +2905,12 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
         if (mv) { if (json) out({ found: true, kind: "mission", ...mv }); else console.log(`${mv.id}  ${mv.status}  ${mv.name}\n  ${mv.outcome}`); return; }
       }
       const d = en.entityDetail(vault, idx, id);
-      // Products (ia.ts): an org's app records ride along, and an app with no
+      // Products (ia.ts): a product's app records ride along, and an app with no
       // company page yet is still a product the user can open.
       const iam = await import("./ia.ts");
-      const product = /^(org|app)\//.test(id) ? iam.listProducts(vault, idx).find((p) => p.id === iam.canonId(vault, id)) : undefined;
+      const product = /^(product|org|app)\//.test(id) /* org/ and app/: legacy ids */ ? iam.listProducts(vault, idx).find((p) => p.id === iam.canonId(vault, id)) : undefined;
       if (!d && product && json) {
-        out({ found: true, id: product.id, name: product.name, kind: "org", aliases: [], kinds: ["org"], mention_count: 0, conversations: 0, last_ts: 0, mentions: [], co_mentions: [], digest: "", notes: "", relation: "yours", apps: product.apps, ...(product.website ? { website: product.website } : {}), ...(product.domain ? { domain: product.domain } : {}), fields: {} });
+        out({ found: true, id: product.id, name: product.name, kind: "product", aliases: [], kinds: ["product"], mention_count: 0, conversations: 0, last_ts: 0, mentions: [], co_mentions: [], digest: "", notes: "", relation: "yours", apps: product.apps, ...(product.website ? { website: product.website } : {}), ...(product.domain ? { domain: product.domain } : {}), fields: {} });
         return;
       }
       if (!d) {
@@ -2933,7 +2933,7 @@ async function entitiesCommand(a: string[], vaultPath?: string | null): Promise<
     }
     if (sub === "save") {
       const id = pos[1];
-      if (!id) { fail("usage: prevail entities save <kind/slug> [--name \"Display name\"] [--kind person|place|org|thing|project]"); return; }
+      if (!id) { fail("usage: prevail entities save <kind/slug> [--name \"Display name\"] [--kind person|place|product|thing|project]"); return; }
       const d = en.saveEntity(vault, id, { name: get("--name") ?? undefined, kind: get("--kind") ?? undefined });
       if (json) { out(d); return; }
       console.log(`saved ${d.id} -> ${d.page_path}`);
@@ -3247,7 +3247,7 @@ async function appsCommand(a: string[], vaultPath?: string | null): Promise<void
       const r = am.archiveApps(vault, am.mirroredIds(doc), apply);
       if (json) { out(r); return; }
       for (const c of r.candidates) console.log(`${apply ? "" : "would archive "}${c.id}: ${c.reason}`);
-      console.log(apply ? `moved ${r.moved.length} app folder(s) to data/apps/_archive/` : `${r.candidates.length} candidate(s); run with --apply to move them`);
+      console.log(apply ? `moved ${r.moved.length} app folder(s) to data/entities/products/_archive/` : `${r.candidates.length} candidate(s); run with --apply to move them`);
       return;
     }
     if (sub === "accounts") {
@@ -3477,7 +3477,7 @@ async function connectorSkillRun(args: string[], vaultDefault: string): Promise<
 
   const { existsSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const { appsContainer } = await import("./path-safety.ts");
+  const { productWriteDir } = await import("./path-safety.ts");
   const {
     scanCommunityApps,
     scaffoldCommunityApp,
@@ -3509,8 +3509,8 @@ async function connectorSkillRun(args: string[], vaultDefault: string): Promise<
   // bundled dir) and starter skills exist even pre-connect. Idempotent. For a
   // skill-pack-only app, derive the scaffold metadata from the id (there is no
   // community manifest to read).
-  const vaultAppPath = join(appsContainer(vault), appId);
-  if (!existsSync(vaultAppPath)) {
+  const vaultAppPath = productWriteDir(vault, appId);
+  if (!existsSync(join(vaultAppPath, "manifest.json"))) {
     const title = app?.title ?? appId.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
     const r = scaffoldCommunityApp({
       id: appId,
@@ -3670,7 +3670,7 @@ async function connectorsCommand(args: string[]): Promise<void> {
   const { probeConnector } = await import("./connector-probe.ts");
   const { runOAuthFlow } = await import("./oauth-flow.ts");
   const { readSyncState } = await import("./daemon-sync.ts");
-  // Apps live in <vault>/data/apps (single source of truth). Resolve the
+  // Apps live in <vault>/data/entities/products (single source of truth). Resolve the
   // configured vault, fold any legacy ~/.prevail/apps into it, then scan from
   // the vault so the desktop only ever sees apps from one location.
   // Resolution order: an explicit `--vault` flag (the desktop now passes this
@@ -3796,8 +3796,8 @@ async function connectorsCommand(args: string[]): Promise<void> {
     const id = args[1];
     if (!id) { console.error("usage: prevail connectors remove <id>"); process.exit(1); }
     const app = pickConnector(id);
-    const { appsContainer } = await import("./path-safety.ts");
-    const { rmSync } = await import("node:fs");
+    const { legacyProductRoots, productsContainer } = await import("./path-safety.ts");
+    const { existsSync: exists, mkdirSync: mkdirp, readdirSync: readdir, renameSync: rename, rmSync } = await import("node:fs");
     const { homedir } = await import("node:os");
     const { resolve, sep } = await import("node:path");
     const fail = (msg: string) => {
@@ -3805,18 +3805,29 @@ async function connectorsCommand(args: string[]): Promise<void> {
       console.error(msg); process.exit(1);
     };
     if (!app) return fail(connectorNotFound(id));
-    // Guard: a user app lives in the vault's data/apps (the single source of
+    // Guard: a user app lives in the vault's data/entities/products (the single source of
     // truth), the legacy ~/.prevail/apps, or the dev override - any of those is
     // the user's own and is removable. The ONLY thing we refuse is a connector
     // that ships read-only inside the app bundle (apps/community), which isn't
     // in any of these roots.
-    const userRoots = [resolve(appsContainer(connectorsVault)), resolve(homedir(), ".prevail", "apps")];
+    const userRoots = [resolve(productsContainer(connectorsVault)), ...legacyProductRoots(connectorsVault).map((r) => resolve(r)), resolve(homedir(), ".prevail", "apps")];
     if (process.env.PREVAIL_APPS_DIR) userRoots.push(resolve(process.env.PREVAIL_APPS_DIR));
     const resolved = resolve(app.path);
     const underUser = userRoots.some((root) => resolved === root || resolved.startsWith(root + sep));
     if (!underUser) return fail(`"${id}" is a built-in connector that ships with Prevail and can't be deleted. Connectors you added live in your vault and can be removed.`);
     try {
-      rmSync(app.path, { recursive: true, force: true });
+      // A product keeps its page: when the folder holds one (entity.md), only
+      // the app parts move to products/_archive/<id>/ (never deleted) and the
+      // product stays. A folder with no page is the connector alone.
+      if (exists(join(app.path, "entity.md"))) {
+        const PAGE_PARTS = new Set(["entity.md", "files", "updates.jsonl"]);
+        let to = join(productsContainer(connectorsVault), "_archive", id);
+        for (let n = 2; exists(to); n++) to = join(productsContainer(connectorsVault), "_archive", `${id}-${n}`);
+        mkdirp(to, { recursive: true });
+        for (const name of readdir(app.path)) if (!PAGE_PARTS.has(name) && !/^picture\./.test(name)) rename(join(app.path, name), join(to, name));
+      } else {
+        rmSync(app.path, { recursive: true, force: true });
+      }
     } catch (e) {
       return fail(`could not delete "${id}": ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -4928,7 +4939,7 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
       // Best-effort cleanup of stray app-scope shadow folders. A confirmed bug
       // resolved per-app conversation scopes (`_app-<id>`) like domains, leaving
       // shadow folders under data/domains/_app-<id>. They belong with the app at
-      // data/apps/<id>/_scope. Relocate them non-destructively so the Rebuild
+      // data/entities/products/<id>/_scope. Relocate them non-destructively so the Rebuild
       // button repairs existing vaults. Never clobber: when the target already
       // has an entry, only non-colliding children are moved and the rest stay.
       // Recursively move src into dest without ever clobbering: a file that
@@ -4961,7 +4972,7 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
             const id = appScopeId(de.name);
             if (!id) continue;
             const src = join(domainsDir, de.name);
-            const dest = resolveDomainDir(targetVault, de.name); // data/apps/<id>/_scope
+            const dest = resolveDomainDir(targetVault, de.name); // data/entities/products/<id>/_scope
             if (!existsSync(dest)) {
               try {
                 mkdirSync(dirname(dest), { recursive: true });
@@ -5018,8 +5029,8 @@ async function vaultCommand(args: string[], vaultOverride: string | null): Promi
         for (const r of results) console.log(r.already ? `${r.domain}: already clean` : `${r.domain}: moved ${r.ops} entr(ies) into source/·memory/·.system/, archived ${r.archived} original(s)`);
         for (const r of relocated) {
           console.log(r.whole
-            ? `_app-${r.app}: relocated shadow domain folder to data/apps/${r.app}/_scope`
-            : `_app-${r.app}: merged ${r.entries} entr(ies) into data/apps/${r.app}/_scope (kept any colliding originals)`);
+            ? `_app-${r.app}: relocated shadow domain folder to data/entities/products/${r.app}/_scope`
+            : `_app-${r.app}: merged ${r.entries} entr(ies) into data/entities/products/${r.app}/_scope (kept any colliding originals)`);
         }
         for (const c of consolidated) {
           const n = c.moved.length + c.deduped.length + c.conflicts.length + c.merged.length;
