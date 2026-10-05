@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { addMachine, agentKinds, buildBrief, closeTask, hostKey, launchTask, machines, mirrorTask, newText, reopenTask, writeMachineRecord } from "./herdr-work.ts";
@@ -8,9 +8,13 @@ import { addWork, answerTask, continueTask, pauseTask, readTask, routeTask, upda
 const ROOT = join("/tmp", `prevail-herdr-work-${process.pid}`);
 const V = join(ROOT, "vault");
 const GLYPH = join(ROOT, "glyph");
-process.env.PREVAIL_CONFIG_DIR = join(ROOT, "config");
-process.env.GLYPH_SPACES = join(ROOT, "no-glyph");
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+// Never the user's config or Glyph map: both point into /tmp while these tests run.
+const saved = { config: process.env.PREVAIL_CONFIG_DIR, glyph: process.env.GLYPH_SPACES };
+beforeAll(() => { process.env.PREVAIL_CONFIG_DIR = join(ROOT, "config"); process.env.GLYPH_SPACES = join(ROOT, "no-glyph"); });
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true });
+  for (const [k, v] of [["PREVAIL_CONFIG_DIR", saved.config], ["GLYPH_SPACES", saved.glyph]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+});
 const D = (d: string) => join(V, "data", "domains", d);
 
 function seed() {
