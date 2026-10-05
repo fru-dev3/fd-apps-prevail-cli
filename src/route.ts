@@ -331,6 +331,16 @@ export function parseRouteReply(raw: string, domains: string[]): { domains: Rout
  * along. The prompt goes over stdin rather than argv so it never shows in a
  * process listing.
  */
+/**
+ * The router's child env. Claude Code thinks by default, and for a routing
+ * call that is ten thousand hidden tokens and two minutes: past every
+ * router timeout, so the model plan was silently replaced by the code one.
+ * A router call answers from the catalog in the prompt; it needs no thinking.
+ */
+export function routeRunnerEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...base, MAX_THINKING_TOKENS: "0" };
+}
+
 export const claudeRouteRunner: RouteRunner = async ({ system, prompt, timeoutMs, maxChars = 4_000 }) => {
   const { detectClis, scrubbedEnv } = await import("./cli-bridge.ts");
   const claude = (await detectClis()).find((c) => c.kind === "claude");
@@ -348,7 +358,7 @@ export const claudeRouteRunner: RouteRunner = async ({ system, prompt, timeoutMs
         "--no-session-persistence",
         "--system-prompt", system,
       ],
-      { cwd: tmpdir(), env: scrubbedEnv(), stdio: ["pipe", "pipe", "ignore"] },
+      { cwd: tmpdir(), env: routeRunnerEnv(scrubbedEnv()), stdio: ["pipe", "pipe", "ignore"] },
     );
     let out = "";
     const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("timeout")); }, timeoutMs);

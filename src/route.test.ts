@@ -15,6 +15,7 @@ import {
   recordRouteCorrection,
   routableDomains,
   routeMessage,
+  routeRunnerEnv,
   type RouteRunner,
 } from "./route.ts";
 import { decisionsFile } from "./decisions.ts";
@@ -152,4 +153,10 @@ describe("corrections", () => {
     const { prompt } = buildRoutePrompt("x".repeat(10_000), ["finance"], []);
     expect(prompt.length).toBeLessThan(4_100);
   });
+});
+
+test("the router's claude runs without thinking, so it answers inside the timeout", () => {
+  const env = routeRunnerEnv({ FOO: "bar", MAX_THINKING_TOKENS: "9000" });
+  expect(env.MAX_THINKING_TOKENS).toBe("0");
+  expect(env.FOO).toBe("bar");
 });
