@@ -181,11 +181,26 @@ export interface Pane {
 
 export type Herdr = (args: string[]) => unknown;
 
-export const realHerdr: Herdr = (args) => {
-  const r = spawnSync("herdr", args, { encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`herdr ${args.join(" ")} failed: ${(r.stderr || r.error?.message || "").trim()}`);
-  try { return (JSON.parse(r.stdout) as { result?: unknown }).result; } catch { return r.stdout; }
-};
+/** The herdr binary: on PATH, else the usual install places (a shell's herdr may be a function). */
+export function herdrBin(): string {
+  const which = typeof Bun !== "undefined" ? Bun.which("herdr") : null;
+  if (which) return which;
+  for (const p of [join(homedir(), ".local", "bin", "herdr"), "/opt/homebrew/bin/herdr", "/usr/local/bin/herdr"]) if (existsSync(p)) return p;
+  return "herdr";
+}
+
+/** herdr on one machine: "local", or a saved Herdr machine (label or id), reached with --machine. */
+export function herdrOn(machine = "local", opts: { timeoutMs?: number } = {}): Herdr {
+  return (args) => {
+    const argv = machine === "local" ? args : ["--machine", machine, ...args];
+    const r = spawnSync(herdrBin(), argv, { encoding: "utf8", ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}) });
+    if (r.status !== 0) throw new Error(`herdr ${args.join(" ")} failed: ${(r.stderr || r.error?.message || "").trim()}`);
+    // Socket API replies are {id, result}; `machine list --json` is a bare array.
+    try { const j = JSON.parse(r.stdout) as unknown; return j && typeof j === "object" && "result" in j ? (j as { result: unknown }).result : j; } catch { return r.stdout; }
+  };
+}
+
+export const realHerdr: Herdr = (args) => herdrOn("local")(args);
 
 const real = (p: string) => { try { return realpathSync(p); } catch { return p; } };
 

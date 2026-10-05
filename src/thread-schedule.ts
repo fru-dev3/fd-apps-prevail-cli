@@ -15,7 +15,7 @@
 // runChatJson; the markdown gets the same user + assistant pair appended so the
 // result is visible when the conversation is opened.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { domainDir } from "./decisions.ts";
 import { tryAcquireLock } from "./file-lock.ts";
@@ -169,6 +169,54 @@ function threadMdPath(vault: string, domain: string, session: string): string | 
     if (existsSync(p)) return p;
   }
   return null;
+}
+
+/** The folder new threads of a space are written to: memory/threads on a v4 space, else _threads (the desktop's choice). */
+export function threadWriteDir(vault: string, space: string): string {
+  const base = domainDir(vault, space);
+  return isV4Domain(base) ? join(base, "memory", "threads") : join(base, "_threads");
+}
+
+/** Every existing file of one thread (the .md transcript and its .jsonl twin), wherever it lives in the space. */
+export function threadFiles(vault: string, space: string, session: string): string[] {
+  if (!ID_RE.test(session)) return [];
+  const base = domainDir(vault, space);
+  const dirs = [...new Set([threadWriteDir(vault, space), join(base, "_threads")])];
+  return dirs.flatMap((d) => [".md", ".jsonl"].map((x) => join(d, `${session}${x}`))).filter((p) => existsSync(p));
+}
+
+const isoZ = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+export interface NewThread {
+  title: string;
+  turns: { role: "user" | "assistant"; content: string; cli?: string; model?: string }[];
+  /** `entity: <kind>/<slug>`, `app: <id>`: the tags the desktop files a thread by. */
+  entity?: string;
+  app?: string;
+  now?: number;
+}
+
+/** Create a desktop thread transcript with the desktop's own frontmatter
+ *  (threads.rs save_thread), so it lists like any conversation. Never
+ *  overwrites: returns null when the session already has a file. */
+export function createThreadMarkdown(vault: string, space: string, session: string, t: NewThread): string | null {
+  if (!ID_RE.test(session) || threadMdPath(vault, space, session)) return null;
+  const dir = threadWriteDir(vault, space);
+  const p = join(dir, `${session}.md`);
+  const iso = isoZ(t.now ?? Date.now());
+  const one = (s: string) => s.replace(/\s+/g, " ").trim();
+  const general = !space || space === "general" || space === "__general__";
+  let body = `---\ntitle: ${one(t.title) || "Untitled"}\ndomain: ${general ? "" : space}\ncreated: ${iso}\nupdated: ${iso}\nturns: ${t.turns.length}\n`;
+  if (t.entity) body += `entity: ${one(t.entity)}\n`;
+  if (t.app) body += `app: ${one(t.app)}\n`;
+  body += "---\n\n";
+  for (const turn of t.turns) {
+    const cli = (turn.cli ?? "assistant").toLowerCase().replace(/[^a-z0-9_-]/g, "") || "assistant";
+    body += `## ${turn.role === "user" ? "You" : `${cli}${turn.model ? ` · ${turn.model}` : ""}`}\n\n${turn.content.trim()}\n\n`;
+  }
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(p, body);
+  return p;
 }
 
 /** The last few turns of a desktop thread as plain context for the model. */

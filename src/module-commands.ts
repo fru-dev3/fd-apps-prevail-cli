@@ -24,6 +24,7 @@ export async function runModuleCommand(name: string, args: string[], vault: stri
   if (name === "agents") return (await import("./agent-contract.ts")).agentsCommand(args, vault);
   if (name === "spaces" || name === "aidev") return (await import("./spaces.ts")).spacesCommand(args, vault);
   if (name === "hub") return (await import("./hub.ts")).hubCommand(args, vault);
+  if (name === "work") return (await import("./work.ts")).workCommand(args, vault);
   console.error(`unknown command: ${name}`);
   return 1;
 }
