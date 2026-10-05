@@ -22,7 +22,7 @@ import { domainDir } from "./decisions.ts";
 import { readJob } from "./jobs.ts";
 import { runtimePath } from "./path-safety.ts";
 import { getSpecialist } from "./specialists.ts";
-import { herdrBin, herdrOn, mapDir, type Herdr } from "./spaces.ts";
+import { herdrBin, herdrOn, mapDir, readSpaces, type Herdr } from "./spaces.ts";
 import { threadFiles } from "./thread-schedule.ts";
 import { appendTurn, defaultSpawnSelf, distilOutcome, finish, note, readSettings, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
 import { FALLBACK_AGENT_KINDS, folderOf, folderPath, type CatalogMachine } from "./work-router.ts";
@@ -361,37 +361,123 @@ export function glyphOn(vault: string, label: string, local: boolean): boolean {
   return readMachineRecords(vault).some((r) => (r.label === label || r.hostname === label) && r.glyph === true);
 }
 
-// ── Finding the destination's workspace ─────────────────────────────────────
+// ── Finding the task's workspace ────────────────────────────────────────────
+//
+// The workspaces are the owner's. A task goes into one of them, found through
+// the private Glyph spaces map (read at run time, never copied into code): by
+// the folder it works in, then (for the vault) the workspace that holds the
+// vault's domains, then a link saved earlier, then by name. With no clear
+// home it goes to one shared workspace, SHARED_WORKSPACE, made once and
+// reused. Prevail never makes a workspace per destination, and it closes only
+// a workspace it made (herdr.json `created`), when nothing is left in it.
 
+export const SHARED_WORKSPACE = "Work";
 interface WsRow { workspace_id: string; label: string; cwd?: string; tab_count?: number }
 type Links = Record<string, Record<string, string>>;
+interface HerdrFile { links: Links; created: Record<string, string[]> }
 const linksFile = (vault: string) => join(workDir(vault), "herdr.json");
-function readLinks(vault: string): Links {
-  try { const j = JSON.parse(readFileSync(linksFile(vault), "utf8")) as { links?: Links }; return j.links && typeof j.links === "object" ? j.links : {}; } catch { return {}; }
+function readHerdrFile(vault: string): HerdrFile {
+  try {
+    const j = JSON.parse(readFileSync(linksFile(vault), "utf8")) as Partial<HerdrFile>;
+    return { links: j.links && typeof j.links === "object" ? j.links : {}, created: j.created && typeof j.created === "object" ? j.created : {} };
+  } catch { return { links: {}, created: {} }; }
+}
+function writeHerdrFile(vault: string, f: HerdrFile): void {
+  const out: Partial<HerdrFile> = { links: f.links };
+  if (Object.values(f.created).some((x) => x.length)) out.created = Object.fromEntries(Object.entries(f.created).filter(([, x]) => x.length));
+  mkdirSync(workDir(vault), { recursive: true });
+  writeFileSync(linksFile(vault), `${JSON.stringify(out, null, 2)}\n`);
 }
 function saveLink(vault: string, machine: string, space: string, label: string): void {
-  const links = readLinks(vault);
-  if (links[machine]?.[space] === label) return;
-  links[machine] = { ...(links[machine] ?? {}), [space]: label };
-  mkdirSync(workDir(vault), { recursive: true });
-  writeFileSync(linksFile(vault), `${JSON.stringify({ links }, null, 2)}\n`);
+  const f = readHerdrFile(vault);
+  if (f.links[machine]?.[space] === label) return;
+  f.links[machine] = { ...(f.links[machine] ?? {}), [space]: label };
+  writeHerdrFile(vault, f);
+}
+function markCreated(vault: string, machine: string, id: string, on: boolean): void {
+  const f = readHerdrFile(vault);
+  const was = f.created[machine] ?? [];
+  const next = on ? [...new Set([...was, id])] : was.filter((x) => x !== id);
+  if (next.length === was.length) return;
+  f.created[machine] = next;
+  writeHerdrFile(vault, f);
+}
+const madeByPrevail = (vault: string, machine: string, id: string) => (readHerdrFile(vault).created[machine] ?? []).includes(id);
+
+/** Drop links and made-here marks that point at workspaces no longer open on that machine. They are found again, never made again. */
+export function pruneLinks(vault: string, machine: string, rows: WsRow[]): void {
+  const f = readHerdrFile(vault);
+  const labels = new Set(rows.map((w) => norm(w.label)));
+  const ids = new Set(rows.map((w) => w.workspace_id));
+  const links = Object.fromEntries(Object.entries(f.links[machine] ?? {}).filter(([, l]) => labels.has(norm(l))));
+  const created = (f.created[machine] ?? []).filter((id) => ids.has(id));
+  if (Object.keys(links).length === Object.keys(f.links[machine] ?? {}).length && created.length === (f.created[machine] ?? []).length) return;
+  if (f.links[machine]) f.links[machine] = links;
+  f.created[machine] = created;
+  writeHerdrFile(vault, f);
 }
 
+const norm = (s?: string) => (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 const titled = (s: string) => s.split(/[-_]/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+/** A map tab's path ("{root}/rel") as a root name and a relative path. */
+const tabFolder = (p: unknown): { root: string; rel: string } | null => {
+  const m = typeof p === "string" ? /^\{(\w+)\}(?:\/(.*))?$/.exec(p.trim()) : null;
+  return m ? { root: m[1]!, rel: (m[2] ?? "").replace(/\/+$/, "") } : null;
+};
+const within = (rel: string, base: string) => base === "" || rel === base || rel.startsWith(`${base}/`);
 
-/** The workspace a destination already has open: its saved link, then by name (its label, id or space) or its folder. */
-export function findDestWorkspace(vault: string, rows: WsRow[], t: WorkTask, cwd: string): WsRow | null {
-  const by = (l?: string) => (l ? rows.find((w) => typeof w.label === "string" && w.label.trim().toLowerCase() === l.trim().toLowerCase()) ?? null : null);
+interface MapSpace { space: string; id: string; tabs: { label: string; folder: { root: string; rel: string } | null }[] }
+function readMap(env: Record<string, string | undefined>): MapSpace[] {
+  return readSpaces(mapDir(env)).map(({ space: s }) => ({
+    space: String(s.space ?? ""), id: String(s.id ?? ""),
+    tabs: (Array.isArray(s.tabs) ? s.tabs : []).map((x) => ({ label: String((x as { label?: unknown }).label ?? ""), folder: tabFolder((x as { path?: unknown }).path) })),
+  })).filter((s) => s.space || s.id);
+}
+
+/**
+ * The owner's workspace a task belongs in, or null (it goes to the shared one).
+ * `cwd` is the folder on the machine it runs on; `roots` that machine's Glyph roots, when known.
+ */
+export function findTaskWorkspace(vault: string, rows: WsRow[], t: WorkTask, cwd: string, o: { env?: Record<string, string | undefined>; roots?: Record<string, string | null | undefined> } = {}): WsRow | null {
+  const byLabel = (l?: string) => (l && norm(l) ? rows.find((w) => typeof w.label === "string" && norm(w.label) === norm(l)) ?? null : null);
+  const tag = Object.values(glyphMachines(o.env ?? process.env)).find((m) => m.tag === t.machine)?.tag;
+  const live = (s: MapSpace) => byLabel(s.space) ?? byLabel(s.id) ?? (tag ? byLabel(`${tag}-${s.space}`) : null);
   const space = t.thread.space;
+  const pinned = byLabel(readSettings(vault).workspaces[space]);
+  if (pinned) return pinned;
+  const map = readMap(o.env ?? process.env);
+  const f = t.dest?.folder ?? folderOf(domainDir(vault, space), { vault, home: homedir() });
+  const abs = cwd.replace(/\/+$/, "");
+  const rootPath = (r: string) => expand(o.roots?.[r] ?? undefined)?.replace(/\/+$/, "");
+  // 1. By folder: the most specific map tab the task's folder sits in.
+  const hits: { s: MapSpace; depth: number }[] = [];
+  for (const s of map) for (const tab of s.tabs) {
+    if (!tab.folder) continue;
+    const base = rootPath(tab.folder.root);
+    const tabAbs = base ? (tab.folder.rel ? `${base}/${tab.folder.rel}` : base) : undefined;
+    if ((tab.folder.root === f.root && within(f.rel, tab.folder.rel)) || (tabAbs && within(abs, tabAbs))) hits.push({ s, depth: tab.folder.rel.split("/").filter(Boolean).length });
+  }
+  for (const h of hits.sort((a, b) => b.depth - a.depth)) { const w = live(h.s); if (w) return w; }
+  // 2. The vault: the workspace whose tabs hold the most of its domains.
+  const vaultRoot = rootPath("vault");
+  if (f.root === "vault" || (vaultRoot && within(abs, vaultRoot))) {
+    const count = (s: MapSpace) => s.tabs.filter((x) => x.folder?.root === "vault" && within(x.folder.rel, "data/domains") && x.folder.rel !== "data/domains").length;
+    for (const s of map.filter((x) => count(x) > 0).sort((a, b) => count(b) - count(a))) { const w = live(s); if (w) return w; }
+  }
+  // 3. A link saved earlier that still resolves to an owner's workspace (never one Prevail made for a destination).
+  const linked = byLabel(readHerdrFile(vault).links[t.machine]?.[space]);
+  if (linked && (norm(linked.label) === norm(SHARED_WORKSPACE) || !madeByPrevail(vault, t.machine, linked.workspace_id))) return linked;
+  // 4. By name: an open workspace, or a map space or tab, named like the destination.
   const bare = space.replace(/^_(?:mission|app)-/, "");
   const d = t.dest;
-  const names = [readLinks(vault)[t.machine]?.[space], readSettings(vault).workspaces[space], d?.label, d?.id, bare, titled(bare), d?.folder ? d.folder.rel.split("/").pop() : undefined];
-  for (const n of names) { const w = by(n); if (w) return w; }
-  return rows.find((w) => w.cwd && w.cwd.replace(/\/$/, "") === cwd.replace(/\/$/, "")) ?? null;
+  const names = [d?.label, d?.id, bare, titled(bare), d?.folder ? d.folder.rel.split("/").pop() : undefined].filter((n): n is string => !!n && !!norm(n));
+  for (const n of names) {
+    const w = byLabel(n);
+    if (w && norm(w.label) !== norm(SHARED_WORKSPACE)) return w;
+    for (const s of map) if ([s.space, s.id, ...s.tabs.map((x) => x.label)].some((l) => norm(l) === norm(n))) { const m = live(s); if (m) return m; }
+  }
+  return null;
 }
-
-/** A workspace is named after its destination. */
-export const workspaceName = (t: Pick<WorkTask, "dest">) => (t.dest?.label ?? "General").replace(/\s+/g, " ").trim().slice(0, 40);
 
 // ── Dialogs and questions in the tab ────────────────────────────────────────
 
@@ -479,9 +565,8 @@ function settleAgent(h: Herdr, agent: string, pane: string | undefined, deps: Wo
 }
 
 /**
- * Open the task in Herdr, headless, one tab per task: the destination's
- * workspace (found by its link, name or folder, else made and named after
- * it), a new tab named after the task, and the agent in its non-interactive
+ * Open the task in Herdr, headless, one tab per task: the owner's workspace
+ * it belongs in (findTaskWorkspace), else the shared one (made once), a new tab named after the task, and the agent in its non-interactive
  * mode. With Glyph installed the agent's command is typed into the tab's
  * shell so Glyph names the session and turns on Remote Control; otherwise
  * `herdr agent start`. The brief follows once Herdr sees the agent ready; when
@@ -516,26 +601,33 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
       const cwd = taskCwd(vault, t, machine, deps);
       const env = ["--env", `PREVAIL_DOMAIN=${t.thread.space}`, "--env", `PREVAIL_THREAD_ID=${t.thread.session}`];
       const rows = ((h(["workspace", "list"]) as { workspaces?: WsRow[] } | undefined)?.workspaces ?? []);
-      const ws = findDestWorkspace(vault, rows, t, cwd);
+      pruneLinks(vault, t.machine, rows);
+      const env0 = deps.machine?.env ?? process.env;
+      const gms = glyphMachines(env0);
+      const gm = machine === "local" ? gms[hostKey(deps.machine?.host)] : Object.entries(gms).find(([k, m]) => m.tag === t.machine || k === t.machine)?.[1];
+      const ws = findTaskWorkspace(vault, rows, t, cwd, { env: env0, roots: gm?.roots }) ?? rows.find((w) => norm(w.label) === norm(SHARED_WORKSPACE)) ?? null;
       const name = (t.name || t.text).replace(/\s+/g, " ").slice(0, 30).trim();
-      let workspaceId: string, tabId: string, paneId: string, label: string, created = false;
+      let workspaceId: string, tabId: string, paneId: string, label: string;
       if (ws) {
         const c = h(["tab", "create", "--workspace", ws.workspace_id, "--cwd", cwd, "--label", name, ...env, "--no-focus"]) as { tab?: { tab_id: string }; root_pane?: { pane_id: string } };
         if (!c?.tab?.tab_id || !c.root_pane?.pane_id) throw new Error("herdr did not return the new tab");
         workspaceId = ws.workspace_id; label = ws.label; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id;
       } else {
-        label = workspaceName(t);
+        // No home and no shared workspace yet: make the shared one, once.
+        label = SHARED_WORKSPACE;
         const c = h(["workspace", "create", "--label", label, "--cwd", cwd, ...env, "--no-focus"]) as { workspace?: { workspace_id: string }; tab?: { tab_id: string }; root_pane?: { pane_id: string } };
         if (!c?.workspace?.workspace_id || !c.tab?.tab_id || !c.root_pane?.pane_id) throw new Error("herdr did not return the new workspace");
-        workspaceId = c.workspace.workspace_id; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id; created = true;
+        workspaceId = c.workspace.workspace_id; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id;
+        markCreated(vault, t.machine, workspaceId, true);
         try { h(["tab", "rename", tabId, name]); } catch { /* the label can wait */ }
       }
+      const created = madeByPrevail(vault, t.machine, workspaceId);
       saveLink(vault, t.machine, t.thread.space, label);
       // Claude Code carries Prevail's act-gate hook; the hook file lives on this Mac, so a remote Claude runs without it.
       const settingsPath = t.agentKind === "claude" && machine === "local" ? (deps.settingsPath ?? defaultSettingsPath)(vault, t.thread.space) : null;
       const args = headlessArgs(t.agentKind, settingsPath, deps.machine?.env);
       const glyph = (deps.glyph ?? ((m: string) => glyphOn(vault, m, m === "local")))(machine === "local" ? "local" : t.machine);
-      opened = { machine: t.machine, workspaceLabel: label, workspaceId, tabId, paneId, agent: paneId, createdWorkspace: created || (t.herdr?.createdWorkspace === true && t.herdr.workspaceLabel === label), createdTab: true, ...(glyph ? { glyph: true } : {}) };
+      opened = { machine: t.machine, workspaceLabel: label, workspaceId, tabId, paneId, agent: paneId, createdWorkspace: created, createdTab: true, ...(glyph ? { glyph: true } : {}) };
       if (glyph) h(["pane", "run", paneId, glyphLine(t.agentKind, name, args)]);
       else h(["agent", "start", agentName(t), "--kind", t.agentKind, "--pane", paneId, ...(args.length ? ["--", ...args] : [])]);
       try { h(["pane", "rename", paneId, name]); } catch { /* cosmetic */ }
@@ -753,7 +845,7 @@ export function closeHerdr(vault: string, t: WorkTask, deps: WorkDeps = {}): voi
   if (ref.createdWorkspace && ref.workspaceId) {
     let left = 1;
     try { left = ((h(["tab", "list", "--workspace", ref.workspaceId]) as { tabs?: unknown[] })?.tabs ?? []).length; } catch { left = 0; }
-    if (left === 0) { try { h(["workspace", "close", ref.workspaceId]); } catch { /* already closed */ } }
+    if (left === 0) { try { h(["workspace", "close", ref.workspaceId]); } catch { /* already closed */ } markCreated(vault, ref.machine, ref.workspaceId, false); }
   }
 }
 

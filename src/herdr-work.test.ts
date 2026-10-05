@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { addMachine, agentKinds, approveInTerminal, askingQuestion, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
+import { addMachine, agentKinds, findTaskWorkspace, approveInTerminal, askingQuestion, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
-import { addWork, continueTask, doneTask, followUp, pauseTask, queueTasks, updateTask, writeSettings, type WorkDeps } from "./work.ts";
+import { addWork, continueTask, doneTask, followUp, pauseTask, queueTasks, updateTask, writeSettings, type WorkDeps, type WorkTask } from "./work.ts";
 
 const ROOT = join("/tmp", `prevail-herdr-work-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -129,7 +129,7 @@ describe("machines and agent kinds", () => {
 
 describe("a task in a Herdr tab: found or made, one tab per task, headless, never asking", () => {
   beforeEach(seed);
-  test("a destination without a workspace gets one named after it; each task gets its own tab there", async () => {
+  test("a task with no home goes to the one shared Work workspace, made once; each task gets its own tab there", async () => {
     const h = fakeHerdr({ statuses: ["idle"] });
     const spawned: string[][] = [];
     const p = await addWork(V, "x", { deps: { ...deps(h, spawned), runner: async () => oneTask() } });
@@ -139,7 +139,7 @@ describe("a task in a Herdr tab: found or made, one tab per task, headless, neve
     const run = await launchTask(V, t.id, deps(h, spawned));
     expect(run.ask).toBeUndefined();
     const m = mutating(h.calls);
-    expect(m[0]!.slice(0, 7)).toEqual(["local", "workspace", "create", "--label", "Insurance", "--cwd", D("insurance")]);
+    expect(m[0]!.slice(0, 7)).toEqual(["local", "workspace", "create", "--label", "Work", "--cwd", D("insurance")]);
     expect(m[0]).toContain("--no-focus");
     expect(m[0]).toContain(`PREVAIL_THREAD_ID=${t.thread.session}`);
     expect(m[1]).toEqual(["local", "tab", "rename", "wnew:t1", "Foo Carrier"]);
@@ -150,10 +150,10 @@ describe("a task in a Herdr tab: found or made, one tab per task, headless, neve
     expect(m[4]![4]).toContain("Task: Find the best foo carrier for the rentals");
     expect(m[4]![4]).toContain("Never ask the user a question");
     expect(m[4]![4]).toContain("Draft, never send");
-    expect(run).toMatchObject({ status: "running", herdr: { workspaceLabel: "Insurance", workspaceId: "wnew", tabId: "wnew:t1", createdWorkspace: true, createdTab: true } });
-    expect(JSON.parse(readFileSync(join(V, "build", "_meta", "work", "herdr.json"), "utf8"))).toEqual({ links: { laptop: { insurance: "Insurance" } } });
+    expect(run).toMatchObject({ status: "running", herdr: { workspaceLabel: "Work", workspaceId: "wnew", tabId: "wnew:t1", createdWorkspace: true, createdTab: true } });
+    expect(JSON.parse(readFileSync(join(V, "build", "_meta", "work", "herdr.json"), "utf8"))).toEqual({ links: { laptop: { insurance: "Work" } }, created: { laptop: ["wnew"] } });
     expect(spawned.at(-1)).toEqual(["work", "mirror", t.id]);
-    // A second task for the same place: a new tab in the workspace made for the first.
+    // A second task: a new tab in the shared workspace, never a second workspace.
     const q = await addWork(V, "y", { deps: { ...deps(h, spawned), runner: async () => oneTask("claude", undefined, "Compare foo carrier quotes") } });
     const second = await launchTask(V, q.tasks[0]!.id, deps(h, spawned));
     expect(mutating(h.calls).filter((c) => c[1] === "workspace" && c[2] === "create").length).toBe(1);
@@ -321,7 +321,7 @@ describe("mirror, follow up, check off, close and reopen", () => {
     const m = mutating(h.calls);
     expect(m.slice(-2)).toEqual([["local", "tab", "close", "wnew:t1"], ["local", "workspace", "close", "wnew"]]);
     expect(c.status).toBe("closed");
-    expect(c.herdr).toEqual({ machine: "laptop", workspaceLabel: "Insurance", workspaceId: "wnew", createdWorkspace: true, lastRead: "foo tail" });
+    expect(c.herdr).toEqual({ machine: "laptop", workspaceLabel: "Work", workspaceId: "wnew", createdWorkspace: true, lastRead: "foo tail" });
     const o = reopenTask(V, t.id, deps(h, spawned));
     expect(o.status).toBe("running");
     expect(spawned.at(-1)).toEqual(["work", "run", t.id, "--reopen"]);
@@ -358,6 +358,70 @@ describe("mirror, follow up, check off, close and reopen", () => {
     expect(b).toContain("- Researcher:");
     expect(b).toContain("Where it belongs: Insurance (domain).");
     expect(b).toContain("Task name: Foo Carrier");
+  });
+});
+
+describe("the owner's workspaces, from the Glyph spaces map", () => {
+  const MONO = join(ROOT, "mono");
+  const rows = [{ workspace_id: "wc", label: "Foo Code" }, { workspace_id: "wl", label: "Foo Life" }];
+  const env = () => ({ GLYPH_SPACES: GLYPH });
+  const task = (o: Partial<WorkTask>) => ({ machine: "laptop", thread: { space: "_app-foo", session: "s" }, ...o }) as unknown as WorkTask;
+  beforeEach(() => {
+    seed();
+    mkdirSync(join(GLYPH, "spaces"), { recursive: true });
+    writeFileSync(join(GLYPH, "machines.json"), JSON.stringify({ machines: { laptop: { tag: "laptop", roots: { vault: V, mono: MONO } } } }));
+    writeFileSync(join(GLYPH, "spaces", "foo-code.json"), JSON.stringify({ id: "foo-code", space: "foocode", tabs: [{ label: "widget", path: "{mono}/apps/widget" }, { label: "root", path: "{mono}" }] }));
+    writeFileSync(join(GLYPH, "spaces", "foo-life.json"), JSON.stringify({ id: "foo-life", space: "foolife", tabs: [{ label: "insurance", path: "{vault}/data/domains/insurance" }, { label: "money", path: "{vault}/data/domains/money" }] }));
+  });
+  test("by folder: code under a map tab goes to that workspace; vault domains, listed or not, to the one holding them", () => {
+    const code = task({ dest: { kind: "folder", id: "w", label: "Bar", folder: { root: "mono", rel: "apps/widget/src" } } as WorkTask["dest"] });
+    expect(findTaskWorkspace(V, rows, code, join(MONO, "apps/widget/src"), { env: env() })?.label).toBe("Foo Code");
+    // An absolute folder resolves through the machine's roots.
+    const abs = task({ dest: { kind: "folder", id: "w", label: "Bar", folder: { root: "abs", rel: join(MONO, "apps/other") } } as WorkTask["dest"] });
+    expect(findTaskWorkspace(V, rows, abs, join(MONO, "apps/other"), { env: env(), roots: { mono: MONO, vault: V } })?.label).toBe("Foo Code");
+    expect(findTaskWorkspace(V, rows, task({ thread: { space: "insurance", session: "s" } }), D("insurance"), { env: env() })?.label).toBe("Foo Life");
+    expect(findTaskWorkspace(V, rows, task({ thread: { space: "general", session: "s" } }), D("general"), { env: env() })?.label).toBe("Foo Life");
+  });
+  test("by name, else nothing: an unmapped task has no home of its own", () => {
+    const elsewhere = { root: "abs", rel: "/tmp/foo-elsewhere" } as const;
+    const named = task({ dest: { kind: "app", id: "widget", label: "Widget", folder: elsewhere } as WorkTask["dest"] });
+    expect(findTaskWorkspace(V, rows, named, elsewhere.rel, { env: env() })?.label).toBe("Foo Code");
+    const byLabel = task({ dest: { kind: "app", id: "x", label: "Foo Life", folder: elsewhere } as WorkTask["dest"] });
+    expect(findTaskWorkspace(V, rows, byLabel, elsewhere.rel, { env: env() })?.label).toBe("Foo Life");
+    const none = task({ dest: { kind: "app", id: "amazon", label: "Amazon", folder: elsewhere } as WorkTask["dest"] });
+    expect(findTaskWorkspace(V, rows, none, elsewhere.rel, { env: env() })).toBeNull();
+  });
+  test("a mapped task gets a tab in the owner's workspace, no workspace is made, and that workspace is never closed", async () => {
+    const h = fakeHerdr({ workspaces: rows, statuses: ["idle"] });
+    const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask() } });
+    const t = await launchTask(V, p.tasks[0]!.id, deps(h));
+    expect(t.herdr).toMatchObject({ workspaceLabel: "Foo Life", workspaceId: "wl", createdWorkspace: false });
+    expect(mutating(h.calls).some((c) => c[1] === "workspace" && c[2] === "create")).toBe(false);
+    closeTask(V, t.id, deps(h));
+    expect(mutating(h.calls).some((c) => c[1] === "workspace" && c[2] === "close")).toBe(false);
+  });
+  test("stale links and made-here marks are dropped, never made again", async () => {
+    mkdirSync(join(V, "build", "_meta", "work"), { recursive: true });
+    const file = join(V, "build", "_meta", "work", "herdr.json");
+    writeFileSync(file, JSON.stringify({ links: { laptop: { insurance: "Amazon", money: "Foo Life" }, studio: { general: "Bar" } }, created: { laptop: ["wgone"] } }));
+    const h = fakeHerdr({ workspaces: rows, statuses: ["idle"] });
+    const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask() } });
+    expect((await launchTask(V, p.tasks[0]!.id, deps(h))).herdr?.workspaceLabel).toBe("Foo Life");
+    expect(mutating(h.calls).some((c) => c[1] === "workspace" && c[2] === "create")).toBe(false);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ links: { laptop: { money: "Foo Life", insurance: "Foo Life" }, studio: { general: "Bar" } } });
+  });
+  test("the shared Work workspace is reused while open and closes with its last tab", async () => {
+    writeFileSync(join(GLYPH, "spaces", "foo-life.json"), JSON.stringify({ id: "foo-life", space: "foolife", tabs: [] }));
+    const h = fakeHerdr({ workspaces: [{ workspace_id: "wc", label: "Foo Code" }], statuses: ["idle"] });
+    const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask() } });
+    const a = await launchTask(V, p.tasks[0]!.id, deps(h));
+    const q = await addWork(V, "y", { deps: { ...deps(h), runner: async () => oneTask("claude", undefined, "Compare foo quotes") } });
+    const b = await launchTask(V, q.tasks[0]!.id, deps(h));
+    expect([a.herdr?.workspaceLabel, b.herdr?.workspaceLabel]).toEqual(["Work", "Work"]);
+    expect(b.herdr?.createdWorkspace).toBe(true);
+    expect(mutating(h.calls).filter((c) => c[1] === "workspace" && c[2] === "create").map((c) => c[4])).toEqual(["Work"]);
+    closeTask(V, a.id, deps(h));
+    expect(mutating(h.calls).at(-1)).toEqual(["local", "workspace", "close", "wnew"]);
   });
 });
 
