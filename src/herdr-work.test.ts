@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { addMachine, agentKinds, findTaskWorkspace, approveInTerminal, askingQuestion, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
-import { addWork, continueTask, doneTask, followUp, pauseTask, queueTasks, updateTask, writeSettings, type WorkDeps, type WorkTask } from "./work.ts";
+import { addWork, continueTask, doneTask, followUp, isCloseYes, CLOSE_QUESTION, WORKING_LINE, pauseTask, queueTasks, updateTask, writeSettings, type WorkDeps, type WorkTask } from "./work.ts";
 
 const ROOT = join("/tmp", `prevail-herdr-work-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -294,6 +294,42 @@ describe("mirror, follow up, check off, close and reopen", () => {
     expect(s.added![0]!).toMatchObject({ promptId: t.promptId, name: "Foo Bank Call" });
     expect(s.added![0]!.id).toBe(`${t.promptId}-2`);
     expect(s.task.log.at(-1)).toMatchObject({ ev: "split", detail: "Became its own task: Foo Bank Call" });
+  });
+  test("a finished task never closes itself: it says what came of it, asks to close, and stays with its tab", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "done"], reads: [`${BRIEF_END}\n\nSummary:\nFoo carrier A is cheapest overall.`] });
+    const t = await running(h);
+    const r = await mirrorTask(V, t.id, deps(h), { maxRounds: 3, waitMs: 1 });
+    expect(r).toMatchObject({ status: "done", cleared: false });
+    expect(r.updates?.map((u) => [u.from, u.text])).toEqual([["task", WORKING_LINE], ["task", "Done: Foo carrier A is cheapest overall."], ["task", CLOSE_QUESTION]]);
+    expect(queueTasks(V).some((x) => x.task.id === t.id)).toBe(true);
+    expect(mutating(h.calls).some((c) => c[2] === "close")).toBe(false);
+  });
+  test("a yes to the close question closes the task and its tab", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "done"], reads: [`${BRIEF_END}\n\nSummary:\nFoo carrier A is cheapest overall.`], tabsLeft: 0 });
+    const t = await running(h);
+    await mirrorTask(V, t.id, deps(h), { maxRounds: 3, waitMs: 1 });
+    const f = await followUp(V, t.id, "Go ahead and close it", { deps: deps(h) });
+    expect(f.closed).toBe(true);
+    expect(f.task).toMatchObject({ status: "done", cleared: true });
+    expect(f.task.updates?.at(-1)).toMatchObject({ from: "you", text: "Go ahead and close it" });
+    expect(mutating(h.calls).some((c) => c[1] === "tab" && c[2] === "close")).toBe(true);
+    expect(queueTasks(V).some((x) => x.task.id === t.id)).toBe(false);
+  });
+  test("any other reply to the close question goes on with the work", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "done"], reads: [`${BRIEF_END}\n\nSummary:\nFoo carrier A is cheapest overall.`] });
+    const spawned: string[][] = [];
+    const t = await running(h, spawned);
+    await mirrorTask(V, t.id, deps(h), { maxRounds: 3, waitMs: 1 });
+    const f = await followUp(V, t.id, "Continue, and add the foo deductible", { deps: deps(h, spawned) });
+    expect(f.closed).toBeUndefined();
+    expect(f.task.status).toBe("running");
+    expect(f.task.updates?.slice(-2).map((u) => [u.from, u.text])).toEqual([["you", "Continue, and add the foo deductible"], ["task", WORKING_LINE]]);
+    expect(mutating(h.calls).filter((c) => c[2] === "prompt").at(-1)![4]).toBe("Continue, and add the foo deductible");
+    expect(mutating(h.calls).some((c) => c[1] === "tab" && c[2] === "close")).toBe(false);
+  });
+  test("a clear yes is told apart from a follow-up", () => {
+    for (const y of ["yes", "Yes, close it.", "go ahead", "Go ahead and close it", "ok thanks", "close it please", "done", "You can close it"]) expect([y, isCloseYes(y)]).toEqual([y, true]);
+    for (const n of ["Continue", "no", "don't close it", "not yet", "yes but add the foo deductible", "keep it open", "what did it cost?", "close the foo account", "Close the foo account at the bank and then email Sam about it"]) expect([n, isCloseYes(n)]).toEqual([n, false]);
   });
   test("checking a task off marks it done, closes its tab and takes it out of the queue", async () => {
     const h = fakeHerdr({ tabsLeft: 0 });

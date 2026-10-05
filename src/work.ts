@@ -24,8 +24,10 @@
 // `work start` moves one to the end of the queue.
 //
 // A finished task stays in the queue, checked, with a one or two sentence
-// outcome the engine distils from the result, until the user clears it
-// (`work done`, which also closes its Herdr tab). `work followup` appends to a
+// outcome the engine distils from the result. It never closes itself: it asks
+// "Can I close this task?" in its updates (the light back-and-forth) and
+// waits for a yes in a follow-up, or `work done` (which also closes its
+// Herdr tab). `work followup` appends to a
 // task: it goes into the thread, to the agent still at work, or starts the
 // task again with it.
 //
@@ -107,7 +109,11 @@ export interface WorkTask extends RoutedTask {
   context?: ContextItem[];
   /** The question the agent is waiting on, as one plain sentence (status needs-you). Answered by a follow-up. */
   waiting?: string;
+  /** The light back-and-forth: short plain lines from the task in its own voice and the user's replies, oldest first. Never raw output. */
+  updates?: TaskUpdate[];
 }
+
+export interface TaskUpdate { ts: number; from: "task" | "you"; text: string }
 
 /** `ev` is a short event name; `detail` one line; `more` what a line shows when expanded (a follow-up's words, the tool call behind an activity). */
 export interface LogEntry { ts: number; ev: string; detail?: string; more?: string }
@@ -279,12 +285,44 @@ export async function topUp(vault: string, deps: WorkDeps = {}): Promise<string[
 
 export const note = (t: WorkTask, ev: string, detail: string | undefined, now: number, more?: string) => { t.log.push({ ts: now, ev, ...(detail ? { detail: detail.slice(0, 300) } : {}), ...(more ? { more: more.slice(0, 2000) } : {}) }); if (t.log.length > 200) t.log.splice(0, t.log.length - 200); };
 
-/** Finished (done or failed), checked in the queue until cleared, with what came of it. */
-export function finish(t: WorkTask, status: "done" | "failed", outcome?: string): void {
+/** One line in the task's back-and-forth, at a meaningful moment only; the same line twice in a row is said once. */
+export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, now = Date.now()): void {
+  const line = text.replace(/\s+/g, " ").trim().slice(0, 400);
+  if (!line) return;
+  const u = (t.updates ??= []);
+  const last = u[u.length - 1];
+  if (last?.from === from && last.text === line) return;
+  u.push({ ts: now, from, text: line });
+  if (u.length > 60) u.splice(0, u.length - 60);
+}
+export const CLOSE_QUESTION = "Can I close this task?";
+export const WORKING_LINE = "Working on it, nothing needed from you.";
+
+/**
+ * Finished (done or failed), checked in the queue with what came of it. It
+ * never closes itself: a finished task says what came of it, asks whether it
+ * can close, and waits for the user's yes (or a tick).
+ */
+export function finish(t: WorkTask, status: "done" | "failed", outcome?: string, now = Date.now()): void {
+  const was = t.status;
   t.status = status;
   t.cleared = false;
   delete t.ask;
   if (outcome) t.outcome = outcome;
+  if (was === status) return;
+  if (status === "done") { const what = (t.outcome ?? "").replace(/^done[:.]?\s*/i, "").trim(); addUpdate(t, "task", what ? `Done: ${what}` : "Done.", now); }
+  else addUpdate(t, "task", t.outcome || "I could not finish it.", now);
+  addUpdate(t, "task", CLOSE_QUESTION, now);
+}
+
+/** A clear yes to "Can I close this task?" ("close it", "go ahead", "yes"); anything else is a follow-up. */
+export function isCloseYes(text: string): boolean {
+  const s = text.toLowerCase().replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!s || s.split(" ").length > 8) return false;
+  if (/\b(don'?t|do not|not|no|wait|keep|but|until|and then)\b/.test(s)) return false;
+  if (s === "close" || /\bclose (it|this|that|the task|this task|this one)\b/.test(s)) return true;
+  const core = s.replace(/\b(please|thanks|thank you|ok|okay|sure|yes|yeah|yep|go ahead|done|all good|that's it|thats it|that's all|thats all|you can|it's done|its done|perfect|great)\b/g, "").trim();
+  return core === "" && s.length > 0;
 }
 
 // ── The outcome: one or two plain sentences ────────────────────────────────
@@ -591,6 +629,7 @@ export async function startTask(vault: string, id: string, o: { deps?: WorkDeps 
     x.status = "running";
     claimed = true;
     note(x, x.executor === "herdr" ? "starting" : "started", x.executor === "herdr" ? "in Herdr" : "the engine runs it", now);
+    addUpdate(x, "task", WORKING_LINE, now);
     savePrompt(vault, cur.prompt);
     return x;
   });
@@ -663,11 +702,11 @@ export async function runTask(vault: string, id: string, deps: WorkDeps = {}, o:
     if (x.status === "running") {
       // Follow-ups that came in while it ran: it goes again with them.
       if (job.status === "done" && x.pendingFollowups?.length) rerun = true;
-      else if (job.status === "done") finish(x, "done", outcome || "Done.");
+      else if (job.status === "done") finish(x, "done", outcome || "Done.", clock());
       // An action the user's rules hold for approval: a plain line, never a question here.
-      else if (job.status === "needs-approval") { x.status = "paused"; x.outcome = "Stopped before an action your rules keep for your approval."; }
+      else if (job.status === "needs-approval") { x.status = "paused"; x.outcome = "Stopped before an action your rules keep for your approval."; addUpdate(x, "task", x.outcome, clock()); }
       else if (job.status === "stopped") x.status = "paused";
-      else finish(x, "failed", "It did not finish.");
+      else finish(x, "failed", "It did not finish.", clock());
     }
     note(x, job.status === "done" ? "done" : `job ${job.status}`, job.note ?? job.result?.summary, clock());
   });
@@ -1018,7 +1057,7 @@ export function renameTask(vault: string, id: string, name: string, deps: WorkDe
   return t;
 }
 
-export interface FollowupResult { ok: true; task: WorkTask; added?: WorkTask[]; renamed?: string }
+export interface FollowupResult { ok: true; task: WorkTask; added?: WorkTask[]; renamed?: string; closed?: boolean }
 
 /**
  * A follow-up or clarification on a task. It goes into the task's record and
@@ -1036,21 +1075,26 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
   if (body.length > 8_000) throw new Error("that follow-up is too long (8,000 characters at most)");
   const r = readTask(vault, id);
   if (!r) throw new Error(`no task ${id}`);
+  // The yes to "Can I close this task?": it closes now (its Herdr tab too). Only a finished task closes on a word.
+  if (!o.asTask && (r.task.status === "done" || r.task.status === "failed") && !r.task.cleared && isCloseYes(body)) {
+    updateTask(vault, id, (x) => addUpdate(x, "you", body, now));
+    return { ok: true, task: doneTask(vault, id, deps), closed: true };
+  }
   const j: FollowupJudgement = o.asTask ? { kind: "new" } : await judgeFollowup(r.task, body, deps);
   if (j.kind === "new") {
     const p = await addWork(vault, body, { into: r.prompt.id, surface: r.prompt.surface, deps });
     if (j.name && p.tasks.length === 1) renameTask(vault, p.tasks[0]!.id, j.name, deps);
-    const t = updateTask(vault, id, (x) => note(x, "split", `Became its own task: ${j.name ?? p.tasks[0]?.name ?? "new task"}`, now, body));
+    const t = updateTask(vault, id, (x) => { const nm = j.name ?? p.tasks[0]?.name ?? "new task"; note(x, "split", `Became its own task: ${nm}`, now, body); addUpdate(x, "you", body, now); addUpdate(x, "task", `That is its own task now: ${nm}.`, now); });
     return { ok: true, task: t, added: p.tasks.map((x) => readTask(vault, x.id)?.task ?? x) };
   }
-  updateTask(vault, id, (x) => { appendTurn(vault, x, "user", body, "prevail", now); note(x, "follow-up", undefined, now, body); });
+  updateTask(vault, id, (x) => { appendTurn(vault, x, "user", body, "prevail", now); note(x, "follow-up", undefined, now, body); addUpdate(x, "you", body, now); });
   if (j.kind === "rename" && j.name) renameTask(vault, id, j.name, deps);
   const t = readTask(vault, id)!.task;
   const done = (task: WorkTask): FollowupResult => ({ ok: true, task, ...(j.kind === "rename" ? { renamed: j.name } : {}) });
   if (t.executor === "herdr" && t.herdr?.agent && !t.herdr.briefPending && promptHerdr(vault, t, body, deps)) {
     if (t.status === "running") return done(readTask(vault, id)!.task);
     // Finished, its tab still open: the same agent goes on with it.
-    const back = updateTask(vault, id, (x) => { x.status = "running"; delete x.outcome; delete x.cleared; delete x.ask; note(x, "again", "with your follow-up", now); });
+    const back = updateTask(vault, id, (x) => { x.status = "running"; delete x.outcome; delete x.cleared; delete x.ask; note(x, "again", "with your follow-up", now); addUpdate(x, "task", WORKING_LINE, now); });
     syncBoard(vault, back);
     (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "mirror", id]);
     return done(back);

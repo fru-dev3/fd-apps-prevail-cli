@@ -24,7 +24,7 @@ import { runtimePath } from "./path-safety.ts";
 import { getSpecialist } from "./specialists.ts";
 import { herdrBin, herdrOn, mapDir, readSpaces, type Herdr } from "./spaces.ts";
 import { threadFiles } from "./thread-schedule.ts";
-import { appendTurn, defaultSpawnSelf, distilOutcome, finish, note, readSettings, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
+import { appendTurn, defaultSpawnSelf, distilOutcome, finish, note, readSettings, addUpdate, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
 import { FALLBACK_AGENT_KINDS, folderOf, folderPath, type CatalogMachine } from "./work-router.ts";
 
 export interface Machine {
@@ -639,7 +639,7 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
   } catch (e) {
     const msg = (e as Error).message;
     const keep = opened;
-    const x = updateTask(vault, id, (y) => { if (keep) y.herdr = keep; finish(y, "failed", "Herdr could not start it."); note(y, "could not start", msg.slice(0, 200), now); });
+    const x = updateTask(vault, id, (y) => { if (keep) y.herdr = keep; finish(y, "failed", "Herdr could not start it.", now); note(y, "could not start", msg.slice(0, 200), now); });
     syncBoard(vault, x);
     return x;
   }
@@ -730,7 +730,7 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       let status = "";
       try { text = readText(h(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "400"])); status = statusOf(h(["agent", "get", agent])); } catch (e) {
         // The agent is gone (its tab closed by hand): stop mirroring.
-        updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") finish(x, "done", x.outcome ?? "Its Herdr tab was closed."); });
+        updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") finish(x, "done", x.outcome ?? "Its Herdr tab was closed.", clock()); });
         break;
       }
       // The brief that could not go in at launch: in now that the agent is ready.
@@ -743,7 +743,7 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
         }
         if (answerDialog(h, pane)) continue;
         if (status === "blocked" && cur.status !== "needs-you") {
-          const t = updateTask(vault, id, (x) => { x.status = "needs-you"; x.waiting = WAITING; note(x, "waiting", WAITING, clock()); });
+          const t = updateTask(vault, id, (x) => { x.status = "needs-you"; x.waiting = WAITING; note(x, "waiting", WAITING, clock()); addUpdate(x, "task", WAITING, clock()); });
           syncBoard(vault, t);
         }
         continue;
@@ -760,10 +760,10 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
         for (const a of activities(words)) if (x.log[x.log.length - 1]?.detail !== a.line) note(x, "activity", a.line, clock(), a.more);
         if (x.herdr) x.herdr.lastRead = text.slice(-2000);
         if (question) {
-          if (x.status !== "needs-you" || x.waiting !== question) note(x, "waiting", question, clock());
+          if (x.status !== "needs-you" || x.waiting !== question) { note(x, "waiting", question, clock()); addUpdate(x, "task", question, clock()); }
           x.status = "needs-you"; x.waiting = question;
         } else if (status === "working" && x.status === "needs-you") { x.status = "running"; delete x.waiting; }
-        else if (settled && (x.status === "running" || x.status === "needs-you")) { delete x.waiting; finish(x, "done", outcome || "Done."); note(x, "done", undefined, clock()); }
+        else if (settled && (x.status === "running" || x.status === "needs-you")) { delete x.waiting; finish(x, "done", outcome || "Done.", clock()); note(x, "done", undefined, clock()); }
       });
       syncBoard(vault, t);
       if (t.status === "done") break;
