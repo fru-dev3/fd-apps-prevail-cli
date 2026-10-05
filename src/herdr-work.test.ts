@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { addMachine, agentKinds, buildBrief, closeTask, hostKey, launchTask, machines, mirrorTask, newText, reopenTask, writeMachineRecord } from "./herdr-work.ts";
+import { addMachine, agentKinds, buildBrief, closeTask, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 import { addWork, answerTask, continueTask, pauseTask, readTask, routeTask, updateTask, writeSettings, type WorkDeps } from "./work.ts";
 
@@ -29,7 +29,7 @@ function seed() {
 }
 
 /** A fake herdr: records every call as [machine, ...argv] and keeps a little state. */
-function fakeHerdr(o: { workspaces?: { workspace_id: string; label: string }[]; saved?: { id: string; label: string; enabled?: boolean }[]; reads?: string[]; statuses?: string[]; panes?: unknown[]; tabsLeft?: number } = {}) {
+function fakeHerdr(o: { workspaces?: { workspace_id: string; label: string }[]; saved?: { id: string; label: string; enabled?: boolean }[]; reads?: string[]; statuses?: string[]; panes?: unknown[]; tabsLeft?: number; startFails?: boolean } = {}) {
   const calls: string[][] = [];
   const reads = [...(o.reads ?? ["working on foo"])];
   const statuses = [...(o.statuses ?? ["done"])];
@@ -40,6 +40,7 @@ function fakeHerdr(o: { workspaces?: { workspace_id: string; label: string }[]; 
     if (a === "--version") return "herdr 0.0.0";
     if (a === "machine" && b === "list") return o.saved ?? [];
     if (a === "machine" && b === "add") return "saved";
+    if (a === "agent" && b === "start" && o.startFails && args[2] !== "--help") throw new Error('herdr agent start failed: {"error":{"code":"agent_not_ready"}}');
     if (a === "agent" && b === "start" && args[2] === "--help") return "Usage...\n  [possible values: pi, claude, codex, gemini]";
     if (a === "workspace" && b === "list") return { workspaces: o.workspaces ?? [] };
     if (a === "workspace" && b === "create") return { workspace: { workspace_id: "wnew" }, tab: { tab_id: "wnew:t1" }, root_pane: { pane_id: "wnew:p1" } };
@@ -126,6 +127,33 @@ describe("a task in a Herdr tab", () => {
     expect(run).toMatchObject({ status: "running", herdr: { workspaceLabel: "Foo Work", workspaceId: "wnew", tabId: "wnew:t1", createdWorkspace: true, createdTab: true } });
     expect(spawned.at(-1)).toEqual(["work", "mirror", t.id]);
   });
+  test("an agent that is not ready (a trust question in its tab) keeps its tab: Start goes on there, Not now closes it", async () => {
+    const h = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Foo Work" }], startFails: true, statuses: ["blocked", "idle"] });
+    const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask() } });
+    const id = p.tasks[0]!.id;
+    const first = await launchTask(V, id, deps(h));
+    expect(first.status).toBe("needs-you");
+    expect(first.ask?.detail).toMatch(/waiting for an answer there/);
+    expect(first.herdr).toMatchObject({ tabId: "w1:t1", paneId: "w1:p1", createdTab: true });
+    // Still blocked: it asks again and opens nothing new.
+    const before = mutating(h.calls).length;
+    expect((await launchTask(V, id, deps(h))).ask?.detail).toMatch(/waiting for an answer there/);
+    expect(mutating(h.calls).length).toBe(before);
+    // Answered in Herdr: the same agent gets the brief, no new tab.
+    const go = await launchTask(V, id, deps(h));
+    expect(go.status).toBe("running");
+    const m = mutating(h.calls).slice(before);
+    expect(m.map((c) => c.slice(1, 3).join(" "))).toEqual(["agent prompt"]);
+    expect(m[0]![3]).toBe(first.herdr!.agent!);
+    // Not now on a fresh failure closes the tab Prevail opened.
+    const h2 = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Foo Work" }], startFails: true, statuses: ["blocked"], tabsLeft: 1 });
+    const q = await addWork(V, "y", { deps: { ...deps(h2), runner: async () => oneTask() } });
+    await launchTask(V, q.tasks[0]!.id, deps(h2));
+    const no = await answerTask(V, q.tasks[0]!.id, "no", { deps: deps(h2) });
+    expect(no.status).toBe("closed");
+    expect(no.herdr?.tabId).toBeUndefined();
+    expect(h2.calls.some((c) => c[1] === "tab" && c[2] === "close" && c[3] === "w1:t1")).toBe(true);
+  });
   test("an existing workspace gets a new tab with --cwd and --no-focus, resolved by label each time", async () => {
     const h = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Foo Work" }] });
     const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask() } });
@@ -198,16 +226,17 @@ describe("mirror, pause, close and reopen", () => {
     const t = await running(h, spawned);
     pauseTask(V, t.id, deps(h));
     expect(h.calls.at(-1)).toEqual(["local", "agent", "send-keys", t.herdr!.agent!, "esc"]);
+    updateTask(V, t.id, (x) => { x.herdr!.lastRead = "foo tail"; });
     const c = closeTask(V, t.id, deps(h));
     const m = mutating(h.calls);
     expect(m.slice(-2)).toEqual([["local", "tab", "close", "wnew:t1"], ["local", "workspace", "close", "wnew"]]);
     expect(c.status).toBe("closed");
-    expect(c.herdr).toEqual({ machine: "laptop", workspaceLabel: "Foo Work", workspaceId: "wnew", createdWorkspace: true });
+    expect(c.herdr).toEqual({ machine: "laptop", workspaceLabel: "Foo Work", workspaceId: "wnew", createdWorkspace: true, lastRead: "foo tail" });
     const o = reopenTask(V, t.id, deps(h, spawned));
     expect(o.status).toBe("running");
     expect(spawned.at(-1)).toEqual(["work", "run", t.id, "--reopen"]);
     const h2 = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Foo Work" }] });
-    await launchTask(V, t.id, deps(h2), { reopen: true });
+    expect((await launchTask(V, t.id, deps(h2), { reopen: true })).herdr?.lastRead).toBeUndefined();
     const prompt = mutating(h2.calls).find((x) => x[2] === "prompt")!;
     expect(prompt[4]).toMatch(/^Pick this task back up/);
     expect(prompt[4]).toContain("## You");
@@ -239,4 +268,24 @@ describe("mirror, pause, close and reopen", () => {
     expect(b).toContain("- Researcher:");
     expect(b).toContain("Where it belongs: Insurance (domain).");
   });
+});
+
+describe("workspaces", () => {
+  beforeEach(seed);
+  test("lists the open workspaces' labels on a machine, read only", () => {
+    const h = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Foo Work" }, { workspace_id: "w2", label: "Bar" }, { workspace_id: "w3", label: "Foo Work" }] });
+    expect(herdrWorkspaces(V, "laptop", deps(h))).toEqual(["Foo Work", "Bar"]);
+    expect(mutating(h.calls)).toEqual([]);
+    expect(() => herdrWorkspaces(V, "mini-foo", deps(h))).toThrow(/not a saved Herdr machine/);
+  });
+});
+
+test("the mirror keeps the agent's words and drops its terminal chrome", () => {
+  const screen = ["Foo summary:", "", "- the foo policy renews in May", "", "\u273b Baked for 9s", "", "\u2500".repeat(40) + " foo-tab \u2500", "\u276f ", "\u2500".repeat(40), "  \u23f5\u23f5 foo mode on (shift+tab to cycle)"].join("\n");
+  expect(stripChrome(screen)).toBe("Foo summary:\n\n- the foo policy renews in May");
+});
+
+test("the first mirror skips the agent's banner and its echo of the brief", () => {
+  expect(afterBrief(`Foo CLI v1\n> You are working on one task. End with a short summary: what you did, ${BRIEF_END}\n\nFoo answer`).trim()).toBe("Foo answer");
+  expect(afterBrief("no echo yet")).toBe("no echo yet");
 });

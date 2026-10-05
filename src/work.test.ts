@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setChiefSetting } from "./chief-of-staff.ts";
-import { readJob, saveJob, type Job } from "./jobs.ts";
+import { boardFile, readJob, saveJob, type Job } from "./jobs.ts";
 import type { Herdr } from "./spaces.ts";
 import {
   acceptSuggestion, addWork, answerTask, continueTask, declineSuggestion, listWork, pauseTask, readSettings, readTask, remainingJob, routeTask, runTask, showWork,
@@ -211,6 +211,14 @@ describe("routes, suggestions and answers", () => {
     expect(r.task.suggestions[0]!.state).toBe("accepted");
     await expect(acceptSuggestion(V, t.id, 1, deps())).rejects.toThrow(/already accepted/);
   });
+  test("accepting an entity makes it as the kind the router named, not always a person", async () => {
+    setChiefSetting(V, "handoff", "offer");
+    const reply = JSON.stringify({ goals: [{ text: "Foo the dog", tasks: [{ text: "Book the foo dog's checkup", dest: { kind: "domain", id: "general" }, confidence: 0.8, missing: [{ kind: "entity", name: "Foo Dog", why: "a pet", draft: { kind: "thing" } }] }] }] });
+    const p = await addWork(V, "x", { deps: { ...deps(), runner: async () => reply } });
+    const r = await acceptSuggestion(V, p.tasks[0]!.id, 1, deps());
+    expect(r.made).toBe("thing/foo-dog");
+    expect(r.task.dest?.entity).toBe("thing/foo-dog");
+  });
   test("answer yes starts, no closes", async () => {
     const spawned: string[][] = [];
     const p = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => threeGoals } });
@@ -219,7 +227,10 @@ describe("routes, suggestions and answers", () => {
     expect(spawned.at(-1)).toEqual(["work", "run", c.id]);
     pauseTask(V, c.id, deps());
     updateTask(V, c.id, (x) => { x.ask = { kind: "start", detail: "foo" }; });
-    expect((await answerTask(V, c.id, "no", { deps: deps() })).status).toBe("closed");
+    const closed = await answerTask(V, c.id, "no", { deps: deps() });
+    expect(closed.status).toBe("closed");
+    // Off the open board, as dropped.
+    expect(readFileSync(boardFile(V, closed.board!.space), "utf8")).toMatch(new RegExp(`- \\[x\\] .*~status:dropped ~id:${closed.board!.id}`));
     await expect(answerTask(V, c.id, "maybe", { deps: deps() })).rejects.toThrow(/answer yes, no/);
   });
 });

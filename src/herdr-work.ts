@@ -243,13 +243,23 @@ export function buildBrief(vault: string, t: WorkTask, o: { history?: string } =
     ...(chief.neverRead.length ? [`- Never read these areas unless the task names them: ${chief.neverRead.join(", ")}.`] : []),
     `- Stay within about $${job?.budget.usd ?? chief.limits.usd} and ${job?.budget.minutes ?? chief.limits.minutes} minutes of work, then report.`,
     ...(job?.askReason ? [`- Why this asked first: ${job.askReason}.`] : []),
-    "", "End with a short summary: what you did, what you filed, and what is left.",
+    "", `End with a short summary: what you did, ${BRIEF_END}`,
   ];
   if (o.history) lines.unshift("Pick this task back up. The conversation so far:", "", o.history, "", "---", "");
   return lines.join("\n");
 }
 
+const notReady = "the agent in its Herdr tab is waiting for an answer there (Claude Code may be asking whether to trust the folder); answer it in Herdr, then Start";
+
 const agentName = (taskId: string) => `pw-${taskId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(-24)}`.replace(/-+$/, "");
+
+/** The Herdr workspaces open on a machine (by label), for the "which workspace?" question. */
+export function herdrWorkspaces(vault: string, label: string, deps: WorkDeps = {}): string[] {
+  const machine = herdrMachine(vault, label, deps);
+  if (!machine) throw new Error(`${label} is not a saved Herdr machine here`);
+  const r = herdrFor(deps, machine)(["workspace", "list"]) as { workspaces?: WsRow[] } | undefined;
+  return [...new Set((r?.workspaces ?? []).map((w) => w.label).filter((l) => typeof l === "string" && l.trim()))];
+}
 
 interface WsRow { workspace_id: string; label: string; tab_count?: number }
 function findWorkspace(h: Herdr, label: string): WsRow | null {
@@ -285,10 +295,19 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
   }
   const brief = buildBrief(vault, t, { history });
   let ref: HerdrRef;
+  // What this launch opened, kept even when the agent never gets ready, so Close and Not now can shut it.
+  let opened: HerdrRef | null = null;
+  // A tab an earlier launch opened whose agent was not ready (Claude Code asking to trust the folder, say).
+  const prior = !o.reopen && t.herdr?.tabId && t.herdr.agent ? t.herdr : null;
+  let priorStatus = "";
+  if (prior) { try { priorStatus = statusOf(h(["agent", "get", prior.agent!])); } catch { priorStatus = "gone"; } }
+  if (prior && priorStatus === "blocked") return ask("start", notReady);
   try {
     // The destination's own agent, open and idle on this Mac: prompt it there.
     const pane = machine === "local" && t.dest?.kind === "domain" && !o.reopen ? domainPanes(vault, h).get(t.dest.id) : undefined;
-    if (pane?.agent && (pane.agent_status === "idle" || pane.agent_status === "done")) {
+    if (prior && priorStatus !== "gone") {
+      ref = prior;
+    } else if (pane?.agent && (pane.agent_status === "idle" || pane.agent_status === "done")) {
       ref = { machine: t.machine, workspaceLabel: "", paneId: pane.pane_id, agent: pane.pane_id, createdTab: false };
     } else {
       const label = o.workspace?.trim() || settings.workspaces[t.thread.space] || settings.workspace;
@@ -311,14 +330,17 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
         workspaceId = ws.workspace_id; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id;
       }
       const name = agentName(t.id);
+      opened = { machine: t.machine, workspaceLabel: label, workspaceId, tabId, paneId, agent: name, createdWorkspace: created || (t.herdr?.createdWorkspace === true && t.herdr.workspaceLabel === label), createdTab: true };
       // Claude Code carries Prevail's act-gate hook; the hook file lives on this Mac, so a remote Claude runs without it.
       const settingsPath = t.agentKind === "claude" && machine === "local" ? (deps.settingsPath ?? defaultSettingsPath)(vault, t.thread.space) : null;
       h(["agent", "start", name, "--kind", t.agentKind, "--pane", paneId, ...(settingsPath ? ["--", "--settings", settingsPath] : [])]);
-      ref = { machine: t.machine, workspaceLabel: label, workspaceId, tabId, paneId, agent: name, createdWorkspace: created || (t.herdr?.createdWorkspace === true && t.herdr.workspaceLabel === label), createdTab: true };
+      ref = opened;
     }
     h(["agent", "prompt", ref.agent!, brief]);
   } catch (e) {
-    return ask("start", `Herdr could not start it: ${(e as Error).message.slice(0, 200)}`);
+    const msg = (e as Error).message;
+    if (opened) { const keep = opened; updateTask(vault, id, (x) => { x.herdr = keep; }); }
+    return ask("start", opened && /agent_not_ready/.test(msg) ? notReady : `Herdr could not start it: ${msg.slice(0, 200)}`);
   }
   const next = updateTask(vault, id, (x) => {
     x.herdr = ref; x.status = "running"; delete x.ask;
@@ -343,6 +365,20 @@ export function newText(prev: string | undefined, cur: string): string {
   const anchor = prev.slice(-400);
   const i = cur.lastIndexOf(anchor);
   return i >= 0 ? cur.slice(i + anchor.length) : cur;
+}
+
+/** The brief's last words: the first mirror starts after the agent's echo of them (its banner and the brief are not its words). */
+export const BRIEF_END = "what you filed, and what is left.";
+export function afterBrief(text: string): string {
+  const i = text.lastIndexOf(BRIEF_END);
+  return i >= 0 ? text.slice(i + BRIEF_END.length) : text;
+}
+
+/** The agent's words without its terminal chrome: rules and boxes, the empty input line, the mode footer, the spinner line. */
+export function stripChrome(text: string): string {
+  return text.split("\n")
+    .filter((l) => !/^\s*[\u2500\u2501\u2550]{3,}/.test(l) && !/^\s*\u276f\s*$/.test(l) && !/^\s*\u23f5\u23f5/.test(l) && !/^\s*\u273b /.test(l))
+    .join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 const readText = (r: unknown): string => {
@@ -386,10 +422,11 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
         updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running") { x.status = "done"; x.ask = { kind: "keep-close", detail: "the Herdr agent is gone; close its place here?" }; } });
         break;
       }
-      const fresh = newText(cur.herdr?.lastRead, text).trim();
+      const fresh = (cur.herdr?.lastRead ? newText(cur.herdr.lastRead, text) : afterBrief(text)).trim();
       const settled = status === "idle" || status === "done";
       const t = updateTask(vault, id, (x) => {
-        if (fresh) appendTurn(vault, x, "assistant", fresh, x.agentKind, clock());
+        const words = stripChrome(fresh);
+        if (words) appendTurn(vault, x, "assistant", words, x.agentKind, clock());
         if (x.herdr) x.herdr.lastRead = text.slice(-2000);
         if (status === "blocked" && x.status === "running") { x.status = "needs-you"; x.ask = { kind: "start", detail: "the agent is waiting for your answer in Herdr" }; }
         else if (status === "working" && x.status === "needs-you" && x.ask?.kind === "start") { x.status = "running"; delete x.ask; }
@@ -445,7 +482,8 @@ export function closeTask(vault: string, id: string, deps: WorkDeps = {}): WorkT
   if (!r) throw new Error(`no task ${id}`);
   closeHerdr(vault, r.task, deps);
   const t = updateTask(vault, id, (x) => {
-    if (x.herdr) x.herdr = { machine: x.herdr.machine, workspaceLabel: x.herdr.workspaceLabel, ...(x.herdr.workspaceId ? { workspaceId: x.herdr.workspaceId } : {}), ...(x.herdr.createdWorkspace ? { createdWorkspace: true } : {}) };
+    // The tab is gone; what it last said stays on the card (a relaunch starts a fresh ref).
+    if (x.herdr) x.herdr = { machine: x.herdr.machine, workspaceLabel: x.herdr.workspaceLabel, ...(x.herdr.workspaceId ? { workspaceId: x.herdr.workspaceId } : {}), ...(x.herdr.createdWorkspace ? { createdWorkspace: true } : {}), ...(x.herdr.lastRead ? { lastRead: x.herdr.lastRead } : {}) };
     delete x.ask;
     if (x.status !== "done") x.status = "closed";
     note(x, "closed", "its Herdr tab", now);

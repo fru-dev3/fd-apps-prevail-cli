@@ -36,7 +36,7 @@ import type { RouteRunner } from "./route.ts";
 import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./session.ts";
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
 import { buildCatalog, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
-import { agentKinds, asCatalogMachines, closeHerdr, closeTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, reopenTask, resumeHerdr, addMachine, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
+import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, reopenTask, resumeHerdr, addMachine, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 
 export type WorkStatus = "routed" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
@@ -200,7 +200,8 @@ function createThread(vault: string, t: WorkTask, now: number): void {
   writeThreadTurn(vault, space, session, { id: makeTurnId(), parentId: null, role: "user", cli: "", model: "", content: t.text, ts: now });
 }
 
-const BOARD_STATUS: Partial<Record<WorkStatus, string>> = { running: "doing", paused: "blocked", "needs-you": "review" };
+// A closed task is checked off as dropped (closeout.ts does the same), so it leaves the open board; Continue reopens it.
+const BOARD_STATUS: Partial<Record<WorkStatus, string>> = { running: "doing", paused: "blocked", "needs-you": "review", closed: "dropped" };
 
 function addBoardLine(vault: string, t: WorkTask, tid: string, now: number): void {
   const bf = boardFile(vault, t.thread.space);
@@ -220,7 +221,7 @@ export function syncBoard(vault: string, t: WorkTask): void {
   const tag = `~id:${t.board.id}`;
   const next = cur.split("\n").map((l) => {
     if (!l.includes(tag) || !/^\s*- \[[ xX]\]/.test(l)) return l;
-    let x = l.replace(/\s+~status:\S+/g, "").replace(/^(\s*- )\[[ xX]\]/, `$1[${t.status === "done" ? "x" : " "}]`);
+    let x = l.replace(/\s+~status:\S+/g, "").replace(/^(\s*- )\[[ xX]\]/, `$1[${t.status === "done" || t.status === "closed" ? "x" : " "}]`);
     const st = BOARD_STATUS[t.status];
     if (st) x = x.replace(` ${tag}`, ` ~status:${st} ${tag}`);
     return x;
@@ -683,7 +684,9 @@ export async function answerTask(vault: string, id: string, reply: string, o: { 
   if (!ask) throw new Error("nothing is waiting for an answer on this task");
   if (ask.kind === "start") {
     if (a === "yes") return startTask(vault, id, { deps });
-    const t = updateTask(vault, id, (x) => { delete x.ask; x.status = "closed"; note(x, "not started", undefined, now); });
+    // Not now also shuts a Herdr tab an unfinished launch left open.
+    if (r.task.herdr?.tabId) { try { closeHerdr(vault, r.task, deps); } catch { /* already gone */ } }
+    const t = updateTask(vault, id, (x) => { delete x.ask; x.status = "closed"; if (x.herdr?.tabId) { delete x.herdr.tabId; delete x.herdr.paneId; delete x.herdr.agent; } note(x, "not started", undefined, now); });
     syncBoard(vault, t);
     return t;
   }
@@ -725,7 +728,9 @@ function settle(vault: string, p: WorkPrompt, now: number): WorkPrompt {
 export function listWork(vault: string, view: "queue" | "backlog" = "queue", now = Date.now()) {
   const prompts = listPrompts(vault).map((p) => settle(vault, p, now));
   if (view === "backlog") {
-    const tasks = prompts.flatMap((p) => p.tasks.map((t) => ({ ...t, prompt: { id: p.id, ts: p.ts, text: oneLine(p.text, 200), surface: p.surface } })));
+    // The prompt rides along with each task, clipped; the clip says so.
+    const clip = (x: string) => { const one = x.replace(/\s+/g, " ").trim(); return one.length > 200 ? `${oneLine(one, 199).trimEnd()}\u2026` : oneLine(one); };
+    const tasks = prompts.flatMap((p) => p.tasks.map((t) => ({ ...t, prompt: { id: p.id, ts: p.ts, text: clip(p.text), surface: p.surface } })));
     return { ok: true, view, tasks };
   }
   return { ok: true, view, prompts: prompts.filter((p) => p.tasks.some((t) => OPEN.includes(t.status) || !!t.ask)) };
@@ -749,7 +754,7 @@ export function showWork(vault: string, id: string) {
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
-const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--no-model] | list [--view queue|backlog] | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] | machines | machine-add --label l --target t --yes | run <task> | mirror <task>  [--json]";
+const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--no-model] | list [--view queue|backlog] | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | run <task> | mirror <task>  [--json]";
 
 export async function workCommand(argv: string[], vault: string, deps: WorkDeps = {}): Promise<number> {
   const args = parseModArgs(argv);
@@ -802,6 +807,11 @@ export async function workCommand(argv: string[], vault: string, deps: WorkDeps 
     if (sub === "machines") {
       const ms = machines(vault, md);
       return say({ ok: true, current: ms.find((m) => m.current)?.label ?? null, machines: ms, agentKinds: agentKinds(md.herdr) }, ms.map((m) => `${m.current ? "*" : " "} ${m.label.padEnd(20)} ${m.herdr}${m.role ? ` ${m.role}` : ""}`).join("\n"));
+    }
+    if (sub === "workspaces") {
+      const label = args.get("machine") ?? hereLabel(vault, deps);
+      const ws = herdrWorkspaces(vault, label, deps);
+      return say({ ok: true, machine: label, workspaces: ws }, ws.join("\n"));
     }
     if (sub === "machine-add") {
       const label = args.get("label") ?? "";
