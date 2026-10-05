@@ -17,7 +17,9 @@
 // reorders it. Tasks run in parallel up to maxRunning; beyond the cap a task
 // that may start waits as "queued" and starts in queue order when a slot frees
 // (topUp, after every `work` command, so a finished run starts the next).
-// A task that needs the user takes no slot.
+// A task that needs the user takes no slot. `work add --hold` parks the
+// tasks in the backlog instead: routed and filed, never started, until
+// `work start` moves one to the end of the queue.
 //
 // Pause, Continue, Stop, re-route and Undo act on one task. A re-route moves
 // the thread files and the board line; nothing is ever deleted. A missing
@@ -43,10 +45,11 @@ import type { RouteRunner } from "./route.ts";
 import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./session.ts";
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
 import { buildCatalog, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
-import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, reopenTask, resumeHerdr, addMachine, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
+import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 
-export type WorkStatus = "routed" | "queued" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
+// "backlog": parked as an idea (routed, never started, not in the queue); `work start` moves it to the end of the queue.
+export type WorkStatus = "backlog" | "routed" | "queued" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
 export type Executor = "engine" | "herdr";
 export type AskKind = "start" | "herdr-workspace" | "keep-close" | "machine-add";
 export type Surface = "desktop" | "phone" | "cli";
@@ -102,6 +105,8 @@ export interface WorkDeps {
   /** Runs a job (tests pass a stub). */
   runJob?: (vault: string, id: string) => Promise<Job>;
   machine?: MachineDeps;
+  /** Runs osascript with these args (tests record the call; never Terminal for real). */
+  terminal?: (osascriptArgs: string[]) => void;
   /** Claude Code's act-gate settings file for a space (tests pass a /tmp path). */
   settingsPath?: (vault: string, space: string) => string;
 }
@@ -353,7 +358,20 @@ function startsAlone(vault: string, job: Job | null): { yes: boolean; why: strin
 
 // ── Add ─────────────────────────────────────────────────────────────────────
 
-export interface AddOptions { surface?: Surface; machine?: string; agentKind?: string; deps?: WorkDeps }
+export interface AddOptions { surface?: Surface; machine?: string; agentKind?: string; /** Park the tasks in the backlog: routed, never started. */ hold?: boolean; deps?: WorkDeps }
+
+/** A task entering the queue: wait for its machine, ask before it starts, or queue it to start in turn. */
+function gateTask(vault: string, t: WorkTask, ms: Machine[], job: Job | null): void {
+  const machine = ms.find((m) => m.label === t.machine);
+  if (t.executor === "herdr" && machine && (machine.herdr === "missing" || machine.herdr === "disabled")) {
+    t.status = "needs-you";
+    t.ask = { kind: "machine-add", detail: `${machine.label} is not a saved Herdr machine here`, command: machineAddCommand(machine.label) };
+    return;
+  }
+  const s = startsAlone(vault, job);
+  if (s.yes) t.status = "queued";
+  else { t.status = "needs-you"; t.ask = { kind: "start", detail: s.why }; }
+}
 
 function catalogFor(vault: string, deps: WorkDeps = {}): { cat: Catalog; ms: Machine[] } {
   const md = { ...deps.machine, ...(deps.herdrFor ? { herdr: deps.herdrFor("local") } : {}) };
@@ -406,22 +424,16 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     addBoardLine(vault, t, `w${(now + n).toString(36).slice(-6)}`, now);
     const job = staffTask(vault, t, plan.source, now);
     if (job) t.jobId = job.id;
-    const machine = ms.find((m) => m.label === t.machine);
-    if (t.executor === "herdr" && machine && (machine.herdr === "missing" || machine.herdr === "disabled")) {
-      t.status = "needs-you";
-      t.ask = { kind: "machine-add", detail: `${machine.label} is not a saved Herdr machine here`, command: machineAddCommand(machine.label) };
-    } else {
-      const s = startsAlone(vault, job);
-      if (!s.yes) { t.status = "needs-you"; t.ask = { kind: "start", detail: s.why }; }
-    }
+    if (o.hold) { t.status = "backlog"; note(t, "parked", "in the backlog until it is moved to the queue", now); }
+    // What may start alone waits its turn behind what is already queued.
+    else gateTask(vault, t, ms, job);
     prompt.tasks.push(t);
   }
-  // What may start alone waits its turn behind what is already queued; new tasks go to the end of the queue.
-  for (const t of prompt.tasks) if (t.status === "routed") t.status = "queued";
+  // New tasks go to the end of the queue; parked ones stay out of it.
   withWorkLock(vault, () => {
     const ids = queueTasks(vault).map((x) => x.task.id);
     savePrompt(vault, prompt);
-    writeOrder(vault, [...ids, ...prompt.tasks.map((t) => t.id)]);
+    writeOrder(vault, [...ids, ...prompt.tasks.filter((t) => t.status !== "backlog").map((t) => t.id)]);
   });
   for (const t of prompt.tasks) if (t.status !== "queued") syncBoard(vault, t);
   await topUp(vault, deps);
@@ -447,6 +459,7 @@ export async function startTask(vault: string, id: string, o: { deps?: WorkDeps 
   if (!r) throw new Error(`no task ${id}`);
   const t = r.task;
   if (t.status === "running") return t;
+  if (t.status === "backlog") return queueFromBacklog(vault, id, deps);
   if (t.executor === "engine" && (!t.jobId || !readJob(vault, t.jobId))) throw new Error("this task has no job to run; re-route it first");
   // Take a slot, or wait as queued: the count and the claim happen under one lock, so two starters never overfill.
   let claimed = false;
@@ -472,6 +485,28 @@ export async function startTask(vault: string, id: string, o: { deps?: WorkDeps 
   if (next.executor === "engine") startJob(vault, next.jobId!, { detached: false });
   (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "run", id]);
   return next;
+}
+
+/** Move a parked task to the end of the queue, where it starts in turn (or asks first, as a new task would). */
+async function queueFromBacklog(vault: string, id: string, deps: WorkDeps): Promise<WorkTask> {
+  const now = (deps.now ?? Date.now)();
+  let ms: Machine[] = [];
+  try { ms = machines(vault, { ...deps.machine, ...(deps.herdrFor ? { herdr: deps.herdrFor("local") } : {}) }); } catch { ms = []; }
+  const t = withWorkLock(vault, () => {
+    const cur = readTask(vault, id);
+    if (!cur) throw new Error(`no task ${id}`);
+    const x = cur.task;
+    if (x.status !== "backlog") return x;
+    const ids = queueTasks(vault).map((q) => q.task.id);
+    gateTask(vault, x, ms, x.jobId ? readJob(vault, x.jobId) : null);
+    note(x, "moved to the queue", undefined, now);
+    savePrompt(vault, cur.prompt);
+    writeOrder(vault, [...ids.filter((q) => q !== id), id]);
+    return x;
+  });
+  syncBoard(vault, t);
+  await topUp(vault, deps);
+  return readTask(vault, id)?.task ?? t;
 }
 
 export function hereLabel(vault: string, deps: WorkDeps): string { return thisMachine(vault, deps.machine).label; }
@@ -839,7 +874,7 @@ export function showWork(vault: string, id: string) {
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
-const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--no-model] | list [--view queue|backlog] | reorder <task> --before <id>|--after <id>|--to <index> | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] [--max-running n] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | run <task> | mirror <task>  [--json]";
+const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--hold] [--no-model] | list [--view queue|backlog] | reorder <task> --before <id>|--after <id>|--to <index> | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] [--max-running n] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | machine-approve --label l --target t --yes | run <task> | mirror <task>  [--json]";
 
 export async function workCommand(argv: string[], vault: string, deps: WorkDeps = {}): Promise<number> {
   const sub = parseModArgs(argv).pos[0] ?? "list";
@@ -867,7 +902,7 @@ async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<n
       const file = args.get("file");
       const text = file === "-" ? await new Response(Bun.stdin.stream()).text() : file ? readFileSync(file, "utf8") : args.get("text") ?? args.pos.slice(1).join(" ");
       const surface = (["desktop", "phone", "cli"] as const).find((s) => s === args.get("surface")) ?? "cli";
-      const p = await addWork(vault, text, { surface, machine: args.get("machine"), agentKind: args.get("agent"), deps: { ...deps, ...(args.has("no-model") ? { runner: null } : {}) } });
+      const p = await addWork(vault, text, { surface, machine: args.get("machine"), agentKind: args.get("agent"), hold: args.has("hold"), deps: { ...deps, ...(args.has("no-model") ? { runner: null } : {}) } });
       return say({ ok: true, prompt: p }, p.tasks.map((t) => `${t.id}  ${t.status.padEnd(9)} ${t.dest ? `${t.dest.kind}:${t.dest.id}` : "unrouted"}  ${t.text}`).join("\n"));
     }
     if (sub === "list") {
@@ -920,7 +955,15 @@ async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<n
       const target = args.get("target") ?? "";
       if (!args.has("yes")) return fail(`confirm with --yes: ${machineAddCommand(label || "<label>", target || "<ssh target>")}`);
       const r = addMachine(label, target, md.herdr);
-      return say({ ok: true, ...r }, r.output);
+      // Needs approval is an answer, not a failure: the desktop offers to open Terminal for it.
+      return say(r, r.ok ? r.output : `${r.error}: ${r.command.join(" ")}`);
+    }
+    if (sub === "machine-approve") {
+      const label = args.get("label") ?? "";
+      const target = args.get("target") ?? "";
+      if (!args.has("yes")) return fail(`confirm with --yes: opens Terminal running ${machineAddCommand(label || "<label>", target || "<ssh target>")}`);
+      const r = approveInTerminal(label, target, deps.terminal);
+      return say(r, `opened Terminal: ${r.command.join(" ")}`);
     }
     if (sub === "run") { const t = await runTask(vault, id, deps, { createWorkspace: args.has("create-workspace"), workspace: args.get("workspace"), reopen: args.has("reopen") }); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }
     if (sub === "mirror") { const t = await mirrorTask(vault, id, deps); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }

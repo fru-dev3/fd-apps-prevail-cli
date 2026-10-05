@@ -5,7 +5,7 @@ import { setChiefSetting } from "./chief-of-staff.ts";
 import { boardFile, readJob, saveJob, type Job } from "./jobs.ts";
 import type { Herdr } from "./spaces.ts";
 import {
-  acceptSuggestion, addWork, answerTask, continueTask, declineSuggestion, listWork, pauseTask, readOrder, readSettings, readTask, remainingJob, reorderTask, routeTask, runTask, showWork,
+  acceptSuggestion, addWork, answerTask, continueTask, startTask, declineSuggestion, listWork, pauseTask, readOrder, readSettings, readTask, remainingJob, reorderTask, routeTask, runTask, showWork,
   stopTask, topUp, updateTask, workCommand, writeSettings, type WorkDeps,
 } from "./work.ts";
 
@@ -266,6 +266,20 @@ describe("views and the CLI", () => {
     expect((await cli(["show", "nope"])).json).toMatchObject({ ok: false });
     expect((await cli(["bogus"])).code).toBe(1);
     expect(readTask(V, p.tasks[2]!.id)?.task.status).toBe("needs-you");
+  });  test("machine-add answers needs approval (exit 0) and machine-approve opens Terminal only with --yes", async () => {
+    const q = quietHerdr();
+    const refusing: Herdr = (args) => { if (args[0] === "machine" && args[1] === "add") throw new Error("herdr machine add failed: remote herdr server needs one final update before this client can attach; run from an interactive terminal to approve updating it"); return q(args); };
+    const ran: string[][] = [];
+    const d: WorkDeps = { ...deps(), herdrFor: () => refusing, terminal: (a) => { ran.push(a); } };
+    const r = await cli(["machine-add", "--label", "mini-foo", "--target", "foo@mini-foo", "--yes"], d);
+    expect(r.code).toBe(0);
+    expect(r.json).toMatchObject({ ok: false, needsApproval: true, label: "mini-foo" });
+    expect((r.json.command as string[]).slice(1)).toEqual(["machine", "add", "--label", "mini-foo", "foo@mini-foo"]);
+    expect((await cli(["machine-approve", "--label", "mini-foo", "--target", "foo@mini-foo"], d)).code).toBe(1);
+    expect(ran).toEqual([]);
+    const ok = await cli(["machine-approve", "--label", "mini-foo", "--target", "foo@mini-foo", "--yes"], d);
+    expect(ok.json).toMatchObject({ ok: true });
+    expect(ran.length).toBe(1);
   });
 });
 
@@ -357,6 +371,42 @@ describe("the ordered queue", () => {
     expect(status(p.tasks[2]!.id)).toBe("running");
     // Paused tasks hold their place in the order.
     expect(ids().slice(0, 2)).toEqual([a, b]);
+  });
+
+  test("work add --hold parks the tasks in the backlog; start moves one to the end of the queue", async () => {
+    setChiefSetting(V, "handoff", "auto");
+    const spawned: string[][] = [];
+    const a = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => four("a") } });
+    const orig = process.stdout.write.bind(process.stdout);
+    let buf = "";
+    process.stdout.write = ((x: string) => { buf += x; return true; }) as typeof process.stdout.write;
+    try { expect(await workCommand(["add", "--hold", "--text", "foo ideas", "--json"], V, { ...deps(spawned), runner: async () => four("h") })).toBe(0); } finally { process.stdout.write = orig; }
+    const held = (JSON.parse(buf.trim().split("\n").pop()!) as { prompt: { tasks: { id: string; status: string; ask?: unknown }[] } }).prompt.tasks;
+    // Routed and filed, never started, not in the queue, no slot taken.
+    expect(held.map((t) => t.status)).toEqual(["backlog", "backlog", "backlog", "backlog"]);
+    expect(held.every((t) => !t.ask)).toBe(true);
+    expect(ids()).toEqual(a.tasks.map((t) => t.id));
+    expect(readOrder(V)).toEqual(a.tasks.map((t) => t.id));
+    expect(spawned.filter((c) => held.some((t) => c.includes(t.id)))).toEqual([]);
+    expect((listWork(V, "backlog").tasks ?? []).filter((t) => t.status === "backlog").length).toBe(4);
+    // A topUp never starts a parked task.
+    updateTask(V, a.tasks[0]!.id, (x) => { x.status = "done"; });
+    await topUp(V, deps(spawned));
+    expect(held.map((t) => status(t.id))).toEqual(["backlog", "backlog", "backlog", "backlog"]);
+    // Start moves it to the end of the queue, where it starts in turn (three slots: a2, a3, a4 run, so it waits).
+    const moved = await startTask(V, held[1]!.id, { deps: deps(spawned) });
+    expect(moved.status).toBe("queued");
+    expect(ids()).toEqual([...a.tasks.slice(1).map((t) => t.id), held[1]!.id]);
+    expect(moved.log.map((l) => l.ev)).toContain("moved to the queue");
+    // A freed slot starts it.
+    pauseTask(V, a.tasks[1]!.id, deps(spawned));
+    await topUp(V, deps(spawned));
+    expect(status(held[1]!.id)).toBe("running");
+    // A parked task that needs a yes asks once it is in the queue, as a new one would.
+    setChiefSetting(V, "handoff", "offer");
+    const asked = await startTask(V, held[2]!.id, { deps: deps(spawned) });
+    expect(asked).toMatchObject({ status: "needs-you", ask: { kind: "start" } });
+    expect(ids().at(-1)).toBe(held[2]!.id);
   });
 
   test("settings take --max-running from 1 to 20", async () => {
