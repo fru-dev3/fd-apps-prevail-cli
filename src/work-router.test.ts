@@ -112,6 +112,7 @@ describe("the code path", () => {
   beforeEach(seed);
   test("splits sentences, lines and 'also', and merges scraps", () => {
     expect(splitGoals("Find a cheaper foo policy. Also, pick a gift for Foo Bar\n- fix the foo site header; ok")).toEqual(["Find a cheaper foo policy", "pick a gift for Foo Bar", "fix the foo site header, ok"]);
+    expect(splitGoals("ok a few things. Get foo quotes. So, two things. Email the foo club")).toEqual(["Get foo quotes", "Email the foo club"]);
     expect(splitGoals("one two three. four five six. seven eight nine. a b c. d e f. g h i. j k l").length).toBe(MAX_GOALS);
   });
   test("routes three goals by their words, with kinds and machines", async () => {
