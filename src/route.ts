@@ -75,7 +75,7 @@ export interface RouteExample {
 }
 
 /** A model call: system instructions plus one prompt in, raw text out. */
-export type RouteRunner = (req: { system: string; prompt: string; timeoutMs: number }) => Promise<string>;
+export type RouteRunner = (req: { system: string; prompt: string; timeoutMs: number; maxChars?: number }) => Promise<string>;
 
 export interface RouteOptions {
   vault: string;
@@ -331,7 +331,7 @@ export function parseRouteReply(raw: string, domains: string[]): { domains: Rout
  * along. The prompt goes over stdin rather than argv so it never shows in a
  * process listing.
  */
-export const claudeRouteRunner: RouteRunner = async ({ system, prompt, timeoutMs }) => {
+export const claudeRouteRunner: RouteRunner = async ({ system, prompt, timeoutMs, maxChars = 4_000 }) => {
   const { detectClis, scrubbedEnv } = await import("./cli-bridge.ts");
   const claude = (await detectClis()).find((c) => c.kind === "claude");
   if (!claude) throw new Error("no claude runtime");
@@ -352,7 +352,7 @@ export const claudeRouteRunner: RouteRunner = async ({ system, prompt, timeoutMs
     );
     let out = "";
     const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("timeout")); }, timeoutMs);
-    child.stdout.on("data", (b) => { out += String(b); if (out.length > 4_000) child.kill("SIGKILL"); });
+    child.stdout.on("data", (b) => { out += String(b); if (out.length > maxChars) child.kill("SIGKILL"); });
     child.on("error", (e) => { clearTimeout(timer); reject(e); });
     child.on("close", () => { clearTimeout(timer); resolve(out); });
     child.stdin.end(prompt);

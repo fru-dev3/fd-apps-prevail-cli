@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { readDecisions } from "./decisions.ts";
 import {
   adjustJob, codeCheck, dispatch, jobView, learnedStaffing, parseDispatchReply, parseStepOutput, readJob, readReceipts,
-  runJob, saveJob, shapeOf, startJob, stopJob, teamFor, undoFiled, type Job,
+  jobContext, runJob, saveJob, shapeOf, staffJob, startJob, stopJob, teamFor, undoFiled, type Job,
 } from "./jobs.ts";
+import { createMission } from "./missions.ts";
 import { appendNotebook, builtInSpecialists, forDomain, getSpecialist, loadSpecialists, NOTEBOOK_MAX, parseSpecialist, readNotebook } from "./specialists.ts";
 import { readChiefOfStaff, setChiefSetting } from "./chief-of-staff.ts";
 import { runChatJson } from "./chat-json.ts";
@@ -338,5 +339,50 @@ describe("a specialist's read-only tools reach the runtime", () => {
     const c = (await runChatTurn({ prompt: "hi", cwd, cli, model: "", isFirst: true, bare: true, webAccess: "deny", allowTools: ["Read"], noShell: true })).split("\n");
     expect(c.slice(c.indexOf("--disallowedTools") + 1, c.indexOf("--disallowedTools") + 4)).toEqual(["WebSearch", "WebFetch", "Bash"]);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("staffJob (Work mode)", () => {
+  beforeEach(seed);
+  test("staffs a decided owner with the shape's team, named specialists first, the work trigger and entities", () => {
+    const s = staffJob({ vault: V, message: "Find the best foo carrier for the rentals", here: "insurance", owner: "insurance", shape: "find", dm: null, trigger: "work", extra: ["historian"], entities: ["person/foo-bar"], confident: true });
+    expect(s).not.toBeNull();
+    const j = s!.job;
+    expect(j.origin.kind).toBe("work");
+    expect(j.domains.owner).toBe("insurance");
+    expect(j.team[0]).toEqual({ step: 1, specialists: ["historian"] });
+    expect(j.team.slice(1).map((x) => x.specialists)).toEqual([["researcher", "scout"], ["steward"], ["editor"]]);
+    expect(j.entities).toEqual(["person/foo-bar"]);
+    expect(j.startsAlone).toBe(true);
+  });
+  test("an agent other than claude never starts alone", () => {
+    const j = staffJob({ vault: V, message: "Find the best foo carrier for the rentals", here: "insurance", owner: "insurance", shape: "find", dm: null, trigger: "work", agentKind: "codex", confident: true })!.job;
+    expect(j.startsAlone).toBe(false);
+    expect(j.askReason).toMatch(/outside Prevail's approval gate/);
+  });
+  test("a guess is not confident", () => {
+    const j = staffJob({ vault: V, message: "Find the best foo carrier for the rentals", here: "insurance", shape: "find", dm: null })!.job;
+    expect(j.askReason).toMatch(/not sure/);
+  });
+});
+
+describe("adjust to a project, and the entity block", () => {
+  beforeEach(seed);
+  test("Adjust accepts an active project as owner and brings its ceiling", async () => {
+    createMission(V, { name: "Foo launch", outcome: "Ship foo", domains: [{ slug: "money", role: "owner" }], ceiling: "read" });
+    const d = await dispatch({ vault: V, message: "Find the best foo providers for next year", domain: "insurance", runner: async () => dispatchReply });
+    saveJob(V, d.job!);
+    const j = adjustJob(V, d.job!.id, { owner: "mission/foo-launch" });
+    expect(j.domains.owner).toBe("mission/foo-launch");
+    expect(j.mission?.ceiling).toBe("read");
+    expect(() => adjustJob(V, d.job!.id, { owner: "mission/nope" })).toThrow(/unknown domain/);
+    expect(adjustJob(V, d.job!.id, { owner: "money" }).mission).toBeUndefined();
+  });
+  test("jobContext carries the entity the job is about", () => {
+    const dir = join(V, "data", "entities", "people", "foo-bar");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "entity.md"), "---\nname: Foo Bar\nkind: person\nsaved: true\n---\n\n## Your notes\nLikes foo.\n");
+    const j = staffJob({ vault: V, message: "Find a gift for Foo Bar this weekend", here: "general", owner: "general", shape: "find", dm: null, entities: ["person/foo-bar"] })!.job;
+    expect(jobContext(V, j)).toContain("# ENTITY: person/foo-bar");
   });
 });

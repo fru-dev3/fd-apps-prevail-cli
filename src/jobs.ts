@@ -47,14 +47,15 @@ import { routableDomains, type RouteRunner } from "./route.ts";
 import { listDomainDirs } from "./vault-layout-v4.ts";
 import { vreadFile } from "./vault-session.ts";
 import { forDomain, getSpecialist, loadSpecialists, readNotebook, appendNotebook, ceilingRank, type Ceiling, type Specialist } from "./specialists.ts";
-import { readMission, type MissionDomain } from "./missions.ts";
+import { budgetLeft, readMission, type MissionDomain } from "./missions.ts";
+import { objectContextText } from "./ia.ts";
 import { leadingMentions } from "./members.ts";
 import { jobCompass, ruleGate, type JobCompass } from "./compass-align.ts";
 import { parseModArgs } from "./cli-args.ts";
 
 export type Effort = "quick" | "standard" | "deep";
 export type JobStatus = "proposed" | "running" | "needs-approval" | "done" | "failed" | "stopped";
-export type TriggerKind = "chat" | "mention" | "offer" | "playbook" | "schedule" | "event" | "cli";
+export type TriggerKind = "chat" | "mention" | "offer" | "playbook" | "schedule" | "event" | "cli" | "work";
 export const EFFORT_BUDGET: Record<Effort, { usd: number; minutes: number }> = {
   quick: { usd: 0.3, minutes: 4 },
   standard: { usd: 1, minutes: 10 },
@@ -372,7 +373,6 @@ export async function dispatch(i: DispatchInput): Promise<Dispatch> {
   const here = sc ? `mission/${sc.slug}` : (i.domain || "general").toLowerCase();
   const chief = readChiefOfStaff(i.vault);
   const specs = loadSpecialists(i.vault);
-  const on = new Set(specs.filter((s) => s.on).map((s) => s.id));
   const known = routableDomains(i.vault).filter((d) => !d.startsWith("_"));
   const never = new Set(chief.neverRead);
   const named = (d: string) => new RegExp(`\\b${d.replace(/-/g, "[- ]")}\\b`, "i").test(message);
@@ -431,8 +431,58 @@ export async function dispatch(i: DispatchInput): Promise<Dispatch> {
     if (dm.owner && !inScope.has(dm.owner)) return { kind: "bring-in", confident: true, bringIn: { domains: [dm.owner], never: never.has(dm.owner), why: dm.why ? `the job belongs to ${dm.owner}: ${dm.why}` : `the job belongs to ${dm.owner}` } };
     leftOut = [...new Set([...(dm.consulted ?? []), ...(dm.informed ?? [])].filter((d) => !inScope.has(d)))];
   }
+  const staffed = staffJob({ vault: i.vault, message, here, shape, dm, scope: sc, thread: i.thread, trigger: i.trigger ?? "chat", now, leftOut, learned, chief, specs, known });
+  if (!staffed) return { kind: "answer", confident: true };
+  return { kind: "job", job: staffed.job, confident: staffed.confident };
+}
+
+export interface StaffInput {
+  vault: string;
+  message: string;
+  /** Where the ask came from (a domain, or mission/<slug>). */
+  here: string;
+  shape: Shape;
+  dm: DispatchModel | null;
+  /** An owner already decided (Work mode's route); otherwise the model's, else here. */
+  owner?: string;
+  scope?: MissionScope;
+  thread?: string;
+  trigger?: TriggerKind;
+  now?: number;
+  /** Domains the model reached for outside a mission, named on the card. */
+  leftOut?: string[];
+  /** Specialists asked for by name (Work mode's router): a first step beside the shape's team. */
+  extra?: string[];
+  entities?: string[];
+  /** The agent that will carry it out (Work mode); anything but claude runs outside the approval gate. */
+  agentKind?: string;
+  /** Defaults to: the model answered, or it is a mission's own scope. */
+  confident?: boolean;
+  learned?: Learned;
+  chief?: ReturnType<typeof readChiefOfStaff>;
+  specs?: Specialist[];
+  known?: string[];
+}
+
+/** Staff a job for a shape: owner, consulted and informed domains, the team, and whether it may start alone. Null when no team fits. */
+export function staffJob(i: StaffInput): { job: Job; confident: boolean } | null {
+  const now = i.now ?? Date.now();
+  const sc = i.scope;
+  const here = i.here;
+  const message = i.message;
+  const dm = i.dm;
+  const chief = i.chief ?? readChiefOfStaff(i.vault);
+  const specs = i.specs ?? loadSpecialists(i.vault);
+  const on = new Set(specs.filter((s) => s.on).map((s) => s.id));
+  const known = i.known ?? routableDomains(i.vault).filter((d) => !d.startsWith("_"));
+  const never = new Set(chief.neverRead);
+  const named = (d: string) => new RegExp(`\\b${d.replace(/-/g, "[- ]")}\\b`, "i").test(message);
+  const inScope = new Set(sc?.domains.map((d) => d.slug) ?? []);
+  const learned = i.learned ?? learnedStaffing(i.vault);
+  const leftOut = i.leftOut ?? [];
+  const shape = i.shape;
   // Owner: inside a mission the mission owns the outcome; a domain only for a domain-owned write.
-  const owner = sc ? here : dm?.owner ?? (known.includes(here) ? here : "general");
+  const owner = i.owner ?? (sc ? here : dm?.owner ?? (known.includes(here) ? here : "general"));
   const keep = (d: string) => d !== owner && (!never.has(d) || named(d)) && (!sc || inScope.has(d));
   const scConsulted = sc ? sc.domains.filter((d) => d.role !== "informed").map((d) => d.slug) : [];
   const scInformed = sc ? sc.domains.filter((d) => d.role === "informed").map((d) => d.slug) : [];
@@ -445,15 +495,19 @@ export async function dispatch(i: DispatchInput): Promise<Dispatch> {
   if (!team.length && sc) team = teamFor(shape, on, teamOpts);
   const skip = learned.skip.get(owner);
   if (skip) team = team.map((s) => ({ ...s, specialists: s.specialists.filter((x) => !skip.has(x)) })).filter((s) => s.specialists.length).map((s, n) => ({ ...s, step: n + 1 }));
-  if (!team.length) return { kind: "answer", confident: true };
+  // Specialists asked for by name run first, side by side, when the team does not have them already.
+  const extra = [...new Set(i.extra ?? [])].filter((x) => on.has(x) && !team.some((s) => s.specialists.includes(x))).slice(0, 3);
+  if (extra.length) team = [{ step: 1, specialists: extra }, ...team].map((s, n) => ({ ...s, step: n + 1 }));
+  if (!team.length) return null;
   const effort = dm?.effort ?? "standard";
   const why = `${dm?.why ?? `${shape} job`}${leftOut.length ? ` (left out, not in the project: ${leftOut.join(", ")})` : ""}`;
   const job = newJob({ ask: message, here, thread: i.thread, kind: i.trigger ?? "chat", owner, consulted, informed, team, effort, why, now });
+  if (i.entities?.length) job.entities = [...new Set(i.entities)];
   if (sc) job.mission = { slug: sc.slug, ceiling: sc.ceiling, budgetLeftUsd: sc.budgetLeftUsd };
   // Unsure: the model did not answer, so the domains are a guess (a mission's own scope is not a guess).
-  const confident = !!dm || !!sc;
-  decideStart(i.vault, job, specs, chief.limits, confident);
-  return { kind: "job", job, confident };
+  const confident = i.confident ?? (!!dm || !!sc);
+  decideStart(i.vault, job, specs, chief.limits, confident, i.agentKind);
+  return { job, confident };
 }
 
 function newJob(o: { ask: string; here: string; thread?: string; kind: TriggerKind; owner: string; consulted: string[]; informed: string[]; team: TeamStep[]; effort: Effort; why: string; now: number }): Job {
@@ -465,9 +519,11 @@ function newJob(o: { ask: string; here: string; thread?: string; kind: TriggerKi
 }
 
 /** May this job start without asking? Sets startsAlone and askReason. */
-export function decideStart(vault: string, job: Job, specs: Specialist[], limits: { usd: number; minutes: number }, confident: boolean): void {
+export function decideStart(vault: string, job: Job, specs: Specialist[], limits: { usd: number; minutes: number }, confident: boolean, agentKind?: string): void {
   const reasons: string[] = [];
   if (isPaused(vault)) reasons.push("autonomy is paused");
+  // Only Claude Code carries Prevail's act-gate hook; any other agent acts without it.
+  if (agentKind && agentKind !== "claude") reasons.push("it runs outside Prevail's approval gate");
   for (const st of job.team) for (const id of st.specialists) {
     const s = specs.find((x) => x.id === id);
     if (!s || !s.on) reasons.push(`the ${id} is not available`);
@@ -517,9 +573,15 @@ export function adjustJob(vault: string, id: string, a: Adjust, now = Date.now()
     if (removed.length || added.length) appendJsonl(staffingPath(vault), { ts: now, job: id, owner: a.owner ?? job.domains.owner, field, removed, added });
   };
   if (a.owner && a.owner !== job.domains.owner) {
-    if (!known.has(a.owner)) throw new Error(`unknown domain ${a.owner}`);
-    log("owner", [job.domains.owner], [a.owner]);
-    job.domains.owner = a.owner;
+    // A domain, or an active project (mission/<slug>), which brings its ceiling and money along.
+    const ms = missionScopeSlug(a.owner);
+    const m = ms ? readMission(vault, ms) : null;
+    if (!known.has(a.owner) && !(m && m.status === "active")) throw new Error(`unknown domain ${a.owner}`);
+    const owner = m ? `mission/${m.slug}` : a.owner;
+    log("owner", [job.domains.owner], [owner]);
+    job.domains.owner = owner;
+    if (m) job.mission = { slug: m.slug, ceiling: m.ceiling, budgetLeftUsd: budgetLeft(vault, m) };
+    else delete job.mission;
   }
   for (const k of ["consulted", "informed"] as const) {
     const v = a[k];
@@ -717,6 +779,12 @@ export function jobContext(vault: string, job: Job): string {
     goalsBlock(vault, job.domains.owner),
   ].filter(Boolean).join("\n\n");
   parts.push(owner);
+  // The person, place, product, thing or event the job is about.
+  for (const e of job.entities.slice(0, 3)) {
+    let body = "";
+    try { body = objectContextText(vault, e); } catch { body = ""; }
+    parts.push(`# ENTITY: ${e}\n${clip(body, 1500) || "Nothing recorded yet."}`);
+  }
   for (const d of job.domains.consulted) {
     const dd = resolveDomainDir(vault, d);
     const body = clip(readText(join(dd, "memory", "state.md")) || readText(join(dd, "memory", "memory.md")), 1500);
