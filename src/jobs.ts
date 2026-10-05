@@ -78,6 +78,8 @@ export interface Job {
   status: JobStatus;
   startsAlone: boolean;
   askReason?: string;
+  /** Work mode: the cautions the run keeps to on its own (draft only, no sending), never asked about. */
+  guards?: string[];
   created: number;
   started?: number;
   ended?: number;
@@ -518,10 +520,13 @@ function newJob(o: { ask: string; here: string; thread?: string; kind: TriggerKi
   };
 }
 
-/** May this job start without asking? Sets startsAlone and askReason. */
+const UNSURE = "I am not sure how to staff it";
+
+/** May this job start without asking? Sets startsAlone and askReason (and, for Work mode, guards). */
 export function decideStart(vault: string, job: Job, specs: Specialist[], limits: { usd: number; minutes: number }, confident: boolean, agentKind?: string): void {
   const reasons: string[] = [];
-  if (isPaused(vault)) reasons.push("autonomy is paused");
+  const hard: string[] = [];
+  if (isPaused(vault)) { reasons.push("autonomy is paused"); hard.push("autonomy is paused"); }
   // Only Claude Code carries Prevail's act-gate hook; any other agent acts without it.
   if (agentKind && agentKind !== "claude") reasons.push("it runs outside Prevail's approval gate");
   for (const st of job.team) for (const id of st.specialists) {
@@ -539,7 +544,7 @@ export function decideStart(vault: string, job: Job, specs: Specialist[], limits
   if (job.budget.usd > limits.usd || job.budget.minutes > limits.minutes) reasons.push(`over your limit of $${limits.usd} and ${limits.minutes} minutes`);
   const sensitive = askFirstReason(job.ask);
   if (sensitive) reasons.push(sensitive);
-  if (!confident) reasons.push("I am not sure how to staff it");
+  if (!confident) reasons.push(UNSURE);
   // Goals G3: serves, costs and rules on every job. A rule the ask would
   // break (a hard limit, or one already broken) means it never starts alone.
   try {
@@ -547,8 +552,15 @@ export function decideStart(vault: string, job: Job, specs: Specialist[], limits
     const jc = jobCompass(vault, job, missionGoal);
     if (jc.serves.length || jc.costs.length || jc.rules.length) job.compass = jc;
     const rg = ruleGate(vault, job.ask);
-    if (rg) reasons.push(rg.reason);
+    if (rg) { reasons.push(rg.reason); hard.push(rg.reason); }
   } catch { /* no Compass */ }
+  // Work mode is autonomous: only the brake and a rule the ask would break hold it back. Every other
+  // reason becomes a guard the run keeps to by itself (draft, never send), never a question.
+  if (job.origin.kind === "work") {
+    const guards = reasons.filter((r) => !hard.includes(r) && r !== UNSURE);
+    if (guards.length) job.guards = guards; else delete job.guards;
+    reasons.splice(0, reasons.length, ...reasons.filter((r) => hard.includes(r)));
+  }
   job.startsAlone = reasons.length === 0;
   job.askReason = reasons.length ? reasons.join("; ") : undefined;
 }

@@ -7,6 +7,7 @@ import {
   jobContext, runJob, saveJob, shapeOf, staffJob, startJob, stopJob, teamFor, undoFiled, type Job,
 } from "./jobs.ts";
 import { createMission } from "./missions.ts";
+import { setAutonomyState } from "./autonomy.ts";
 import { appendNotebook, builtInSpecialists, forDomain, getSpecialist, loadSpecialists, NOTEBOOK_MAX, parseSpecialist, readNotebook } from "./specialists.ts";
 import { readChiefOfStaff, setChiefSetting } from "./chief-of-staff.ts";
 import { runChatJson } from "./chat-json.ts";
@@ -355,10 +356,24 @@ describe("staffJob (Work mode)", () => {
     expect(j.entities).toEqual(["person/foo-bar"]);
     expect(j.startsAlone).toBe(true);
   });
-  test("an agent other than claude never starts alone", () => {
-    const j = staffJob({ vault: V, message: "Find the best foo carrier for the rentals", here: "insurance", owner: "insurance", shape: "find", dm: null, trigger: "work", agentKind: "codex", confident: true })!.job;
+  test("outside Work mode, an agent other than claude never starts alone", () => {
+    const j = staffJob({ vault: V, message: "Find the best foo carrier for the rentals", here: "insurance", owner: "insurance", shape: "find", dm: null, trigger: "chat", agentKind: "codex", confident: true })!.job;
     expect(j.startsAlone).toBe(false);
     expect(j.askReason).toMatch(/outside Prevail's approval gate/);
+  });
+  test("Work mode never asks: the reasons become guards the run keeps to; the autonomy brake still holds it", () => {
+    const j = staffJob({ vault: V, message: "Draft an email to the foo bank about the fee", here: "money", owner: "money", shape: "do", dm: null, trigger: "work", agentKind: "codex", confident: false })!.job;
+    expect(j.startsAlone).toBe(true);
+    expect(j.askReason).toBeUndefined();
+    expect(j.guards!.join("; ")).toMatch(/outside Prevail's approval gate/);
+    expect(j.guards!.join("; ")).toMatch(/contacts someone/);
+    expect(j.guards!.join("; ")).not.toMatch(/not sure/);
+    setAutonomyState(V, "paused");
+    try {
+      const held = staffJob({ vault: V, message: "Find the best foo carrier", here: "insurance", owner: "insurance", shape: "find", dm: null, trigger: "work", confident: true })!.job;
+      expect(held.startsAlone).toBe(false);
+      expect(held.askReason).toBe("autonomy is paused");
+    } finally { setAutonomyState(V, "ask"); }
   });
   test("a guess is not confident", () => {
     const j = staffJob({ vault: V, message: "Find the best foo carrier for the rentals", here: "insurance", shape: "find", dm: null })!.job;
