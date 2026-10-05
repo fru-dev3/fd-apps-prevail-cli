@@ -49,6 +49,7 @@ function fixture(): string {
   put(v, "data/apps/_log/audit.jsonl", "{}\n");
   // References to rewrite.
   put(v, "data/domains/general/memory/tasks.md", `- [ ] Call them ~to:${OLD}/foo-co ~from:app/foobar\n- [ ] Read https://x.${OLD}/foo-co\n`);
+  put(v, "data/domains/general/notes.md", `See [Foo](prevail://${OLD}/foo-co) and [Zed](prevail://${OLD}/foo-zed)\n`);
   put(v, "data/entities/relations.json", JSON.stringify({ [`${OLD}/foo-bar`]: "yours" }));
   put(v, "data/entities/things/foo-phone/entity.md", `---\nname: Foo Phone\nkind: thing\nmaker: ${OLD}/foo-co\n---\n`);
   put(v, "build/_meta/entities/index.json", JSON.stringify({ entities: [{ id: `${OLD}/foo-gym`, kind: OLD, kinds: [OLD, "thing"] }, { id: `${OLD}/foo-mention`, kind: OLD }] }));
@@ -104,6 +105,8 @@ describe("migrate products", () => {
     const board = read(v, "data/domains/general/memory/tasks.md");
     expect(board).toContain("~to:product/foo-co ~from:product/foobar");
     expect(board).toContain(`https://x.${OLD}/foo-co`);
+    expect(read(v, "data/domains/general/notes.md")).toBe("See [Foo](prevail://product/foo-co) and [Zed](prevail://product/foo-zed)\n");
+    expect(read(v, `${P}/foo-gym/entity.md`)).toContain("kind: product");
     expect(read(v, "data/entities/relations.json")).toContain('"product/foobar"');
     expect(read(v, "data/entities/things/foo-phone/entity.md")).toContain("maker: product/foo-co");
     const idx = read(v, "build/_meta/entities/index.json");

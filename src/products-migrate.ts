@@ -295,6 +295,13 @@ function rewriteText(text: string, ids: Map<string, string>, entityPage: boolean
     n++;
     return to;
   });
+  // prevail:// links are ours: every legacy page link moves, apps only when known.
+  t = t.replace(/prevail:\/\/(org|app)\/([A-Za-z0-9][A-Za-z0-9-]*)(?![A-Za-z0-9-])/g, (m, head: string, slug: string) => {
+    const to = ids.get(`${head}/${slug}`) ?? (head === LEGACY_PREFIX ? `product/${slug}` : null);
+    if (!to) return m;
+    n++;
+    return `prevail://${to}`;
+  });
   if (entityPage) t = t.replace(new RegExp(`^kind:\\s*${LEGACY_PREFIX}\\s*$`, "m"), () => { n++; return "kind: product"; });
   if (indexFile) {
     t = t.replace(new RegExp(`("kinds?"\\s*:\\s*)"${LEGACY_PREFIX}"`, "g"), (_m, k: string) => { n++; return `${k}"product"`; });
