@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { addMachine, agentKinds, buildBrief, closeTask, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
+import { addMachine, agentKinds, approveInTerminal, shellQuote, terminalArgv, buildBrief, closeTask, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 import { addWork, answerTask, continueTask, pauseTask, readTask, routeTask, updateTask, writeSettings, type WorkDeps } from "./work.ts";
 
@@ -90,10 +90,30 @@ describe("machines and agent kinds", () => {
   });
   test("adding a machine checks the label and the SSH target", () => {
     const h = fakeHerdr();
-    expect(addMachine("mini-foo", "foo@mini-foo", h.forMachine("local")).output).toBe("saved");
+    expect(addMachine("mini-foo", "foo@mini-foo", h.forMachine("local"))).toMatchObject({ ok: true, output: "saved" });
     expect(h.calls.at(-1)).toEqual(["local", "machine", "add", "--label", "mini-foo", "foo@mini-foo"]);
     expect(() => addMachine("x", "-oProxyCommand=foo")).toThrow(/SSH target/);
     expect(() => addMachine("bad label", "foo@x")).toThrow(/label/);
+  });
+  test("a remote Herdr that needs its update is a clear needs-approval answer, approved in Terminal", () => {
+    const refuse: Herdr = () => { throw new Error("herdr machine add failed: remote herdr server on mini-foo needs one final update before this client can attach; run from an interactive terminal to approve updating it"); };
+    const r = addMachine("mini-foo", "foo@mini-foo", refuse);
+    expect(r).toMatchObject({ ok: false, needsApproval: true, label: "mini-foo", target: "foo@mini-foo" });
+    expect(!r.ok && r.command.slice(1)).toEqual(["machine", "add", "--label", "mini-foo", "foo@mini-foo"]);
+    // Any other failure stays a failure.
+    expect(() => addMachine("mini-foo", "foo@mini-foo", () => { throw new Error("herdr machine add failed: no route to host"); })).toThrow(/no route/);
+    // Approve: Terminal runs exactly that argv, each word shell-quoted, inside one AppleScript string.
+    const ran: string[][] = [];
+    const ok = approveInTerminal("mini-foo", "foo@mini-foo", (a) => { ran.push(a); });
+    expect(ok.command.slice(1)).toEqual(["machine", "add", "--label", "mini-foo", "foo@mini-foo"]);
+    expect(ran[0]!.filter((_, i) => i % 2 === 1)).toEqual(['tell application "Terminal"', "activate", expect.stringMatching(/^do script ".* machine add --label mini-foo foo@mini-foo"$/), "end tell"]);
+    // Nothing else gets in: a label or target that is not plain is refused before Terminal opens.
+    expect(() => approveInTerminal("foo; rm", "foo@x", (a) => { ran.push(a); })).toThrow(/label/);
+    expect(() => approveInTerminal("foo", "x\" & y", (a) => { ran.push(a); })).toThrow(/SSH target/);
+    expect(ran.length).toBe(1);
+    expect(shellQuote("a b'c")).toBe("'a b'\\''c'");
+    expect(terminalArgv(["/tmp/foo bar/herdr", "x"])[5]).toBe(`do script "'/tmp/foo bar/herdr' x"`);
+    expect(terminalArgv(['a"b'])[5]).toBe(`do script "'a\\"b'"`);
   });
 });
 

@@ -12,6 +12,7 @@
 // Agent kinds come from `herdr agent start --help` (its possible values),
 // cached per process, with a fallback list.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
@@ -21,7 +22,7 @@ import { domainDir } from "./decisions.ts";
 import { readJob } from "./jobs.ts";
 import { runtimePath } from "./path-safety.ts";
 import { getSpecialist } from "./specialists.ts";
-import { domainPanes, herdrOn, mapDir, type Herdr } from "./spaces.ts";
+import { domainPanes, herdrBin, herdrOn, mapDir, type Herdr } from "./spaces.ts";
 import { threadFiles } from "./thread-schedule.ts";
 import { appendTurn, defaultSpawnSelf, note, readSettings, readTask, syncBoard, updateTask, withLease, writeSettings, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
 import { FALLBACK_AGENT_KINDS, folderOf, folderPath, type CatalogMachine } from "./work-router.ts";
@@ -193,12 +194,58 @@ export function machineAddCommand(label: string, target = "<ssh target>"): strin
   return `herdr machine add --label ${label} ${target}`;
 }
 
-/** Save a machine in Herdr: only on the user's explicit yes, with the SSH target they typed. */
-export function addMachine(label: string, target: string, h: Herdr = herdrOn("local")): { label: string; target: string; output: string } {
+function checkMachine(label: string, target: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(label)) throw new Error("a machine label is letters, digits, dots, dashes (at most 40)");
   if (!/^[A-Za-z0-9._@:-]{1,120}$/.test(target) || target.startsWith("-")) throw new Error("an SSH target is user@host or a host alias");
-  const r = h(["machine", "add", "--label", label, target]);
-  return { label, target, output: typeof r === "string" ? r.trim() : JSON.stringify(r) };
+}
+
+/** The argv that saves a machine in Herdr. */
+export const machineAddArgv = (label: string, target: string, bin = herdrBin()): string[] => [bin, "machine", "add", "--label", label, target];
+
+// Herdr refuses to attach to an older server without a person approving its update in a terminal.
+const NEEDS_APPROVAL = /needs one final update|interactive terminal to approve/i;
+
+export type AddMachineResult =
+  | { ok: true; label: string; target: string; output: string }
+  | { ok: false; needsApproval: true; label: string; target: string; command: string[]; error: string };
+
+/** Save a machine in Herdr: only on the user's explicit yes, with the SSH target they typed. */
+export function addMachine(label: string, target: string, h: Herdr = herdrOn("local")): AddMachineResult {
+  checkMachine(label, target);
+  try {
+    const r = h(["machine", "add", "--label", label, target]);
+    return { ok: true, label, target, output: typeof r === "string" ? r.trim() : JSON.stringify(r) };
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (!NEEDS_APPROVAL.test(msg)) throw e;
+    return { ok: false, needsApproval: true, label, target, command: machineAddArgv(label, target), error: `${label} needs a Herdr update before it can connect; approve it in a terminal` };
+  }
+}
+
+/** One argv word for a POSIX shell: single-quoted, any single quote closed, escaped and reopened. */
+export const shellQuote = (w: string) => /^[A-Za-z0-9_./@:=-]+$/.test(w) ? w : `'${w.replace(/'/g, "'\\''")}'`;
+
+/** The osascript argv that opens Terminal running `argv` for the user to approve there. */
+export function terminalArgv(argv: string[]): string[] {
+  const line = argv.map(shellQuote).join(" ");
+  const as = line.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return ["-e", 'tell application "Terminal"', "-e", "activate", "-e", `do script "${as}"`, "-e", "end tell"];
+}
+
+/**
+ * Open Terminal on this Mac running exactly `herdr machine add --label <label> <target>`, so the user can
+ * approve the remote Herdr's update there. Only the validated label and target reach the command.
+ */
+export function approveInTerminal(label: string, target: string, run: (osascriptArgs: string[]) => void = realOsascript): { ok: true; command: string[] } {
+  checkMachine(label, target);
+  const command = machineAddArgv(label, target);
+  run(terminalArgv(command));
+  return { ok: true, command };
+}
+
+function realOsascript(args: string[]): void {
+  const r = spawnSync("/usr/bin/osascript", args, { encoding: "utf8", timeout: 15_000 });
+  if (r.status !== 0) throw new Error(`could not open Terminal: ${(r.stderr || r.error?.message || "").trim()}`);
 }
 
 // ── The bridge: a task in a Herdr tab ───────────────────────────────────────
