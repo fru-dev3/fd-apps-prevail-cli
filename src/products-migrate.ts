@@ -373,7 +373,8 @@ export function runProductsMigration(vault: string, opts: MigrationOptions = {})
   const result: MigrationResult = { ...base, counts };
 
   let lock: { release(): void } | null = null;
-  const date = (opts.now ?? new Date()).toISOString().slice(0, 10);
+  const d0 = opts.now ?? new Date();
+  const date = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, "0")}-${String(d0.getDate()).padStart(2, "0")}`; // the user's local day
   let backup = join(buildRoot(vault), "_archive", `products-migration-${date}`);
   for (let i = 2; existsSync(backup); i++) backup = join(buildRoot(vault), "_archive", `products-migration-${date}-${i}`);
   try {
