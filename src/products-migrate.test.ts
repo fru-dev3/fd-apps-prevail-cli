@@ -53,7 +53,7 @@ function fixture(): string {
   put(v, "data/domains/general/notes.md", `See [Foo](prevail://${OLD}/foo-co) and [Zed](prevail://${OLD}/foo-zed)\n`);
   put(v, "data/entities/relations.json", JSON.stringify({ [`${OLD}/foo-bar`]: "yours" }));
   put(v, "data/entities/things/foo-phone/entity.md", `---\nname: Foo Phone\nkind: thing\nmaker: ${OLD}/foo-co\n---\n`);
-  put(v, "build/_meta/entities/index.json", JSON.stringify({ entities: [{ id: `${OLD}/foo-gym`, kind: OLD, kinds: [OLD, "thing"] }, { id: `${OLD}/foo-mention`, kind: OLD }] }));
+  put(v, "build/_meta/entities/index.json", JSON.stringify({ entities: [{ id: `${OLD}/foo-gym`, kind: OLD, kinds: [OLD, "thing"] }, { id: `${OLD}/foo-mention`, kind: OLD }, { id: `${OLD}/foo-bar`, kind: OLD, page: `data/entities/${LEGACY_PAGES}/foo-bar/entity.md` }] }));
   put(v, "build/_meta/work/prompts/w1.json", JSON.stringify({ tasks: [{ dest: { kind: "entity", id: `${OLD}/foo-co` } }] }));
   return v;
 }
@@ -114,6 +114,7 @@ describe("migrate products", () => {
     expect(idx).toContain('"product/foo-gym"');
     expect(idx).toContain('"product/foo-mention"');
     expect(idx).not.toContain(`"${OLD}"`);
+    expect(idx).toContain('"page":"data/entities/products/foobar/entity.md"'); // page path follows the name merge
     expect(read(v, "build/_meta/work/prompts/w1.json")).toContain('"product/foo-co"');
     expect(r.counts.idRewrites.byType.boards).toBe(2);
     expect(r.counts.idRewrites.byType.relations).toBe(1);

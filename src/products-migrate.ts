@@ -286,9 +286,21 @@ function walkText(root: string, skip: Set<string>, out: string[]): void {
   }
 }
 
-function rewriteText(text: string, ids: Map<string, string>, entityPage: boolean, indexFile: boolean): { text: string; n: number } {
+function rewriteText(text: string, ids: Map<string, string>, entityPage: boolean, indexFile: boolean, meta = false): { text: string; n: number } {
   let n = 0;
-  let t = text.replace(/(?<![\w./-])(org|app)\/([A-Za-z0-9][A-Za-z0-9-]*)(?![A-Za-z0-9-])/g, (m) => {
+  // Machine-managed files under build/_meta (the entity index's page and
+  // picture paths, the trusted-source folder paths) name the old folders:
+  // point them at the product folder, through the id map when a slug changed.
+  let src = text;
+  if (meta) {
+    src = src.replace(new RegExp(`data/(?:entities/${LEGACY_PAGES}|${LEGACY_APPS})/(_archive/)?([A-Za-z0-9][A-Za-z0-9._-]*)`, "g"), (m, arch: string | undefined, slug: string) => {
+      n++;
+      if (arch) return `data/entities/products/_archive/${slug}`;
+      const to = ids.get(`${m.includes(`/${LEGACY_PAGES}/`) ? LEGACY_PREFIX : "app"}/${slug}`);
+      return `data/entities/products/${to ? to.slice("product/".length) : slug}`;
+    });
+  }
+  let t = src.replace(/(?<![\w./-])(org|app)\/([A-Za-z0-9][A-Za-z0-9-]*)(?![A-Za-z0-9-])/g, (m) => {
     const to = ids.get(m);
     if (!to) return m;
     n++;
@@ -322,7 +334,7 @@ function rewriteIds(vault: string, ids: Map<string, string>, dry: boolean, skip:
     try { text = vreadFile(p); } catch { continue; }
     if (text.includes("\u0000")) continue;
     const rel = relative(vault, p).split("\\").join("/");
-    const r = rewriteText(text, ids, p.endsWith(".md") && resolve(p).startsWith(pages), /(^|\/)_meta\/entities\/index\.json$/.test(rel));
+    const r = rewriteText(text, ids, p.endsWith(".md") && resolve(p).startsWith(pages), /(^|\/)_meta\/entities\/index\.json$/.test(rel), /(^|\/)_meta\//.test(rel));
     if (!r.n) continue;
     res.files++; res.ids += r.n;
     const ty = typeOf(rel);
