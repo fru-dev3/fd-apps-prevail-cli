@@ -257,6 +257,17 @@ describe("mirror, follow up, check off, close and reopen", () => {
     expect(readFileSync(join(D("insurance"), "memory", "tasks.md"), "utf8")).toMatch(/- \[x\]/);
     expect(newText("abc", "abcdef")).toBe("def");
   });
+  test("a long run says its milestones in a sentence each, distilled from the agent's progress, never its raw output", async () => {
+    const r1 = "\u23fa Read(data/foo/policy.md)\nI found three foo carriers that cover both rentals.";
+    const r2 = `${r1}\n\u23fa Write(drafts/foo.md)\nI drafted the foo quote request for carrier A.`;
+    const h = fakeHerdr({ statuses: ["idle", "working", "working", "done"], reads: [r1, r2, `${r2}\nSummary:\nCarrier A is cheapest for both foo rentals.`] });
+    const t = await running(h);
+    let clock = Date.now();
+    const r = await mirrorTask(V, t.id, { ...deps(h), now: () => (clock += 10 * 60_000) }, { maxRounds: 5, waitMs: 1 });
+    expect(r.updates!.filter((u) => u.milestone).map((u) => u.text)).toEqual(["I found three foo carriers that cover both rentals.", "I drafted the foo quote request for carrier A."]);
+    expect(r.updates!.some((u) => /\u23fa|Read\(|Write\(/.test(u.text))).toBe(false);
+    expect(r.status).toBe("done");
+  });
   test("an agent asking something is never done: it needs you with the question; the follow-up answers it", async () => {
     const menu = "Where are you right now?\n❯ 1. Home\n  2. Work\nEnter to select · Esc to cancel";
     const h = fakeHerdr({ statuses: ["idle", "blocked", "blocked"], reads: ["Looking for foo dinner spots", `Looking for foo dinner spots\n${menu}`], promptBlockedOnce: true });

@@ -54,7 +54,8 @@ import { runtimePath } from "./path-safety.ts";
 import type { RouteRunner } from "./route.ts";
 import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./session.ts";
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
-import { gatherContext, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
+import { gatherContext, judgePlan, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
+import { forgetLearned, isForget, journalLesson, knownAnswers, learnAnswers, learnRoute, lessons, plainLesson, rankContext, recurringMatch, routeLessonFor, sourceRank, unlearnRoute, type PlanKind } from "./work-learn.ts";
 import { buildCatalog, cleanName, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
 import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, focusTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, promptHerdr, renameHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
@@ -120,9 +121,23 @@ export interface WorkTask extends RoutedTask {
   apps?: string[];
   /** The light back-and-forth: short plain lines from the task in its own voice and the user's replies, oldest first. Never raw output. */
   updates?: TaskUpdate[];
+  /** The kind of plan it asked (its answers are remembered per kind). */
+  planKind?: PlanKind;
+  /** The lessons this task used (from "What I've learned"): "forget that" takes them out. */
+  learned?: string[];
+  /** The earlier tasks it was recognised from as recurring work. */
+  recurringOf?: string[];
+  /** The owner said "forget that": this task no longer teaches anything. */
+  learnOff?: boolean;
 }
 
-export interface TaskUpdate { ts: number; from: "task" | "you"; text: string; /** A plan's questions, shown as a short list the owner answers in one reply. */ questions?: string[]; /** A subtask this line hands work to: the panel shows it as a link. */ link?: string }
+export interface TaskUpdate {
+  ts: number; from: "task" | "you"; text: string;
+  /** A plan's questions, shown as a short list the owner answers in one reply. */ questions?: string[];
+  /** A subtask this line hands work to: the panel shows it as a link. */ link?: string;
+  /** The line saying what was learned and used ("forget that" takes it back). */ learned?: boolean;
+  /** A milestone reached mid-run, distilled from the agent's progress. */ milestone?: boolean;
+}
 
 /** `ev` is a short event name; `detail` one line; `more` what a line shows when expanded (a follow-up's words, the tool call behind an activity). */
 export interface LogEntry { ts: number; ev: string; detail?: string; more?: string }
@@ -305,6 +320,68 @@ export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, n
   if (u.length > 60) u.splice(0, u.length - 60);
 }
 export const CLOSE_QUESTION = "Can I close this task?";
+
+// ── Milestones: a long task says how it is going, a sentence at most ──────
+
+/** At most one milestone line per five minutes, counted from the task's last line. */
+export const MILESTONE_GAP_MS = 5 * 60_000;
+
+/** May a milestone be said now: it is running and has said nothing for a while. */
+export function milestoneDue(t: Pick<WorkTask, "status" | "updates">, now: number): boolean {
+  if (t.status !== "running") return false;
+  const last = [...(t.updates ?? [])].reverse().find((u) => u.from === "task");
+  return !last || now - last.ts >= MILESTONE_GAP_MS;
+}
+
+/** Say a milestone when one is due; false when it is too soon (rate-limited). */
+export function addMilestone(t: WorkTask, line: string, now: number): boolean {
+  if (!line.trim() || !milestoneDue(t, now)) return false;
+  const before = t.updates?.length ?? 0;
+  addUpdate(t, "task", line, now);
+  if ((t.updates?.length ?? 0) > before) t.updates!.at(-1)!.milestone = true;
+  return true;
+}
+
+const MILESTONE_RE = /\b(?:found|finished|done with|completed|drafted|wrote|written|created|fixed|updated|built|added|compared|collected|gathered|checked|reviewed|saved|filed|narrowed|shortlisted|listed)\b/i;
+
+/** A milestone in the agent's own words, by code: its last plain sentence that reports a step reached. Null when there is none. */
+export function milestoneByCode(words: string): string | null {
+  const prose = words.replace(/```[\s\S]*?```/g, "").split("\n")
+    .filter((l) => !/^\s*[\u23fa\u25cf\u23bf|]/.test(l) && !/^\s*[-=_*]{3,}\s*$/.test(l))
+    .map((l) => l.replace(/^\s*(?:#+|>|[-*\u2022]|\d+[.)])\s*/, "").replace(/[*_`]+/g, "").trim()).filter(Boolean).join(" ");
+  const hits = prose.split(/(?<=[.!])\s+/).filter((x) => x.length >= 12 && x.length <= 200 && MILESTONE_RE.test(x) && !/[{}<>]|\/\w+\/|\?$/.test(x));
+  const s = hits.at(-1);
+  return s ? s.replace(/\s*[\u2014\u2013]\s*/g, ", ").trim() : null;
+}
+
+/** The milestone the model distils from the agent's latest progress (one sentence), or null when nothing is worth telling. Never raw output. */
+export async function distilMilestone(words: string, deps: WorkDeps = {}): Promise<string | null> {
+  const text = words.trim();
+  if (!text) return null;
+  const byCode = milestoneByCode(text);
+  if (deps.runner === null || process.env.PREVAIL_BUNKER === "1") return byCode;
+  try {
+    const runner = deps.runner ?? (await import("./route.ts")).claudeRouteRunner;
+    const raw = await runner({
+      system: "From an agent's latest progress on a task, write the milestone it reached as one short plain sentence in the first person (\"I found three carriers and am comparing prices.\"). Only a real milestone: something found, drafted, finished or decided. If nothing is worth telling the owner, reply NONE. No markdown, no em dashes, no file paths.",
+      prompt: text.slice(-4000), timeoutMs: 20_000, maxChars: 300,
+    });
+    const line = raw.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").replace(/^["']|["']$/g, "").trim();
+    if (/^none\b/i.test(line)) return null;
+    if (!line || line.startsWith("{") || line.length > 240) return byCode;
+    return line.split(/(?<=[.!?])\s+/)[0]!;
+  } catch { return byCode; }
+}
+
+/** An engine job moved to its next step: the step before is done. Null until it does. */
+export function engineMilestone(job: Job | null, seen: number): { step: number; text: string } | null {
+  const at = job?.progress?.at(-1)?.step ?? 0;
+  if (!job || job.status !== "running" || at <= seen) return null;
+  const who = (step: number) => job.team.find((s) => s.step === step)?.specialists.join(" and ") ?? "";
+  const prev = who(at - 1);
+  const next = who(at);
+  return { step: at, text: `${prev ? `The ${prev} step is done` : `Step ${at - 1} is done`}; ${next ? `the ${next} is on it now` : `now on step ${at}`}.` };
+}
 export const WORKING_LINE = "Working on it, nothing needed from you.";
 
 /**
@@ -563,8 +640,16 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
   const prompt: WorkPrompt = { id, ts: now, text: body, surface: o.surface ?? "cli", machine: cat.here, source: plan.source, tasks: [] };
   // Numbering goes on after the work's own tasks.
   let n = into ? Math.max(0, ...into.tasks.map((t) => Number(/-(\d+)$/.exec(t.id)?.[1] ?? 0))) : 0;
-  for (const g of plan.goals) for (const r of g.tasks) {
+  // What it learned before: the owner's lessons, the history of tasks, the sources that answered well.
+  const history = listPrompts(vault);
+  const taught = lessons(vault);
+  const rank = sourceRank(history);
+  // The model judges which tasks need a plan first (all at once); with no model the keywords do.
+  const routed = plan.goals.flatMap((g) => g.tasks);
+  const judged = o.hold ? [] : await Promise.all(routed.map((r) => judgePlan(r.text, cat.domains.map((d) => d.slug), deps.runner)));
+  for (const [k, r0] of routed.entries()) {
     n++;
+    const { r, used, said, rec } = applyLearned(r0, cat, taught, history, now);
     const t: WorkTask = {
       ...r,
       ...(o.agentKind && cat.agentKinds.includes(o.agentKind) ? { agentKind: o.agentKind } : {}),
@@ -576,10 +661,24 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     // Assemble before dispatch: the specialists the work needs and what the vault already knows that it will need.
     t.specialists = neededSpecialists(vault, t);
     const ctx = gatherContext(vault, t);
-    // Plan before doing: a task that spends money or time, or touches health, first asks what only the owner knows.
-    const prep = o.hold ? null : planTask(vault, t);
-    if (prep) ctx.push(...prep.found);
-    if (ctx.length) t.context = ctx;
+    if (rec?.outcome) ctx.push({ label: `Last time: ${oneLine(rec.outcome, 90)}`, text: `Last time this came up it ended: ${rec.outcome}` });
+    // Plan before doing: an under-specified or high-impact task first asks what only the owner knows (and he has not said before).
+    const prep = o.hold ? null : planTask(vault, t, { judged: judged[k] ?? null, known: (kind) => knownAnswers(taught, kind) });
+    if (prep) {
+      ctx.push(...prep.found);
+      t.planKind = prep.kind;
+      if (prep.used.length) { used.push(...prep.used.map((u) => u.line)); said.push(`you said ${prep.used.map((u) => u.text).join(", ")}`); }
+    }
+    // The sources that answered well before go first.
+    if (ctx.length) t.context = rankContext(ctx, rank);
+    if (rec) t.recurringOf = rec.ids;
+    if (used.length) t.learned = used;
+    // One plain line when something learned was used.
+    if (said.length) {
+      const line = said.length === 1 && prep?.used.length ? `Using what you told me last time: ${prep.used.map((u) => u.text).join(", ")}.` : `From what I learned: ${said.join("; ")}.`;
+      addUpdate(t, "task", line, now);
+      t.updates!.at(-1)!.learned = true;
+    }
     // A specialist the work needs is made at once (draft ceiling at most): Work mode does not stop to ask.
     for (const s of t.suggestions) {
       if (s.kind !== "specialist" || s.state !== "open" || process.env.PREVAIL_BUNKER === "1") continue;
@@ -599,7 +698,7 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     if (touched.length || prep?.domains.length) t.domains = [...new Set([...touched, ...(prep?.domains ?? [])])];
     if (t.dest?.kind === "app") t.apps = [t.dest.id];
     if (o.hold) { t.status = "backlog"; note(t, "parked", "in the backlog until it is moved to the queue", now); }
-    else if (prep) {
+    else if (prep?.questions.length) {
       t.status = "needs-you"; t.planning = true; t.waiting = "A few questions before I start.";
       note(t, "planning", prep.questions.join(" "), now);
       addUpdate(t, "task", prep.say, now, prep.questions);
@@ -620,6 +719,27 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
   const saved = readPrompt(vault, id);
   // Added to earlier work: the answer is the new tasks, under that work's id.
   return saved ? (into ? { ...saved, tasks: saved.tasks.filter((t) => prompt.tasks.some((x) => x.id === t.id)) } : saved) : prompt;
+}
+
+/** Routing follows the owner's corrections; recurring work is set up as it was last time. */
+function applyLearned(r0: RoutedTask, cat: Catalog, taught: string[], history: WorkPrompt[], now: number) {
+  let r = r0;
+  const used: string[] = [];
+  const said: string[] = [];
+  const rec = recurringMatch(history, r, now);
+  const lesson = routeLessonFor(taught, r);
+  const to = lesson ? destination(cat, lesson.kind, lesson.id, { confidence: 0.9, why: "you moved work like this there before" }) : null;
+  if (to && lesson) {
+    if (to.kind !== r.dest?.kind || to.id !== r.dest?.id) r = { ...r, dest: to, alternatives: r.dest ? [r.dest, ...r.alternatives].slice(0, 2) : r.alternatives };
+    used.push(lesson.line);
+    said.push(`it goes to ${to.label}, where you moved it before`);
+  }
+  if (rec) {
+    const last = rec.last.dest && !to ? destination(cat, rec.last.dest.kind, rec.last.dest.id, { confidence: 0.85, why: "where it went last time" }) : null;
+    r = { ...r, ...(last ? { dest: last } : {}), name: rec.last.name || r.name, specialists: [...new Set([...r.specialists, ...rec.last.specialists])].slice(0, 3) };
+    said.unshift(`this comes up regularly (${rec.count} times before${rec.weekday ? `, usually on ${rec.weekday}` : ""}), so it is set up like last time`);
+  }
+  return { r, used, said, rec };
 }
 
 async function makeSpecialist(vault: string, name: string, mandate: string, draft: unknown, now: number): Promise<string> {
@@ -715,7 +835,18 @@ export async function runTask(vault: string, id: string, deps: WorkDeps = {}, o:
   const jobId = r.task.jobId;
   if (!jobId) throw new Error("this task has no job");
   const clock = deps.now ?? Date.now;
-  const job = await withLease(vault, id, deps, () => (deps.runJob ?? ((v, j) => runJob(v, j)))(vault, jobId));
+  // A long run says when a step is done (rate-limited, never its raw output).
+  let seen = 1;
+  const watch = setInterval(() => {
+    try {
+      const m = engineMilestone(readJob(vault, jobId), seen);
+      if (!m) return;
+      seen = m.step;
+      updateTask(vault, id, (x) => { addMilestone(x, m.text, clock()); });
+    } catch { /* the next tick */ }
+  }, LEASE_RENEW_MS);
+  let job: Job;
+  try { job = await withLease(vault, id, deps, () => (deps.runJob ?? ((v, j) => runJob(v, j)))(vault, jobId)); } finally { clearInterval(watch); }
   const filed = readReceipts(vault, jobId).filter((x) => !x.undone).map((x) => `- ${x.text} (${x.file})`);
   let body = "";
   try { body = (JSON.parse(readFileSync(join(jobDir(vault, jobId), "result.json"), "utf8")) as { body?: string }).body ?? ""; } catch { /* no result */ }
@@ -901,6 +1032,9 @@ export async function routeTask(vault: string, id: string, c: RouteChange, deps:
       else x.routes = [...(x.routes ?? []), x.dest];
       moveThread(vault, x, to, now);
       note(x, c.undo ? "route undone" : "re-routed", to ? `${to.kind} ${to.label}` : "General", now);
+      // The owner's correction teaches where work like this goes; undoing it takes the lesson back.
+      if (c.undo && x.dest) unlearnRoute(vault, x, x.dest, now);
+      else if (!c.undo && to) learnRoute(vault, x, to, now);
       x.dest = to;
       const ctx = gatherContext(vault, x);
       if (ctx.length) x.context = ctx; else delete x.context;
@@ -1028,6 +1162,7 @@ export function doneTask(vault: string, id: string, deps: WorkDeps = {}): WorkTa
     note(x, "checked off", undefined, now);
   });
   syncBoard(vault, t);
+  if (!t.learnOff) journalLesson(vault, t.dest?.owner, `Work task "${t.name}" closed${t.outcome ? `: ${t.outcome}` : "."}`, now);
   return t;
 }
 
@@ -1082,6 +1217,7 @@ export function renameTask(vault: string, id: string, name: string, deps: WorkDe
   if (!clean) throw new Error("a name is 1 to 4 words, at most 28 characters");
   const now = (deps.now ?? Date.now)();
   const t = updateTask(vault, id, (x) => { if (x.name !== clean) { x.name = clean; note(x, "renamed", `Renamed to ${clean}`, now); } });
+  journalLesson(vault, t.dest?.owner, `The task "${t.text.slice(0, 120)}" is called ${clean}.`, now);
   if (t.executor === "herdr" && t.herdr?.tabId) { try { renameHerdr(vault, t, deps); } catch { /* the tab is gone */ } }
   return t;
 }
@@ -1104,8 +1240,28 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
   if (body.length > 8_000) throw new Error("that follow-up is too long (8,000 characters at most)");
   const r = readTask(vault, id);
   if (!r) throw new Error(`no task ${id}`);
+  // "Forget that": what this task used from what was learned goes, and it never comes back from these tasks.
+  if (!o.asTask && isForget(body)) {
+    const gone = forgetLearned(vault, r.task.learned ?? [], now).map(plainLesson);
+    const past = r.task.recurringOf ?? [];
+    for (const pid of past) { try { updateTask(vault, pid, (x) => { x.learnOff = true; }); } catch { /* gone */ } }
+    if (past.length) gone.push("that this is recurring work");
+    const t = updateTask(vault, id, (x) => {
+      addUpdate(x, "you", body, now);
+      note(x, "forgot", gone.join("; ") || "nothing", now);
+      // Shaped by what was forgotten, this task no longer teaches either.
+      if (gone.length) x.learnOff = true;
+      delete x.learned; delete x.recurringOf;
+      addUpdate(x, "task", gone.length ? `Forgotten: ${gone.join("; ")}. I will not use it again.` : "Nothing learned was used on this task, so there is nothing to forget.", now);
+    });
+    return { ok: true, task: t };
+  }
   // The answers to a plan's questions: into what it knows (and so the brief), then it starts.
   if (!o.asTask && r.task.planning && r.task.status === "needs-you") {
+    // What holds next time (budget, preferences) is remembered, so the next plan asks less.
+    const asked = [...(r.task.updates ?? [])].reverse().find((u) => u.questions?.length)?.questions ?? [];
+    learnAnswers(vault, r.task.planKind ?? "other", asked, body, now);
+    journalLesson(vault, r.task.dest?.owner, `The owner answered the plan for "${r.task.name}": ${body}`, now);
     updateTask(vault, id, (x) => {
       appendTurn(vault, x, "user", body, "prevail", now); note(x, "follow-up", undefined, now, body); addUpdate(x, "you", body, now);
       x.context = [...(x.context ?? []), { label: "Your answers to the plan", text: `The user answered the plan's questions: ${body}` }];
@@ -1132,6 +1288,8 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
     return { ok: true, task: t, added: p.tasks.map((x) => readTask(vault, x.id)?.task ?? x) };
   }
   updateTask(vault, id, (x) => { appendTurn(vault, x, "user", body, "prevail", now); note(x, "follow-up", undefined, now, body); addUpdate(x, "you", body, now); });
+  // "No, not that": a correction the owner's domain memory keeps.
+  if (/^\s*(?:no\b|nope\b|not (?:that|this|quite)|wrong\b|that'?s not|that is not)/i.test(body)) journalLesson(vault, r.task.dest?.owner, `The owner corrected the task "${r.task.name}": ${body}`, now);
   if (j.kind === "rename" && j.name) renameTask(vault, id, j.name, deps);
   const t = readTask(vault, id)!.task;
   const done = (task: WorkTask): FollowupResult => ({ ok: true, task, ...(j.kind === "rename" ? { renamed: j.name } : {}) });

@@ -13,6 +13,8 @@ import { listPages } from "./entities.ts";
 import { readProfile } from "./goals.ts";
 import { appRecords } from "./ia.ts";
 import { loadSpecialists } from "./specialists.ts";
+import type { RouteRunner } from "./route.ts";
+import { topicOf, type KnownAnswer, type PlanKind } from "./work-learn.ts";
 import type { RoutedTask } from "./work-router.ts";
 
 /** One thing the vault knows that the work needs: `label` is the plain line on the card, `text` goes in the brief. */
@@ -135,28 +137,76 @@ function domainLines(vault: string, slug: string, re: RegExp, n = 2): string[] {
 }
 
 export interface TaskPlan {
+  /** What kind of plan: its answers are remembered per kind (travel, purchase, health). */
+  kind: PlanKind;
   /** Every domain it touches, by concept (money, travel, health...), that exists in the vault. */
   domains: string[];
   /** What the vault already knows that bears on it: into the task's context and the brief. */
   found: ContextItem[];
-  /** Two to four things only the user can say. */
+  /** Two to four things only the user can say; none when what he said before answers them all. */
   questions: string[];
   /** The plan as the task says it, one short paragraph. */
   say: string;
+  /** The lessons it used (answers the owner gave before), for the learned line and "forget that". */
+  used: KnownAnswer[];
 }
 
-/** The plan for an under-specified or high-impact task; null when it can go straight through. Never throws. */
-export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags">): TaskPlan | null {
+/** The model's judgement: does the task need a plan with the owner first? */
+export interface PlanJudgement { underSpecified: boolean; highImpact: boolean; questions: string[]; domains: string[] }
+
+const PLAN_SYSTEM = [
+  "You decide whether a task needs a short plan with its owner before an agent does it.",
+  "under_specified: the ask leaves out something only the owner can say (where, when, budget, who, what for) and it changes the result.",
+  "high_impact: it spends money or much time, commits the owner, affects other people, or touches health, legal matters or identity.",
+  "A small, fully specified, low-stakes ask (summarise a note, look something up, draft a reply) is neither.",
+  "When either is true, give 2 to 4 short, specific questions only the owner can answer, and the life areas it touches from the list.",
+  'Reply with ONLY JSON: {"under_specified":<bool>,"high_impact":<bool>,"questions":["..."],"domains":["<listed area>"]}',
+  "No em dashes. Plain words.",
+].join("\n");
+
+/** Read the judgement from a reply; null when it is not one. */
+export function parsePlanJudgement(raw: string): PlanJudgement | null {
+  try {
+    const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)) as Record<string, unknown>;
+    if (typeof j.under_specified !== "boolean" || typeof j.high_impact !== "boolean") return null;
+    const list = (x: unknown, n: number, len: number) => (Array.isArray(x) ? x : []).filter((q): q is string => typeof q === "string" && !!q.trim()).map((q) => q.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").trim().slice(0, len)).slice(0, n);
+    return { underSpecified: j.under_specified, highImpact: j.high_impact, questions: list(j.questions, 4, 200), domains: list(j.domains, 4, 40).map((d) => d.toLowerCase()) };
+  } catch { return null; }
+}
+
+/**
+ * The model judges under-specified or not, high or low impact (the cheap
+ * router runner). Null with no model (runner null, bunker mode) or on any
+ * failure: the keyword check in planTask decides then.
+ */
+export async function judgePlan(text: string, domains: string[], runner?: RouteRunner | null): Promise<PlanJudgement | null> {
+  if (runner === null || process.env.PREVAIL_BUNKER === "1") return null;
+  try {
+    const run = runner ?? (await import("./route.ts")).claudeRouteRunner;
+    return parsePlanJudgement(await run({ system: PLAN_SYSTEM, prompt: `Life areas: ${domains.join(", ")}\nTask: ${text.slice(0, 2000)}`, timeoutMs: 20_000, maxChars: 1200 }));
+  } catch { return null; }
+}
+
+/**
+ * The plan for an under-specified or high-impact task; null when it can go
+ * straight through. The model's judgement decides when there is one, the
+ * keywords otherwise. What the owner said before (`known`) answers its
+ * questions, so they get fewer. Never throws.
+ */
+export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags">, o: { judged?: PlanJudgement | null; known?: (kind: PlanKind) => KnownAnswer[] } = {}): TaskPlan | null {
   const text = t.text;
   const travel = TRAVEL.test(text);
   const spend = SPEND.test(text) || !!t.flags.money;
   const health = HEALTH.test(text);
-  if (!travel && !spend && !health) return null;
+  const judged = o.judged ?? null;
+  if (judged ? !judged.underSpecified && !judged.highImpact : !travel && !spend && !health) return null;
+  const kind: PlanKind = travel ? "travel" : spend ? "purchase" : health ? "health" : "other";
   try {
     const domains = pickDomains(vault, [
       ...(travel ? [["travel", "dreams", "adventures", "trips"]] : []),
       ...(spend || travel ? [["money", "wealth", "finance", "finances"]] : []),
       ...(health || travel ? [["health", "fitness"]] : []),
+      ...(judged?.domains ?? []).map((d) => [d]),
     ]);
     const found: ContextItem[] = [];
     if (travel) {
@@ -168,21 +218,30 @@ export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags">): 
     for (const d of domains.filter((x) => ["health", "fitness"].includes(x))) for (const l of domainLines(vault, d, /\b(allerg\w*|condition|avoid|knee|back|diet|medication|can't|cannot)\b/i, 1)) found.push({ label: `From your ${d} notes: ${l}`, text: `From the user's ${d} notes: ${l}` });
     if (spend || travel) found.push({ label: "It proposes before paying", text: "Never buy, book or pay. Prepare options and a proposal (holds or drafts only) and ask the user before anything spends money." });
 
-    const where = /\b(?:to|in|at)\s+([A-Z][\w-]+(?:\s+[A-Z][\w-]+)?)/.exec(text)?.[1];
-    const questions: string[] = [];
-    if (travel) questions.push(where ? `Where in ${where}: which cities or places?` : "Where would you like to go?");
-    if (travel || health) { if (!WHEN.test(text)) questions.push(travel ? "When, and for how long?" : "When would suit you?"); }
-    else if (!WHEN.test(text)) questions.push("When do you need it by?");
-    if ((spend || travel) && !BUDGET.test(text)) questions.push("What budget should I keep to?");
-    if (!WHY.test(text)) questions.push(travel ? "What is it for: rest, people, sights or work?" : "What is it for, so I pick the right one?");
-    if (questions.length < 2) questions.push("Anything I should avoid or must include?");
+    let questions: string[] = [];
+    if (judged?.questions.length) questions = [...judged.questions];
+    else if (travel || spend || health) {
+      const where = /\b(?:to|in|at)\s+([A-Z][\w-]+(?:\s+[A-Z][\w-]+)?)/.exec(text)?.[1];
+      if (travel) questions.push(where ? `Where in ${where}: which cities or places?` : "Where would you like to go?");
+      if (travel || health) { if (!WHEN.test(text)) questions.push(travel ? "When, and for how long?" : "When would suit you?"); }
+      else if (!WHEN.test(text)) questions.push("When do you need it by?");
+      if ((spend || travel) && !BUDGET.test(text)) questions.push("What budget should I keep to?");
+      if (!WHY.test(text)) questions.push(travel ? "What is it for: rest, people, sights or work?" : "What is it for, so I pick the right one?");
+    } else questions.push("What outcome do you want from it?", "When do you need it by?");
+    // What the owner said before answers its question: fewer, sharper questions.
+    const known = o.known?.(kind) ?? [];
+    const used = known;
+    questions = questions.filter((q) => !known.some((k) => k.topic === topicOf(q)));
+    if (questions.length === 1 && !judged?.questions.length && !known.some((k) => k.topic === "prefs")) questions.push("Anything I should avoid or must include?");
+    for (const k of known) found.push({ label: `What you told me before: ${k.text}`, text: `The user said before, for ${kind} plans: ${k.text}` });
 
     const touched = domains.map((d) => d[0]!.toUpperCase() + d.slice(1)).join(", ");
+    const cited = found.filter((f) => f.label !== "It proposes before paying" && !f.label.startsWith("What you told me before"));
     const say = [
-      `Before I start: this ${spend || travel ? "spends money and time" : "affects your plans"}${touched ? `, so I brought in ${touched}` : ""}.`,
-      found.filter((f) => f.label !== "It proposes before paying").length ? `From your vault: ${found.filter((f) => f.label !== "It proposes before paying").map((f) => f.label.replace(/^From your \w+ notes: /, "")).slice(0, 3).join("; ")}.` : "",
+      `Before I start: this ${spend || travel ? "spends money and time" : judged?.highImpact ? "affects your plans" : "needs a few details"}${touched ? `, so I brought in ${touched}` : ""}.`,
+      cited.length ? `From your vault: ${cited.map((f) => f.label.replace(/^From your \w+ notes: /, "")).slice(0, 3).join("; ")}.` : "",
       "A few things only you can tell me:",
     ].filter(Boolean).join(" ");
-    return { domains, found, questions: questions.slice(0, 4), say };
+    return { kind, domains, found, questions: questions.slice(0, 4), say, used };
   } catch { return null; }
 }

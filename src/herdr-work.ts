@@ -24,7 +24,7 @@ import { runtimePath } from "./path-safety.ts";
 import { getSpecialist } from "./specialists.ts";
 import { herdrBin, herdrOn, mapDir, readSpaces, type Herdr } from "./spaces.ts";
 import { threadFiles } from "./thread-schedule.ts";
-import { appendTurn, defaultSpawnSelf, distilOutcome, finish, note, readSettings, addUpdate, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
+import { addMilestone, appendTurn, defaultSpawnSelf, distilMilestone, distilOutcome, milestoneDue, finish, note, readSettings, addUpdate, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
 import { FALLBACK_AGENT_KINDS, folderOf, folderPath, type CatalogMachine } from "./work-router.ts";
 
 export interface Machine {
@@ -759,8 +759,11 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       const question = status === "blocked" || settled ? askingQuestion(all) ?? (status === "blocked" ? WAITING : null) : null;
       if (question && status === "blocked" && answerDialog(h, pane)) continue;
       const outcome = settled && !question ? await distilOutcome(all.slice(-4000), deps) : "";
+      // Still at work: a real milestone from what it just did, a sentence at most and only now and then.
+      const milestone = !settled && !question && words && milestoneDue(cur, clock()) ? await distilMilestone(words, deps) : null;
       const t = updateTask(vault, id, (x) => {
         if (words) appendTurn(vault, x, "assistant", words, x.agentKind, clock());
+        if (milestone) addMilestone(x, milestone, clock());
         for (const a of activities(words)) if (x.log[x.log.length - 1]?.detail !== a.line) note(x, "activity", a.line, clock(), a.more);
         if (x.herdr) x.herdr.lastRead = text.slice(-2000);
         if (question) {
