@@ -24,10 +24,10 @@ function seed() {
   mkdirSync(join(V, "build", "_meta"), { recursive: true });
   for (const d of ["general", "home"]) { mkdirSync(join(V, "data", "domains", d, "memory"), { recursive: true }); w(`data/domains/${d}/manifest.json`, JSON.stringify({ identity: { name: d } })); }
   // Products: a company the user talks about, its app, and an app with no company page.
-  saveEntity(V, "org/foo-bank", { name: "Foo Bank", now: NOW });
-  w("data/apps/foo-bank/manifest.json", JSON.stringify({ id: "foo-bank", title: "Foo Bank", kind: "service", identifiers: { domains: ["foobank.example"] } }));
-  w("data/apps/bar-notes/manifest.json", JSON.stringify({ id: "bar-notes", title: "Bar Notes", kind: "app" }));
-  w("data/apps/baz-mobile/manifest.json", JSON.stringify({ id: "baz-mobile", title: "Baz Mobile", company: "Foo Bank" }));
+  saveEntity(V, "product/foo-bank", { name: "Foo Bank", now: NOW });
+  w("data/entities/products/foo-bank/manifest.json", JSON.stringify({ id: "foo-bank", title: "Foo Bank", kind: "service", identifiers: { domains: ["foobank.example"] } }));
+  w("data/entities/products/bar-notes/manifest.json", JSON.stringify({ id: "bar-notes", title: "Bar Notes", kind: "app" }));
+  w("data/entities/products/baz-mobile/manifest.json", JSON.stringify({ id: "baz-mobile", title: "Baz Mobile", company: "Foo Bank" }));
   saveEntity(V, "person/sam-foo", { name: "Sam Foo", now: NOW });
   saveEntity(V, "place/foo-house", { name: "Foo House", now: NOW });
   buildIndex(V, { now: NOW });
@@ -51,19 +51,19 @@ describe("products", () => {
   test("companies and apps are one list; an app shows on its company's row and nothing is copied", () => {
     const before = files(join(V, "data")).length;
     const rows = listProducts(V);
-    const bank = rows.find((r) => r.id === "org/foo-bank")!;
+    const bank = rows.find((r) => r.id === "product/foo-bank")!;
     expect(bank.company).toBe(true);
     // Matched by slug, and by the manifest's company field.
     expect(bank.apps.map((a) => a.id).sort()).toEqual(["baz-mobile", "foo-bank"]);
-    const notes = rows.find((r) => r.id === "org/bar-notes")!;
+    const notes = rows.find((r) => r.id === "product/bar-notes")!;
     expect(notes).toMatchObject({ name: "Bar Notes", company: false, has_page: false, relation: "yours" });
     expect(rows.filter((r) => r.name === "Foo Bank").length).toBe(1);
     expect(files(join(V, "data")).length).toBe(before);
-    expect(canonId(V, "app/baz-mobile")).toBe("org/foo-bank");
+    expect(canonId(V, "app/baz-mobile")).toBe("product/foo-bank");
   });
 
   test("a product's chat carries its app records and their read tools", async () => {
-    const s = await resolveScope(V, { domain: "general", entity: ["org/foo-bank"] });
+    const s = await resolveScope(V, { domain: "general", entity: ["product/foo-bank"] });
     expect(s.kind).toBe("entity");
     expect(s.appIds.sort()).toEqual(["baz-mobile", "foo-bank"]);
     const text = s.blocks.map((b) => b.text).join("\n");
@@ -75,14 +75,14 @@ describe("things", () => {
   beforeEach(seed);
   test("an owned thing keeps purchase, warranty, value, maker, place and a service history", () => {
     const r = setFields(V, "thing/foo-watch", { purchased: "2025-03-01", warranty: "2027-03-01", value: "$420", maker: "Foo Bank", place: "Foo House" }, { name: "Foo Watch", now: NOW });
-    expect(r.fields).toMatchObject({ purchased: "2025-03-01", warranty: "2027-03-01", value: 420, maker: "org/foo-bank", place: "place/foo-house" });
+    expect(r.fields).toMatchObject({ purchased: "2025-03-01", warranty: "2027-03-01", value: 420, maker: "product/foo-bank", place: "place/foo-house" });
     addService(V, "thing/foo-watch", { date: "2026-01-10", what: "Battery replaced", cost: "35" }, NOW);
     const doc = readPage(V, "thing", "foo-watch")!;
     expect(readFields(doc).service).toEqual([{ date: "2026-01-10", what: "Battery replaced", cost: 35 }]);
     expect(() => setFields(V, "thing/foo-watch", { purchased: "2026-02-31" })).toThrow(/real date/);
     expect(() => setFields(V, "thing/foo-watch", { date: "2026-12-25" })).toThrow(/a thing has no date/);
     // Its maker and place see it from their side.
-    expect(linksOf(V, "org/foo-bank").links.find((l) => l.id === "thing/foo-watch")).toMatchObject({ via: "field", role: "made", kind: "things" });
+    expect(linksOf(V, "product/foo-bank").links.find((l) => l.id === "thing/foo-watch")).toMatchObject({ via: "field", role: "made", kind: "things" });
     expect(linksOf(V, "place/foo-house").links.map((l) => l.id)).toContain("thing/foo-watch");
     expect(objectContextText(V, "thing/foo-watch")).toContain("Warranty until: 2027-03-01");
   });
@@ -168,7 +168,7 @@ describe("links", () => {
     expect(linkObjects(V, "mission/move-to-foo-house", "person/sam-foo", NOW).added).toBe(false);
     linkObjects(V, "app/bar-notes", "place/foo-house", NOW);
     expect(linksOf(V, "person/sam-foo").links).toEqual([{ id: "mission/move-to-foo-house", name: "Move to foo house", kind: "projects", via: "link" }]);
-    expect(linksOf(V, "org/bar-notes").links.map((l) => l.id)).toEqual(["place/foo-house"]);
+    expect(linksOf(V, "product/bar-notes").links.map((l) => l.id)).toEqual(["place/foo-house"]);
     // The project's chat brings a linked person along.
     const s = await resolveScope(V, { mission: "move-to-foo-house" });
     expect(s.entityIds).toContain("person/sam-foo");
@@ -195,7 +195,7 @@ describe("new by talking", () => {
     expect(readFields(readPage(V, "event", "christmas-dinner")!)).toMatchObject({ date: "2026-12-25", place: "place/foo-house", people: ["person/sam-foo"] });
     expect(checkDraft(V, "thing", { name: "Foo phone", value: "lots" }, "").dropped[0]).toMatchObject({ field: "value" });
     const thing = createFromObjectDraft(V, "thing", { name: "Foo phone", purchased: "2026-05-01", value: 900, maker: "Foo Bank" }, NOW);
-    expect(readFields(readPage(V, "thing", thing.id.slice(6))!)).toMatchObject({ purchased: "2026-05-01", value: 900, maker: "org/foo-bank" });
+    expect(readFields(readPage(V, "thing", thing.id.slice(6))!)).toMatchObject({ purchased: "2026-05-01", value: 900, maker: "product/foo-bank" });
     expect(() => createFromObjectDraft(V, "event", { name: "No date" }, NOW)).toThrow(/needs a date/);
   });
 

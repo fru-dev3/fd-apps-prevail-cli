@@ -31,12 +31,12 @@ describe("action-audit lands in build/_log whatever root a caller hands in", () 
     const v = mkdtempSync(`${tmpdir()}/prevail-audit-v4-`);
     mkdirSync(join(v, "build"), { recursive: true });
     mkdirSync(join(v, "data", "domains", "garden"), { recursive: true });
-    mkdirSync(join(v, "data", "apps"), { recursive: true });
+    mkdirSync(join(v, "data", "entities", "products"), { recursive: true });
     auditAction(join(v, "data", "domains"), { ts: 1, domain: "garden", action: "a", outcome: "executed" });
-    auditAction(join(v, "data", "apps"), { ts: 2, domain: "garden", action: "b", outcome: "executed" });
+    auditAction(join(v, "data", "entities", "products"), { ts: 2, domain: "garden", action: "b", outcome: "executed" });
     auditAction(v, { ts: 3, domain: "garden", action: "c", outcome: "executed" });
     expect(existsSync(join(v, "data", "domains", "_log"))).toBe(false);
-    expect(existsSync(join(v, "data", "apps", "_log"))).toBe(false);
+    expect(existsSync(join(v, "data", "entities", "products", "_log"))).toBe(false);
     expect(readdirSync(join(v, "build", "_log")).some((f) => f.startsWith("action-audit"))).toBe(true);
     expect(readActionAudit(join(v, "data", "domains")).map((r) => r.action)).toEqual(["a", "b", "c"]);
   });

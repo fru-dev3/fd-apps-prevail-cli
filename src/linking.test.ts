@@ -216,23 +216,23 @@ describe("Yours vs Reference", () => {
     // In the user's words with a possessive, in a real domain.
     thread("realestate", "t2", "my lawyer Bar Qux wants the claim papers", "Send [Bar Qux](prevail://person/Bar%20Qux) the letter.");
     // In the user's words, in passing, in General.
-    thread("general", "t3", "what would Quux Corp think", "[Quux Corp](prevail://org/Quux%20Corp) is a firm.");
+    thread("general", "t3", "what would Quux Corp think", "[Quux Corp](prevail://product/Quux%20Corp) is a firm.");
     const idx = buildIndex(vault, { now: NOW });
     const rel = (id: string) => findEntity(idx, id)!;
     expect(rel("person/seneca")).toMatchObject({ relation: "reference", relation_reason: "Only mentioned in replies, not in your own words." });
     expect(rel("person/bar-qux")).toMatchObject({ relation: "yours", home_domain: "realestate", user_mentions: 1 });
-    expect(rel("org/quux-corp").relation).toBe("reference");
+    expect(rel("product/quux-corp").relation).toBe("reference");
 
     // Sticky: a saved entity is yours whatever the signals.
     saveEntity(vault, "person/seneca");
     expect(findEntity(buildIndex(vault, { now: NOW }), "person/seneca")!.relation).toBe("yours");
     // An override always wins, and persists in relations.json.
     setRelation(vault, "person/seneca", "reference");
-    setRelation(vault, "org/quux-corp", "yours");
-    expect(readRelations(vault).overrides).toEqual({ "person/seneca": "reference", "org/quux-corp": "yours" });
+    setRelation(vault, "product/quux-corp", "yours");
+    expect(readRelations(vault).overrides).toEqual({ "person/seneca": "reference", "product/quux-corp": "yours" });
     const again = buildIndex(vault, { now: NOW });
     expect(findEntity(again, "person/seneca")!.relation).toBe("reference");
-    expect(findEntity(again, "org/quux-corp")).toMatchObject({ relation: "yours", relation_confidence: 1 });
+    expect(findEntity(again, "product/quux-corp")).toMatchObject({ relation: "yours", relation_confidence: 1 });
     expect(() => setRelation(vault, "person/seneca", "maybe")).toThrow();
   });
 

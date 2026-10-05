@@ -28,6 +28,9 @@ export function kindOf(rel: string): ScrubKind | null {
   if (r.startsWith("build/_meta/entities/")) return "entity-caches";
   if (r.startsWith("build/_meta/")) return "meta-derived";
   if (r.startsWith("build/_scan/")) return "scan-corpus";
+  // A product folder also holds its app parts (connection, data files): only
+  // its page counts here, the rest stays out of the scrub as apps always did.
+  if (/^data\/entities\/products\/[^/]+\/(?!entity\.md$|updates\.jsonl$|files\/)/.test(r)) return null;
   if (r.startsWith("data/entities/")) return "entity-pages";
   if (!r.startsWith("data/domains/")) return null;
   if (/\/(memory\/threads|_threads)\//.test(r)) return "threads";

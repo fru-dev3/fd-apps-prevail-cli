@@ -64,8 +64,8 @@ test("discoverLoopTargets: includes an enabled app with loops, excludes a disabl
   const root = _join(TMP_BASE, `prevail-looptargets-${process.pid}-${Math.floor(performance.now())}`);
   // v4 layout: vault root must hold only data/ + build/. Domains + apps live in data/.
   const domain = _join(root, "data", "domains", "health");
-  const onApp = _join(root, "data", "apps", "myapp");
-  const offApp = _join(root, "data", "apps", "offapp");
+  const onApp = _join(root, "data", "entities", "products", "myapp");
+  const offApp = _join(root, "data", "entities", "products", "offapp");
   _mkdir(domain, { recursive: true });
   _mkdir(onApp, { recursive: true });
   _mkdir(offApp, { recursive: true });

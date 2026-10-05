@@ -24,7 +24,7 @@ function seed() {
   upsertRecord(V, { id: "bar-notes", name: "Bar Notes", kind: "app", category: "notes", identifiers: { domains: ["barnotes.example"] } });
   upsertRecord(V, { id: "baz-video", name: "Baz Video", kind: "app", category: "content", identifiers: { domains: ["bazvideo.example"] } });
   upsertRecord(V, { id: "qux-free", name: "Qux Free", kind: "app", category: "dev", identifiers: { domains: ["quxfree.example"] } });
-  const set = (id: string, patch: object) => { const p = join(V, "data", "apps", id, "manifest.json"); writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), ...patch })); };
+  const set = (id: string, patch: object) => { const p = join(V, "data", "entities", "products", id, "manifest.json"); writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), ...patch })); };
   set("foo-notes", { cost: { amount: 10, period: "month", source: "card statements" } });
   set("bar-notes", { cost: { amount: 8, period: "month", source: "card statements" } });
   set("baz-video", { cost: { amount: 288, period: "year", source: "card statements" }, renewal: { next: "2026-10-06", period: "yearly" }, price_history: [{ date: "2025-10-06", amount: 240 }, { date: "2026-10-06", amount: 288 }] });
@@ -153,6 +153,6 @@ describe("the stack and its cards", () => {
     expect(() => offboardingDraft(V, "nope")).toThrow();
     const to = archiveRecord(V, "qux-free");
     expect(existsSync(join(to, "manifest.json"))).toBe(true);
-    expect(existsSync(join(V, "data", "apps", "qux-free"))).toBe(false);
+    expect(existsSync(join(V, "data", "entities", "products", "qux-free"))).toBe(false);
   });
 });

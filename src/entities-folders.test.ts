@@ -70,9 +70,9 @@ describe("folders", () => {
   });
 
   test("refresh migrates", async () => {
-    flat(ents("orgs"), "foo-co", page("Foo Co", "x").replace("kind: person", "kind: org"));
+    flat(ents("products"), "foo-co", page("Foo Co", "x").replace("kind: person", "kind: product"));
     await refreshEntities(vault, { run: null, now: NOW, autosave: "all" });
-    expect(existsSync(ents("orgs", "foo-co", "entity.md"))).toBe(true);
+    expect(existsSync(ents("products", "foo-co", "entity.md"))).toBe(true);
   });
 });
 
@@ -99,30 +99,30 @@ describe("picture, website, files", () => {
   });
 
   test("website is inferred for an org only from a matching URL in its mentions", async () => {
-    thread("t1", "Pricing for [Fooco](prevail://org/Fooco) is at https://www.fooco.com/pricing today.");
-    thread("t2", "[Barco](prevail://org/Barco) was mentioned next to https://bazco.com/x.");
+    thread("t1", "Pricing for [Fooco](prevail://product/Fooco) is at https://www.fooco.com/pricing today.");
+    thread("t2", "[Barco](prevail://product/Barco) was mentioned next to https://bazco.com/x.");
     thread("t3", "[Quxco](prevail://person/Quxco) wrote from https://quxco.com.");
-    thread("t4", "[Zedco Inc](prevail://org/Zedco%20Inc) sent a quote.");
+    thread("t4", "[Zedco Inc](prevail://product/Zedco%20Inc) sent a quote.");
     await refreshEntities(vault, { run: null, now: NOW, autosave: "all" });
     const idx = readIndex(vault);
     const site = (id: string) => idx.entities.find((e) => e.id === id)!.website;
-    expect(site("org/fooco")).toBe("fooco.com");
-    expect(readPage(vault, "org", "fooco")!.website).toBe("fooco.com");
-    expect(site("org/barco")).toBeUndefined();
+    expect(site("product/fooco")).toBe("fooco.com");
+    expect(readPage(vault, "product", "fooco")!.website).toBe("fooco.com");
+    expect(site("product/barco")).toBeUndefined();
     expect(site("person/quxco")).toBeUndefined();
-    expect(site("org/zedco-inc")).toBeUndefined();
+    expect(site("product/zedco-inc")).toBeUndefined();
   });
 
   test("set-website, add-file and files", () => {
-    thread("t1", "[Foo Co](prevail://org/Foo%20Co).");
+    thread("t1", "[Foo Co](prevail://product/Foo%20Co).");
     buildIndex(vault, { now: NOW });
-    expect(setWebsite(vault, "org/foo-co", "https://fooco.example/about", { now: NOW })).toEqual({ ok: true });
-    expect(entityDetail(vault, readIndex(vault), "org/foo-co")!.website).toBe("https://fooco.example/about");
-    expect(() => setWebsite(vault, "org/foo-co", "not a site")).toThrow(/not a website/);
+    expect(setWebsite(vault, "product/foo-co", "https://fooco.example/about", { now: NOW })).toEqual({ ok: true });
+    expect(entityDetail(vault, readIndex(vault), "product/foo-co")!.website).toBe("https://fooco.example/about");
+    expect(() => setWebsite(vault, "product/foo-co", "not a site")).toThrow(/not a website/);
     const src = scratchFile("quote.txt", "hello");
-    expect(addEntityFile(vault, "org/foo-co", src, { now: NOW })).toEqual({ ok: true, name: "quote.txt" });
-    expect(addEntityFile(vault, "org/foo-co", src, { now: NOW })).toEqual({ ok: true, name: "quote (2).txt" });
-    const files = entityFiles(vault, "org/foo-co");
+    expect(addEntityFile(vault, "product/foo-co", src, { now: NOW })).toEqual({ ok: true, name: "quote.txt" });
+    expect(addEntityFile(vault, "product/foo-co", src, { now: NOW })).toEqual({ ok: true, name: "quote (2).txt" });
+    const files = entityFiles(vault, "product/foo-co");
     expect(files.map((f) => [f.name, f.size])).toEqual([["quote (2).txt", 5], ["quote.txt", 5]]);
     expect(typeof files[0].mtime).toBe("number");
     expect(entityFiles(vault, "person/nobody")).toEqual([]);

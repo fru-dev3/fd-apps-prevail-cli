@@ -9,8 +9,9 @@ const roots: string[] = [];
 afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }); });
 
 // The legacy layout, spelled once (the migration reads exactly this).
-const LEGACY_PAGES = "or" + "gs";
-const OLD = "or" + "g";
+// The legacy layout this migration reads (before products): page dir and id prefix.
+const LEGACY_PAGES = "orgs";
+const OLD = "org";
 
 function put(root: string, rel: string, body: string, mtime?: number): void {
   const p = join(root, rel);
@@ -147,7 +148,7 @@ describe("migrate products", () => {
     const r = runProductsMigration(v, { now: new Date("2026-10-04T12:00:00Z") });
     expect(r.backup).toBe("build/_archive/products-migration-2026-10-04");
     expect(existsSync(join(v, r.backup!, "apps/foo-co/manifest.json"))).toBe(true);
-    expect(existsSync(join(v, r.backup!, "entities-orgs/foo-gym/entity.md"))).toBe(true);
+    expect(existsSync(join(v, r.backup!, "entities-pages/foo-gym/entity.md"))).toBe(true);
     const v2 = fixture();
     const failed = runProductsMigration(v2, { verify: () => false });
     expect(failed.ok).toBe(false);

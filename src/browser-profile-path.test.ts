@@ -55,7 +55,7 @@ describe("sanitizeConnectorId", () => {
     expect(sanitizeConnectorId("Fidelity-COM")).toBe("fidelity-com");
     expect(sanitizeConnectorId("a b!c@d")).toBe("a-b-c-d");
     // a full connectorDir collapses to the app id (basename)
-    expect(sanitizeConnectorId("/some/vault/data/apps/fidelity-com")).toBe("fidelity-com");
+    expect(sanitizeConnectorId("/some/vault/data/entities/products/fidelity-com")).toBe("fidelity-com");
     expect(sanitizeConnectorId("keeps.dots_and-dashes")).toBe("keeps.dots_and-dashes");
   });
 
@@ -83,7 +83,7 @@ describe("browserProfileDir", () => {
     const id = uniqueId("migrate");
     const vault = mkdtempSync(join(tmpdir(), "prevail-vault-"));
     try {
-      const legacy = join(vault, "data", "apps", id, "auth", "profile");
+      const legacy = join(vault, "data", "entities", "products", id, "auth", "profile");
       mkdirSync(legacy, { recursive: true });
       writeFileSync(join(legacy, "Cookies"), "session-cookie");
 

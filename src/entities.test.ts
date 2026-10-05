@@ -37,13 +37,16 @@ describe("ids and links", () => {
     expect(parseEntityId("person/Sam%20Rivera")).toEqual({ kind: "person", slug: "sam-rivera" });
     expect(parseEntityId("people/sam-rivera")).toEqual({ kind: "person", slug: "sam-rivera" });
     expect(parseEntityId("Maple St")).toEqual({ kind: null, slug: "maple-st" });
-    expect(parseEntityId("prevail://org/acme")).toEqual({ kind: "org", slug: "acme" });
+    expect(parseEntityId("prevail://product/acme")).toEqual({ kind: "product", slug: "acme" });
+    // Legacy ids from before products still read as products.
+    expect(parseEntityId("org/acme")).toEqual({ kind: "product", slug: "acme" });
+    expect(parseEntityId("app/acme")).toEqual({ kind: "product", slug: "acme" });
   });
 
   test("extracts entity links with a snippet and ignores other kinds", () => {
-    const md = "We met [Sam](prevail://person/Sam%20Rivera) at [Maple St](prevail://place/Maple%20St) about the [lease](prevail://file/x.md) with [acme](prevail://org/acme).";
+    const md = "We met [Sam](prevail://person/Sam%20Rivera) at [Maple St](prevail://place/Maple%20St) about the [lease](prevail://file/x.md) with [acme](prevail://product/acme).";
     const links = extractLinks(md);
-    expect(links.map((l) => `${l.kind}:${l.value}`)).toEqual(["person:Sam Rivera", "place:Maple St", "org:acme"]);
+    expect(links.map((l) => `${l.kind}:${l.value}`)).toEqual(["person:Sam Rivera", "place:Maple St", "product:acme"]);
     expect(links[0].label).toBe("Sam");
     expect(links[0].snippet).toBe("We met Sam at Maple St about the lease with acme.");
   });
@@ -52,7 +55,7 @@ describe("ids and links", () => {
 describe("index", () => {
   test("aggregates thread links and sitting tags with co-mentions", async () => {
     thread("home", "t1", "Lease questions", "Ask [Sam](prevail://person/Sam%20Rivera) about [Maple St](prevail://place/Maple%20St).");
-    thread("money", "t2", "Rent plan", "[Sam Rivera](prevail://person/Sam%20Rivera) pays rent to [acme](prevail://org/acme).", "2026-09-19T10:00:00Z");
+    thread("money", "t2", "Rent plan", "[Sam Rivera](prevail://person/Sam%20Rivera) pays rent to [acme](prevail://product/acme).", "2026-09-19T10:00:00Z");
     const run: ModelRunner = async (prompt) => {
       expect(prompt).toContain("## Sitting s1");
       return JSON.stringify({ s1: [{ name: "Sam Rivera", kind: "person" }, { name: "Maple St", kind: "place" }, { name: "x", kind: "planet" }] });
@@ -78,9 +81,9 @@ describe("index", () => {
     buildIndex(vault, { now: NOW });
     const cache = JSON.parse(readFileSync(join(vault, "build", "_meta", "entities", "threads.json"), "utf8"));
     expect(Object.keys(cache.files)).toEqual(["data/domains/home/memory/threads/t1.md"]);
-    thread("home", "t1", "One", "[Sam](prevail://person/Sam) and [acme](prevail://org/acme)");
+    thread("home", "t1", "One", "[Sam](prevail://person/Sam) and [acme](prevail://product/acme)");
     const idx = buildIndex(vault, { now: NOW });
-    expect(idx.entities.map((e) => e.id).sort()).toEqual(["org/acme", "person/sam"]);
+    expect(idx.entities.map((e) => e.id).sort()).toEqual(["person/sam", "product/acme"]);
   });
 });
 
@@ -93,7 +96,7 @@ describe("tagging checkpoints", () => {
     const run: ModelRunner = async (prompt) => {
       calls++;
       const ids = [...prompt.matchAll(/## Sitting (\S+)/g)].map((m) => m[1]);
-      return JSON.stringify(Object.fromEntries(ids.map((id) => [id, [{ name: "acme", kind: "org" }]])));
+      return JSON.stringify(Object.fromEntries(ids.map((id) => [id, [{ name: "acme", kind: "product" }]])));
     };
     await tagSittings(vault, newSittings(vault, [old, fresh], NOW), { run, now: NOW });
     expect(newSittings(vault, [old, fresh], NOW)).toEqual([]);
@@ -175,20 +178,20 @@ describe("pages", () => {
   });
 
   test("save creates a saved page; detail and context text read it back", () => {
-    thread("home", "a", "Chat a", "[acme](prevail://org/acme) quoted the roof.");
+    thread("home", "a", "Chat a", "[acme](prevail://product/acme) quoted the roof.");
     buildIndex(vault, { now: NOW });
-    const d = saveEntity(vault, "org/acme", { now: NOW });
+    const d = saveEntity(vault, "product/acme", { now: NOW });
     expect(d.saved).toBe(true);
-    expect(d.page_path).toBe("data/entities/orgs/acme/entity.md");
-    expect(readIndex(vault).entities.find((e) => e.id === "org/acme")?.saved).toBe(true);
+    expect(d.page_path).toBe("data/entities/products/acme/entity.md");
+    expect(readIndex(vault).entities.find((e) => e.id === "product/acme")?.saved).toBe(true);
     const saved = saveEntity(vault, "thing/blue-kayak", { name: "Blue kayak", now: NOW });
     expect(saved.name).toBe("Blue Kayak");
     const detail = entityDetail(vault, readIndex(vault), "Blue kayak")!;
     expect(detail.id).toBe("thing/blue-kayak");
-    const text = entityContextText(entityDetail(vault, readIndex(vault), "org/acme")!);
-    expect(text).toContain("# Acme (Product, id org/acme)");
+    const text = entityContextText(entityDetail(vault, readIndex(vault), "product/acme")!);
+    expect(text).toContain("# Acme (Product, id product/acme)");
     expect(text).toContain("quoted the roof");
-    expect(() => saveEntity(vault, "nobody-known", { now: NOW })).toThrow(/kind person, place, org, thing or event/);
+    expect(() => saveEntity(vault, "nobody-known", { now: NOW })).toThrow(/kind person, place, product, thing or event/);
   });
 
   test("saving a one-conversation entity makes it digest-worthy", async () => {
@@ -281,7 +284,7 @@ describe("entity chats", () => {
     appendNote(vault, "person/foo", "  Moves in May.\n", { now: NOW + DAY });
     const d = appendNote(vault, "person/foo", "Lease ends in June.", { now: NOW + 2 * DAY });
     expect(d.notes).toBe("First thought.\n\n2026-09-21: Moves in May.\n\n2026-09-22: Lease ends in June.");
-    const fresh = appendNote(vault, "org/foo-co", "Quoted the roof.", { now: NOW });
+    const fresh = appendNote(vault, "product/foo-co", "Quoted the roof.", { now: NOW });
     expect(fresh.saved).toBe(true);
     expect(fresh.notes).toBe("2026-09-20: Quoted the roof.");
     expect(() => appendNote(vault, "person/foo", "  ")).toThrow(/empty note/);

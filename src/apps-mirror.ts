@@ -1299,7 +1299,7 @@ export function archiveApps(vault: string, mirroredIds: Set<string>, apply: bool
   if (!existsSync(index)) vwriteFile(index, "# Archived apps\n\nProduct folders moved here by `prevail apps archive`. Move one back to data/entities/products/ to restore it.\n\n");
   const date = localDate(now);
   for (const c of candidates) {
-    const from = appDir(vault, c.id);
+    const from = productDir(vault, c.id);
     let to = join(arch, c.id);
     for (let n = 2; existsSync(to); n++) to = join(arch, `${c.id}-${n}`);
     try {

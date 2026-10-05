@@ -30,6 +30,7 @@ import { readMachineRole, type MachineRole } from "./config.ts";
 import { slugify } from "./entities.ts";
 import { tryAcquireLock } from "./file-lock.ts";
 import { buildRoot, dataRoot, entitiesContainer } from "./path-safety.ts";
+import { productsMigrationRecorded } from "./path-safety.ts";
 import { vreadFile, vwriteFileAtomic } from "./vault-session.ts";
 
 // ── Layout ──────────────────────────────────────────────────────────────────
@@ -60,9 +61,7 @@ export function hostTag(): string {
   return hostname().toLowerCase().replace(/\.local$/, "").replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "host";
 }
 
-export function productsMigrationRecorded(vault: string): boolean {
-  try { return readdirSync(recordsDir(vault)).some((n) => /^products\..+\.json$/.test(n)); } catch { return false; }
-}
+export { productsMigrationRecorded };
 
 const isDir = (p: string) => { try { return lstatSync(p).isDirectory(); } catch { return false; } };
 const ls = (p: string) => { try { return readdirSync(p).sort(); } catch { return [] as string[]; } };
@@ -384,7 +383,7 @@ export function runProductsMigration(vault: string, opts: MigrationOptions = {})
       if (!lock) return { ...result, ok: false, skipped: "locked", errors: ["another products migration is running"] };
       // Backup first, verified, before a single move.
       const verify = opts.verify ?? verifyCopy;
-      const pairs: [string | null, string][] = [[plan.legacy.apps, "apps"], [plan.legacy.pages, "entities-orgs"], [plan.legacy.merged, "entities-merged-orgs"]];
+      const pairs: [string | null, string][] = [[plan.legacy.apps, "apps"], [plan.legacy.pages, "entities-pages"], [plan.legacy.merged, "entities-merged-pages"]];
       for (const [src, name] of pairs) {
         if (!src) continue;
         const dst = join(backup, name);

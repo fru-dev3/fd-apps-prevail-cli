@@ -35,23 +35,23 @@ describe("imports, as quoted data", () => {
     expect(parseGemini(GEMINI).prompts.map((p) => p.text)).toEqual(["What is a foo?"]);
   });
   test("an inbox file comes in once: prompts to the history, titles quoted, the file moved aside", async () => {
-    mkdirSync(join(V, "data", "apps", "chatgpt", "inbox"), { recursive: true });
-    writeFileSync(join(V, "data", "apps", "chatgpt", "inbox", "conversations.json"), JSON.stringify(CHATGPT));
+    mkdirSync(join(V, "data", "entities", "products", "chatgpt", "inbox"), { recursive: true });
+    writeFileSync(join(V, "data", "entities", "products", "chatgpt", "inbox", "conversations.json"), JSON.stringify(CHATGPT));
     const zdir = join(ROOT, "z");
     mkdirSync(zdir, { recursive: true });
     writeFileSync(join(zdir, "conversations.json"), JSON.stringify(CLAUDE));
-    mkdirSync(join(V, "data", "apps", "claude-ai", "inbox"), { recursive: true });
-    spawnSync("/usr/bin/zip", ["-q", "-j", join(V, "data", "apps", "claude-ai", "inbox", "export.zip"), join(zdir, "conversations.json")]);
+    mkdirSync(join(V, "data", "entities", "products", "claude-ai", "inbox"), { recursive: true });
+    spawnSync("/usr/bin/zip", ["-q", "-j", join(V, "data", "entities", "products", "claude-ai", "inbox", "export.zip"), join(zdir, "conversations.json")]);
     const r = await importInbox(V, Date.parse("2026-10-02T09:00:00Z"));
     expect(r.map((x) => [x.app, x.written, x.titles])).toEqual([["chatgpt", 1, 1], ["claude-ai", 1, 1]]);
     const pdir = join(V, "build", "_meta", "prompts");
     const stream = readdirSync(pdir).filter((f) => f.startsWith("chatgpt."));
     const rec = JSON.parse(readFileSync(join(pdir, stream[0]!), "utf8").trim());
     expect(rec).toMatchObject({ tool: "chatgpt", prompt: "How do I plan a foo budget?", entry: "import", session: "c1" });
-    expect(readFileSync(join(V, "data", "apps", "chatgpt", "imports", "2026-10-02-titles.md"), "utf8")).toContain("> Foo budget ideas");
-    expect(existsSync(join(V, "data", "apps", "chatgpt", "inbox", ".imported", "conversations.json"))).toBe(true);
+    expect(readFileSync(join(V, "data", "entities", "products", "chatgpt", "imports", "2026-10-02-titles.md"), "utf8")).toContain("> Foo budget ideas");
+    expect(existsSync(join(V, "data", "entities", "products", "chatgpt", "inbox", ".imported", "conversations.json"))).toBe(true);
     // The same export again adds nothing.
-    writeFileSync(join(V, "data", "apps", "chatgpt", "inbox", "again.json"), JSON.stringify(CHATGPT));
+    writeFileSync(join(V, "data", "entities", "products", "chatgpt", "inbox", "again.json"), JSON.stringify(CHATGPT));
     expect((await importInbox(V))[0]!.written).toBe(0);
   });
   test("the quarterly reminder is off unless turned on, and only in a quarter's first two weeks", () => {

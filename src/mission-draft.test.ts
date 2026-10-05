@@ -18,7 +18,10 @@ function seed() {
     mkdirSync(join(V, "data", "domains", d, "memory"), { recursive: true });
     writeFileSync(join(V, "data", "domains", d, "manifest.json"), JSON.stringify({ identity: { name: d } }));
   }
-  mkdirSync(join(V, "data", "apps", "foo-calendar"), { recursive: true });
+  mkdirSync(join(V, "data", "entities", "products", "foo-calendar"), { recursive: true });
+  writeFileSync(join(V, "data", "entities", "products", "foo-calendar", "manifest.json"), JSON.stringify({ id: "foo-calendar", integration: "manual" }));
+  mkdirSync(join(V, "data", "entities", "products", "foo-page-only"), { recursive: true });
+  writeFileSync(join(V, "data", "entities", "products", "foo-page-only", "entity.md"), "---\nname: Foo Page Only\nkind: product\n---\n");
   mkdirSync(join(V, "data", "entities", "people", "sam-foo"), { recursive: true });
   writeFileSync(join(V, "data", "entities", "people", "sam-foo", "entity.md"), "---\nname: Sam Foo\nkind: person\naliases: [Sam]\n---\nA foo tutor.\n");
   mkdirSync(join(V, "data", "entities", "people", "bar-baz"), { recursive: true });

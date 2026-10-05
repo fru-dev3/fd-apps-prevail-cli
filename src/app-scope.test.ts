@@ -15,7 +15,7 @@ let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "prevail-app-scope-"));
   mkdirSync(join(vault, "data", "domains", "general"), { recursive: true });
-  mkdirSync(join(vault, "data", "apps"), { recursive: true });
+  mkdirSync(join(vault, "data", "entities", "products"), { recursive: true });
 });
 afterEach(() => rmSync(vault, { recursive: true, force: true }));
 
@@ -63,8 +63,8 @@ async function turn(o: { apps?: string[]; entity?: string | string[]; refDomains
 }
 
 test("the app block names the runtime, status, grouped tools and the approval rule", () => {
-  mkdirSync(join(vault, "data", "apps", "foo-mail"), { recursive: true });
-  writeFileSync(join(vault, "data", "apps", "foo-mail", "SKILL.md"), "Search before drafting.");
+  mkdirSync(join(vault, "data", "entities", "products", "foo-mail"), { recursive: true });
+  writeFileSync(join(vault, "data", "entities", "products", "foo-mail", "SKILL.md"), "Search before drafting.");
   const b = appChatBlock(vault, "foo-mail", FOO_MAIL);
   expect(b).toContain("# APP CONTEXT: Foo Mail");
   expect(b).toContain("belongs to the Claude runtime. Status: connected.");
@@ -88,8 +88,8 @@ test("--app puts its block ahead of the message, never into the transcript", asy
 
 test("--entity is repeatable: one block each, the first exported as the entity id", async () => {
   setNotes(vault, "person/foo", "Foo notes.", { name: "Foo" });
-  setNotes(vault, "org/foo-co", "Foo Co notes.", { name: "Foo Co" });
-  const r = await turn({ entity: ["person/foo", "org/foo-co"] });
+  setNotes(vault, "product/foo-co", "Foo Co notes.", { name: "Foo Co" });
+  const r = await turn({ entity: ["person/foo", "product/foo-co"] });
   const p = r.turns[0].prompt;
   expect(p.indexOf("This conversation is about Foo (Person")).toBeGreaterThanOrEqual(0);
   expect(p.indexOf("This conversation is about Foo Co (")).toBeGreaterThan(p.indexOf("Foo notes."));
@@ -150,9 +150,9 @@ test("--scope-app stores the thread in the app's own space", async () => {
   const r = await turn({ scopeApp: "foo-mail", sessionId: "t-app" });
   expect(r.code).toBe(0);
   expect(r.events[0]).toMatchObject({ type: "start", domain: "_app-foo-mail" });
-  expect(r.turns[0].cwd).toBe(join(vault, "data", "apps", "foo-mail", "_scope"));
+  expect(r.turns[0].cwd).toBe(join(vault, "data", "entities", "products", "foo-mail", "_scope"));
   expect(r.turns[0].prompt.startsWith("# APP CONTEXT: Foo Mail")).toBe(true);
-  expect(existsSync(join(vault, "data", "apps", "foo-mail", "_scope", "_threads", "t-app.jsonl"))).toBe(true);
+  expect(existsSync(join(vault, "data", "entities", "products", "foo-mail", "_scope", "_threads", "t-app.jsonl"))).toBe(true);
   expect(existsSync(join(vault, "data", "domains", "_app-foo-mail"))).toBe(false);
   expect((await turn({ scopeApp: "../x" })).code).toBe(1);
 });
@@ -203,7 +203,7 @@ test("gate decisions map to access outcomes; the entity env is validated", () =>
 });
 
 test("app threads list the app's own chats, newest first", () => {
-  const dir = join(vault, "data", "apps", "foo-mail", "_scope", "_threads");
+  const dir = join(vault, "data", "entities", "products", "foo-mail", "_scope", "_threads");
   mkdirSync(dir, { recursive: true });
   const md = (title: string, updated: string, turns: number) =>
     `---\ntitle: ${title}\ndomain: _app-foo-mail\ncreated: ${updated}\nupdated: ${updated}\nturns: ${turns}\napp: foo-mail\n---\n\n## You\n\nhi\n\n`;

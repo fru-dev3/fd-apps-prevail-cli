@@ -59,7 +59,7 @@ Life goals:
 
 exports[`app scope turn 1`] = `
 {
-  "cwd": "<vault>/data/apps/paint-shop/_scope",
+  "cwd": "<vault>/data/entities/products/paint-shop/_scope",
   "entityId": null,
   "inheritUserMcp": true,
   "prompt": 

@@ -51,23 +51,23 @@ import { scaffoldCommunityApp, scanApps, seedAppParityFiles } from "./vault.ts";
 
 // #55/#32 app/domain parity: "an app is a domain with a little bit more." A
 // connected app gets the SAME standing-context files a domain does, in addition
-// to its skills/ + manifest, all under data/apps/<id>/ (never the vault root).
+// to its skills/ + manifest, all under data/entities/products/<id>/ (never the vault root).
 describe("app/domain parity scaffolding", () => {
   const TMP_BASE = process.platform === "darwin" ? "/tmp" : tmpdir();
   const ROOT = join(TMP_BASE, `prevail-parity-${process.pid}`);
 
   function freshVault(): string {
     rmSync(ROOT, { recursive: true, force: true });
-    // v4 vault: data/ exists, so apps land in data/apps and the root stays bare.
-    mkdirSync(join(ROOT, "data", "apps"), { recursive: true });
+    // v4 vault: data/ exists, so apps land in data/entities/products and the root stays bare.
+    mkdirSync(join(ROOT, "data", "entities", "products"), { recursive: true });
     return ROOT;
   }
 
-  test("scaffoldCommunityApp creates the domain-like parity files under data/apps/<id>", () => {
+  test("scaffoldCommunityApp creates the domain-like parity files under data/entities/products/<id>", () => {
     const vault = freshVault();
     const r = scaffoldCommunityApp({ id: "acme", title: "Acme", integration: "manual", domains: ["wealth"], vaultRoot: vault });
     expect(r.ok).toBe(true);
-    const appDir = join(vault, "data", "apps", "acme");
+    const appDir = join(vault, "data", "entities", "products", "acme");
     // Its own skills/ + manifest (pre-existing behavior).
     expect(existsSync(join(appDir, "manifest.json"))).toBe(true);
     expect(existsSync(join(appDir, "skills"))).toBe(true);
@@ -85,7 +85,7 @@ describe("app/domain parity scaffolding", () => {
 
   test("seedAppParityFiles is idempotent and edit-safe (never clobbers)", () => {
     const vault = freshVault();
-    const appDir = join(vault, "data", "apps", "edited");
+    const appDir = join(vault, "data", "entities", "products", "edited");
     mkdirSync(appDir, { recursive: true });
     writeFileSync(join(appDir, "MEMORY.md"), "USER CONTENT");
     seedAppParityFiles(appDir, "Edited");
@@ -98,7 +98,7 @@ describe("app/domain parity scaffolding", () => {
   test("scanApps reads the enabled flag off a vault app's manifest", () => {
     const vault = freshVault();
     scaffoldCommunityApp({ id: "onapp", title: "On", integration: "manual", domains: [], vaultRoot: vault });
-    const offDir = join(vault, "data", "apps", "offapp");
+    const offDir = join(vault, "data", "entities", "products", "offapp");
     mkdirSync(offDir, { recursive: true });
     writeFileSync(join(offDir, "manifest.json"), JSON.stringify({ id: "offapp", name: "Off", integration: "manual", enabled: false }));
     const apps = scanApps(vault);

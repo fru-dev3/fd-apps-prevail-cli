@@ -10,24 +10,24 @@ const ROOT = join("/tmp", `prevail-money-${process.pid}`);
 const V = join(ROOT, "vault");
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 const NOW = new Date(2026, 8, 30, 12, 0, 0).getTime();
-const man = (id: string) => JSON.parse(readFileSync(join(V, "data", "apps", id, "manifest.json"), "utf8"));
+const man = (id: string) => JSON.parse(readFileSync(join(V, "data", "entities", "products", id, "manifest.json"), "utf8"));
 
 function seed() {
   rmSync(ROOT, { recursive: true, force: true });
   mkdirSync(join(V, "build", "_meta", "apps"), { recursive: true });
   mkdirSync(join(V, "data", "domains", "general"), { recursive: true });
   // A card export in the first bank format (invented merchants and amounts).
-  mkdirSync(join(V, "data", "apps", "Foo Card"), { recursive: true });
+  mkdirSync(join(V, "data", "entities", "products", "Foo Card"), { recursive: true });
   const rows = ["Transaction Date,Post Date,Description,Category,Type,Amount,Memo"];
   for (const [m, d] of [["06", "14"], ["07", "14"], ["08", "14"], ["09", "14"]]) rows.push(`${m}/${d}/2026,${m}/${d}/2026,NOTION LABS INC 4155550100 CA,Software,Sale,-10.00,`);
   for (const [m, d, a] of [["06", "02", "15.00"], ["07", "02", "15.00"], ["08", "02", "17.00"], ["09", "02", "17.00"]]) rows.push(`${m}/${d}/2026,${m}/${d}/2026,SQ *BAR GYM EXAMPLE #4421,Health,Sale,-${a},`);
   rows.push("09/20/2026,09/21/2026,CORNER BAKERY EXAMPLE,Food,Sale,-6.50,");
   rows.push("09/25/2026,09/25/2026,PAYMENT THANK YOU,,Payment,200.00,");
   rows.push("09/10/2026,09/10/2026,OPENAI *CHATGPT SUBSCR,Software,Sale,-20.00,");
-  writeFileSync(join(V, "data", "apps", "Foo Card", "activity.CSV"), rows.join("\n"));
+  writeFileSync(join(V, "data", "entities", "products", "Foo Card", "activity.CSV"), rows.join("\n"));
   // The second format: a yearly charge seen twice.
-  mkdirSync(join(V, "data", "apps", "Bar Card"), { recursive: true });
-  writeFileSync(join(V, "data", "apps", "Bar Card", "export.csv"), ["Date,Description,Amount", "09/28/2025,FOO NOTES APP YEARLY,48.00", "09/27/2026,FOO NOTES APP YEARLY,52.00", "09/27/2026,ONLINE PAYMENT,-500.00"].join("\n"));
+  mkdirSync(join(V, "data", "entities", "products", "Bar Card"), { recursive: true });
+  writeFileSync(join(V, "data", "entities", "products", "Bar Card", "export.csv"), ["Date,Description,Amount", "09/28/2025,FOO NOTES APP YEARLY,48.00", "09/27/2026,FOO NOTES APP YEARLY,52.00", "09/27/2026,ONLINE PAYMENT,-500.00"].join("\n"));
   upsertRecord(V, { id: "notion", name: "Notion" });
   upsertRecord(V, { id: "openai", name: "OpenAI" });
   upsertRecord(V, { id: "foo-notes", name: "Foo Notes", identifiers: { merchants: ["FOO NOTES APP"] } });
@@ -57,7 +57,7 @@ describe("A3: money", () => {
   });
   test("costs, renewals and price history onto the records; a stated cost is never replaced", () => {
     upsertRecord(V, { id: "bar-gym", name: "Bar Gym", identifiers: { merchants: ["BAR GYM EXAMPLE"] } });
-    const fooNotes = join(V, "data", "apps", "foo-notes", "manifest.json");
+    const fooNotes = join(V, "data", "entities", "products", "foo-notes", "manifest.json");
     writeFileSync(fooNotes, JSON.stringify({ ...man("foo-notes"), cost: { amount: 40, period: "year", source: "stated" } }));
     const r = moneyScan(V, { now: NOW, host: "mac-a" });
     expect(r.matched).toBe(3);

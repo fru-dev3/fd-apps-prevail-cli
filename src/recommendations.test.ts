@@ -139,7 +139,7 @@ test("entities: recurring people and places without a saved page", () => {
   const v = vault();
   const e = (id: string, kind: string, conversations: number, saved = false) => ({ id, name: id.split("/")[1], kind, aliases: [], kinds: [kind], mention_count: conversations, conversations, last_ts: NOW, mentions: [], co_mentions: [], saved });
   v.put("_meta/entities/index.json", { version: 1, generated_ts: NOW, entities: [
-    e("person/ada", "person", 6), e("place/lisbon", "place", 4), e("person/bo", "person", 9, true), e("org/acme", "org", 20), e("person/cy", "person", 1),
+    e("person/ada", "person", 6), e("place/lisbon", "place", 4), e("person/bo", "person", 9, true), e("product/acme", "product", 20), e("person/cy", "person", 1),
   ] });
   try {
     const recs = buildRecommendations(v.root, offline).filter((r) => r.category === "people");

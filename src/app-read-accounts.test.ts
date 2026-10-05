@@ -24,7 +24,7 @@ let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "prevail-app-read-"));
   mkdirSync(join(vault, "data", "domains", "general"), { recursive: true });
-  mkdirSync(join(vault, "data", "apps"), { recursive: true });
+  mkdirSync(join(vault, "data", "entities", "products"), { recursive: true });
 });
 afterEach(() => rmSync(vault, { recursive: true, force: true }));
 

@@ -64,7 +64,7 @@ const focus = (bundle: string, starting: boolean) => pb([[1, "v", starting ? 1 :
 function seedHome() {
   rmSync(ROOT, { recursive: true, force: true });
   mkdirSync(join(V, "build", "_meta"), { recursive: true });
-  mkdirSync(join(V, "data", "apps"), { recursive: true });
+  mkdirSync(join(V, "data", "entities", "products"), { recursive: true });
   // Biome: this Mac (v1) and a phone (v2).
   const st = join(HOME, "Library", "Biome", "streams", "restricted");
   mkdirSync(join(st, "App.InFocus", "local"), { recursive: true });
@@ -231,18 +231,18 @@ describe("reading this Mac", () => {
 describe("mapping, records and the unknown inbox", () => {
   beforeEach(seedHome);
   test("records for vendors seen; never overwritten; archived never recreated", () => {
-    mkdirSync(join(V, "data", "apps", "zoom"), { recursive: true });
-    writeFileSync(join(V, "data", "apps", "zoom", "manifest.json"), JSON.stringify({ id: "zoom", name: "My Zoom", integration: "mcp", domains: ["work"] }));
-    mkdirSync(join(V, "data", "apps", "_archive", "github"), { recursive: true });
-    writeFileSync(join(V, "data", "apps", "_archive", "github", "manifest.json"), JSON.stringify({ id: "github" }));
+    mkdirSync(join(V, "data", "entities", "products", "zoom"), { recursive: true });
+    writeFileSync(join(V, "data", "entities", "products", "zoom", "manifest.json"), JSON.stringify({ id: "zoom", name: "My Zoom", integration: "mcp", domains: ["work"] }));
+    mkdirSync(join(V, "data", "entities", "products", "_archive", "github"), { recursive: true });
+    writeFileSync(join(V, "data", "entities", "products", "_archive", "github", "manifest.json"), JSON.stringify({ id: "github" }));
     scanAppUsage(V, { roots: roots(), host: "mac-a", now: NOW, inventory });
     const u = computeUsage(V, { now: NOW });
     expect(u.apps.zoom!.minutes_30d).toBe(30);
     const r = ensureRecords(V, u, inventory, { now: NOW });
     expect(r.updated).toContain("zoom");
     expect(r.archived_seen).toContain("github");
-    expect(existsSync(join(V, "data", "apps", "github"))).toBe(false);
-    const z = JSON.parse(readFileSync(join(V, "data", "apps", "zoom", "manifest.json"), "utf8"));
+    expect(existsSync(join(V, "data", "entities", "products", "github"))).toBe(false);
+    const z = JSON.parse(readFileSync(join(V, "data", "entities", "products", "zoom", "manifest.json"), "utf8"));
     expect(z.name).toBe("My Zoom");
     expect(z.integration).toBe("mcp");
     expect(z.domains).toEqual(["work"]);
@@ -264,7 +264,7 @@ describe("mapping, records and the unknown inbox", () => {
     u = computeUsage(V, { now: NOW });
     expect(u.apps["foo-news"]!.web_visits_30d).toBe(3);
     expect(u.unknown.find((x) => x.value === "com.example.BarChat")).toBeUndefined();
-    const m = JSON.parse(readFileSync(join(V, "data", "apps", "foo-news", "manifest.json"), "utf8"));
+    const m = JSON.parse(readFileSync(join(V, "data", "entities", "products", "foo-news", "manifest.json"), "utf8"));
     expect(m.identifiers.domains).toEqual(["example.co.uk"]);
     // A record's identifier beats the alias table.
     upsertRecord(V, { id: "my-meetings", name: "Meetings", identifiers: { bundle_ids: ["us.zoom.xos"] } });

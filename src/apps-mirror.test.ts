@@ -103,7 +103,7 @@ function fakeExec(opts: { syncReply?: string; draftReply?: string; noGemini?: bo
 function makeVault(): string {
   const v = mkdtempSync(join(tmpdir(), "apps-mirror-"));
   mkdirSync(join(v, "build", "_meta"), { recursive: true });
-  mkdirSync(join(v, "data", "apps"), { recursive: true });
+  mkdirSync(join(v, "data", "entities", "products"), { recursive: true });
   for (const d of ["health", "notes", "wealth"]) {
     mkdirSync(join(v, "data", "domains", d), { recursive: true });
     writeFileSync(join(v, "data", "domains", d, "ideal-state.md"), `# ${d}\nA thriving ${d} domain.\n`);
@@ -258,7 +258,7 @@ describe("refresh + list", () => {
     expect(doc.apps.find((a) => a.id === "agy-acme-tasks")!.signin_hint).toBe("agy mcp enable Acme Tasks");
     expect(doc.apps.find((a) => a.id === "acme-notes")!.signin_hint).toBe("https://claude.ai/settings/connectors");
     // no tool discovery -> no app folders scaffolded
-    expect(readdirSync(join(v, "data", "apps"))).toEqual([]);
+    expect(readdirSync(join(v, "data", "entities", "products"))).toEqual([]);
     expect(existsSync(join(v, "build", "_meta", "apps", "mirror.json"))).toBe(true);
     // list reads the cache without calling any runtime
     const calls: Call[] = [];
@@ -269,8 +269,8 @@ describe("refresh + list", () => {
 
   test("--tools writes classified tools into manifests, keeping existing fields", async () => {
     const v = makeVault();
-    mkdirSync(join(v, "data", "apps", "acme-notes"), { recursive: true });
-    writeFileSync(join(v, "data", "apps", "acme-notes", "manifest.json"), JSON.stringify({ id: "acme-notes", title: "Acme Notes", integration: "mcp", domains: ["notes"], connection: "x" }));
+    mkdirSync(join(v, "data", "entities", "products", "acme-notes"), { recursive: true });
+    writeFileSync(join(v, "data", "entities", "products", "acme-notes", "manifest.json"), JSON.stringify({ id: "acme-notes", title: "Acme Notes", integration: "mcp", domains: ["notes"], connection: "x" }));
     const { exec, calls } = fakeExec();
     const doc = await refreshMirror(v, { exec, tools: true, now: () => 5 });
     const init = calls.find((c) => c.args.includes("stream-json"))!;
@@ -280,12 +280,12 @@ describe("refresh + list", () => {
     expect(acme.tools!.map((t) => `${t.name}:${t.kind}`)).toEqual(["create_page:write", "fetch_page:read", "search:read", "send_invite:send"]);
     expect(acme.tools_checked_at).toBe(5);
     expect(acme.domains).toEqual(["notes"]);
-    const man = JSON.parse(readFileSync(join(v, "data", "apps", "acme-notes", "manifest.json"), "utf8"));
+    const man = JSON.parse(readFileSync(join(v, "data", "entities", "products", "acme-notes", "manifest.json"), "utf8"));
     expect(man.connection).toBe("x");
     expect(man.mirror).toEqual({ runtime: "claude", server: "claude.ai Acme Notes", url: "https://mcp.acme-notes.example/mcp" });
     expect(man.tools).toHaveLength(4);
     // only servers whose tools were discovered got a folder
-    expect(readdirSync(join(v, "data", "apps")).sort()).toEqual(["acme-notes", "baz-mail", "foo"]);
+    expect(readdirSync(join(v, "data", "entities", "products")).sort()).toEqual(["acme-notes", "baz-mail", "foo"]);
   });
 });
 
@@ -322,7 +322,7 @@ describe("recipes", () => {
     expect(prompt).not.toContain("create_page");
     expect(prompt).toContain("A thriving notes domain.");
     expect(existsSync(join(v, "build", "_meta", "apps", "drafts", "acme-notes.json"))).toBe(true);
-    const man = JSON.parse(readFileSync(join(v, "data", "apps", "acme-notes", "manifest.json"), "utf8"));
+    const man = JSON.parse(readFileSync(join(v, "data", "entities", "products", "acme-notes", "manifest.json"), "utf8"));
     expect(man.recipe).toBeUndefined();
     const saved = await saveRecipe(v, "acme-notes", { fromDraft: true, schedule: "manual" }, { exec });
     expect(saved.recipe).toMatchObject({ prompt: "Fetch pages", schedule: "manual", read_tools: ["search"] });
@@ -416,7 +416,7 @@ describe("extractJsonObject", () => {
 
 describe("archive", () => {
   function app(v: string, id: string, files: Record<string, string>) {
-    const dir = join(v, "data", "apps", id);
+    const dir = join(v, "data", "entities", "products", id);
     mkdirSync(dir, { recursive: true });
     for (const [rel, body] of Object.entries(files)) {
       const p = join(dir, rel);
@@ -436,7 +436,7 @@ describe("archive", () => {
     app(v, "synced", { "manifest.json": "{}", "connection-status.json": '{"status":"connected","lastSuccessTs":1}' });
     app(v, "intents", { "manifest.json": "{}", "_intents.jsonl": '{"a":1}\n' });
     app(v, "csv", { "manifest.json": "{}", "export.csv": "a,b" });
-    const root = join(v, "data", "apps");
+    const root = join(v, "data", "entities", "products");
     expect(scaffoldOnly(join(root, "plain")).scaffold).toBe(true);
     for (const id of ["hasdata", "hascode", "hasthreads", "bigstate", "synced", "intents", "csv"]) {
       expect([id, scaffoldOnly(join(root, id)).scaffold]).toEqual([id, false]);
@@ -455,16 +455,16 @@ describe("archive", () => {
     expect(archiveCandidates(v, mirrored).map((c) => c.id)).toEqual(["old two", "old-one"]);
     const dry = archiveApps(v, mirrored, false);
     expect(dry.moved).toEqual([]);
-    expect(existsSync(join(v, "data", "apps", "old-one"))).toBe(true);
+    expect(existsSync(join(v, "data", "entities", "products", "old-one"))).toBe(true);
     const done = archiveApps(v, mirrored, true, new Date(2026, 1, 3).getTime());
     expect(done.moved.map((m) => m.id)).toEqual(["old two", "old-one"]);
-    expect(existsSync(join(v, "data", "apps", "old-one"))).toBe(false);
-    expect(existsSync(join(v, "data", "apps", "_archive", "old-one-2", "manifest.json"))).toBe(true);
-    expect(existsSync(join(v, "data", "apps", "_archive", "old two", "skills", "a", "SKILL.md"))).toBe(true);
-    const index = readFileSync(join(v, "data", "apps", "_archive", "INDEX.md"), "utf8");
+    expect(existsSync(join(v, "data", "entities", "products", "old-one"))).toBe(false);
+    expect(existsSync(join(v, "data", "entities", "products", "_archive", "old-one-2", "manifest.json"))).toBe(true);
+    expect(existsSync(join(v, "data", "entities", "products", "_archive", "old two", "skills", "a", "SKILL.md"))).toBe(true);
+    const index = readFileSync(join(v, "data", "entities", "products", "_archive", "INDEX.md"), "utf8");
     expect(index).toContain("- 2026-02-03 `old-one` (as old-one-2):");
     expect(index).toContain("- 2026-02-03 `old two`:");
-    expect(readdirSync(join(v, "data", "apps")).sort()).toEqual(["_archive", "_scratch", "acme-notes", "keeper"]);
+    expect(readdirSync(join(v, "data", "entities", "products")).sort()).toEqual(["_archive", "_scratch", "acme-notes", "keeper"]);
   });
 });
 
@@ -472,13 +472,13 @@ describe("scanners skip _-prefixed app dirs", () => {
   test("scanApps and scanCommunityApps never list _archive", async () => {
     const { scanApps, scanCommunityApps } = await import("./vault.ts");
     const v = makeVault();
-    const arch = join(v, "data", "apps", "_archive", "old-one");
+    const arch = join(v, "data", "entities", "products", "_archive", "old-one");
     mkdirSync(arch, { recursive: true });
     writeFileSync(join(arch, "manifest.json"), "{}");
     writeFileSync(join(arch, "SKILL.md"), "# old");
-    writeFileSync(join(v, "data", "apps", "_archive", "INDEX.md"), "# Archived apps\n");
-    mkdirSync(join(v, "data", "apps", "live-one"), { recursive: true });
-    writeFileSync(join(v, "data", "apps", "live-one", "manifest.json"), "{}");
+    writeFileSync(join(v, "data", "entities", "products", "_archive", "INDEX.md"), "# Archived apps\n");
+    mkdirSync(join(v, "data", "entities", "products", "live-one"), { recursive: true });
+    writeFileSync(join(v, "data", "entities", "products", "live-one", "manifest.json"), "{}");
     const ids = scanApps(v).map((a) => a.id);
     expect(ids).toContain("live-one");
     expect(ids.some((i) => i.startsWith("_"))).toBe(false);

@@ -28,17 +28,17 @@ beforeEach(() => {
 afterEach(() => rmSync(vault, { recursive: true, force: true }));
 
 describe("detection", () => {
-  test("same name written differently is clear; org suffixes are ignored", () => {
-    thread("t1", [link("person", "Foo Bar"), link("org", "Foo Co")]);
-    thread("t2", [link("person", "FooBar"), link("org", "Foo")]);
+  test("same name written differently is clear; company suffixes are ignored", () => {
+    thread("t1", [link("person", "Foo Bar"), link("product", "Foo Co")]);
+    thread("t2", [link("person", "FooBar"), link("product", "Foo")]);
     buildIndex(vault, { now: NOW });
     const d = entityDuplicates(vault).sort((x, y) => x.pair.localeCompare(y.pair));
     expect(d.map((x) => [x.a.id, x.b.id, x.confidence])).toEqual([
-      ["org/foo-co", "org/foo", 0.97],
       ["person/foo-bar", "person/foobar", 0.97],
+      ["product/foo-co", "product/foo", 0.97],
     ]);
-    expect(d[1].reason).toBe('"Foo Bar" and "FooBar" are the same name written differently');
-    expect(d[1].a).toEqual({ id: "person/foo-bar", name: "Foo Bar", kind: "person", mentions: 1 });
+    expect(d[0].reason).toBe('"Foo Bar" and "FooBar" are the same name written differently');
+    expect(d[0].a).toEqual({ id: "person/foo-bar", name: "Foo Bar", kind: "person", mentions: 1 });
   });
 
   test("a multi-word alias is clear; a bare first name alias is only proposed", () => {

@@ -93,8 +93,9 @@ describe("adoptObsidianApp", () => {
   test("writes an obsidian app manifest and unions domains on re-run", async () => {
     const { adoptObsidianApp } = await import("./obsidian-import");
     const pv = mkdtempSync(join(tmpdir(), "prevail-"));
+    mkdirSync(join(pv, "data"));
     adoptObsidianApp(pv, "notes", "/Users/me/Obsidian");
-    let m = JSON.parse(readFileSync(join(pv, "data/apps/obsidian/manifest.json"), "utf8"));
+    let m = JSON.parse(readFileSync(join(pv, "data/entities/products/obsidian/manifest.json"), "utf8"));
     expect(m.id).toBe("obsidian");
     expect(m.integration).toBe("manual");
     expect(m.enabled).toBe(true);
@@ -102,7 +103,7 @@ describe("adoptObsidianApp", () => {
     expect(m.source.path).toBe("/Users/me/Obsidian");
     // Re-run into a second domain unions, does not clobber.
     adoptObsidianApp(pv, "learning", "/Users/me/Obsidian");
-    m = JSON.parse(readFileSync(join(pv, "data/apps/obsidian/manifest.json"), "utf8"));
+    m = JSON.parse(readFileSync(join(pv, "data/entities/products/obsidian/manifest.json"), "utf8"));
     expect(m.domains.sort()).toEqual(["learning", "notes"]);
   });
 });

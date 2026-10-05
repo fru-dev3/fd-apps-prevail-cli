@@ -87,20 +87,20 @@ describe("appScopeId — _app-<id> scope keys", () => {
 });
 
 describe("resolveDomainDir / newDomainDir — app-scope rerouting", () => {
-  // Functional check: an _app-<id> scope key must land under data/apps/<id>
+  // Functional check: an _app-<id> scope key must land under data/entities/products/<id>
   // (never data/domains), while a real domain still resolves under data/domains.
   function mkV4Vault(): string {
     const root = mkdtempSync(join(tmpdir(), "vault-appscope-"));
-    mkdirSync(join(root, "data", "apps"), { recursive: true });
+    mkdirSync(join(root, "data", "entities", "products"), { recursive: true });
     mkdirSync(join(root, "data", "domains"), { recursive: true });
     return root;
   }
 
-  test("_app-google resolves under data/apps/google, not data/domains", () => {
+  test("_app-google resolves under data/entities/products/google, not data/domains", () => {
     const vault = mkV4Vault();
     const resolved = resolveDomainDir(vault, "_app-google");
-    expect(resolved).toBe(join(vault, "data", "apps", "google", "_scope"));
-    expect(resolved.startsWith(join(vault, "data", "apps") + "/")).toBe(true);
+    expect(resolved).toBe(join(vault, "data", "entities", "products", "google", "_scope"));
+    expect(resolved.startsWith(join(vault, "data", "entities", "products") + "/")).toBe(true);
     expect(resolved).not.toContain(join("data", "domains"));
     // Same target for a brand-new scope.
     expect(newDomainDir(vault, "_app-google")).toBe(resolved);
@@ -111,7 +111,7 @@ describe("resolveDomainDir / newDomainDir — app-scope rerouting", () => {
     mkdirSync(join(vault, "data", "domains", "health"), { recursive: true });
     const resolved = resolveDomainDir(vault, "health");
     expect(resolved).toBe(join(vault, "data", "domains", "health"));
-    expect(resolved).not.toContain(join("data", "apps"));
+    expect(resolved).not.toContain(join("data", "entities", "products"));
     expect(newDomainDir(vault, "health")).toBe(join(vault, "data", "domains", "health"));
   });
 
@@ -119,7 +119,7 @@ describe("resolveDomainDir / newDomainDir — app-scope rerouting", () => {
     const vault = mkV4Vault();
     const threadsDir = join(resolveDomainDir(vault, "_app-foo-notes"), "_threads");
     expect(threadsDir).toBe(
-      join(vault, "data", "apps", "foo-notes", "_scope", "_threads"),
+      join(vault, "data", "entities", "products", "foo-notes", "_scope", "_threads"),
     );
     expect(threadsDir).not.toContain(join("data", "domains"));
   });

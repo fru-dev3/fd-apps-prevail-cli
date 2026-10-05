@@ -25,7 +25,7 @@ beforeAll(() => {
   w("data/domains/homestead/source/goals.md", "# Goals\n- [ ] Paint the shed ~id:g-paint @2026-11-01\n");
   w("data/domains/homestead/ideal-state.md", "A tidy yard.\n");
   w("data/domains/money/memory/state.md", "# State\nBudget is fine.\n");
-  w("data/apps/paint-shop/manifest.json", JSON.stringify({ id: "paint-shop", name: "Paint Shop", domains: ["homestead"], integration: "manual" }));
+  w("data/entities/products/paint-shop/manifest.json", JSON.stringify({ id: "paint-shop", name: "Paint Shop", domains: ["homestead"], integration: "manual" }));
   setNotes(vault, "person/foo", "Lends a ladder.", { name: "Foo" });
 });
 afterAll(() => rmSync(vault, { recursive: true, force: true }));

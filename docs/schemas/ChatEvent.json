@@ -40,7 +40,7 @@
     "access": {
       "type": "string",
       "enum": ["read", "write", "blocked"],
-      "description": "On a 'tool' event that carries 'app': the tool's access class, from the same classifier as the app access log (data/apps/<id>/_log/access.jsonl)."
+      "description": "On a 'tool' event that carries 'app': the tool's access class, from the same classifier as the app access log (data/entities/products/<id>/_log/access.jsonl)."
     },
     "usage": {
       "type": "object",

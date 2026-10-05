@@ -53,7 +53,7 @@ let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "prevail-trusted-"));
   mkdirSync(join(vault, "data", "domains", "general"), { recursive: true });
-  mkdirSync(join(vault, "data", "apps"), { recursive: true });
+  mkdirSync(join(vault, "data", "entities", "products"), { recursive: true });
   // An empty runtime mirror, so listing never spawns a runtime.
   mkdirSync(join(mirrorCachePath(vault), ".."), { recursive: true });
   writeFileSync(mirrorCachePath(vault), JSON.stringify({ generated_at: 1, runtimes: [], apps: [] }));
@@ -92,7 +92,7 @@ test("add-source refuses a bad kind, a bad URL and two MCP URLs, writing nothing
   await expect(addSource(vault, { kind: "db", urls: ["https://foo.example"], name: "Foo" })).rejects.toThrow(/--kind/);
   await expect(addSource(vault, { kind: "web", urls: ["http://foo.example"], name: "Foo" })).rejects.toThrow(/https/);
   await expect(addSource(vault, { kind: "mcp-remote", urls: [mcpUrl, "https://foo.example/mcp"], name: "Foo" })).rejects.toThrow(/exactly one/);
-  expect(existsSync(join(vault, "data", "apps", "foo"))).toBe(false);
+  expect(existsSync(join(vault, "data", "entities", "products", "foo"))).toBe(false);
 });
 
 test("mcp-remote: probe lists tools with read classification; manifest, registry and apps list", async () => {
@@ -107,7 +107,7 @@ test("mcp-remote: probe lists tools with read classification; manifest, registry
   expect(calls).toContain("notifications/initialized");
   expect(r.app).toMatchObject({ id: "foo-context", trusted: true, integration: "mcp-remote", urls: [mcpUrl], status: "connected", runtime: "claude" });
 
-  const man = JSON.parse(readFileSync(join(vault, "data", "apps", "foo-context", "manifest.json"), "utf8"));
+  const man = JSON.parse(readFileSync(join(vault, "data", "entities", "products", "foo-context", "manifest.json"), "utf8"));
   expect(man).toMatchObject({ id: "foo-context", name: "Foo Context", integration: "mcp-remote", urls: [mcpUrl], trusted: true, domains: [] });
   expect(man.tools.map((t: { name: string; kind: string }) => `${t.name}:${t.kind}`)).toEqual(["list_foos:read", "foo_spec:read", "drop_foo:write"]);
   expect(readRegistry(vault)["foo-context"]).toMatchObject({ integration: "mcp-remote", read_tools: ["list_foos", "foo_spec"] });
@@ -132,7 +132,7 @@ test("probe times out within its budget", async () => {
 });
 
 test("adopting keeps the user's own manifest values and files", async () => {
-  const dir = join(vault, "data", "apps", "foo-context");
+  const dir = join(vault, "data", "entities", "products", "foo-context");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "manifest.json"), JSON.stringify({ name: "My Foo", domains: ["money"], note: "mine" }));
   writeFileSync(join(dir, "SKILL.md"), "# mine\n");
@@ -142,8 +142,8 @@ test("adopting keeps the user's own manifest values and files", async () => {
   expect(man).toMatchObject({ id: "foo-context", name: "My Foo", domains: ["money"], note: "mine", trusted: true, integration: "mcp-remote" });
   expect(readFileSync(join(dir, "SKILL.md"), "utf8")).toBe("# mine\n");
   // Another kind of app with that name is never taken over.
-  mkdirSync(join(vault, "data", "apps", "foo-mail"), { recursive: true });
-  writeFileSync(join(vault, "data", "apps", "foo-mail", "manifest.json"), JSON.stringify({ integration: "oauth" }));
+  mkdirSync(join(vault, "data", "entities", "products", "foo-mail"), { recursive: true });
+  writeFileSync(join(vault, "data", "entities", "products", "foo-mail", "manifest.json"), JSON.stringify({ integration: "oauth" }));
   await expect(addSource(vault, { kind: "web", urls: ["https://foo.example"], name: "Foo Mail" }, { fetch: siteFetch })).rejects.toThrow(/already exists as a oauth app/);
 });
 
@@ -201,7 +201,7 @@ test("act gate: registered reads run and are logged as reads; other tools queue"
 test("web: llms.txt and openapi GET paths are summarized; WebFetch may GET only that host", async () => {
   const r = await addSource(vault, { kind: "web", urls: ["https://foo.example/docs"], name: "Foo Site" }, { fetch: siteFetch });
   expect(r.probe).toMatchObject({ ok: true, llms_txt: true, openapi: true });
-  const man = JSON.parse(readFileSync(join(vault, "data", "apps", "foo-site", "manifest.json"), "utf8"));
+  const man = JSON.parse(readFileSync(join(vault, "data", "entities", "products", "foo-site", "manifest.json"), "utf8"));
   expect(man.source.title).toBe("Foo Data");
   expect(man.source.endpoints).toEqual([{ path: "/api/foos", summary: "List foos" }, { path: "/api/foos/{id}", summary: "One foo" }]);
   expect(man.source.llms).toContain("Foo facts");
@@ -237,15 +237,15 @@ test("links: each URL is checked; the turn gets their hosts", async () => {
 test("remove-source archives the folder, never deletes it", async () => {
   await addSource(vault, { kind: "mcp-remote", urls: [mcpUrl], name: "Foo Context" });
   const r = removeSource(vault, "foo-context", 0);
-  expect(r.to).toBe(join(vault, "data", "apps", "_archive", "foo-context"));
+  expect(r.to).toBe(join(vault, "data", "entities", "products", "_archive", "foo-context"));
   expect(existsSync(join(r.to, "manifest.json"))).toBe(true);
-  expect(existsSync(join(vault, "data", "apps", "foo-context"))).toBe(false);
+  expect(existsSync(join(vault, "data", "entities", "products", "foo-context"))).toBe(false);
   expect(readRegistry(vault)["foo-context"]).toBeUndefined();
   expect(gateToolCall(vault, "general", "mcp__foo-context__foo_spec", {}).action).toBe("deny");
-  expect(readFileSync(join(vault, "data", "apps", "_archive", "INDEX.md"), "utf8")).toContain("`foo-context`: trusted source removed");
+  expect(readFileSync(join(vault, "data", "entities", "products", "_archive", "INDEX.md"), "utf8")).toContain("`foo-context`: trusted source removed");
   // A second one with the same id goes beside it.
   await addSource(vault, { kind: "mcp-remote", urls: [mcpUrl], name: "Foo Context" });
-  expect(removeSource(vault, "foo-context").to).toBe(join(vault, "data", "apps", "_archive", "foo-context-2"));
+  expect(removeSource(vault, "foo-context").to).toBe(join(vault, "data", "entities", "products", "_archive", "foo-context-2"));
   expect(() => removeSource(vault, "foo-nothing")).toThrow(/not a trusted source/);
 });
 
@@ -279,12 +279,12 @@ test("a source folder synced from another Mac lists as untrusted_here and is nev
 });
 
 test("a synced manifest's URLs are shown only when they pass the add-time checks", () => {
-  mkdirSync(join(vault, "data", "apps", "foo-hand"), { recursive: true });
-  writeFileSync(join(vault, "data", "apps", "foo-hand", "manifest.json"), JSON.stringify({
+  mkdirSync(join(vault, "data", "entities", "products", "foo-hand"), { recursive: true });
+  writeFileSync(join(vault, "data", "entities", "products", "foo-hand", "manifest.json"), JSON.stringify({
     name: "Foo Hand", integration: "links", trusted: true, urls: ["https://foo.example/a", "https://foo.example/b?token=x", "http://foo.example/c"],
   }));
   expect(sourceInfo(vault, "foo-hand")).toMatchObject({ urls: ["https://foo.example/a"], trusted_here: false });
   // A manifest that does not claim to be a trusted source is not one.
-  writeFileSync(join(vault, "data", "apps", "foo-hand", "manifest.json"), JSON.stringify({ integration: "links", urls: ["https://foo.example/a"] }));
+  writeFileSync(join(vault, "data", "entities", "products", "foo-hand", "manifest.json"), JSON.stringify({ integration: "links", urls: ["https://foo.example/a"] }));
   expect(sourceInfo(vault, "foo-hand")).toBeNull();
 });

@@ -22,7 +22,7 @@ const at = (d: number, h: number, m = 0) => new Date(2026, 8, d, h, m, 0).getTim
 beforeEach(() => {
   rmSync(ROOT, { recursive: true, force: true });
   mkdirSync(join(V, "build", "_meta"), { recursive: true });
-  mkdirSync(join(V, "data", "apps"), { recursive: true });
+  mkdirSync(join(V, "data", "entities", "products"), { recursive: true });
   mkdirSync(join(V, "data", "domains", "general"), { recursive: true });
   mkdirSync(HOME, { recursive: true });
 });
@@ -197,8 +197,8 @@ describe("wave 3: connections the user makes", () => {
     expect(one("health.workout").attrs.minutes).toBe(32);
     // Through the inbox and consent.
     setConsent(V, "apple-health", true);
-    mkdirSync(join(V, "data", "apps", "apple-health", "inbox"), { recursive: true });
-    writeFileSync(join(V, "data", "apps", "apple-health", "inbox", "export.xml"), `<?xml version="1.0"?>\n<HealthData>\n${lines.join("\n")}\n</HealthData>\n`);
+    mkdirSync(join(V, "data", "entities", "products", "apple-health", "inbox"), { recursive: true });
+    writeFileSync(join(V, "data", "entities", "products", "apple-health", "inbox", "export.xml"), `<?xml version="1.0"?>\n<HealthData>\n${lines.join("\n")}\n</HealthData>\n`);
     expect((await syncAppleHealth(V, { now: NOW, host: "mac-a" })).state).toBe("ok");
     const c = await computeMetrics(V, { now: NOW, home: HOME });
     expect(glance(c, { ids: ["m-sleep"] }).rows[0]!.value).toBe(7.5);

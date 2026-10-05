@@ -44,10 +44,13 @@ describe("production transition", () => {
     expect(res.created).toBe(true);
     expect(existsSync(prod)).toBe(true);
     // A fresh production vault now starts in the canonical layout: the root
-    // holds exactly build/ + data/{apps,domains,entities} (no flat/legacy root).
+    // holds exactly build/ + data/{domains,entities} (no flat/legacy root), and
+    // neither the old apps folder nor the old company pages folder.
     expect(readdirSync(prod).filter((n) => !n.startsWith(".")).sort()).toEqual(["build", "data"]);
     expect(existsSync(join(prod, "data", "domains"))).toBe(true);
-    expect(existsSync(join(prod, "data", "apps"))).toBe(true);
+    expect(existsSync(join(prod, "data", "entities"))).toBe(true);
+    expect(existsSync(join(prod, "data", "apps"))).toBe(false); // legacy app container
+    expect(readdirSync(join(prod, "data", "entities"))).toEqual([]);
     expect(existsSync(join(prod, "data", "entities"))).toBe(true);
     expect(existsSync(join(prod, "build"))).toBe(true);
   });

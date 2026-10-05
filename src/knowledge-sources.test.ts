@@ -32,7 +32,7 @@ beforeEach(() => {
   vault = join(root, "vault");
   mkdirSync(join(vault, "data", "domains", "general"), { recursive: true });
   mkdirSync(join(vault, "data", "domains", "wealth"), { recursive: true });
-  mkdirSync(join(vault, "data", "apps"), { recursive: true });
+  mkdirSync(join(vault, "data", "entities", "products"), { recursive: true });
   docs = join(root, "docs");
   mkdirSync(join(docs, "sub"), { recursive: true });
   writeFileSync(join(docs, "budget-notes.md"), "# Foo budget\nThe foo budget is 120 units.\n");
@@ -235,7 +235,7 @@ test("a source synced from another Mac is listed but never trusted, read or atta
 });
 
 test("old trusted sources get a scope without losing anything: dated backup, idempotent", () => {
-  const dir = join(vault, "data", "apps", "foo-old");
+  const dir = join(vault, "data", "entities", "products", "foo-old");
   mkdirSync(dir, { recursive: true });
   const old = { id: "foo-old", name: "Foo Old", integration: "web", urls: ["https://page.example.com/"], trusted: true, domains: ["wealth"], probe: { ok: true, checked_at: 1 } };
   writeFileSync(join(dir, "manifest.json"), JSON.stringify(old));
@@ -263,7 +263,7 @@ test("removing archives the folder; use changes the scope; the chat note names s
   expect(knowledgeNote([])).toBe("");
   const r = removeKnowledgeSource(vault, "foo-db");
   expect(existsSync(r.to)).toBe(true);
-  expect(existsSync(join(vault, "data", "apps", "foo-db"))).toBe(false);
+  expect(existsSync(join(vault, "data", "entities", "products", "foo-db"))).toBe(false);
   expect(listKnowledgeSources(vault)).toEqual([]);
 });
 

@@ -23,7 +23,8 @@ describe("scrubVault", () => {
   test("classifies kinds and skips skills", () => {
     expect(kindOf("build/_meta/prompts.claude.jsonl")).toBe("prompt-streams");
     expect(kindOf("data/domains/a/memory/skills/x/SKILL.md")).toBeNull();
-    expect(kindOf("data/apps/x/notes.md")).toBeNull();
+    expect(kindOf("data/entities/products/x/notes.md")).toBeNull();
+    expect(kindOf("data/entities/products/x/entity.md")).toBe("entity-pages");
   });
 
   test("dry run counts, a real run masks with a backup outside the vault", () => {

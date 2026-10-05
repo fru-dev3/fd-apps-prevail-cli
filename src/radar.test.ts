@@ -64,8 +64,8 @@ describe("the radar eval: known slips flagged before they are due", () => {
       ...[1, 2, 3].flatMap((k) => [{ id: `q${k}`, thread: `old${k}`, ts: NOW - (30 + k) * DAY, dir: "sent" as const, from: "me@x.com", to: ["sam@x.com"], subject: "q" }, { id: `a${k}`, thread: `old${k}`, ts: NOW - (30 + k) * DAY + 6 * 3_600_000, dir: "received" as const, from: "sam@x.com", to: ["me@x.com"], subject: "a" }]),
       { id: "w", thread: "new", ts: NOW - 4 * DAY, dir: "sent", from: "me@x.com", to: ["sam@x.com"], subject: "Can you send the foo lease?", asks: true },
     ];
-    mkdirSync(join(V, "data", "apps", "foo-app"), { recursive: true });
-    writeFileSync(join(V, "data", "apps", "foo-app", "manifest.json"), JSON.stringify({ name: "Foo app", renewal: { next: at(6) } }));
+    mkdirSync(join(V, "data", "entities", "products", "foo-app"), { recursive: true });
+    writeFileSync(join(V, "data", "entities", "products", "foo-app", "manifest.json"), JSON.stringify({ name: "Foo app", renewal: { next: at(6) } }));
     openDecision(V, { question: "Keep the foo car?", domain: "foo", due: at(-1) });
     // A person seen every week who has gone quiet for three weeks.
     writeFileSync(join(V, "build", "_meta", "entities", "index.json"), JSON.stringify({ entities: [{ id: "person/alex-reed", name: "Alex Reed", kind: "person", relation: "yours", home_domain: "bar", mentions: [8, 15, 22, 29].map((w) => ({ ts: NOW - (w + 21) * DAY })) }] }));
@@ -94,8 +94,8 @@ describe("the radar eval: known slips flagged before they are due", () => {
   });
   test("Today shows one thing falling behind, from the radar, with how many more", () => {
     writeFileSync(join(D("foo"), "memory", "tasks.md"), `- [ ] Return the foo drill @${ymd(NOW - 2 * DAY)} ~id:o1 ~kind:commitment ~to:person/jordan\n- [ ] Renew the foo license @${ymd(NOW + 5 * DAY)} ~id:a2\n`);
-    mkdirSync(join(V, "data", "apps", "foo-app"), { recursive: true });
-    writeFileSync(join(V, "data", "apps", "foo-app", "manifest.json"), JSON.stringify({ name: "Foo app", trial: { ends: ymd(NOW + DAY) } }));
+    mkdirSync(join(V, "data", "entities", "products", "foo-app"), { recursive: true });
+    writeFileSync(join(V, "data", "entities", "products", "foo-app", "manifest.json"), JSON.stringify({ name: "Foo app", trial: { ends: ymd(NOW + DAY) } }));
     const card = composeToday(V, { now: NOW, refresh: true });
     expect(card.fallingBehind).toMatchObject({ kind: "admin" });
     expect(card.fallingBehind!.text).toContain("Foo app trial ends");

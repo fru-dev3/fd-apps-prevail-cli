@@ -20,7 +20,7 @@ const asst = (id: string, req: string, ts: string, out: number, extra: Record<st
 function seed() {
   rmSync(ROOT, { recursive: true, force: true });
   mkdirSync(join(V, "build", "_meta"), { recursive: true });
-  mkdirSync(join(V, "data", "apps"), { recursive: true });
+  mkdirSync(join(V, "data", "entities", "products"), { recursive: true });
   // Claude Code: one response written as two content-block lines (the first
   // with partial output), copied again into a resumed session file; a second
   // response; a cost-state line; one line in an unknown shape.

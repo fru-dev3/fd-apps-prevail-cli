@@ -19,8 +19,8 @@ function seed() {
   const p = join(V, "data", "entities", "people", "foo-bar");
   mkdirSync(p, { recursive: true });
   writeFileSync(join(p, "entity.md"), "---\nname: Foo Bar\nkind: person\nsaved: true\n---\n");
-  mkdirSync(join(V, "data", "apps", "foo-inbox"), { recursive: true });
-  writeFileSync(join(V, "data", "apps", "foo-inbox", "manifest.json"), JSON.stringify({ title: "Foo Inbox" }));
+  mkdirSync(join(V, "data", "entities", "products", "foo-inbox"), { recursive: true });
+  writeFileSync(join(V, "data", "entities", "products", "foo-inbox", "manifest.json"), JSON.stringify({ title: "Foo Inbox" }));
   createMission(V, { name: "Bar site", outcome: "Ship the bar site", domains: [{ slug: "money", role: "owner" }], repos: ["/tmp/foo-home/code/bar-site"] });
 }
 

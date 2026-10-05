@@ -48,14 +48,14 @@ function seed() {
   writeFileSync(join(raw, "2026-09-29", "in_foo.json"), JSON.stringify({ meta: {}, videos: [{ video_id: "v1", title: "A foo talk", duration_s: 600 }, { video_id: "v2", title: "Bar", duration_s: 1200 }] }));
   writeFileSync(join(raw, "2026-09-30", "in_foo.json"), JSON.stringify({ meta: {}, videos: [{ video_id: "v2", title: "Bar", duration_s: 1200 }, { video_id: "v3", title: "Baz", duration_s: 300 }] }));
   // Card statements (invented merchants).
-  mkdirSync(join(V, "data", "apps", "Foo Card"), { recursive: true });
-  writeFileSync(join(V, "data", "apps", "Foo Card", "activity.CSV"), [
+  mkdirSync(join(V, "data", "entities", "products", "Foo Card"), { recursive: true });
+  writeFileSync(join(V, "data", "entities", "products", "Foo Card", "activity.CSV"), [
     "Transaction Date,Post Date,Description,Category,Type,Amount,Memo",
     "09/29/2026,09/30/2026,FOO GROCER,Groceries,Sale,-20.50,",
     "09/29/2026,09/30/2026,BAR CAFE,Food & Drink,Sale,-4.25,",
     "09/30/2026,09/30/2026,PAYMENT THANK YOU,,Payment,100.00,"].join("\n"));
-  mkdirSync(join(V, "data", "apps", "Bar Card"), { recursive: true });
-  writeFileSync(join(V, "data", "apps", "Bar Card", "export.csv"), ["Date,Description,Amount", "09/30/2026,BAZ AIRLINES,68.87", "09/30/2026,ONLINE PAYMENT,-500.00"].join("\n"));
+  mkdirSync(join(V, "data", "entities", "products", "Bar Card"), { recursive: true });
+  writeFileSync(join(V, "data", "entities", "products", "Bar Card", "export.csv"), ["Date,Description,Amount", "09/30/2026,BAZ AIRLINES,68.87", "09/30/2026,ONLINE PAYMENT,-500.00"].join("\n"));
   // AI events from two Macs.
   const ai = join(V, "build", "_meta", "events", "claude");
   mkdirSync(ai, { recursive: true });

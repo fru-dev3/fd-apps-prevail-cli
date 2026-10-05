@@ -20,7 +20,7 @@ import {
   migrateToBuildLayout,
   migrateToDataLayout,
 } from "./vault-data-layout.ts";
-import { dataRoot, resolveDomainDir, appsContainer, newDomainDir } from "./path-safety.ts";
+import { dataRoot, resolveDomainDir, productsContainer, newDomainDir } from "./path-safety.ts";
 import { scanVault } from "./vault.ts";
 import { appendScoreHistory, readScoreHistory } from "./score.ts";
 import type { ContextScore } from "./manifest.ts";
@@ -87,7 +87,7 @@ describe("v4 data-layout migrator", () => {
     expect(isDataLayout(vault)).toBe(true);
     expect(dataRoot(vault)).toBe(join(vault, "data"));
     expect(resolveDomainDir(vault, "wealth")).toBe(join(vault, "data", "domains", "wealth"));
-    expect(appsContainer(vault)).toBe(join(vault, "data", "apps"));
+    expect(productsContainer(vault)).toBe(join(vault, "data", "entities", "products"));
     expect(newDomainDir(vault, "health")).toBe(join(vault, "data", "domains", "health"));
     // The scanner still finds the domain (now under data/), exactly once.
     const domains = scanVault(vault).map((d) => d.name).filter((n) => n === "wealth");
