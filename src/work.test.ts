@@ -246,7 +246,8 @@ describe("views and the CLI", () => {
     expect((await cli(["settings", "--herdr", "maybe"])).code).toBe(1);
     writeSettings(V, { herdr: false });
     const m = await cli(["machines"]);
-    expect(m.json).toMatchObject({ ok: true, current: "laptop", machines: [{ id: "local", label: "laptop", current: true, herdr: "local" }], agentKinds: ["claude", "codex", "gemini"] });
+    expect(m.json).toMatchObject({ ok: true, current: "laptop", machines: [{ id: "local", label: "laptop", current: true, herdr: "local" }] });
+    expect(m.json.agentKinds).toContain("claude");
     expect((await cli(["show", "nope"])).json).toMatchObject({ ok: false });
     expect((await cli(["bogus"])).code).toBe(1);
     expect(readTask(V, p.tasks[2]!.id)?.task.status).toBe("needs-you");

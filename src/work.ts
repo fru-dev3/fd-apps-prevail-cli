@@ -36,7 +36,7 @@ import type { RouteRunner } from "./route.ts";
 import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./session.ts";
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
 import { buildCatalog, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
-import { agentKinds, asCatalogMachines, closeHerdr, closeTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, reopenTask, addMachine, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
+import { agentKinds, asCatalogMachines, closeHerdr, closeTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, reopenTask, resumeHerdr, addMachine, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 
 export type WorkStatus = "routed" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
@@ -437,7 +437,7 @@ export function pauseTask(vault: string, id: string, deps: WorkDeps = {}): WorkT
   if (!r) throw new Error(`no task ${id}`);
   if (!OPEN.includes(r.task.status)) throw new Error(`a ${r.task.status} task cannot be paused`);
   if (r.task.executor === "engine" && r.task.jobId && readJob(vault, r.task.jobId)?.status === "running") stopJob(vault, r.task.jobId);
-  if (r.task.executor === "herdr" && r.task.herdr?.agent) { try { pauseHerdr(r.task, deps); } catch { /* the agent is gone */ } }
+  if (r.task.executor === "herdr" && r.task.herdr?.agent) { try { pauseHerdr(vault, r.task, deps); } catch { /* the agent is gone */ } }
   const t = updateTask(vault, id, (x) => { x.status = "paused"; note(x, "paused", undefined, now); });
   syncBoard(vault, t);
   return t;
@@ -449,7 +449,7 @@ export function stopTask(vault: string, id: string, deps: WorkDeps = {}): WorkTa
   const r = readTask(vault, id);
   if (!r) throw new Error(`no task ${id}`);
   if (r.task.jobId && readJob(vault, r.task.jobId)) { try { stopJob(vault, r.task.jobId); } catch { /* gone */ } }
-  if (r.task.executor === "herdr" && r.task.herdr?.agent) { try { pauseHerdr(r.task, deps); } catch { /* not open */ } }
+  if (r.task.executor === "herdr" && r.task.herdr?.agent) { try { pauseHerdr(vault, r.task, deps); } catch { /* not open */ } }
   const t = updateTask(vault, id, (x) => { x.status = "closed"; delete x.ask; note(x, "stopped", undefined, now); });
   syncBoard(vault, t);
   return t;
@@ -501,8 +501,14 @@ export async function continueTask(vault: string, id: string, o: { yes?: boolean
       x.status = "routed";
     });
   } else {
+    // A Herdr task on the same Mac with its agent still there goes on in its tab; otherwise it reopens here with its history.
+    if (t0.executor === "herdr" && t0.machine === here && t0.herdr?.agent && resumeHerdr(vault, id, deps)) return { ok: true, task: readTask(vault, id)!.task };
     updateTask(vault, id, (x) => { if (x.machine !== here) { note(x, "moved", `${x.machine} to ${here}`, now); x.machine = here; } delete x.lease; x.status = "routed"; note(x, "continued", undefined, now); });
-    if (t0.executor === "herdr") return { ok: true, task: reopenTask(vault, id, deps) };
+    if (t0.executor === "herdr") {
+      if (t0.herdr?.tabId && t0.machine !== here) { try { closeHerdr(vault, t0, deps); } catch { /* that Mac is away */ } }
+      updateTask(vault, id, (x) => { if (x.herdr) delete x.herdr.tabId; });
+      return { ok: true, task: reopenTask(vault, id, deps) };
+    }
   }
   return { ok: true, task: await startTask(vault, id, { deps }) };
 }

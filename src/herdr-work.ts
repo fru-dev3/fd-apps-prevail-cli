@@ -306,7 +306,7 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
         workspaceId = c.workspace.workspace_id; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id; created = true;
         if (o.workspace && o.workspace !== settings.workspace) writeSettings(vault, { workspaces: { ...settings.workspaces, [t.thread.space]: o.workspace } });
       } else {
-        const c = h(["tab", "create", "--workspace", ws.workspace_id, "--cwd", cwd, "--label", t.text.replace(/\s+/g, " ").slice(0, 30), ...env, "--no-focus"]) as { tab?: { tab_id: string }; root_pane?: { pane_id: string } };
+        const c = h(["tab", "create", "--workspace", ws.workspace_id, "--cwd", cwd, "--label", t.text.replace(/\s+/g, " ").slice(0, 30).trim(), ...env, "--no-focus"]) as { tab?: { tab_id: string }; root_pane?: { pane_id: string } };
         if (!c?.tab?.tab_id || !c.root_pane?.pane_id) throw new Error("herdr did not return the new tab");
         workspaceId = ws.workspace_id; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id;
       }
@@ -374,7 +374,7 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
   const h = herdrFor(deps, machine);
   const agent = r.task.herdr.agent;
   const until = clock() + 6 * 3_600_000;
-  return withLease(vault, id, deps, async () => {
+  await withLease(vault, id, deps, async () => {
     for (let round = 0; round < (o.maxRounds ?? 10_000) && clock() < until; round++) {
       const cur = readTask(vault, id)?.task;
       if (!cur || !(cur.status === "running" || cur.status === "needs-you") || cur.herdr?.agent !== agent) break;
@@ -398,16 +398,30 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       syncBoard(vault, t);
       if (settled) break;
     }
-    return readTask(vault, id)!.task;
   });
+  return readTask(vault, id)!.task;
 }
 
 /** Esc to the agent: it stops what it is doing and waits. */
-export function pauseHerdr(t: WorkTask, deps: WorkDeps = {}): void {
+export function pauseHerdr(vault: string, t: WorkTask, deps: WorkDeps = {}): void {
   if (!t.herdr?.agent) return;
-  const m = t.herdr.machine;
-  const h = herdrFor(deps, deps.herdrFor || !m ? "local" : m);
+  const h = herdrFor(deps, herdrMachine(vault, t.herdr.machine, deps) ?? "local");
   h(["agent", "send-keys", t.herdr.agent, "esc"]);
+}
+
+/** Continue in the same tab: the paused agent is asked to go on, and the mirror picks up again. False when the agent is gone. */
+export function resumeHerdr(vault: string, id: string, deps: WorkDeps = {}): boolean {
+  const r = readTask(vault, id);
+  const ref = r?.task.herdr;
+  if (!r || !ref?.agent) return false;
+  const machine = herdrMachine(vault, ref.machine, deps);
+  if (!machine) return false;
+  try { herdrFor(deps, machine)(["agent", "prompt", ref.agent, "Continue where you left off."]); } catch { return false; }
+  const now = (deps.now ?? Date.now)();
+  const t = updateTask(vault, id, (x) => { x.status = "running"; delete x.ask; note(x, "resumed", "in its Herdr tab", now); });
+  syncBoard(vault, t);
+  (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "mirror", id]);
+  return true;
 }
 
 /** Close what Prevail opened: the tab, and the workspace only when Prevail created it and nothing else is in it. */
