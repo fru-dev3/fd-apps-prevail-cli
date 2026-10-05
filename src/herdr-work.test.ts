@@ -294,6 +294,12 @@ describe("mirror, follow up, check off, close and reopen", () => {
     expect(s.added![0]!).toMatchObject({ promptId: t.promptId, name: "Foo Bank Call" });
     expect(s.added![0]!.id).toBe(`${t.promptId}-2`);
     expect(s.task.log.at(-1)).toMatchObject({ ev: "split", detail: "Became its own task: Foo Bank Call" });
+    // The parent stays open as it was, and the two link both ways.
+    expect(s.task.status).toBe("running");
+    expect(s.task.children).toEqual([s.added![0]!.id]);
+    expect(s.task.updates!.at(-1)).toMatchObject({ from: "task", link: s.added![0]!.id });
+    expect(queueTasks(V).find((x) => x.task.id === s.added![0]!.id)?.task.parentId).toBe(t.id);
+    expect(queueTasks(V).some((x) => x.task.id === t.id)).toBe(true);
   });
   test("a finished task never closes itself: it says what came of it, asks to close, and stays with its tab", async () => {
     const h = fakeHerdr({ statuses: ["idle", "done"], reads: [`${BRIEF_END}\n\nSummary:\nFoo carrier A is cheapest overall.`] });

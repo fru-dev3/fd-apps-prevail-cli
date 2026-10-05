@@ -109,6 +109,9 @@ export interface WorkTask extends RoutedTask {
   context?: ContextItem[];
   /** The question the agent is waiting on, as one plain sentence (status needs-you). Answered by a follow-up. */
   waiting?: string;
+  /** The task this one was split from, and the subtasks split from this one: linked both ways, neither closes the other. */
+  parentId?: string;
+  children?: string[];
   /** True while a planned task waits for the owner's answers before it starts. */
   planning?: boolean;
   /** Every domain the work touches, the owner first (then consulted and informed). */
@@ -119,7 +122,7 @@ export interface WorkTask extends RoutedTask {
   updates?: TaskUpdate[];
 }
 
-export interface TaskUpdate { ts: number; from: "task" | "you"; text: string; /** A plan's questions, shown as a short list the owner answers in one reply. */ questions?: string[] }
+export interface TaskUpdate { ts: number; from: "task" | "you"; text: string; /** A plan's questions, shown as a short list the owner answers in one reply. */ questions?: string[]; /** A subtask this line hands work to: the panel shows it as a link. */ link?: string }
 
 /** `ev` is a short event name; `detail` one line; `more` what a line shows when expanded (a follow-up's words, the tool call behind an activity). */
 export interface LogEntry { ts: number; ev: string; detail?: string; more?: string }
@@ -292,13 +295,13 @@ export async function topUp(vault: string, deps: WorkDeps = {}): Promise<string[
 export const note = (t: WorkTask, ev: string, detail: string | undefined, now: number, more?: string) => { t.log.push({ ts: now, ev, ...(detail ? { detail: detail.slice(0, 300) } : {}), ...(more ? { more: more.slice(0, 2000) } : {}) }); if (t.log.length > 200) t.log.splice(0, t.log.length - 200); };
 
 /** One line in the task's back-and-forth, at a meaningful moment only; the same line twice in a row is said once. */
-export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, now = Date.now(), questions?: string[]): void {
+export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, now = Date.now(), questions?: string[], link?: string): void {
   const line = text.replace(/\s+/g, " ").trim().slice(0, 400);
   if (!line) return;
   const u = (t.updates ??= []);
   const last = u[u.length - 1];
   if (last?.from === from && last.text === line) return;
-  u.push({ ts: now, from, text: line, ...(questions?.length ? { questions: questions.map((q) => q.trim().slice(0, 200)).filter(Boolean) } : {}) });
+  u.push({ ts: now, from, text: line, ...(questions?.length ? { questions: questions.map((q) => q.trim().slice(0, 200)).filter(Boolean) } : {}), ...(link ? { link } : {}) });
   if (u.length > 60) u.splice(0, u.length - 60);
 }
 export const CLOSE_QUESTION = "Can I close this task?";
@@ -1119,7 +1122,13 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
   if (j.kind === "new") {
     const p = await addWork(vault, body, { into: r.prompt.id, surface: r.prompt.surface, deps });
     if (j.name && p.tasks.length === 1) renameTask(vault, p.tasks[0]!.id, j.name, deps);
-    const t = updateTask(vault, id, (x) => { const nm = j.name ?? p.tasks[0]?.name ?? "new task"; note(x, "split", `Became its own task: ${nm}`, now, body); addUpdate(x, "you", body, now); addUpdate(x, "task", `That is its own task now: ${nm}.`, now); });
+    // The parent stays as it was (status, tab, back-and-forth); the subtask links back to it.
+    for (const c of p.tasks) updateTask(vault, c.id, (x) => { x.parentId = id; });
+    const t = updateTask(vault, id, (x) => {
+      const nm = j.name ?? p.tasks[0]?.name ?? "new task";
+      x.children = [...new Set([...(x.children ?? []), ...p.tasks.map((c) => c.id)])];
+      note(x, "split", `Became its own task: ${nm}`, now, body); addUpdate(x, "you", body, now); addUpdate(x, "task", `That is its own task now: ${nm}.`, now, undefined, p.tasks[0]?.id);
+    });
     return { ok: true, task: t, added: p.tasks.map((x) => readTask(vault, x.id)?.task ?? x) };
   }
   updateTask(vault, id, (x) => { appendTurn(vault, x, "user", body, "prevail", now); note(x, "follow-up", undefined, now, body); addUpdate(x, "you", body, now); });
