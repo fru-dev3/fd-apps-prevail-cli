@@ -22,9 +22,9 @@ import { domainDir } from "./decisions.ts";
 import { readJob } from "./jobs.ts";
 import { runtimePath } from "./path-safety.ts";
 import { getSpecialist } from "./specialists.ts";
-import { domainPanes, herdrBin, herdrOn, mapDir, type Herdr } from "./spaces.ts";
+import { herdrBin, herdrOn, mapDir, type Herdr } from "./spaces.ts";
 import { threadFiles } from "./thread-schedule.ts";
-import { appendTurn, defaultSpawnSelf, note, readSettings, readTask, syncBoard, updateTask, withLease, writeSettings, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
+import { appendTurn, defaultSpawnSelf, distilOutcome, finish, note, readSettings, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
 import { FALLBACK_AGENT_KINDS, folderOf, folderPath, type CatalogMachine } from "./work-router.ts";
 
 export interface Machine {
@@ -48,6 +48,8 @@ export interface MachineRecord {
   homeRoot: string;
   monoRoot?: string;
   herdrMachines: string[];
+  /** Glyph is installed here, so Work mode launches agents through it. */
+  glyph?: boolean;
   lastSeen: number;
 }
 
@@ -123,7 +125,7 @@ export function writeMachineRecord(vault: string, deps: MachineDeps = {}): Machi
   const rec: MachineRecord = {
     hostname: me.hostname, label: me.label, role: deps.role ?? readMachineRole(), herdrVersion: herdrVersion(h),
     vaultRoot: vault, homeRoot: me.roots.home, ...(me.roots.mono ? { monoRoot: me.roots.mono } : {}),
-    herdrMachines: savedHerdrMachines(h).map((m) => m.label), lastSeen: now,
+    herdrMachines: savedHerdrMachines(h).map((m) => m.label), glyph: existsSync(join(homedir(), ".config", "glyph", "glyph.zsh")), lastSeen: now,
   };
   mkdirSync(machinesDir(vault), { recursive: true });
   writeFileSync(p, `${JSON.stringify(rec, null, 2)}\n`);
@@ -280,27 +282,180 @@ export function buildBrief(vault: string, t: WorkTask, o: { history?: string } =
   const team = (job?.team ?? []).flatMap((s) => s.specialists).map((id) => getSpecialist(vault, id)).filter((s): s is NonNullable<typeof s> => !!s);
   const lines = [
     "You are working on one task for the user's chief of staff in Prevail. Prevail keeps this conversation in the user's vault.",
+    ...(t.name ? [`Task name: ${t.name}`] : []),
     `Task: ${t.text}`,
     ...(t.goal && t.goal !== t.text ? [`Goal it serves: ${t.goal}`] : []),
     `Where it belongs: ${t.dest ? `${t.dest.label} (${t.dest.kind})` : "General"}.`,
     ...(team.length ? ["", "Work the way these specialists would:", ...team.map((s) => `- ${s.name}: ${s.mandate.replace(/\s+/g, " ").slice(0, 300)}`)] : []),
+    ...(t.context?.length ? ["", "What Prevail already knows (use it; never ask the user for it):", ...t.context.map((c) => `- ${c.text}`)] : []),
     "", "Rules:",
+    "- Work on your own. Never ask the user a question or wait for an answer: nobody is watching this tab. When something is truly missing, make a sensible assumption and say so in your summary.",
     "- Draft, never send: do not email, message, post, buy, pay, book or sign anything. Write the draft and stop.",
-    "- Ask before anything that cannot be undone, and before touching money, people, where the user lives or who they are.",
+    "- Stop before anything that cannot be undone, or that touches money, people, where the user lives or who they are, and say in your summary what is waiting for the user's approval.",
     ...(chief.neverRead.length ? [`- Never read these areas unless the task names them: ${chief.neverRead.join(", ")}.`] : []),
     `- Stay within about $${job?.budget.usd ?? chief.limits.usd} and ${job?.budget.minutes ?? chief.limits.minutes} minutes of work, then report.`,
-    ...(job?.askReason ? [`- Why this asked first: ${job.askReason}.`] : []),
     "", `End with a short summary: what you did, ${BRIEF_END}`,
   ];
   if (o.history) lines.unshift("Pick this task back up. The conversation so far:", "", o.history, "", "---", "");
   return lines.join("\n");
 }
 
-const notReady = "the agent in its Herdr tab is waiting for an answer there (Claude Code may be asking whether to trust the folder); answer it in Herdr, then Start";
+// ── Headless agents: each kind in its non-interactive mode ──────────────────
 
-const agentName = (taskId: string) => `pw-${taskId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(-24)}`.replace(/-+$/, "");
+/**
+ * The flags that keep each agent kind from ever waiting on an approval prompt.
+ * Claude Code also loses its ask-the-user tool and keeps Prevail's act-gate
+ * hook (--settings, added at launch), so sending, money and anything that
+ * cannot be undone are still blocked by the hook, never asked about in a tab.
+ * Codex runs sandboxed to its folder with no approvals. Kinds not listed use
+ * the flag the user gave Glyph for them (its agents table), if any.
+ */
+export const HEADLESS: Record<string, string[]> = {
+  claude: ["--dangerously-skip-permissions"],
+  codex: ["--ask-for-approval", "never", "--sandbox", "workspace-write"],
+  gemini: ["--yolo"],
+  agy: ["--dangerously-skip-permissions"],
+  cursor: ["--force"],
+  hermes: ["--yolo"],
+};
+/** The command a Herdr agent kind runs as, where it differs from the kind. */
+const KIND_CMD: Record<string, string> = { cursor: "cursor-agent" };
+/** The commands Glyph wraps by default (its public table); Claude and pi take the session name with -n, the rest as a first bare word. */
+const GLYPH_WRAPS = new Set(["claude", "agy", "codex", "cursor-agent", "crush", "cortex", "hermes", "opencode", "pi", "omni"]);
+const NAME_FLAG: Record<string, string> = { claude: "-n", pi: "-n" };
 
-/** The Herdr workspaces open on a machine (by label), for the "which workspace?" question. */
+/** The user's own Glyph agents table (command, auto-approve flag), read at run time. */
+function glyphAgentFlags(env: Record<string, string | undefined> = process.env): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    const f = env.GLYPH_AGENTS || join(homedir(), ".config", "glyph", "agents.tsv");
+    for (const line of readFileSync(f, "utf8").split("\n")) {
+      const [cmd, flag] = line.split("\t");
+      if (cmd && !cmd.startsWith("#") && /^[A-Za-z0-9_.-]+$/.test(cmd)) out.set(cmd, (flag ?? "").trim());
+    }
+  } catch { /* none */ }
+  return out;
+}
+
+/** The agent's arguments for a headless run: its approval mode, then Claude's act-gate hook and no ask-the-user tool. */
+export function headlessArgs(kind: string, settingsPath: string | null, env?: Record<string, string | undefined>): string[] {
+  const cmd = KIND_CMD[kind] ?? kind;
+  const flag = glyphAgentFlags(env).get(cmd);
+  const base = HEADLESS[kind] ?? (flag ? [flag] : []);
+  if (kind !== "claude") return [...base];
+  return [...base, ...(settingsPath ? ["--settings", settingsPath] : []), "--disallowedTools", "AskUserQuestion"];
+}
+
+const slugName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "task";
+
+/** The line typed into the new tab's shell so Glyph wraps the launch: its session name (the task's name) and Remote Control. */
+export function glyphLine(kind: string, name: string, args: string[]): string {
+  const cmd = KIND_CMD[kind] ?? kind;
+  const label = NAME_FLAG[cmd] ? [NAME_FLAG[cmd]!, name] : GLYPH_WRAPS.has(cmd) || glyphAgentFlags().has(cmd) ? [slugName(name)] : [];
+  return [cmd, ...label, ...args].map(shellQuote).join(" ");
+}
+
+/** Is Glyph installed on that machine? This Mac: its zsh file; another: what that Mac's record says. */
+export function glyphOn(vault: string, label: string, local: boolean): boolean {
+  if (local) return existsSync(join(homedir(), ".config", "glyph", "glyph.zsh"));
+  return readMachineRecords(vault).some((r) => (r.label === label || r.hostname === label) && r.glyph === true);
+}
+
+// ── Finding the destination's workspace ─────────────────────────────────────
+
+interface WsRow { workspace_id: string; label: string; cwd?: string; tab_count?: number }
+type Links = Record<string, Record<string, string>>;
+const linksFile = (vault: string) => join(workDir(vault), "herdr.json");
+function readLinks(vault: string): Links {
+  try { const j = JSON.parse(readFileSync(linksFile(vault), "utf8")) as { links?: Links }; return j.links && typeof j.links === "object" ? j.links : {}; } catch { return {}; }
+}
+function saveLink(vault: string, machine: string, space: string, label: string): void {
+  const links = readLinks(vault);
+  if (links[machine]?.[space] === label) return;
+  links[machine] = { ...(links[machine] ?? {}), [space]: label };
+  mkdirSync(workDir(vault), { recursive: true });
+  writeFileSync(linksFile(vault), `${JSON.stringify({ links }, null, 2)}\n`);
+}
+
+const titled = (s: string) => s.split(/[-_]/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+/** The workspace a destination already has open: its saved link, then by name (its label, id or space) or its folder. */
+export function findDestWorkspace(vault: string, rows: WsRow[], t: WorkTask, cwd: string): WsRow | null {
+  const by = (l?: string) => (l ? rows.find((w) => typeof w.label === "string" && w.label.trim().toLowerCase() === l.trim().toLowerCase()) ?? null : null);
+  const space = t.thread.space;
+  const bare = space.replace(/^_(?:mission|app)-/, "");
+  const d = t.dest;
+  const names = [readLinks(vault)[t.machine]?.[space], readSettings(vault).workspaces[space], d?.label, d?.id, bare, titled(bare), d?.folder ? d.folder.rel.split("/").pop() : undefined];
+  for (const n of names) { const w = by(n); if (w) return w; }
+  return rows.find((w) => w.cwd && w.cwd.replace(/\/$/, "") === cwd.replace(/\/$/, "")) ?? null;
+}
+
+/** A workspace is named after its destination. */
+export const workspaceName = (t: Pick<WorkTask, "dest">) => (t.dest?.label ?? "General").replace(/\s+/g, " ").trim().slice(0, 40);
+
+// ── Dialogs and questions in the tab ────────────────────────────────────────
+
+const TRUST = /trust (?:this folder|the files in this folder|this project)|Do you trust/i;
+const BYPASS = /Bypass Permissions mode/i;
+const MENU = /Enter to select|to navigate|Use arrow keys|Esc to cancel|\(y\/n\)|\[y\/N\]|\[Y\/n\]/i;
+
+/** Answer the dialogs a headless launch may still meet (trust this folder; Claude's bypass warning). True when it answered one. */
+export function answerDialog(h: Herdr, pane: string | undefined): boolean {
+  if (!pane) return false;
+  let screen = "";
+  try { screen = readText(h(["pane", "read", pane, "--source", "recent", "--lines", "40"])); } catch { return false; }
+  // Both default to safe choices; the user's yes was given by turning Herdr on for Work mode.
+  if (TRUST.test(screen) && /Yes, (?:proceed|I trust)/i.test(screen)) { h(["pane", "send-keys", pane, "enter"]); return true; }
+  if (BYPASS.test(screen) && /Yes, I accept/i.test(screen)) { h(["pane", "send-keys", pane, "down", "enter"]); return true; }
+  return false;
+}
+
+/** The question an agent is waiting on, as one plain sentence; null when it is not asking. */
+export function askingQuestion(words: string): string | null {
+  const lines = words.split("\n").map((l) => l.replace(/^[\s❯●⏺>*-]+/, "").replace(/\s+/g, " ").trim()).filter(Boolean).slice(-14);
+  if (!lines.length) return null;
+  const menu = lines.some((l) => MENU.test(l));
+  const q = [...lines].reverse().find((l) => /\?$/.test(l) && l.length > 3 && !/^\d+[.)]/.test(l));
+  const last = lines[lines.length - 1]!;
+  if (!menu && !/\?$/.test(last)) return null;
+  const s = (q ?? "It is waiting on a choice in its Herdr tab.").replace(/\s*[—–]\s*/g, ", ");
+  return s.length > 200 ? `${s.slice(0, 199)}…` : s;
+}
+
+// What a line of the agent's work means, in plain words ("Reading your Gmail").
+const ACTIVITY: [RegExp, (arg: string) => string][] = [
+  [/gmail|mail/i, (a) => (/draft/i.test(a) ? "Drafting an email" : "Reading your Gmail")],
+  [/calendar/i, () => "Checking your calendar"],
+  [/drive|docs|sheets/i, () => "Reading your documents"],
+  [/^web ?search$/i, () => "Searching the web"],
+  [/^(?:web ?fetch|fetch)$/i, () => "Reading a web page"],
+  [/^read$/i, (a) => `Reading ${base(a)}`],
+  [/^(?:write|edit|update|multi ?edit)$/i, (a) => `Editing ${base(a)}`],
+  [/^(?:bash|shell|run)$/i, () => "Running a command"],
+  [/^(?:grep|glob|search|list)$/i, () => "Searching files"],
+  [/^(?:task|agent)$/i, () => "Bringing in a helper"],
+  [/^(?:todo ?write|update todos)$/i, () => "Planning the steps"],
+];
+const base = (a: string) => { const p = a.replace(/^["']|["']$/g, "").split(/[,\s]/)[0] ?? ""; const b = p.split("/").filter(Boolean).pop() ?? ""; return b && b.length < 40 ? b : "a file"; };
+
+/** The agent's tool calls in a stretch of its output, as plain activity lines with the call behind each. */
+export function activities(words: string): { line: string; more: string }[] {
+  const out: { line: string; more: string }[] = [];
+  for (const l of words.split("\n")) {
+    const m = /^\s*[⏺●]\s+([A-Za-z][\w .:-]*?)\s*\((.*)$/.exec(l);
+    if (!m) continue;
+    const tool = m[1]!.replace(/\s*\(MCP\)\s*$/i, "").trim();
+    const arg = m[2]!.replace(/\)\s*$/, "");
+    const hit = ACTIVITY.find(([re]) => re.test(tool));
+    const line = hit ? hit[1](`${tool} ${arg}`.includes("draft") ? `draft ${arg}` : arg) : `Using ${tool.replace(/^mcp__/i, "").replace(/[_-]+/g, " ").toLowerCase()}`;
+    if (out[out.length - 1]?.line !== line) out.push({ line, more: l.trim().slice(0, 300) });
+  }
+  return out;
+}
+
+const agentName = (t: Pick<WorkTask, "id" | "name" | "text">) => `${slugName(t.name || t.text)}-${t.id.split("-").pop()}`;
+
+/** The Herdr workspaces open on a machine (by label), read only. */
 export function herdrWorkspaces(vault: string, label: string, deps: WorkDeps = {}): string[] {
   const machine = herdrMachine(vault, label, deps);
   if (!machine) throw new Error(`${label} is not a saved Herdr machine here`);
@@ -308,90 +463,97 @@ export function herdrWorkspaces(vault: string, label: string, deps: WorkDeps = {
   return [...new Set((r?.workspaces ?? []).map((w) => w.label).filter((l) => typeof l === "string" && l.trim()))];
 }
 
-interface WsRow { workspace_id: string; label: string; tab_count?: number }
-function findWorkspace(h: Herdr, label: string): WsRow | null {
-  const r = h(["workspace", "list"]) as { workspaces?: WsRow[] } | undefined;
-  return (r?.workspaces ?? []).find((w) => w.label === label) ?? null;
+/** Wait until Herdr sees the agent in its pane, answering a trust or bypass dialog on the way. */
+function settleAgent(h: Herdr, agent: string, pane: string | undefined, deps: WorkDeps, tries = 30): "ready" | "blocked" | "unknown" {
+  const sleep = deps.sleep ?? ((ms: number) => Bun.sleepSync(ms));
+  let answered = 0;
+  let last = "";
+  for (let i = 0; i < tries; i++) {
+    try { last = statusOf(h(["agent", "get", agent])); } catch { last = ""; }
+    if (last === "idle" || last === "done") return "ready";
+    if (answered < 3 && answerDialog(h, pane)) { answered++; sleep(600); continue; }
+    if (last === "blocked") return "blocked";
+    sleep(500);
+  }
+  return last === "working" ? "ready" : "unknown";
 }
 
 /**
- * Open the task in Herdr: the destination's own agent pane when one is open
- * and idle here, else a new tab (--cwd, --no-focus) in the workspace mapped to
- * its space. A missing workspace is only created on the user's yes. Then the
- * agent starts (Claude Code with the act-gate hook) and gets the brief, and a
- * detached mirror copies its output into the thread.
+ * Open the task in Herdr, headless, one tab per task: the destination's
+ * workspace (found by its link, name or folder, else made and named after
+ * it), a new tab named after the task, and the agent in its non-interactive
+ * mode. With Glyph installed the agent's command is typed into the tab's
+ * shell so Glyph names the session and turns on Remote Control; otherwise
+ * `herdr agent start`. The brief follows once Herdr sees the agent ready; when
+ * it is not ready yet, the mirror sends it. Nothing here asks the user.
  */
-export async function launchTask(vault: string, id: string, deps: WorkDeps = {}, o: { createWorkspace?: boolean; workspace?: string; reopen?: boolean } = {}): Promise<WorkTask> {
+export async function launchTask(vault: string, id: string, deps: WorkDeps = {}, o: { reopen?: boolean } = {}): Promise<WorkTask> {
   const now = (deps.now ?? Date.now)();
   const r = readTask(vault, id);
   if (!r) throw new Error(`no task ${id}`);
-  const t = r.task;
-  const ask = (kind: "herdr-workspace" | "machine-add" | "start", detail: string, command?: string) => {
-    const x = updateTask(vault, id, (y) => { y.status = "needs-you"; y.ask = { kind, detail, ...(command ? { command } : {}) }; note(y, "asks", detail, now); });
-    syncBoard(vault, x);
-    return x;
-  };
-  const machine = herdrMachine(vault, t.machine, deps);
-  if (!machine) return ask("machine-add", `${t.machine} is not a saved Herdr machine here`, machineAddCommand(t.machine));
-  const h = herdrFor(deps, machine);
-  const settings = readSettings(vault);
-  let history = "";
-  if (o.reopen) {
-    const md = threadFiles(vault, t.thread.space, t.thread.session).find((f) => f.endsWith(".md"));
-    if (md) history = readFileSync(md, "utf8").replace(/^---\n[\s\S]*?\n---\n/, "").trim().slice(-4000);
+  let t = r.task;
+  let machine = herdrMachine(vault, t.machine, deps);
+  if (!machine) {
+    // A Mac Herdr cannot reach: it runs on this one.
+    const here = thisMachine(vault, deps.machine).label;
+    t = updateTask(vault, id, (x) => { note(x, "moved", `${x.machine} is not connected, so it runs on ${here}`, now); x.machine = here; });
+    machine = "local";
   }
+  const h = herdrFor(deps, machine);
+  const md = threadFiles(vault, t.thread.space, t.thread.session).find((f) => f.endsWith(".md"));
+  const thread = md ? readFileSync(md, "utf8").replace(/^---\n[\s\S]*?\n---\n/, "").trim() : "";
+  // Picked back up (reopen, a follow-up): the brief carries the conversation so far.
+  const history = o.reopen || (thread.match(/^## /gm)?.length ?? 0) > 1 ? thread.slice(-4000) : "";
   const brief = buildBrief(vault, t, { history });
   let ref: HerdrRef;
-  // What this launch opened, kept even when the agent never gets ready, so Close and Not now can shut it.
   let opened: HerdrRef | null = null;
-  // A tab an earlier launch opened whose agent was not ready (Claude Code asking to trust the folder, say).
   const prior = !o.reopen && t.herdr?.tabId && t.herdr.agent ? t.herdr : null;
-  let priorStatus = "";
-  if (prior) { try { priorStatus = statusOf(h(["agent", "get", prior.agent!])); } catch { priorStatus = "gone"; } }
-  if (prior && priorStatus === "blocked") return ask("start", notReady);
+  let priorAlive = false;
+  if (prior) { try { priorAlive = !!statusOf(h(["agent", "get", prior.agent!])); } catch { priorAlive = false; } }
   try {
-    // The destination's own agent, open and idle on this Mac: prompt it there.
-    const pane = machine === "local" && t.dest?.kind === "domain" && !o.reopen ? domainPanes(vault, h).get(t.dest.id) : undefined;
-    if (prior && priorStatus !== "gone") {
-      ref = prior;
-    } else if (pane?.agent && (pane.agent_status === "idle" || pane.agent_status === "done")) {
-      ref = { machine: t.machine, workspaceLabel: "", paneId: pane.pane_id, agent: pane.pane_id, createdTab: false };
-    } else {
-      const label = o.workspace?.trim() || settings.workspaces[t.thread.space] || settings.workspace;
+    if (prior && priorAlive) ref = { ...prior };
+    else {
       const cwd = taskCwd(vault, t, machine, deps);
       const env = ["--env", `PREVAIL_DOMAIN=${t.thread.space}`, "--env", `PREVAIL_THREAD_ID=${t.thread.session}`];
-      const ws = findWorkspace(h, label);
-      let paneId: string;
-      let tabId: string;
-      let created = false;
-      let workspaceId: string;
-      if (!ws) {
-        if (!o.createWorkspace) return ask("herdr-workspace", `create the Herdr workspace "${label}" on ${t.machine}?`);
+      const rows = ((h(["workspace", "list"]) as { workspaces?: WsRow[] } | undefined)?.workspaces ?? []);
+      const ws = findDestWorkspace(vault, rows, t, cwd);
+      const name = (t.name || t.text).replace(/\s+/g, " ").slice(0, 30).trim();
+      let workspaceId: string, tabId: string, paneId: string, label: string, created = false;
+      if (ws) {
+        const c = h(["tab", "create", "--workspace", ws.workspace_id, "--cwd", cwd, "--label", name, ...env, "--no-focus"]) as { tab?: { tab_id: string }; root_pane?: { pane_id: string } };
+        if (!c?.tab?.tab_id || !c.root_pane?.pane_id) throw new Error("herdr did not return the new tab");
+        workspaceId = ws.workspace_id; label = ws.label; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id;
+      } else {
+        label = workspaceName(t);
         const c = h(["workspace", "create", "--label", label, "--cwd", cwd, ...env, "--no-focus"]) as { workspace?: { workspace_id: string }; tab?: { tab_id: string }; root_pane?: { pane_id: string } };
         if (!c?.workspace?.workspace_id || !c.tab?.tab_id || !c.root_pane?.pane_id) throw new Error("herdr did not return the new workspace");
         workspaceId = c.workspace.workspace_id; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id; created = true;
-        if (o.workspace && o.workspace !== settings.workspace) writeSettings(vault, { workspaces: { ...settings.workspaces, [t.thread.space]: o.workspace } });
-      } else {
-        const c = h(["tab", "create", "--workspace", ws.workspace_id, "--cwd", cwd, "--label", t.text.replace(/\s+/g, " ").slice(0, 30).trim(), ...env, "--no-focus"]) as { tab?: { tab_id: string }; root_pane?: { pane_id: string } };
-        if (!c?.tab?.tab_id || !c.root_pane?.pane_id) throw new Error("herdr did not return the new tab");
-        workspaceId = ws.workspace_id; tabId = c.tab.tab_id; paneId = c.root_pane.pane_id;
+        try { h(["tab", "rename", tabId, name]); } catch { /* the label can wait */ }
       }
-      const name = agentName(t.id);
-      opened = { machine: t.machine, workspaceLabel: label, workspaceId, tabId, paneId, agent: name, createdWorkspace: created || (t.herdr?.createdWorkspace === true && t.herdr.workspaceLabel === label), createdTab: true };
+      saveLink(vault, t.machine, t.thread.space, label);
       // Claude Code carries Prevail's act-gate hook; the hook file lives on this Mac, so a remote Claude runs without it.
       const settingsPath = t.agentKind === "claude" && machine === "local" ? (deps.settingsPath ?? defaultSettingsPath)(vault, t.thread.space) : null;
-      h(["agent", "start", name, "--kind", t.agentKind, "--pane", paneId, ...(settingsPath ? ["--", "--settings", settingsPath] : [])]);
+      const args = headlessArgs(t.agentKind, settingsPath, deps.machine?.env);
+      const glyph = (deps.glyph ?? ((m: string) => glyphOn(vault, m, m === "local")))(machine === "local" ? "local" : t.machine);
+      opened = { machine: t.machine, workspaceLabel: label, workspaceId, tabId, paneId, agent: paneId, createdWorkspace: created || (t.herdr?.createdWorkspace === true && t.herdr.workspaceLabel === label), createdTab: true, ...(glyph ? { glyph: true } : {}) };
+      if (glyph) h(["pane", "run", paneId, glyphLine(t.agentKind, name, args)]);
+      else h(["agent", "start", agentName(t), "--kind", t.agentKind, "--pane", paneId, ...(args.length ? ["--", ...args] : [])]);
+      try { h(["pane", "rename", paneId, name]); } catch { /* cosmetic */ }
       ref = opened;
     }
-    h(["agent", "prompt", ref.agent!, brief]);
+    const state = settleAgent(h, ref.agent!, ref.paneId, deps);
+    if (state === "ready") { h(["agent", "prompt", ref.agent!, brief]); delete ref.briefPending; }
+    else ref.briefPending = true;
   } catch (e) {
     const msg = (e as Error).message;
-    if (opened) { const keep = opened; updateTask(vault, id, (x) => { x.herdr = keep; }); }
-    return ask("start", opened && /agent_not_ready/.test(msg) ? notReady : `Herdr could not start it: ${msg.slice(0, 200)}`);
+    const keep = opened;
+    const x = updateTask(vault, id, (y) => { if (keep) y.herdr = keep; finish(y, "failed", "Herdr could not start it."); note(y, "could not start", msg.slice(0, 200), now); });
+    syncBoard(vault, x);
+    return x;
   }
   const next = updateTask(vault, id, (x) => {
-    x.herdr = ref; x.status = "running"; delete x.ask;
-    note(x, o.reopen ? "reopened" : "in Herdr", `${ref.workspaceLabel || "its own pane"} on ${x.machine}`, now);
+    x.herdr = ref; x.status = "running"; delete x.ask; delete x.waiting;
+    note(x, o.reopen || prior ? "back in Herdr" : "in Herdr", `${ref.workspaceLabel} on ${x.machine}`, now);
     if (machine !== "local" && x.agentKind === "claude") note(x, "no act gate", "the hook file lives on this Mac; the remote agent runs without it", now);
   });
   syncBoard(vault, next);
@@ -424,7 +586,7 @@ export function afterBrief(text: string): string {
 /** The agent's words without its terminal chrome: rules and boxes, the empty input line, the mode footer, the spinner line. */
 export function stripChrome(text: string): string {
   return text.split("\n")
-    .filter((l) => !/^\s*[\u2500\u2501\u2550]{3,}/.test(l) && !/^\s*\u276f\s*$/.test(l) && !/^\s*\u23f5\u23f5/.test(l) && !/^\s*\u273b /.test(l))
+    .filter((l) => !/^\s*[─━═]{3,}/.test(l) && !/^\s*❯\s*$/.test(l) && !/^\s*⏵⏵/.test(l) && !/^\s*✻ /.test(l))
     .join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -443,10 +605,16 @@ const statusOf = (r: unknown): string => {
   return String(a.agent_status ?? a.status ?? "");
 };
 
+const WAITING = "It is waiting on a question in its Herdr tab.";
+
 /**
- * Mirror the agent's work into the thread until it settles: wait, read,
- * append only what is new. Blocked means the user must answer in Herdr; idle
- * or done ends the run and asks keep or close. The mirror holds the lease.
+ * Mirror the agent's work into the thread until it finishes: wait, read,
+ * append only what is new, and note what it is doing as plain activity lines.
+ * A brief that could not go in at launch goes in once the agent is idle. An
+ * agent asking something (a menu, a question, Herdr's blocked state) is never
+ * done: the task waits as needs-you with the question as one sentence, and a
+ * follow-up answers it. Done only when the agent settles with its work
+ * finished; the outcome is distilled then. The mirror holds the lease.
  */
 export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {}, o: { maxRounds?: number; waitMs?: number } = {}): Promise<WorkTask> {
   const clock = deps.now ?? Date.now;
@@ -456,34 +624,101 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
   if (!machine) throw new Error(`${r.task.machine} is not reachable from here`);
   const h = herdrFor(deps, machine);
   const agent = r.task.herdr.agent;
+  const pane = r.task.herdr.paneId;
   const until = clock() + 6 * 3_600_000;
+  const wait = String(o.waitMs ?? 600_000);
   await withLease(vault, id, deps, async () => {
     for (let round = 0; round < (o.maxRounds ?? 10_000) && clock() < until; round++) {
       const cur = readTask(vault, id)?.task;
       if (!cur || !(cur.status === "running" || cur.status === "needs-you") || cur.herdr?.agent !== agent) break;
-      try { h(["agent", "wait", agent, "--timeout", String(o.waitMs ?? 600_000)]); } catch { /* a timeout: read what there is */ }
+      // Waiting on the user: only a change from there wakes it (no spin on a state that stays blocked).
+      const waitArgs = cur.status === "needs-you" ? ["--until", "working", "--until", "idle", "--until", "done"] : [];
+      try { h(["agent", "wait", agent, ...waitArgs, "--timeout", wait]); } catch { /* a timeout: read what there is */ }
       let text = "";
       let status = "";
       try { text = readText(h(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "400"])); status = statusOf(h(["agent", "get", agent])); } catch (e) {
         // The agent is gone (its tab closed by hand): stop mirroring.
-        updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running") { x.status = "done"; x.ask = { kind: "keep-close", detail: "the Herdr agent is gone; close its place here?" }; } });
+        updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") finish(x, "done", x.outcome ?? "Its Herdr tab was closed."); });
         break;
       }
+      // The brief that could not go in at launch: in now that the agent is ready.
+      if (cur.herdr?.briefPending) {
+        if (status === "idle" || status === "done") {
+          try { h(["agent", "prompt", agent, buildBrief(vault, cur)]); } catch { continue; }
+          const t = updateTask(vault, id, (x) => { if (x.herdr) { delete x.herdr.briefPending; x.herdr.lastRead = text.slice(-2000); } x.status = "running"; delete x.waiting; note(x, "briefed", undefined, clock()); });
+          syncBoard(vault, t);
+          continue;
+        }
+        if (answerDialog(h, pane)) continue;
+        if (status === "blocked" && cur.status !== "needs-you") {
+          const t = updateTask(vault, id, (x) => { x.status = "needs-you"; x.waiting = WAITING; note(x, "waiting", WAITING, clock()); });
+          syncBoard(vault, t);
+        }
+        continue;
+      }
       const fresh = (cur.herdr?.lastRead ? newText(cur.herdr.lastRead, text) : afterBrief(text)).trim();
-      const settled = status === "idle" || status === "done";
+      const words = stripChrome(fresh);
+      const all = stripChrome(afterBrief(text));
+      const settled = (status === "idle" || status === "done") && (round > 0 || !!words);
+      const question = status === "blocked" || settled ? askingQuestion(all) ?? (status === "blocked" ? WAITING : null) : null;
+      if (question && status === "blocked" && answerDialog(h, pane)) continue;
+      const outcome = settled && !question ? await distilOutcome(all.slice(-4000), deps) : "";
       const t = updateTask(vault, id, (x) => {
-        const words = stripChrome(fresh);
         if (words) appendTurn(vault, x, "assistant", words, x.agentKind, clock());
+        for (const a of activities(words)) if (x.log[x.log.length - 1]?.detail !== a.line) note(x, "activity", a.line, clock(), a.more);
         if (x.herdr) x.herdr.lastRead = text.slice(-2000);
-        if (status === "blocked" && x.status === "running") { x.status = "needs-you"; x.ask = { kind: "start", detail: "the agent is waiting for your answer in Herdr" }; }
-        else if (status === "working" && x.status === "needs-you" && x.ask?.kind === "start") { x.status = "running"; delete x.ask; }
-        else if (settled && (x.status === "running" || x.status === "needs-you")) { x.status = "done"; x.ask = { kind: "keep-close", detail: "done; keep the Herdr tab open, or close it?" }; note(x, "done", undefined, clock()); }
+        if (question) {
+          if (x.status !== "needs-you" || x.waiting !== question) note(x, "waiting", question, clock());
+          x.status = "needs-you"; x.waiting = question;
+        } else if (status === "working" && x.status === "needs-you") { x.status = "running"; delete x.waiting; }
+        else if (settled && (x.status === "running" || x.status === "needs-you")) { delete x.waiting; finish(x, "done", outcome || "Done."); note(x, "done", undefined, clock()); }
       });
       syncBoard(vault, t);
-      if (settled) break;
+      if (t.status === "done") break;
     }
   });
   return readTask(vault, id)!.task;
+}
+
+/** Send the user's words to the task's agent. A menu it is waiting on is closed first (Esc) so the words land as its answer. */
+export function promptHerdr(vault: string, t: WorkTask, text: string, deps: WorkDeps = {}): boolean {
+  const ref = t.herdr;
+  if (!ref?.agent) return false;
+  const machine = herdrMachine(vault, ref.machine, deps);
+  if (!machine) return false;
+  const h = herdrFor(deps, machine);
+  try { h(["agent", "prompt", ref.agent, text]); return true; } catch (e) {
+    if (!/blocked/i.test((e as Error).message)) return false;
+  }
+  try {
+    h(["agent", "send-keys", ref.agent, "esc"]);
+    (deps.sleep ?? ((ms: number) => Bun.sleepSync(ms)))(400);
+    h(["agent", "prompt", ref.agent, text]);
+    return true;
+  } catch { return false; }
+}
+
+/** The task's new name on its Herdr tab, pane and agent. */
+export function renameHerdr(vault: string, t: WorkTask, deps: WorkDeps = {}): void {
+  const ref = t.herdr;
+  if (!ref?.tabId || ref.createdTab === false) return;
+  const h = herdrFor(deps, herdrMachine(vault, ref.machine, deps) ?? "local");
+  const name = (t.name || t.text).slice(0, 30);
+  h(["tab", "rename", ref.tabId, name]);
+  if (ref.paneId) { try { h(["pane", "rename", ref.paneId, name]); } catch { /* cosmetic */ } }
+  if (ref.agent) { try { h(["agent", "rename", ref.agent, slugName(name)]); } catch { /* cosmetic */ } }
+}
+
+/** Bring the task's Herdr tab to the front ("Open in Herdr"). */
+export function focusTask(vault: string, id: string, deps: WorkDeps = {}): WorkTask {
+  const r = readTask(vault, id);
+  if (!r) throw new Error(`no task ${id}`);
+  const ref = r.task.herdr;
+  if (!ref?.tabId) throw new Error("its Herdr tab is closed");
+  const h = herdrFor(deps, herdrMachine(vault, ref.machine, deps) ?? "local");
+  h(["tab", "focus", ref.tabId]);
+  if (ref.agent) { try { h(["agent", "focus", ref.agent]); } catch { /* the tab is enough */ } }
+  return r.task;
 }
 
 /** Esc to the agent: it stops what it is doing and waits. */
