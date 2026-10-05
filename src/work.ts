@@ -13,13 +13,20 @@
 //     `prevail work run`) or, with Herdr on, an agent in a Herdr tab
 //     (herdr-work.ts), whose output is mirrored back into the thread.
 //
+// The queue is one ordered list of open tasks, newest at the end; the user
+// reorders it. Tasks run in parallel up to maxRunning; beyond the cap a task
+// that may start waits as "queued" and starts in queue order when a slot frees
+// (topUp, after every `work` command, so a finished run starts the next).
+// A task that needs the user takes no slot.
+//
 // Pause, Continue, Stop, re-route and Undo act on one task. A re-route moves
 // the thread files and the board line; nothing is ever deleted. A missing
 // home (domain, project, entity, app, specialist, machine) is a suggestion
 // the user accepts or declines.
 //
 //   build/_meta/work/prompts/<prompt-id>.json   one prompt and its tasks
-//   build/_meta/work/settings.json              Herdr on or off, workspaces
+//   build/_meta/work/settings.json              Herdr on or off, workspaces, maxRunning
+//   build/_meta/work/order.json                 the queue's order: open task ids, first runs first
 //   build/_meta/work/.lock                      one writer at a time
 
 import { spawn } from "node:child_process";
@@ -39,7 +46,7 @@ import { buildCatalog, destination, routeWork, type Catalog, type Destination, t
 import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, reopenTask, resumeHerdr, addMachine, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 
-export type WorkStatus = "routed" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
+export type WorkStatus = "routed" | "queued" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
 export type Executor = "engine" | "herdr";
 export type AskKind = "start" | "herdr-workspace" | "keep-close" | "machine-add";
 export type Surface = "desktop" | "phone" | "cli";
@@ -77,12 +84,13 @@ export interface WorkTask extends RoutedTask {
 
 export interface WorkPrompt { id: string; ts: number; text: string; surface: Surface; machine: string; source: RouterPlan["source"]; tasks: WorkTask[] }
 
-export interface WorkSettings { herdr: boolean; workspace: string; workspaces: Record<string, string> }
-export const DEFAULT_SETTINGS: WorkSettings = { herdr: false, workspace: "Prevail", workspaces: {} };
+export interface WorkSettings { herdr: boolean; workspace: string; workspaces: Record<string, string>; /** Tasks running at once; more wait as queued. */ maxRunning: number }
+export const DEFAULT_SETTINGS: WorkSettings = { herdr: false, workspace: "Prevail", workspaces: {}, maxRunning: 3 };
+export const MAX_RUNNING_LIMIT = 20;
 
 export const LEASE_MS = 3 * 60_000;
 export const LEASE_RENEW_MS = 60_000;
-const OPEN: WorkStatus[] = ["routed", "needs-you", "running", "paused"];
+const OPEN: WorkStatus[] = ["routed", "queued", "needs-you", "running", "paused"];
 
 export interface WorkDeps {
   runner?: RouteRunner | null;
@@ -103,6 +111,7 @@ export interface WorkDeps {
 export const workDir = (vault: string) => join(runtimePath(vault, "_meta"), "work");
 const promptsDir = (vault: string) => join(workDir(vault), "prompts");
 const settingsFile = (vault: string) => join(workDir(vault), "settings.json");
+const orderFile = (vault: string) => join(workDir(vault), "order.json");
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,100}$/;
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -165,9 +174,68 @@ export function writeSettings(vault: string, patch: Partial<WorkSettings>): Work
   return withWorkLock(vault, () => {
     const next = { ...readSettings(vault), ...patch };
     if (typeof next.workspace !== "string" || !next.workspace.trim() || next.workspace.length > 60) throw new Error("a workspace label is 1 to 60 characters");
+    if (!Number.isInteger(next.maxRunning) || next.maxRunning < 1 || next.maxRunning > MAX_RUNNING_LIMIT) throw new Error(`max running is a whole number from 1 to ${MAX_RUNNING_LIMIT}`);
     writeAtomic(settingsFile(vault), `${JSON.stringify(next, null, 2)}\n`);
     return next;
   });
+}
+
+// ── Order ───────────────────────────────────────────────────────────────────
+
+export function readOrder(vault: string): string[] {
+  try { const j = JSON.parse(readFileSync(orderFile(vault), "utf8")) as unknown; return Array.isArray(j) ? j.filter((x): x is string => typeof x === "string") : []; } catch { return []; }
+}
+/** Call under the work lock. */
+function writeOrder(vault: string, ids: string[]): void { writeAtomic(orderFile(vault), `${JSON.stringify(ids, null, 2)}\n`); }
+
+/** Open tasks in queue order: the saved order first, then any task it does not name yet, oldest first. */
+export function queueTasks(vault: string, prompts: WorkPrompt[] = listPrompts(vault)): { task: WorkTask; prompt: WorkPrompt }[] {
+  const rank = new Map(readOrder(vault).map((id, i) => [id, i]));
+  const open = [...prompts].sort((a, b) => a.ts - b.ts).flatMap((p) => p.tasks.filter((t) => OPEN.includes(t.status)).map((task) => ({ task, prompt: p })));
+  return open.map((x, i) => ({ x, k: rank.get(x.task.id) ?? rank.size + i })).sort((a, b) => a.k - b.k).map((y) => y.x);
+}
+
+export interface ReorderTo { before?: string; after?: string; index?: number }
+
+/** Move one open task in the queue; returns the new order. Reordering changes which queued task starts next. */
+export function reorderTask(vault: string, id: string, to: ReorderTo): string[] {
+  return withWorkLock(vault, () => {
+    const ids = queueTasks(vault).map((x) => x.task.id);
+    const from = ids.indexOf(id);
+    if (from < 0) throw new Error(`${id} is not in the queue`);
+    ids.splice(from, 1);
+    let at: number;
+    const ref = to.before ?? to.after;
+    if (ref !== undefined) {
+      const i = ids.indexOf(ref);
+      if (i < 0) throw new Error(`${ref} is not in the queue`);
+      at = to.before !== undefined ? i : i + 1;
+    } else if (to.index !== undefined && Number.isInteger(to.index) && to.index >= 0) at = Math.min(to.index, ids.length);
+    else throw new Error("say where: --before <id>, --after <id> or --to <index>");
+    ids.splice(at, 0, id);
+    writeOrder(vault, ids);
+    return ids;
+  });
+}
+
+const runningCount = (vault: string) => listPrompts(vault).reduce((n, p) => n + p.tasks.filter((t) => t.status === "running").length, 0);
+
+/** Start queued tasks in queue order while there is a free slot. Safe to call any time; returns the ids it started. */
+export async function topUp(vault: string, deps: WorkDeps = {}): Promise<string[]> {
+  const started: string[] = [];
+  for (const { task } of queueTasks(vault)) {
+    if (task.status !== "queued") continue;
+    try {
+      const t = await startTask(vault, task.id, { deps });
+      // Still queued: no slot, and nothing after it may jump ahead.
+      if (t.status === "queued") break;
+      if (t.status === "running") started.push(t.id);
+    } catch (e) {
+      const t = updateTask(vault, task.id, (x) => { x.status = "needs-you"; x.ask = { kind: "start", detail: (e as Error).message }; });
+      syncBoard(vault, t);
+    }
+  }
+  return started;
 }
 
 export const note = (t: WorkTask, ev: string, detail: string | undefined, now: number) => { t.log.push({ ts: now, ev, ...(detail ? { detail: detail.slice(0, 300) } : {}) }); if (t.log.length > 200) t.log.splice(0, t.log.length - 200); };
@@ -347,11 +415,15 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     }
     prompt.tasks.push(t);
   }
-  withWorkLock(vault, () => savePrompt(vault, prompt));
-  for (const t of prompt.tasks) {
-    if (t.status === "routed") { try { await startTask(vault, t.id, { deps }); } catch (e) { updateTask(vault, t.id, (x) => { x.status = "needs-you"; x.ask = { kind: "start", detail: (e as Error).message }; }); } }
-    else syncBoard(vault, t);
-  }
+  // What may start alone waits its turn behind what is already queued; new tasks go to the end of the queue.
+  for (const t of prompt.tasks) if (t.status === "routed") t.status = "queued";
+  withWorkLock(vault, () => {
+    const ids = queueTasks(vault).map((x) => x.task.id);
+    savePrompt(vault, prompt);
+    writeOrder(vault, [...ids, ...prompt.tasks.map((t) => t.id)]);
+  });
+  for (const t of prompt.tasks) if (t.status !== "queued") syncBoard(vault, t);
+  await topUp(vault, deps);
   return readPrompt(vault, id) ?? prompt;
 }
 
@@ -374,17 +446,29 @@ export async function startTask(vault: string, id: string, o: { deps?: WorkDeps 
   if (!r) throw new Error(`no task ${id}`);
   const t = r.task;
   if (t.status === "running") return t;
-  if (t.executor === "herdr") {
-    // Opening a tab and starting an agent takes a while: the detached run does it.
-    const next = updateTask(vault, id, (x) => { x.status = "running"; delete x.ask; note(x, "starting", "in Herdr", now); });
-    syncBoard(vault, next);
-    (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "run", id]);
-    return next;
-  }
-  if (!t.jobId || !readJob(vault, t.jobId)) throw new Error("this task has no job to run; re-route it first");
-  startJob(vault, t.jobId, { detached: false });
-  const next = updateTask(vault, id, (x) => { x.status = "running"; delete x.ask; note(x, "started", "the engine runs it", now); });
+  if (t.executor === "engine" && (!t.jobId || !readJob(vault, t.jobId))) throw new Error("this task has no job to run; re-route it first");
+  // Take a slot, or wait as queued: the count and the claim happen under one lock, so two starters never overfill.
+  let claimed = false;
+  const next = withWorkLock(vault, () => {
+    const cur = readTask(vault, id);
+    if (!cur) throw new Error(`no task ${id}`);
+    const x = cur.task;
+    if (x.status === "running") return x;
+    delete x.ask;
+    if (runningCount(vault) >= readSettings(vault).maxRunning) {
+      if (x.status !== "queued") { x.status = "queued"; note(x, "queued", "waiting for a free slot", now); savePrompt(vault, cur.prompt); }
+      return x;
+    }
+    x.status = "running";
+    claimed = true;
+    note(x, x.executor === "herdr" ? "starting" : "started", x.executor === "herdr" ? "in Herdr" : "the engine runs it", now);
+    savePrompt(vault, cur.prompt);
+    return x;
+  });
   syncBoard(vault, next);
+  if (!claimed) return next;
+  // Opening a Herdr tab and starting an agent takes a while: the detached run does it, as it runs an engine job.
+  if (next.executor === "engine") startJob(vault, next.jobId!, { detached: false });
   (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "run", id]);
   return next;
 }
@@ -727,13 +811,13 @@ function settle(vault: string, p: WorkPrompt, now: number): WorkPrompt {
 
 export function listWork(vault: string, view: "queue" | "backlog" = "queue", now = Date.now()) {
   const prompts = listPrompts(vault).map((p) => settle(vault, p, now));
-  if (view === "backlog") {
-    // The prompt rides along with each task, clipped; the clip says so.
-    const clip = (x: string) => { const one = x.replace(/\s+/g, " ").trim(); return one.length > 200 ? `${oneLine(one, 199).trimEnd()}\u2026` : oneLine(one); };
-    const tasks = prompts.flatMap((p) => p.tasks.map((t) => ({ ...t, prompt: { id: p.id, ts: p.ts, text: clip(p.text), surface: p.surface } })));
-    return { ok: true, view, tasks };
-  }
-  return { ok: true, view, prompts: prompts.filter((p) => p.tasks.some((t) => OPEN.includes(t.status) || !!t.ask)) };
+  // The prompt rides along with each task, clipped; the clip says so.
+  const clip = (x: string) => { const one = x.replace(/\s+/g, " ").trim(); return one.length > 200 ? `${oneLine(one, 199).trimEnd()}\u2026` : oneLine(one); };
+  const withPrompt = (t: WorkTask, p: WorkPrompt) => ({ ...t, prompt: { id: p.id, ts: p.ts, text: clip(p.text), surface: p.surface } });
+  if (view === "backlog") return { ok: true, view, tasks: prompts.flatMap((p) => p.tasks.map((t) => withPrompt(t, p))) };
+  // The queue: open tasks, flat, in the user's order. `prompts` stays for older desktops.
+  const tasks = queueTasks(vault, prompts).map(({ task, prompt }) => withPrompt(task, prompt));
+  return { ok: true, view, tasks, maxRunning: readSettings(vault).maxRunning, prompts: prompts.filter((p) => p.tasks.some((t) => OPEN.includes(t.status) || !!t.ask)) };
 }
 
 export function showWork(vault: string, id: string) {
@@ -754,9 +838,20 @@ export function showWork(vault: string, id: string) {
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
-const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--no-model] | list [--view queue|backlog] | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | run <task> | mirror <task>  [--json]";
+const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--no-model] | list [--view queue|backlog] | reorder <task> --before <id>|--after <id>|--to <index> | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] [--max-running n] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | run <task> | mirror <task>  [--json]";
 
 export async function workCommand(argv: string[], vault: string, deps: WorkDeps = {}): Promise<number> {
+  const sub = parseModArgs(argv).pos[0] ?? "list";
+  // The list tops the queue up first (a safety net); every command that can free a slot or queue a task tops it up after,
+  // so a detached `work run` or `work mirror` that finishes starts the next queued task.
+  const top = async () => { try { await topUp(vault, deps); } catch { /* the next command tries again */ } };
+  if (sub === "list") await top();
+  const code = await workSub(argv, vault, deps);
+  if (!["list", "show", "machines", "workspaces"].includes(sub)) await top();
+  return code;
+}
+
+async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<number> {
   const args = parseModArgs(argv);
   const sub = args.pos[0] ?? "list";
   const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
@@ -777,8 +872,12 @@ export async function workCommand(argv: string[], vault: string, deps: WorkDeps 
     if (sub === "list") {
       const view = args.get("view") === "backlog" ? "backlog" : "queue";
       const l = listWork(vault, view);
-      const rows = ("tasks" in l ? l.tasks : (l.prompts ?? []).flatMap((p) => p.tasks)) ?? [];
-      return say(l, rows.map((t) => `${t.id}  ${t.status.padEnd(9)} ${t.dest ? `${t.dest.kind}:${t.dest.id}` : "unrouted"}  ${t.text}`).join("\n") || "nothing in the queue");
+      return say(l, l.tasks.map((t) => `${t.id}  ${t.status.padEnd(9)} ${t.dest ? `${t.dest.kind}:${t.dest.id}` : "unrouted"}  ${t.text}`).join("\n") || "nothing in the queue");
+    }
+    if (sub === "reorder") {
+      const to = args.get("to");
+      const order = reorderTask(vault, id, { before: args.get("before"), after: args.get("after"), index: to === undefined ? undefined : Number(to) });
+      return say({ ok: true, order }, order.join("\n"));
     }
     if (sub === "show") { const v = showWork(vault, id); if (!v) return fail(`no task or prompt ${id}`); return say(v, JSON.stringify(v, null, 2)); }
     if (sub === "route") {
@@ -801,8 +900,10 @@ export async function workCommand(argv: string[], vault: string, deps: WorkDeps 
       const h = args.get("herdr");
       if (h !== undefined) { if (h !== "on" && h !== "off") return fail("--herdr is on or off"); patch.herdr = h === "on"; }
       if (args.get("workspace")) patch.workspace = args.get("workspace")!;
+      const mr = args.get("max-running");
+      if (mr !== undefined) { const n = Number(mr); if (!Number.isInteger(n) || n < 1 || n > MAX_RUNNING_LIMIT) return fail(`--max-running is a whole number from 1 to ${MAX_RUNNING_LIMIT}`); patch.maxRunning = n; }
       const s = Object.keys(patch).length ? writeSettings(vault, patch) : readSettings(vault);
-      return say({ ok: true, settings: s }, `herdr ${s.herdr ? "on" : "off"}; workspace ${s.workspace}`);
+      return say({ ok: true, settings: s }, `herdr ${s.herdr ? "on" : "off"}; workspace ${s.workspace}; ${s.maxRunning} at once`);
     }
     if (sub === "machines") {
       const ms = machines(vault, md);

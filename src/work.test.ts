@@ -5,8 +5,8 @@ import { setChiefSetting } from "./chief-of-staff.ts";
 import { boardFile, readJob, saveJob, type Job } from "./jobs.ts";
 import type { Herdr } from "./spaces.ts";
 import {
-  acceptSuggestion, addWork, answerTask, continueTask, declineSuggestion, listWork, pauseTask, readSettings, readTask, remainingJob, routeTask, runTask, showWork,
-  stopTask, updateTask, workCommand, writeSettings, type WorkDeps,
+  acceptSuggestion, addWork, answerTask, continueTask, declineSuggestion, listWork, pauseTask, readOrder, readSettings, readTask, remainingJob, reorderTask, routeTask, runTask, showWork,
+  stopTask, topUp, updateTask, workCommand, writeSettings, type WorkDeps,
 } from "./work.ts";
 
 const ROOT = join("/tmp", `prevail-work-${process.pid}`);
@@ -266,5 +266,105 @@ describe("views and the CLI", () => {
     expect((await cli(["show", "nope"])).json).toMatchObject({ ok: false });
     expect((await cli(["bogus"])).code).toBe(1);
     expect(readTask(V, p.tasks[2]!.id)?.task.status).toBe("needs-you");
+  });
+});
+
+describe("the ordered queue", () => {
+  beforeEach(seed);
+  // Four foo tasks that may all start alone (find and plan shapes).
+  const four = (tag: string) => JSON.stringify({ goals: [1, 2, 3, 4].map((n) => ({ text: `Foo ${tag}${n}`, tasks: [{ text: `Find foo ${tag}${n}`, dest: { kind: "domain", id: "fitness" }, confidence: 0.9, shape: "find" }] })) });
+  const ids = () => (listWork(V, "queue").tasks ?? []).map((t) => t.id);
+  const status = (id: string) => readTask(V, id)!.task.status;
+
+  test("new tasks go to the end of the queue, and the order is kept in order.json", async () => {
+    setChiefSetting(V, "handoff", "auto");
+    const a = await addWork(V, "x", { deps: { ...deps(), runner: async () => threeGoals } });
+    const b = await addWork(V, "y", { deps: { ...deps(), runner: async () => four("b") } });
+    const all = [...a.tasks, ...b.tasks].map((t) => t.id);
+    expect(ids()).toEqual(all);
+    expect(readOrder(V)).toEqual(all);
+    expect(existsSync(join(V, "build", "_meta", "work", "order.json"))).toBe(true);
+    // Each row carries its prompt, like the backlog.
+    expect(listWork(V, "queue").tasks?.[3]?.prompt.id).toBe(b.id);
+    // Done and closed tasks leave the queue; the backlog keeps them.
+    updateTask(V, all[0]!, (x) => { x.status = "done"; });
+    stopTask(V, all[1]!, deps());
+    expect(ids()).toEqual(all.slice(2));
+    expect((listWork(V, "backlog").tasks ?? []).length).toBe(7);
+  });
+
+  test("reorder moves a task before, after or to an index; bad targets fail", async () => {
+    setChiefSetting(V, "handoff", "offer");
+    const p = await addWork(V, "x", { deps: { ...deps(), runner: async () => four("r") } });
+    const [a, b, c, d] = p.tasks.map((t) => t.id) as [string, string, string, string];
+    expect(reorderTask(V, d, { before: a })).toEqual([d, a, b, c]);
+    expect(reorderTask(V, d, { after: b })).toEqual([a, b, d, c]);
+    expect(reorderTask(V, a, { index: 99 })).toEqual([b, d, c, a]);
+    expect(reorderTask(V, a, { index: 0 })).toEqual([a, b, d, c]);
+    expect(ids()).toEqual([a, b, d, c]);
+    expect(() => reorderTask(V, a, { before: "nope" })).toThrow(/not in the queue/);
+    expect(() => reorderTask(V, "nope", { index: 0 })).toThrow(/not in the queue/);
+    expect(() => reorderTask(V, a, {})).toThrow(/say where/);
+    const orig = process.stdout.write.bind(process.stdout);
+    let buf = "";
+    process.stdout.write = ((x: string) => { buf += x; return true; }) as typeof process.stdout.write;
+    try { expect(await workCommand(["reorder", c, "--before", a, "--json"], V, deps())).toBe(0); } finally { process.stdout.write = orig; }
+    expect(JSON.parse(buf.trim())).toEqual({ ok: true, order: [c, a, b, d] });
+  });
+
+  test("no more than maxRunning run at once; the rest wait as queued and start in queue order", async () => {
+    setChiefSetting(V, "handoff", "auto");
+    writeSettings(V, { maxRunning: 2 });
+    const spawned: string[][] = [];
+    const p = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => four("q") } });
+    const [a, b, c, d] = p.tasks.map((t) => t.id) as [string, string, string, string];
+    expect(p.tasks.map((t) => t.status)).toEqual(["running", "running", "queued", "queued"]);
+    expect(spawned).toEqual([["work", "run", a], ["work", "run", b]]);
+    // The user moves d ahead of c: d starts next.
+    reorderTask(V, d, { before: c });
+    // The run of a finishes (the board and thread update elsewhere); its process tops the queue up.
+    updateTask(V, a, (x) => { x.status = "done"; });
+    expect(await topUp(V, deps(spawned))).toEqual([d]);
+    expect(status(d)).toBe("running");
+    expect(status(c)).toBe("queued");
+    // Still full: nothing more starts.
+    expect(await topUp(V, deps(spawned))).toEqual([]);
+    expect(spawned.at(-1)).toEqual(["work", "run", d]);
+  });
+
+  test("pausing frees a slot through the CLI; a task that needs you takes none", async () => {
+    setChiefSetting(V, "handoff", "auto");
+    writeSettings(V, { maxRunning: 1 });
+    const spawned: string[][] = [];
+    const p = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => four("p") } });
+    const [a, b] = p.tasks.map((t) => t.id) as [string, string];
+    expect(status(a)).toBe("running");
+    expect(status(b)).toBe("queued");
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    try { expect(await workCommand(["pause", a, "--json"], V, deps(spawned))).toBe(0); } finally { process.stdout.write = orig; }
+    expect(status(a)).toBe("paused");
+    expect(status(b)).toBe("running");
+    // b now needs the user: its slot frees for the next one, which the list tops up.
+    updateTask(V, b, (x) => { x.status = "needs-you"; x.ask = { kind: "start", detail: "foo" }; });
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    try { await workCommand(["list", "--json"], V, deps(spawned)); } finally { process.stdout.write = orig; }
+    expect(status(p.tasks[2]!.id)).toBe("running");
+    // Paused tasks hold their place in the order.
+    expect(ids().slice(0, 2)).toEqual([a, b]);
+  });
+
+  test("settings take --max-running from 1 to 20", async () => {
+    expect(readSettings(V).maxRunning).toBe(3);
+    const orig = process.stdout.write.bind(process.stdout);
+    let buf = "";
+    process.stdout.write = ((x: string) => { buf += x; return true; }) as typeof process.stdout.write;
+    try {
+      expect(await workCommand(["settings", "--max-running", "5", "--json"], V, deps())).toBe(0);
+      expect(await workCommand(["settings", "--max-running", "0", "--json"], V, deps())).toBe(1);
+      expect(await workCommand(["reorder", "nope", "--to", "0", "--json"], V, deps())).toBe(1);
+    } finally { process.stdout.write = orig; }
+    expect(readSettings(V).maxRunning).toBe(5);
+    expect(buf).toContain("\"maxRunning\":5");
   });
 });
