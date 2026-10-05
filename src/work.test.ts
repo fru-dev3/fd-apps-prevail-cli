@@ -8,7 +8,7 @@ import {
   acceptSuggestion, addWork, answerTask, continueTask, distilOutcome, doneTask, finish, followUp, plainOutcome, startTask, declineSuggestion, listWork, pauseTask, readOrder, readSettings, readTask, remainingJob, reorderTask, routeTask, runTask, showWork,
   stopTask, topUp, updateTask, workCommand, writeSettings, type WorkDeps,
 } from "./work.ts";
-import { gatherContext, neededSpecialists, ownerLocation } from "./work-assemble.ts";
+import { gatherContext, neededSpecialists, ownerLocation, planTask } from "./work-assemble.ts";
 
 const ROOT = join("/tmp", `prevail-work-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -75,6 +75,8 @@ describe("adding work", () => {
     // Assembled before dispatch: a search brings the researcher, a draft the writer.
     expect(a!.specialists).toContain("researcher");
     expect(c!.specialists).toContain("writer");
+    // Every domain each touches, the owner first: the panel shows them as pills.
+    expect(p.tasks.map((t) => t.domains?.[0])).toEqual(["insurance", "fitness", "money"]);
     expect(p.tasks.map((t) => t.name)).toEqual(["Foo Carrier Rentals", "Foo Training Plan", "Foo Bank Reply"]);
     // The thread: desktop markdown with its frontmatter, and the .jsonl twin.
     const md = readFileSync(join(D("insurance"), "memory", "threads", `${a!.thread.session}.md`), "utf8");
@@ -511,5 +513,61 @@ describe("assembly, outcomes, follow-ups and check-off", () => {
     const r = await routeTask(V, t.id, { dest: "domain:money" }, deps());
     expect(r).toMatchObject({ status: "running", dest: { id: "money" } });
     expect(r.ask).toBeUndefined();
+  });
+});
+
+describe("plan before doing", () => {
+  beforeEach(seed);
+  const route = (text: string, id = "general") => async () => JSON.stringify({ goals: [{ text, tasks: [{ name: "Foo Task", text, dest: { kind: "domain", id }, confidence: 0.9, shape: "do" }] }] });
+  function travelVault() {
+    mkdirSync(join(D("travel"), "memory"), { recursive: true });
+    writeFileSync(join(D("travel"), ".prevail-layout-v4"), "v4\n");
+    writeFileSync(join(D("travel"), "manifest.json"), JSON.stringify({ identity: { name: "travel", summary: "Foo travel" } }));
+    writeFileSync(join(D("travel"), "memory", "state.md"), "# travel\nPrefers trains over flights on foo trips.\n");
+    writeFileSync(join(D("money"), "memory", "state.md"), "# money\nTravel budget: 3,000 foo dollars a year.\n");
+    const ev = join(V, "data", "entities", "events", "foo-lisbon-trip");
+    mkdirSync(ev, { recursive: true });
+    writeFileSync(join(ev, "entity.md"), "---\nname: Foo Lisbon Trip\nkind: event\n---\n\nA one week trip to Lisbon with Sam Foo, by train.\n");
+  }
+  test("booking a trip to Europe asks first: the plan names the domains, cites the past trip and budget, and waits as Needs you", async () => {
+    travelVault();
+    const spawned: string[][] = [];
+    const p = await addWork(V, "Book a trip to Europe", { deps: { ...deps(spawned), runner: route("Book a trip to Europe", "travel") } });
+    const t = p.tasks[0]!;
+    expect(t).toMatchObject({ status: "needs-you", planning: true });
+    expect(spawned).toEqual([]);
+    expect(t.domains).toEqual(expect.arrayContaining(["travel", "money"]));
+    const plan = t.updates!.at(-1)!;
+    expect(plan.from).toBe("task");
+    expect(plan.text).toContain("Foo Lisbon Trip");
+    expect(plan.text).toContain("Travel budget");
+    expect(plan.questions!.length).toBeGreaterThanOrEqual(2);
+    expect(plan.questions!.length).toBeLessThanOrEqual(4);
+    expect(plan.questions![0]).toBe("Where in Europe: which cities or places?");
+    expect(plan.questions).toEqual(expect.arrayContaining(["When, and for how long?", "What budget should I keep to?"]));
+    expect(t.context!.map((c) => c.label)).toEqual(expect.arrayContaining(["Your past trip: Foo Lisbon Trip", "It proposes before paying"]));
+    // The one reply starts the work, with the answers in what it knows.
+    const f = await followUp(V, t.id, "Porto and Seville, ten days in May, 2,000 at most, to rest", { deps: deps(spawned) });
+    expect(f.task.status).toBe("running");
+    expect(f.task.planning).toBeUndefined();
+    expect(f.task.context!.at(-1)).toMatchObject({ label: "Your answers to the plan" });
+    expect(f.task.updates!.slice(-2).map((u) => u.from)).toEqual(["you", "task"]);
+    expect(spawned.at(-1)).toEqual(["work", "run", t.id]);
+  });
+  test("a small, fully specified ask goes straight through", async () => {
+    const spawned: string[][] = [];
+    const p = await addWork(V, "Summarize the foo insurance note", { deps: { ...deps(spawned), runner: route("Summarize the foo insurance note", "insurance") } });
+    expect(p.tasks[0]!.status).toBe("running");
+    expect(p.tasks[0]!.planning).toBeUndefined();
+    expect(planTask(V, { text: "Summarize the foo insurance note", flags: {} })).toBeNull();
+  });
+  test("done is never set without a result", () => {
+    const t = { status: "running", log: [] } as unknown as Parameters<typeof finish>[0];
+    finish(t, "done", "");
+    expect(t.status).toBe("needs-you");
+    expect(t.updates!.at(-1)!.text).toMatch(/without a result/);
+    finish(t, "done", "Three foo carriers compared; A is cheapest.");
+    expect(t.status).toBe("done");
+    expect(t.updates!.map((u) => u.text).slice(-2)).toEqual(["Done: Three foo carriers compared; A is cheapest.", "Can I close this task?"]);
   });
 });

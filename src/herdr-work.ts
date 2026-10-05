@@ -730,7 +730,11 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       let status = "";
       try { text = readText(h(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "400"])); status = statusOf(h(["agent", "get", agent])); } catch (e) {
         // The agent is gone (its tab closed by hand): stop mirroring.
-        updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") finish(x, "done", x.outcome ?? "Its Herdr tab was closed.", clock()); });
+        updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") {
+          // A closed tab is housekeeping, never an outcome: with no result yet, it asks what to do.
+          if (x.outcome) finish(x, "done", x.outcome, clock());
+          else { x.status = "needs-you"; x.waiting = "Its Herdr tab closed before a result came back. Should it start again?"; addUpdate(x, "task", x.waiting, clock()); }
+        } });
         break;
       }
       // The brief that could not go in at launch: in now that the agent is ready.

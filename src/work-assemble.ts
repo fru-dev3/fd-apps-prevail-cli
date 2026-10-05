@@ -92,3 +92,97 @@ export function gatherContext(vault: string, t: Pick<RoutedTask, "text" | "dest"
   } catch { /* no notes */ }
   return out;
 }
+
+// ── Plan before doing ───────────────────────────────────────────────────────
+// A task that spends money or time, commits the user, or touches their health
+// is never just done: the chief of staff first reads what the vault knows,
+// names the domains it touches, and asks the two to four things it cannot
+// know (where, when, budget, what for). The task waits as Needs you with that
+// plan in its updates; the owner's one reply starts the work, which then
+// proposes before anything spends money. A small, fully specified ask (a
+// summary, a lookup, a draft) goes straight through.
+
+const TRAVEL = /\b(trip|travel|vacation|holiday|getaway|flights?|hotels?|itinerary|cruise|visit (?:to )?[A-Z])\b/i;
+const SPEND = /\b(book|buy|purchase|order|pay|reserve|subscribe|invest|donate|transfer|hire|rent|lease|sign up|enrol+)\b/i;
+const HEALTH = /\b(appointment|doctor|dentist|surgery|clinic|therapy|prescription|vaccin\w*)\b/i;
+const WHEN = /\b(today|tomorrow|tonight|this (?:week|weekend|month)|next (?:week|weekend|month|year)|\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}|mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/i;
+const BUDGET = /(\$|€|£|\busd\b|\beur\b|\bbudget\b|\bunder \d|\bat most \d|\bup to \d)/i;
+const WHY = /\b(for (?:my|our|the|a|an)|because|so (?:that|we|i)|to (?:see|visit|celebrate|rest|meet|attend))\b/i;
+
+/** Domain slugs that exist in this vault, first match per concept (money, then wealth...). */
+function pickDomains(vault: string, wanted: string[][]): string[] {
+  const out: string[] = [];
+  for (const options of wanted) {
+    const hit = options.find((d) => existsSync(join(vault, "data", "domains", d)));
+    if (hit && !out.includes(hit)) out.push(hit);
+  }
+  return out;
+}
+
+/** Lines in a domain's memory and notes that match, for the plan's "what I found". */
+function domainLines(vault: string, slug: string, re: RegExp, n = 2): string[] {
+  const out: string[] = [];
+  for (const f of ["memory.md", "state.md"]) {
+    try {
+      for (const raw of readFileSync(join(domainDir(vault, slug), "memory", f), "utf8").split("\n")) {
+        const l = raw.replace(/^[\s>*#-]+/, "").replace(/[*_`]+/g, "").trim();
+        if (l.length > 6 && l.length < 220 && re.test(l) && !out.includes(l)) out.push(l);
+        if (out.length >= n) return out;
+      }
+    } catch { /* no file */ }
+  }
+  return out;
+}
+
+export interface TaskPlan {
+  /** Every domain it touches, by concept (money, travel, health...), that exists in the vault. */
+  domains: string[];
+  /** What the vault already knows that bears on it: into the task's context and the brief. */
+  found: ContextItem[];
+  /** Two to four things only the user can say. */
+  questions: string[];
+  /** The plan as the task says it, one short paragraph. */
+  say: string;
+}
+
+/** The plan for an under-specified or high-impact task; null when it can go straight through. Never throws. */
+export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags">): TaskPlan | null {
+  const text = t.text;
+  const travel = TRAVEL.test(text);
+  const spend = SPEND.test(text) || !!t.flags.money;
+  const health = HEALTH.test(text);
+  if (!travel && !spend && !health) return null;
+  try {
+    const domains = pickDomains(vault, [
+      ...(travel ? [["travel", "dreams", "adventures", "trips"]] : []),
+      ...(spend || travel ? [["money", "wealth", "finance", "finances"]] : []),
+      ...(health || travel ? [["health", "fitness"]] : []),
+    ]);
+    const found: ContextItem[] = [];
+    if (travel) {
+      const trips = listPages(vault).filter((p) => (p.kind === "event" || p.kind === "place") && /\b(trip|travel|vacation|holiday|visit|flight)\b/i.test(`${p.doc.name} ${body(readFileSync(join(vault, p.path), "utf8"), 400)}`));
+      for (const p of trips.slice(0, 2)) found.push({ label: `Your past trip: ${p.doc.name}`, text: `A past trip in the vault: ${p.doc.name}: ${body(readFileSync(join(vault, p.path), "utf8"), 300)}` });
+      for (const d of domains.filter((x) => !["money", "wealth", "finance", "finances", "health", "fitness"].includes(x))) for (const l of domainLines(vault, d, /\b(trip|travel|visit|prefer|love|want|dream)\w*\b/i)) found.push({ label: `From your ${d} notes: ${l}`, text: `From the user's ${d} notes: ${l}` });
+    }
+    for (const d of domains.filter((x) => ["money", "wealth", "finance", "finances"].includes(x))) for (const l of domainLines(vault, d, /\b(budget|savings?|spend|fund|allowance|limit)\w*\b/i)) found.push({ label: `From your ${d} notes: ${l}`, text: `From the user's ${d} notes: ${l}` });
+    for (const d of domains.filter((x) => ["health", "fitness"].includes(x))) for (const l of domainLines(vault, d, /\b(allerg\w*|condition|avoid|knee|back|diet|medication|can't|cannot)\b/i, 1)) found.push({ label: `From your ${d} notes: ${l}`, text: `From the user's ${d} notes: ${l}` });
+    if (spend || travel) found.push({ label: "It proposes before paying", text: "Never buy, book or pay. Prepare options and a proposal (holds or drafts only) and ask the user before anything spends money." });
+
+    const where = /\b(?:to|in|at)\s+([A-Z][\w-]+(?:\s+[A-Z][\w-]+)?)/.exec(text)?.[1];
+    const questions: string[] = [];
+    if (travel) questions.push(where ? `Where in ${where}: which cities or places?` : "Where would you like to go?");
+    if (travel || health) { if (!WHEN.test(text)) questions.push(travel ? "When, and for how long?" : "When would suit you?"); }
+    else if (!WHEN.test(text)) questions.push("When do you need it by?");
+    if ((spend || travel) && !BUDGET.test(text)) questions.push("What budget should I keep to?");
+    if (!WHY.test(text)) questions.push(travel ? "What is it for: rest, people, sights or work?" : "What is it for, so I pick the right one?");
+    if (questions.length < 2) questions.push("Anything I should avoid or must include?");
+
+    const touched = domains.map((d) => d[0]!.toUpperCase() + d.slice(1)).join(", ");
+    const say = [
+      `Before I start: this ${spend || travel ? "spends money and time" : "affects your plans"}${touched ? `, so I brought in ${touched}` : ""}.`,
+      found.filter((f) => f.label !== "It proposes before paying").length ? `From your vault: ${found.filter((f) => f.label !== "It proposes before paying").map((f) => f.label.replace(/^From your \w+ notes: /, "")).slice(0, 3).join("; ")}.` : "",
+      "A few things only you can tell me:",
+    ].filter(Boolean).join(" ");
+    return { domains, found, questions: questions.slice(0, 4), say };
+  } catch { return null; }
+}

@@ -54,7 +54,7 @@ import { runtimePath } from "./path-safety.ts";
 import type { RouteRunner } from "./route.ts";
 import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./session.ts";
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
-import { gatherContext, neededSpecialists, type ContextItem } from "./work-assemble.ts";
+import { gatherContext, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
 import { buildCatalog, cleanName, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
 import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, focusTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, promptHerdr, renameHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
@@ -109,11 +109,17 @@ export interface WorkTask extends RoutedTask {
   context?: ContextItem[];
   /** The question the agent is waiting on, as one plain sentence (status needs-you). Answered by a follow-up. */
   waiting?: string;
+  /** True while a planned task waits for the owner's answers before it starts. */
+  planning?: boolean;
+  /** Every domain the work touches, the owner first (then consulted and informed). */
+  domains?: string[];
+  /** The apps it involves, by id. */
+  apps?: string[];
   /** The light back-and-forth: short plain lines from the task in its own voice and the user's replies, oldest first. Never raw output. */
   updates?: TaskUpdate[];
 }
 
-export interface TaskUpdate { ts: number; from: "task" | "you"; text: string }
+export interface TaskUpdate { ts: number; from: "task" | "you"; text: string; /** A plan's questions, shown as a short list the owner answers in one reply. */ questions?: string[] }
 
 /** `ev` is a short event name; `detail` one line; `more` what a line shows when expanded (a follow-up's words, the tool call behind an activity). */
 export interface LogEntry { ts: number; ev: string; detail?: string; more?: string }
@@ -286,13 +292,13 @@ export async function topUp(vault: string, deps: WorkDeps = {}): Promise<string[
 export const note = (t: WorkTask, ev: string, detail: string | undefined, now: number, more?: string) => { t.log.push({ ts: now, ev, ...(detail ? { detail: detail.slice(0, 300) } : {}), ...(more ? { more: more.slice(0, 2000) } : {}) }); if (t.log.length > 200) t.log.splice(0, t.log.length - 200); };
 
 /** One line in the task's back-and-forth, at a meaningful moment only; the same line twice in a row is said once. */
-export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, now = Date.now()): void {
+export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, now = Date.now(), questions?: string[]): void {
   const line = text.replace(/\s+/g, " ").trim().slice(0, 400);
   if (!line) return;
   const u = (t.updates ??= []);
   const last = u[u.length - 1];
   if (last?.from === from && last.text === line) return;
-  u.push({ ts: now, from, text: line });
+  u.push({ ts: now, from, text: line, ...(questions?.length ? { questions: questions.map((q) => q.trim().slice(0, 200)).filter(Boolean) } : {}) });
   if (u.length > 60) u.splice(0, u.length - 60);
 }
 export const CLOSE_QUESTION = "Can I close this task?";
@@ -304,6 +310,14 @@ export const WORKING_LINE = "Working on it, nothing needed from you.";
  * can close, and waits for the user's yes (or a tick).
  */
 export function finish(t: WorkTask, status: "done" | "failed", outcome?: string, now = Date.now()): void {
+  // Done means a result exists: an agent that only stopped is asked about, never marked done.
+  if (status === "done" && !(outcome ?? t.outcome ?? "").replace(/^done\.?$/i, "").trim()) {
+    t.status = "needs-you";
+    t.waiting = "It stopped without a result. Should it try again, or do something else?";
+    delete t.ask;
+    addUpdate(t, "task", t.waiting, now);
+    return;
+  }
   const was = t.status;
   t.status = status;
   t.cleared = false;
@@ -559,6 +573,9 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     // Assemble before dispatch: the specialists the work needs and what the vault already knows that it will need.
     t.specialists = neededSpecialists(vault, t);
     const ctx = gatherContext(vault, t);
+    // Plan before doing: a task that spends money or time, or touches health, first asks what only the owner knows.
+    const prep = o.hold ? null : planTask(vault, t);
+    if (prep) ctx.push(...prep.found);
     if (ctx.length) t.context = ctx;
     // A specialist the work needs is made at once (draft ceiling at most): Work mode does not stop to ask.
     for (const s of t.suggestions) {
@@ -574,7 +591,16 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     addBoardLine(vault, t, `w${(now + n).toString(36).slice(-6)}`, now);
     const job = staffTask(vault, t, plan.source, now);
     if (job) t.jobId = job.id;
+    // Every domain it touches (the owner first, then consulted and informed) and the apps it involves: the panel's pills.
+    const touched = [...new Set([t.dest?.owner ?? "general", ...(job?.domains.consulted ?? []), ...(job?.domains.informed ?? [])])].filter((x) => /^[a-z0-9][a-z0-9-]*$/.test(x));
+    if (touched.length || prep?.domains.length) t.domains = [...new Set([...touched, ...(prep?.domains ?? [])])];
+    if (t.dest?.kind === "app") t.apps = [t.dest.id];
     if (o.hold) { t.status = "backlog"; note(t, "parked", "in the backlog until it is moved to the queue", now); }
+    else if (prep) {
+      t.status = "needs-you"; t.planning = true; t.waiting = "A few questions before I start.";
+      note(t, "planning", prep.questions.join(" "), now);
+      addUpdate(t, "task", prep.say, now, prep.questions);
+    }
     // It waits its turn behind what is already queued.
     else gateTask(vault, t, ms, job, now);
     prompt.tasks.push(t);
@@ -1075,6 +1101,15 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
   if (body.length > 8_000) throw new Error("that follow-up is too long (8,000 characters at most)");
   const r = readTask(vault, id);
   if (!r) throw new Error(`no task ${id}`);
+  // The answers to a plan's questions: into what it knows (and so the brief), then it starts.
+  if (!o.asTask && r.task.planning && r.task.status === "needs-you") {
+    updateTask(vault, id, (x) => {
+      appendTurn(vault, x, "user", body, "prevail", now); note(x, "follow-up", undefined, now, body); addUpdate(x, "you", body, now);
+      x.context = [...(x.context ?? []), { label: "Your answers to the plan", text: `The user answered the plan's questions: ${body}` }];
+      delete x.planning; delete x.waiting;
+    });
+    return { ok: true, task: await rerunWithFollowups(vault, id, deps) };
+  }
   // The yes to "Can I close this task?": it closes now (its Herdr tab too). Only a finished task closes on a word.
   if (!o.asTask && (r.task.status === "done" || r.task.status === "failed") && !r.task.cleared && isCloseYes(body)) {
     updateTask(vault, id, (x) => addUpdate(x, "you", body, now));
@@ -1092,7 +1127,8 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
   const t = readTask(vault, id)!.task;
   const done = (task: WorkTask): FollowupResult => ({ ok: true, task, ...(j.kind === "rename" ? { renamed: j.name } : {}) });
   if (t.executor === "herdr" && t.herdr?.agent && !t.herdr.briefPending && promptHerdr(vault, t, body, deps)) {
-    if (t.status === "running") return done(readTask(vault, id)!.task);
+    // Every follow-up gets an answer at once; the result follows as its own update.
+    if (t.status === "running") return done(updateTask(vault, id, (x) => addUpdate(x, "task", "On it: looking into that now.", now)));
     // Finished, its tab still open: the same agent goes on with it.
     const back = updateTask(vault, id, (x) => { x.status = "running"; delete x.outcome; delete x.cleared; delete x.ask; note(x, "again", "with your follow-up", now); addUpdate(x, "task", WORKING_LINE, now); });
     syncBoard(vault, back);
@@ -1100,9 +1136,9 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
     return done(back);
   }
   if (t.executor === "engine" && t.status === "running") {
-    return done(updateTask(vault, id, (x) => { x.pendingFollowups = [...(x.pendingFollowups ?? []), body]; note(x, "noted", "It goes in when this run ends", now); }));
+    return done(updateTask(vault, id, (x) => { x.pendingFollowups = [...(x.pendingFollowups ?? []), body]; note(x, "noted", "It goes in when this run ends", now); addUpdate(x, "task", "Noted: I will work that in as soon as this step ends.", now); }));
   }
-  if (t.status === "queued" || t.status === "routed" || t.status === "backlog") return done(t);
+  if (t.status === "queued" || t.status === "routed" || t.status === "backlog") return done(updateTask(vault, id, (x) => addUpdate(x, "task", "Noted: I will use that when it starts.", now)));
   return done(await rerunWithFollowups(vault, id, deps));
 }
 
