@@ -291,6 +291,11 @@ describe("the ordered queue", () => {
     stopTask(V, all[1]!, deps());
     expect(ids()).toEqual(all.slice(2));
     expect((listWork(V, "backlog").tasks ?? []).length).toBe(7);
+    // A finished task that still asks something (keep or close its tab) stays until it is answered.
+    updateTask(V, all[2]!, (x) => { x.status = "done"; x.ask = { kind: "keep-close", detail: "done; keep the Herdr tab open, or close it?" }; });
+    expect(ids()).toEqual(all.slice(2));
+    updateTask(V, all[2]!, (x) => { delete x.ask; });
+    expect(ids()).toEqual(all.slice(3));
   });
 
   test("reorder moves a task before, after or to an index; bad targets fail", async () => {

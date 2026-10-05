@@ -189,9 +189,10 @@ export function readOrder(vault: string): string[] {
 function writeOrder(vault: string, ids: string[]): void { writeAtomic(orderFile(vault), `${JSON.stringify(ids, null, 2)}\n`); }
 
 /** Open tasks in queue order: the saved order first, then any task it does not name yet, oldest first. */
+// A finished task that still asks something (keep or close its Herdr tab) stays in the queue until answered.
 export function queueTasks(vault: string, prompts: WorkPrompt[] = listPrompts(vault)): { task: WorkTask; prompt: WorkPrompt }[] {
   const rank = new Map(readOrder(vault).map((id, i) => [id, i]));
-  const open = [...prompts].sort((a, b) => a.ts - b.ts).flatMap((p) => p.tasks.filter((t) => OPEN.includes(t.status)).map((task) => ({ task, prompt: p })));
+  const open = [...prompts].sort((a, b) => a.ts - b.ts).flatMap((p) => p.tasks.filter((t) => OPEN.includes(t.status) || !!t.ask).map((task) => ({ task, prompt: p })));
   return open.map((x, i) => ({ x, k: rank.get(x.task.id) ?? rank.size + i })).sort((a, b) => a.k - b.k).map((y) => y.x);
 }
 
