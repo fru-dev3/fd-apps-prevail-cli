@@ -73,7 +73,7 @@ const slugOf = (name: string) => (APP_ID_RE.test(name) ? name : slugify(name));
 interface Source { src: string; dest: string; kind: "app" | "page" | "archived" | "other" | "merged-pages"; name: string }
 export interface MigrationPlan {
   legacy: { apps: string | null; pages: string | null; merged: string | null };
-  liveApps: number; orgPages: number; archivedApps: number; otherDirs: number;
+  liveApps: number; pages: number; archivedApps: number; otherDirs: number;
   doublesBySlug: string[]; doublesByName: string[]; ambiguous: string[];
   archivedMerged: string[]; archivedMoved: string[];
   sources: Source[];
@@ -95,7 +95,7 @@ export function planProductsMigration(vault: string): MigrationPlan {
   const out = productsDir(vault);
   const plan: MigrationPlan = {
     legacy: { apps: appsDir, pages: pagesDir, merged: mergedDir },
-    liveApps: 0, orgPages: 0, archivedApps: 0, otherDirs: 0,
+    liveApps: 0, pages: 0, archivedApps: 0, otherDirs: 0,
     doublesBySlug: [], doublesByName: [], ambiguous: [], archivedMerged: [], archivedMoved: [], sources: [], ids: new Map(),
   };
 
@@ -126,7 +126,7 @@ export function planProductsMigration(vault: string): MigrationPlan {
     const flat = !isDir(p) && n.endsWith(".md");
     if (!isDir(p) && !flat) { plan.sources.push({ src: p, dest: join(out, n), kind: "other", name: n }); plan.otherDirs++; continue; }
     const slug = flat ? n.slice(0, -3) : n;
-    plan.orgPages++;
+    plan.pages++;
     let target = slug;
     if (live.has(slug)) plan.doublesBySlug.push(slug);
     else {
@@ -347,7 +347,7 @@ function rewriteIds(vault: string, ids: Map<string, string>, dry: boolean, skip:
 // ── Run ─────────────────────────────────────────────────────────────────────
 
 export interface MigrationCounts {
-  liveApps: number; orgPages: number; archivedApps: number;
+  liveApps: number; pages: number; archivedApps: number;
   doubles: number; doublesBySlug: number; doublesByName: number;
   liveMoved: number; pagesMoved: number; archivedMerged: number; archivedMoved: number;
   conflicts: number; otherDirs: number;
@@ -366,7 +366,7 @@ export interface MigrationOptions {
   role?: MachineRole; verify?: (src: string, dst: string) => boolean;
 }
 
-const zero = (): MigrationCounts => ({ liveApps: 0, orgPages: 0, archivedApps: 0, doubles: 0, doublesBySlug: 0, doublesByName: 0, liveMoved: 0, pagesMoved: 0, archivedMerged: 0, archivedMoved: 0, conflicts: 0, otherDirs: 0, idRewrites: { files: 0, ids: 0, byType: {} } });
+const zero = (): MigrationCounts => ({ liveApps: 0, pages: 0, archivedApps: 0, doubles: 0, doublesBySlug: 0, doublesByName: 0, liveMoved: 0, pagesMoved: 0, archivedMerged: 0, archivedMoved: 0, conflicts: 0, otherDirs: 0, idRewrites: { files: 0, ids: 0, byType: {} } });
 
 export function runProductsMigration(vault: string, opts: MigrationOptions = {}): MigrationResult {
   const dry = !!opts.dryRun;
@@ -378,7 +378,7 @@ export function runProductsMigration(vault: string, opts: MigrationOptions = {})
   if (opts.auto && (opts.role ?? readMachineRole()) === "client") return { ...base, skipped: "client-waits-for-hub" };
 
   const counts = zero();
-  counts.liveApps = plan.liveApps; counts.orgPages = plan.orgPages; counts.archivedApps = plan.archivedApps; counts.otherDirs = plan.otherDirs;
+  counts.liveApps = plan.liveApps; counts.pages = plan.pages; counts.archivedApps = plan.archivedApps; counts.otherDirs = plan.otherDirs;
   counts.doublesBySlug = plan.doublesBySlug.length; counts.doublesByName = plan.doublesByName.length;
   counts.doubles = counts.doublesBySlug + counts.doublesByName;
   counts.archivedMerged = plan.archivedMerged.length; counts.archivedMoved = plan.archivedMoved.length;
@@ -475,7 +475,7 @@ export async function migrateCommand(args: string[], vault: string): Promise<num
   const c = r.counts;
   const lines = [
     `${r.dryRun ? "Dry run (nothing written)" : r.ran ? "Migrated" : "Not run"}${r.skipped ? `: ${r.skipped}` : ""}`,
-    `live apps ${c.liveApps}, pages ${c.orgPages}, archived apps ${c.archivedApps}, other folders ${c.otherDirs}`,
+    `live apps ${c.liveApps}, pages ${c.pages}, archived apps ${c.archivedApps}, other folders ${c.otherDirs}`,
     `doubles ${c.doubles} (same slug ${c.doublesBySlug}, same name ${c.doublesByName})`,
     `archived merged ${c.archivedMerged}, archived moved ${c.archivedMoved}, conflicts ${c.conflicts}`,
     `ids rewritten ${c.idRewrites.ids} in ${c.idRewrites.files} files: ${Object.entries(c.idRewrites.byType).map(([k, v]) => `${k} ${v}`).join(", ") || "none"}`,
