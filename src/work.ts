@@ -24,10 +24,9 @@
 // `work start` moves one to the end of the queue.
 //
 // A finished task stays in the queue, checked, with a one or two sentence
-// outcome the engine distils from the result. It never closes itself: it asks
-// "Can I close this task?" in its updates (the light back-and-forth) and
-// waits for a yes in a follow-up, or `work done` (which also closes its
-// Herdr tab). `work followup` appends to a
+// outcome the engine distils from the result. It never closes itself and
+// never asks to: it stays until the user closes it, by saying done or close in
+// a follow-up, or `work done` (which also closes its Herdr tab). `work followup` appends to a
 // task: it goes into the thread, to the agent still at work, or starts the
 // task again with it.
 //
@@ -319,7 +318,6 @@ export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, n
   u.push({ ts: now, from, text: line, ...(questions?.length ? { questions: questions.map((q) => q.trim().slice(0, 200)).filter(Boolean) } : {}), ...(link ? { link } : {}) });
   if (u.length > 60) u.splice(0, u.length - 60);
 }
-export const CLOSE_QUESTION = "Can I close this task?";
 
 // ── Milestones: a long task says how it is going, a sentence at most ──────
 
@@ -386,8 +384,8 @@ export const WORKING_LINE = "Working on it, nothing needed from you.";
 
 /**
  * Finished (done or failed), checked in the queue with what came of it. It
- * never closes itself: a finished task says what came of it, asks whether it
- * can close, and waits for the user's yes (or a tick).
+ * never closes itself: a finished task says what came of it and stays until
+ * the user closes it (a tick, or saying done or close).
  */
 export function finish(t: WorkTask, status: "done" | "failed", outcome?: string, now = Date.now()): void {
   // Done means a result exists: an agent that only stopped is asked about, never marked done.
@@ -406,17 +404,17 @@ export function finish(t: WorkTask, status: "done" | "failed", outcome?: string,
   if (was === status) return;
   if (status === "done") { const what = (t.outcome ?? "").replace(/^done[:.]?\s*/i, "").trim(); addUpdate(t, "task", what ? `Done: ${what}` : "Done.", now); }
   else addUpdate(t, "task", t.outcome || "I could not finish it.", now);
-  addUpdate(t, "task", CLOSE_QUESTION, now);
 }
 
-/** A clear yes to "Can I close this task?" ("close it", "go ahead", "yes"); anything else is a follow-up. */
+/** The user closing a finished task in a reply ("close it", "done", "that's it"); anything else is a follow-up. Nothing asks, so a bare "yes" is not one. */
 export function isCloseYes(text: string): boolean {
   const s = text.toLowerCase().replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
   if (!s || s.split(" ").length > 8) return false;
   if (/\b(don'?t|do not|not|no|wait|keep|but|until|and then)\b/.test(s)) return false;
   if (s === "close" || /\bclose (it|this|that|the task|this task|this one)\b/.test(s)) return true;
+  if (!/\b(done|that'?s it|thats it|that'?s all|thats all)\b/.test(s)) return false;
   const core = s.replace(/\b(please|thanks|thank you|ok|okay|sure|yes|yeah|yep|go ahead|done|all good|that's it|thats it|that's all|thats all|you can|it's done|its done|perfect|great)\b/g, "").trim();
-  return core === "" && s.length > 0;
+  return core === "";
 }
 
 // ── The outcome: one or two plain sentences ────────────────────────────────
@@ -1269,7 +1267,7 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
     });
     return { ok: true, task: await rerunWithFollowups(vault, id, deps) };
   }
-  // The yes to "Can I close this task?": it closes now (its Herdr tab too). Only a finished task closes on a word.
+  // The user says done or close: it closes now (its Herdr tab too). Only a finished task closes on a word.
   if (!o.asTask && (r.task.status === "done" || r.task.status === "failed") && !r.task.cleared && isCloseYes(body)) {
     updateTask(vault, id, (x) => addUpdate(x, "you", body, now));
     return { ok: true, task: doneTask(vault, id, deps), closed: true };
