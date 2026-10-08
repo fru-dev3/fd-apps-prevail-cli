@@ -6,9 +6,11 @@
 //     own frontmatter) plus its .jsonl twin, in the destination's space, so
 //     its history lives with the domain, project, entity or app it is about;
 //   - a line on the destination's board, ~owner:ai, whose status follows it;
-//   - a staffed job (jobs.ts staffJob): the team, the policies, and whether it
-//     may start alone (decideStart plus the chief of staff's handoff rule;
-//     bunker and the code-only router never start alone);
+//   - a staffed job (jobs.ts staffJob): the team and the policies. Work mode
+//     is autonomous: a task starts on its own (in queue order, up to the
+//     cap) and never asks; the user's standing rules become guards the run
+//     keeps to by itself (draft, never send), shown as a plain line. Only the
+//     autonomy brake, a rule the ask would break, or bunker mode hold it;
 //   - an executor: the engine (the job runs headless in a detached
 //     `prevail work run`) or, with Herdr on, an agent in a Herdr tab
 //     (herdr-work.ts), whose output is mirrored back into the thread.
@@ -17,7 +19,17 @@
 // reorders it. Tasks run in parallel up to maxRunning; beyond the cap a task
 // that may start waits as "queued" and starts in queue order when a slot frees
 // (topUp, after every `work` command, so a finished run starts the next).
-// A task that needs the user takes no slot.
+// A task that needs the user takes no slot. `work add --hold` parks the
+// tasks in the backlog instead: routed and filed, never started, until
+// `work start` moves one to the end of the queue.
+//
+// A finished task stays in the queue, checked, with a one or two sentence
+// outcome the engine distils from the result. It never closes itself: it asks
+// "Can I close this task?" in its updates (the light back-and-forth) and
+// waits for a yes in a follow-up, or `work done` (which also closes its
+// Herdr tab). `work followup` appends to a
+// task: it goes into the thread, to the agent still at work, or starts the
+// task again with it.
 //
 // Pause, Continue, Stop, re-route and Undo act on one task. A re-route moves
 // the thread files and the board line; nothing is ever deleted. A missing
@@ -27,13 +39,13 @@
 //   build/_meta/work/prompts/<prompt-id>.json   one prompt and its tasks
 //   build/_meta/work/settings.json              Herdr on or off, workspaces, maxRunning
 //   build/_meta/work/order.json                 the queue's order: open task ids, first runs first
+//   build/_meta/work/herdr.json                 which Herdr workspace each destination is linked to, per machine
 //   build/_meta/work/.lock                      one writer at a time
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { readChiefOfStaff } from "./chief-of-staff.ts";
 import { parseModArgs } from "./cli-args.ts";
 import { tryAcquireLock } from "./file-lock.ts";
 import { boardFile, jobDir, jobView, makeJobId, readJob, readReceipts, runJob, saveJob, selfCommand, staffJob, startJob, stopJob, type DispatchModel, type Job, type MissionScope } from "./jobs.ts";
@@ -42,12 +54,16 @@ import { runtimePath } from "./path-safety.ts";
 import type { RouteRunner } from "./route.ts";
 import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./session.ts";
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
-import { buildCatalog, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
-import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, reopenTask, resumeHerdr, addMachine, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
+import { gatherContext, judgePlan, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
+import { forgetLearned, isForget, journalLesson, knownAnswers, learnAnswers, learnRoute, lessons, plainLesson, rankContext, recurringMatch, routeLessonFor, sourceRank, unlearnRoute, type PlanKind } from "./work-learn.ts";
+import { buildCatalog, cleanName, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
+import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, focusTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, promptHerdr, renameHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 
-export type WorkStatus = "routed" | "queued" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
+// "backlog": parked as an idea (routed, never started, not in the queue); `work start` moves it to the end of the queue.
+export type WorkStatus = "backlog" | "routed" | "queued" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
 export type Executor = "engine" | "herdr";
+// Asks are kept for records from before Work mode became autonomous; nothing sets them now but a machine suggestion.
 export type AskKind = "start" | "herdr-workspace" | "keep-close" | "machine-add";
 export type Surface = "desktop" | "phone" | "cli";
 
@@ -63,6 +79,10 @@ export interface HerdrRef {
   createdTab?: boolean;
   /** The tail of what was last mirrored, to append only what is new. */
   lastRead?: string;
+  /** The agent was not ready for its brief yet (a question in its tab); the mirror sends it once the agent is idle. */
+  briefPending?: boolean;
+  /** Started through Glyph (its session name and Remote Control) rather than `herdr agent start`. */
+  glyph?: boolean;
 }
 
 export interface WorkTask extends RoutedTask {
@@ -77,10 +97,50 @@ export interface WorkTask extends RoutedTask {
   herdr?: HerdrRef;
   /** Which Mac is carrying it now; stale after three minutes without renewal. */
   lease?: { host: string; until: number };
-  log: { ts: number; ev: string; detail?: string }[];
+  log: LogEntry[];
   /** Earlier destinations, newest last: Undo goes back one. */
   routes?: (Destination | null)[];
+  /** What came of it, in one or two plain sentences (done, failed or held). */
+  outcome?: string;
+  /** False while a finished task waits, checked, in the queue; true once the user cleared it. */
+  cleared?: boolean;
+  /** Follow-ups for an engine run still going: they start it again when it ends. */
+  pendingFollowups?: string[];
+  /** What the vault already knows that the work needs (assembled before it starts; it goes in the brief). */
+  context?: ContextItem[];
+  /** The question the agent is waiting on, as one plain sentence (status needs-you). Answered by a follow-up. */
+  waiting?: string;
+  /** The task this one was split from, and the subtasks split from this one: linked both ways, neither closes the other. */
+  parentId?: string;
+  children?: string[];
+  /** True while a planned task waits for the owner's answers before it starts. */
+  planning?: boolean;
+  /** Every domain the work touches, the owner first (then consulted and informed). */
+  domains?: string[];
+  /** The apps it involves, by id. */
+  apps?: string[];
+  /** The light back-and-forth: short plain lines from the task in its own voice and the user's replies, oldest first. Never raw output. */
+  updates?: TaskUpdate[];
+  /** The kind of plan it asked (its answers are remembered per kind). */
+  planKind?: PlanKind;
+  /** The lessons this task used (from "What I've learned"): "forget that" takes them out. */
+  learned?: string[];
+  /** The earlier tasks it was recognised from as recurring work. */
+  recurringOf?: string[];
+  /** The owner said "forget that": this task no longer teaches anything. */
+  learnOff?: boolean;
 }
+
+export interface TaskUpdate {
+  ts: number; from: "task" | "you"; text: string;
+  /** A plan's questions, shown as a short list the owner answers in one reply. */ questions?: string[];
+  /** A subtask this line hands work to: the panel shows it as a link. */ link?: string;
+  /** The line saying what was learned and used ("forget that" takes it back). */ learned?: boolean;
+  /** A milestone reached mid-run, distilled from the agent's progress. */ milestone?: boolean;
+}
+
+/** `ev` is a short event name; `detail` one line; `more` what a line shows when expanded (a follow-up's words, the tool call behind an activity). */
+export interface LogEntry { ts: number; ev: string; detail?: string; more?: string }
 
 export interface WorkPrompt { id: string; ts: number; text: string; surface: Surface; machine: string; source: RouterPlan["source"]; tasks: WorkTask[] }
 
@@ -91,6 +151,8 @@ export const MAX_RUNNING_LIMIT = 20;
 export const LEASE_MS = 3 * 60_000;
 export const LEASE_RENEW_MS = 60_000;
 const OPEN: WorkStatus[] = ["routed", "queued", "needs-you", "running", "paused"];
+/** In the queue: open, still asking (an older record), or finished and not cleared yet. */
+export const inQueue = (t: WorkTask) => OPEN.includes(t.status) || !!t.ask || ((t.status === "done" || t.status === "failed") && t.cleared === false);
 
 export interface WorkDeps {
   runner?: RouteRunner | null;
@@ -102,8 +164,14 @@ export interface WorkDeps {
   /** Runs a job (tests pass a stub). */
   runJob?: (vault: string, id: string) => Promise<Job>;
   machine?: MachineDeps;
+  /** Runs osascript with these args (tests record the call; never Terminal for real). */
+  terminal?: (osascriptArgs: string[]) => void;
   /** Claude Code's act-gate settings file for a space (tests pass a /tmp path). */
   settingsPath?: (vault: string, space: string) => string;
+  /** Whether Glyph is installed on a machine (label; "local" for this Mac). Tests pass a stub. */
+  glyph?: (machine: string) => boolean;
+  /** Waits between polls (tests pass a no-op). */
+  sleep?: (ms: number) => void;
 }
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -189,10 +257,10 @@ export function readOrder(vault: string): string[] {
 function writeOrder(vault: string, ids: string[]): void { writeAtomic(orderFile(vault), `${JSON.stringify(ids, null, 2)}\n`); }
 
 /** Open tasks in queue order: the saved order first, then any task it does not name yet, oldest first. */
-// A finished task that still asks something (keep or close its Herdr tab) stays in the queue until answered.
+// A finished task stays in the queue, checked, until the user clears it.
 export function queueTasks(vault: string, prompts: WorkPrompt[] = listPrompts(vault)): { task: WorkTask; prompt: WorkPrompt }[] {
   const rank = new Map(readOrder(vault).map((id, i) => [id, i]));
-  const open = [...prompts].sort((a, b) => a.ts - b.ts).flatMap((p) => p.tasks.filter((t) => OPEN.includes(t.status) || !!t.ask).map((task) => ({ task, prompt: p })));
+  const open = [...prompts].sort((a, b) => a.ts - b.ts).flatMap((p) => p.tasks.filter(inQueue).map((task) => ({ task, prompt: p })));
   return open.map((x, i) => ({ x, k: rank.get(x.task.id) ?? rank.size + i })).sort((a, b) => a.k - b.k).map((y) => y.x);
 }
 
@@ -232,14 +300,175 @@ export async function topUp(vault: string, deps: WorkDeps = {}): Promise<string[
       if (t.status === "queued") break;
       if (t.status === "running") started.push(t.id);
     } catch (e) {
-      const t = updateTask(vault, task.id, (x) => { x.status = "needs-you"; x.ask = { kind: "start", detail: (e as Error).message }; });
+      const t = updateTask(vault, task.id, (x) => { finish(x, "failed", "It could not start."); note(x, "could not start", (e as Error).message, Date.now()); });
       syncBoard(vault, t);
     }
   }
   return started;
 }
 
-export const note = (t: WorkTask, ev: string, detail: string | undefined, now: number) => { t.log.push({ ts: now, ev, ...(detail ? { detail: detail.slice(0, 300) } : {}) }); if (t.log.length > 200) t.log.splice(0, t.log.length - 200); };
+export const note = (t: WorkTask, ev: string, detail: string | undefined, now: number, more?: string) => { t.log.push({ ts: now, ev, ...(detail ? { detail: detail.slice(0, 300) } : {}), ...(more ? { more: more.slice(0, 2000) } : {}) }); if (t.log.length > 200) t.log.splice(0, t.log.length - 200); };
+
+/** One line in the task's back-and-forth, at a meaningful moment only; the same line twice in a row is said once. */
+export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, now = Date.now(), questions?: string[], link?: string): void {
+  const line = text.replace(/\s+/g, " ").trim().slice(0, 400);
+  if (!line) return;
+  const u = (t.updates ??= []);
+  const last = u[u.length - 1];
+  if (last?.from === from && last.text === line) return;
+  u.push({ ts: now, from, text: line, ...(questions?.length ? { questions: questions.map((q) => q.trim().slice(0, 200)).filter(Boolean) } : {}), ...(link ? { link } : {}) });
+  if (u.length > 60) u.splice(0, u.length - 60);
+}
+export const CLOSE_QUESTION = "Can I close this task?";
+
+// ── Milestones: a long task says how it is going, a sentence at most ──────
+
+/** At most one milestone line per five minutes, counted from the task's last line. */
+export const MILESTONE_GAP_MS = 5 * 60_000;
+
+/** May a milestone be said now: it is running and has said nothing for a while. */
+export function milestoneDue(t: Pick<WorkTask, "status" | "updates">, now: number): boolean {
+  if (t.status !== "running") return false;
+  const last = [...(t.updates ?? [])].reverse().find((u) => u.from === "task");
+  return !last || now - last.ts >= MILESTONE_GAP_MS;
+}
+
+/** Say a milestone when one is due; false when it is too soon (rate-limited). */
+export function addMilestone(t: WorkTask, line: string, now: number): boolean {
+  if (!line.trim() || !milestoneDue(t, now)) return false;
+  const before = t.updates?.length ?? 0;
+  addUpdate(t, "task", line, now);
+  if ((t.updates?.length ?? 0) > before) t.updates!.at(-1)!.milestone = true;
+  return true;
+}
+
+const MILESTONE_RE = /\b(?:found|finished|done with|completed|drafted|wrote|written|created|fixed|updated|built|added|compared|collected|gathered|checked|reviewed|saved|filed|narrowed|shortlisted|listed)\b/i;
+
+/** A milestone in the agent's own words, by code: its last plain sentence that reports a step reached. Null when there is none. */
+export function milestoneByCode(words: string): string | null {
+  const prose = words.replace(/```[\s\S]*?```/g, "").split("\n")
+    .filter((l) => !/^\s*[\u23fa\u25cf\u23bf|]/.test(l) && !/^\s*[-=_*]{3,}\s*$/.test(l))
+    .map((l) => l.replace(/^\s*(?:#+|>|[-*\u2022]|\d+[.)])\s*/, "").replace(/[*_`]+/g, "").trim()).filter(Boolean).join(" ");
+  const hits = prose.split(/(?<=[.!])\s+/).filter((x) => x.length >= 12 && x.length <= 200 && MILESTONE_RE.test(x) && !/[{}<>]|\/\w+\/|\?$/.test(x));
+  const s = hits.at(-1);
+  return s ? s.replace(/\s*[\u2014\u2013]\s*/g, ", ").trim() : null;
+}
+
+/** The milestone the model distils from the agent's latest progress (one sentence), or null when nothing is worth telling. Never raw output. */
+export async function distilMilestone(words: string, deps: WorkDeps = {}): Promise<string | null> {
+  const text = words.trim();
+  if (!text) return null;
+  const byCode = milestoneByCode(text);
+  if (deps.runner === null || process.env.PREVAIL_BUNKER === "1") return byCode;
+  try {
+    const runner = deps.runner ?? (await import("./route.ts")).claudeRouteRunner;
+    const raw = await runner({
+      system: "From an agent's latest progress on a task, write the milestone it reached as one short plain sentence in the first person (\"I found three carriers and am comparing prices.\"). Only a real milestone: something found, drafted, finished or decided. If nothing is worth telling the owner, reply NONE. No markdown, no em dashes, no file paths.",
+      prompt: text.slice(-4000), timeoutMs: 20_000, maxChars: 300,
+    });
+    const line = raw.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").replace(/^["']|["']$/g, "").trim();
+    if (/^none\b/i.test(line)) return null;
+    if (!line || line.startsWith("{") || line.length > 240) return byCode;
+    return line.split(/(?<=[.!?])\s+/)[0]!;
+  } catch { return byCode; }
+}
+
+/** An engine job moved to its next step: the step before is done. Null until it does. */
+export function engineMilestone(job: Job | null, seen: number): { step: number; text: string } | null {
+  const at = job?.progress?.at(-1)?.step ?? 0;
+  if (!job || job.status !== "running" || at <= seen) return null;
+  const who = (step: number) => job.team.find((s) => s.step === step)?.specialists.join(" and ") ?? "";
+  const prev = who(at - 1);
+  const next = who(at);
+  return { step: at, text: `${prev ? `The ${prev} step is done` : `Step ${at - 1} is done`}; ${next ? `the ${next} is on it now` : `now on step ${at}`}.` };
+}
+export const WORKING_LINE = "Working on it, nothing needed from you.";
+
+/**
+ * Finished (done or failed), checked in the queue with what came of it. It
+ * never closes itself: a finished task says what came of it, asks whether it
+ * can close, and waits for the user's yes (or a tick).
+ */
+export function finish(t: WorkTask, status: "done" | "failed", outcome?: string, now = Date.now()): void {
+  // Done means a result exists: an agent that only stopped is asked about, never marked done.
+  if (status === "done" && !(outcome ?? t.outcome ?? "").replace(/^done\.?$/i, "").trim()) {
+    t.status = "needs-you";
+    t.waiting = "It stopped without a result. Should it try again, or do something else?";
+    delete t.ask;
+    addUpdate(t, "task", t.waiting, now);
+    return;
+  }
+  const was = t.status;
+  t.status = status;
+  t.cleared = false;
+  delete t.ask;
+  if (outcome) t.outcome = outcome;
+  if (was === status) return;
+  if (status === "done") { const what = (t.outcome ?? "").replace(/^done[:.]?\s*/i, "").trim(); addUpdate(t, "task", what ? `Done: ${what}` : "Done.", now); }
+  else addUpdate(t, "task", t.outcome || "I could not finish it.", now);
+  addUpdate(t, "task", CLOSE_QUESTION, now);
+}
+
+/** A clear yes to "Can I close this task?" ("close it", "go ahead", "yes"); anything else is a follow-up. */
+export function isCloseYes(text: string): boolean {
+  const s = text.toLowerCase().replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!s || s.split(" ").length > 8) return false;
+  if (/\b(don'?t|do not|not|no|wait|keep|but|until|and then)\b/.test(s)) return false;
+  if (s === "close" || /\bclose (it|this|that|the task|this task|this one)\b/.test(s)) return true;
+  const core = s.replace(/\b(please|thanks|thank you|ok|okay|sure|yes|yeah|yep|go ahead|done|all good|that's it|thats it|that's all|thats all|you can|it's done|its done|perfect|great)\b/g, "").trim();
+  return core === "" && s.length > 0;
+}
+
+// ── The outcome: one or two plain sentences ────────────────────────────────
+
+/** The result in one or two plain sentences, by code: markdown off, the summary paragraph, two sentences. */
+export function plainOutcome(text: string): string {
+  let lines = text.replace(/\r/g, "").replace(/```[\s\S]*?```/g, "").split("\n")
+    // Tool calls and tables are the work, not what came of it.
+    .filter((l) => !/^\s*[\u23fa\u25cf]/.test(l) && !/^\s*\|/.test(l) && !/^\s*[-=_*]{3,}\s*$/.test(l))
+    .map((l) => l.replace(/^\s*(?:#+|>|[-*\u2022]|\d+[.)])\s*/, "").replace(/[*_`]+/g, "").trim());
+  // An agent ends with its summary: what follows a "Summary" line, else the last paragraph that says something.
+  const at = lines.map((l) => /^(?:summary|in short|result|outcome)\b\s*[:.]?/i.test(l)).lastIndexOf(true);
+  if (at >= 0) lines = [lines[at]!.replace(/^(?:summary|in short|result|outcome)\b\s*[:.]?\s*/i, ""), ...lines.slice(at + 1)];
+  const paras = lines.join("\n").split(/\n{2,}/).map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+  if (!paras.length) return "";
+  const pick = at >= 0 ? paras[0]! : [...paras].reverse().find((p) => p.split(" ").length >= 4) ?? paras[paras.length - 1]!;
+  const two = pick.split(/(?<=[.!?])\s+/).slice(0, 2).join(" ");
+  const out = two.replace(/\s*[\u2014\u2013]\s*/g, ", ").trim();
+  return out.length > 240 ? `${out.slice(0, 239).replace(/\s+\S*$/, "")}\u2026` : out;
+}
+
+/** The outcome the model distils from the result (one or two sentences), else code's. Never throws. */
+export async function distilOutcome(text: string, deps: WorkDeps = {}): Promise<string> {
+  const body = text.trim();
+  if (!body) return "";
+  const byCode = plainOutcome(body);
+  if (deps.runner === null || process.env.PREVAIL_BUNKER === "1") return byCode;
+  try {
+    const runner = deps.runner ?? (await import("./route.ts")).claudeRouteRunner;
+    const raw = await runner({
+      system: "You write the outcome line on a finished task card. One or two short plain sentences saying what was done and anything left for the user. No preamble, no markdown, no em dashes, no lists.",
+      prompt: body.slice(-6000), timeoutMs: 30_000, maxChars: 600,
+    });
+    const line = raw.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").replace(/^["']|["']$/g, "").trim();
+    return line && line.length <= 400 && !line.startsWith("{") ? line : byCode;
+  } catch { return byCode; }
+}
+
+// ── Guards: the user's standing rules, kept by the run, shown as one line ──
+
+/** A job's guards as one plain line (never a question). */
+export function guardLine(guards: string[] | undefined): string | null {
+  if (!guards?.length) return null;
+  const out = new Set<string>();
+  for (const g of guards) {
+    if (/contacts someone|outside agent/.test(g)) out.add("drafts only, nothing is sent");
+    else if (/money|budget|limit/.test(g)) out.add("nothing is paid or bought");
+    else if (/undone|identity|location|people/.test(g)) out.add("it stops before anything that cannot be undone");
+    else if (/approval gate|would act/.test(g)) out.add("actions wait for your approval");
+  }
+  return out.size ? `Your rules apply: ${[...out].join("; ")}.` : null;
+}
 const oneLine = (s: string, n = 200) => s.replace(/\s+/g, " ").replace(/\s*[—–]\s*/g, ", ").trim().slice(0, n);
 const ymd = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
@@ -326,8 +555,9 @@ export function staffTask(vault: string, t: WorkTask, source: RouterPlan["source
   const scope = ms ? missionScope(vault, ms) : undefined;
   const owner = d?.owner ?? "general";
   const dm: DispatchModel = { owner, effort: t.effort, why: d?.why || `${t.shape} job`, open_ended: t.flags.open_ended, decision: t.flags.decision, money: t.flags.money, numbers: t.flags.numbers };
+  const known = t.context?.length ? `\n\nWhat Prevail already knows (use it; do not ask for it):\n${t.context.map((c) => `- ${c.text}`).join("\n")}` : "";
   const staffed = staffJob({
-    vault, message: t.text, here: owner, owner, shape: t.shape, dm, scope, thread: t.thread.session, trigger: "work", now,
+    vault, message: `${t.text}${known}`, here: owner, owner, shape: t.shape, dm, scope, thread: t.thread.session, trigger: "work", now,
     extra: t.specialists, entities: d?.entity ? [d.entity] : [],
     // Only an agent in a Herdr tab carries an agent kind; the engine runs its own runtime.
     ...(t.executor === "herdr" ? { agentKind: t.agentKind } : {}),
@@ -342,18 +572,44 @@ export function staffTask(vault: string, t: WorkTask, source: RouterPlan["source
   return staffed.job;
 }
 
-/** May it start now? The job's own rule, the handoff setting, and never in bunker or on a guess. */
-function startsAlone(vault: string, job: Job | null): { yes: boolean; why: string } {
-  if (!job) return { yes: false, why: "no specialist team fits this task" };
-  if (process.env.PREVAIL_BUNKER === "1") return { yes: false, why: "bunker mode never starts work alone" };
-  const h = readChiefOfStaff(vault).handoff;
-  if (h !== "auto") return { yes: false, why: h === "offer" ? "you asked to be offered every job first" : "handoff is off" };
-  return job.startsAlone ? { yes: true, why: "" } : { yes: false, why: job.askReason ?? "it needs your yes" };
+/**
+ * May it start now? Work mode never asks: a task starts unless bunker mode,
+ * the autonomy brake or a rule the ask would break holds it (decideStart keeps
+ * only those for the "work" trigger). `why` is a plain sentence for the card.
+ */
+function startsAlone(t: WorkTask, job: Job | null): { yes: boolean; why: string } {
+  if (process.env.PREVAIL_BUNKER === "1") return { yes: false, why: "Held: bunker mode is on, so work waits." };
+  // An agent in a Herdr tab does the work itself; the engine needs a team.
+  if (!job) return t.executor === "herdr" ? { yes: true, why: "" } : { yes: false, why: "No specialist here does this kind of work yet." };
+  if (job.startsAlone) return { yes: true, why: "" };
+  return { yes: false, why: /autonomy is paused/.test(job.askReason ?? "") ? "Held: autonomy is paused." : "Held: it would break one of your rules." };
 }
 
 // ── Add ─────────────────────────────────────────────────────────────────────
 
-export interface AddOptions { surface?: Surface; machine?: string; agentKind?: string; deps?: WorkDeps }
+export interface AddOptions {
+  surface?: Surface; machine?: string; agentKind?: string;
+  /** Park the tasks in the backlog: routed, never started. */ hold?: boolean;
+  /** Add the tasks to this prompt (more tasks for the same work) instead of a new one. */ into?: string;
+  deps?: WorkDeps;
+}
+
+/** A task entering the queue: queued to start in turn, never asked about. A Mac Herdr cannot reach runs it here instead. */
+function gateTask(vault: string, t: WorkTask, ms: Machine[], job: Job | null, now = Date.now()): void {
+  delete t.ask;
+  const machine = ms.find((m) => m.label === t.machine);
+  const here = ms.find((m) => m.current)?.label;
+  if (t.executor === "herdr" && machine && (machine.herdr === "missing" || machine.herdr === "disabled") && here) {
+    note(t, "moved", `${machine.label} is not connected, so it runs on ${here}`, now);
+    t.machine = here;
+  }
+  const g = guardLine(job?.guards);
+  if (g && !t.log.some((l) => l.ev === "guard")) note(t, "guard", g, now);
+  const s = startsAlone(t, job);
+  if (s.yes) { t.status = "queued"; delete t.outcome; }
+  else if (!job && t.executor === "engine") finish(t, "failed", s.why);
+  else { t.status = "paused"; t.outcome = s.why; note(t, "held", s.why, now); }
+}
 
 function catalogFor(vault: string, deps: WorkDeps = {}): { cat: Catalog; ms: Machine[] } {
   const md = { ...deps.machine, ...(deps.herdrFor ? { herdr: deps.herdrFor("local") } : {}) };
@@ -378,12 +634,22 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
   const plan = await routeWork(vault, body, { catalog: cat, ...(deps.runner !== undefined ? { runner: deps.runner } : {}) });
   const settings = readSettings(vault);
   const now = clock();
-  const id = makePromptId(now);
+  const into = o.into ? readPrompt(vault, o.into) : null;
+  if (o.into && !into) throw new Error(`no work ${o.into}`);
+  const id = into?.id ?? makePromptId(now);
   const prompt: WorkPrompt = { id, ts: now, text: body, surface: o.surface ?? "cli", machine: cat.here, source: plan.source, tasks: [] };
-  const chief = readChiefOfStaff(vault);
-  let n = 0;
-  for (const g of plan.goals) for (const r of g.tasks) {
+  // Numbering goes on after the work's own tasks.
+  let n = into ? Math.max(0, ...into.tasks.map((t) => Number(/-(\d+)$/.exec(t.id)?.[1] ?? 0))) : 0;
+  // What it learned before: the owner's lessons, the history of tasks, the sources that answered well.
+  const history = listPrompts(vault);
+  const taught = lessons(vault);
+  const rank = sourceRank(history);
+  // The model judges which tasks need a plan first (all at once); with no model the keywords do.
+  const routed = plan.goals.flatMap((g) => g.tasks);
+  const judged = o.hold ? [] : await Promise.all(routed.map((r) => judgePlan(r.text, cat.domains.map((d) => d.slug), deps.runner)));
+  for (const [k, r0] of routed.entries()) {
     n++;
+    const { r, used, said, rec } = applyLearned(r0, cat, taught, history, now);
     const t: WorkTask = {
       ...r,
       ...(o.agentKind && cat.agentKinds.includes(o.agentKind) ? { agentKind: o.agentKind } : {}),
@@ -392,9 +658,30 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
       thread: { space: r.dest?.space ?? "general", session: makeSessionId() }, log: [],
     };
     note(t, "routed", r.dest ? `${r.dest.kind} ${r.dest.label}${r.dest.why ? `: ${r.dest.why}` : ""}` : "no destination", now);
-    // A specialist the work needs is made at once only when the user lets jobs start alone (draft ceiling at most); otherwise it waits as a suggestion.
+    // Assemble before dispatch: the specialists the work needs and what the vault already knows that it will need.
+    t.specialists = neededSpecialists(vault, t);
+    const ctx = gatherContext(vault, t);
+    if (rec?.outcome) ctx.push({ label: `Last time: ${oneLine(rec.outcome, 90)}`, text: `Last time this came up it ended: ${rec.outcome}` });
+    // Plan before doing: an under-specified or high-impact task first asks what only the owner knows (and he has not said before).
+    const prep = o.hold ? null : planTask(vault, t, { judged: judged[k] ?? null, known: (kind) => knownAnswers(taught, kind) });
+    if (prep) {
+      ctx.push(...prep.found);
+      t.planKind = prep.kind;
+      if (prep.used.length) { used.push(...prep.used.map((u) => u.line)); said.push(`you said ${prep.used.map((u) => u.text).join(", ")}`); }
+    }
+    // The sources that answered well before go first.
+    if (ctx.length) t.context = rankContext(ctx, rank);
+    if (rec) t.recurringOf = rec.ids;
+    if (used.length) t.learned = used;
+    // One plain line when something learned was used.
+    if (said.length) {
+      const line = said.length === 1 && prep?.used.length ? `Using what you told me last time: ${prep.used.map((u) => u.text).join(", ")}.` : `From what I learned: ${said.join("; ")}.`;
+      addUpdate(t, "task", line, now);
+      t.updates!.at(-1)!.learned = true;
+    }
+    // A specialist the work needs is made at once (draft ceiling at most): Work mode does not stop to ask.
     for (const s of t.suggestions) {
-      if (s.kind !== "specialist" || s.state !== "open" || chief.handoff !== "auto" || process.env.PREVAIL_BUNKER === "1") continue;
+      if (s.kind !== "specialist" || s.state !== "open" || process.env.PREVAIL_BUNKER === "1") continue;
       try {
         const made = await makeSpecialist(vault, s.name, s.why || `Help with: ${t.text}`, s.draft, clock());
         s.state = "accepted";
@@ -406,26 +693,53 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     addBoardLine(vault, t, `w${(now + n).toString(36).slice(-6)}`, now);
     const job = staffTask(vault, t, plan.source, now);
     if (job) t.jobId = job.id;
-    const machine = ms.find((m) => m.label === t.machine);
-    if (t.executor === "herdr" && machine && (machine.herdr === "missing" || machine.herdr === "disabled")) {
-      t.status = "needs-you";
-      t.ask = { kind: "machine-add", detail: `${machine.label} is not a saved Herdr machine here`, command: machineAddCommand(machine.label) };
-    } else {
-      const s = startsAlone(vault, job);
-      if (!s.yes) { t.status = "needs-you"; t.ask = { kind: "start", detail: s.why }; }
+    // Every domain it touches (the owner first, then consulted and informed) and the apps it involves: the panel's pills.
+    const touched = [...new Set([t.dest?.owner ?? "general", ...(job?.domains.consulted ?? []), ...(job?.domains.informed ?? [])])].filter((x) => /^[a-z0-9][a-z0-9-]*$/.test(x));
+    if (touched.length || prep?.domains.length) t.domains = [...new Set([...touched, ...(prep?.domains ?? [])])];
+    if (t.dest?.kind === "app") t.apps = [t.dest.id];
+    if (o.hold) { t.status = "backlog"; note(t, "parked", "in the backlog until it is moved to the queue", now); }
+    else if (prep?.questions.length) {
+      t.status = "needs-you"; t.planning = true; t.waiting = "A few questions before I start.";
+      note(t, "planning", prep.questions.join(" "), now);
+      addUpdate(t, "task", prep.say, now, prep.questions);
     }
+    // It waits its turn behind what is already queued.
+    else gateTask(vault, t, ms, job, now);
     prompt.tasks.push(t);
   }
-  // What may start alone waits its turn behind what is already queued; new tasks go to the end of the queue.
-  for (const t of prompt.tasks) if (t.status === "routed") t.status = "queued";
+  // New tasks go to the end of the queue; parked ones stay out of it. Added to earlier work, they join its prompt.
   withWorkLock(vault, () => {
     const ids = queueTasks(vault).map((x) => x.task.id);
-    savePrompt(vault, prompt);
-    writeOrder(vault, [...ids, ...prompt.tasks.map((t) => t.id)]);
+    if (into) { const cur = readPrompt(vault, id) ?? into; cur.tasks.push(...prompt.tasks); savePrompt(vault, cur); }
+    else savePrompt(vault, prompt);
+    writeOrder(vault, [...ids, ...prompt.tasks.filter((t) => t.status !== "backlog").map((t) => t.id)]);
   });
   for (const t of prompt.tasks) if (t.status !== "queued") syncBoard(vault, t);
   await topUp(vault, deps);
-  return readPrompt(vault, id) ?? prompt;
+  const saved = readPrompt(vault, id);
+  // Added to earlier work: the answer is the new tasks, under that work's id.
+  return saved ? (into ? { ...saved, tasks: saved.tasks.filter((t) => prompt.tasks.some((x) => x.id === t.id)) } : saved) : prompt;
+}
+
+/** Routing follows the owner's corrections; recurring work is set up as it was last time. */
+function applyLearned(r0: RoutedTask, cat: Catalog, taught: string[], history: WorkPrompt[], now: number) {
+  let r = r0;
+  const used: string[] = [];
+  const said: string[] = [];
+  const rec = recurringMatch(history, r, now);
+  const lesson = routeLessonFor(taught, r);
+  const to = lesson ? destination(cat, lesson.kind, lesson.id, { confidence: 0.9, why: "you moved work like this there before" }) : null;
+  if (to && lesson) {
+    if (to.kind !== r.dest?.kind || to.id !== r.dest?.id) r = { ...r, dest: to, alternatives: r.dest ? [r.dest, ...r.alternatives].slice(0, 2) : r.alternatives };
+    used.push(lesson.line);
+    said.push(`it goes to ${to.label}, where you moved it before`);
+  }
+  if (rec) {
+    const last = rec.last.dest && !to ? destination(cat, rec.last.dest.kind, rec.last.dest.id, { confidence: 0.85, why: "where it went last time" }) : null;
+    r = { ...r, ...(last ? { dest: last } : {}), name: rec.last.name || r.name, specialists: [...new Set([...r.specialists, ...rec.last.specialists])].slice(0, 3) };
+    said.unshift(`this comes up regularly (${rec.count} times before${rec.weekday ? `, usually on ${rec.weekday}` : ""}), so it is set up like last time`);
+  }
+  return { r, used, said, rec };
 }
 
 async function makeSpecialist(vault: string, name: string, mandate: string, draft: unknown, now: number): Promise<string> {
@@ -447,6 +761,7 @@ export async function startTask(vault: string, id: string, o: { deps?: WorkDeps 
   if (!r) throw new Error(`no task ${id}`);
   const t = r.task;
   if (t.status === "running") return t;
+  if (t.status === "backlog") return queueFromBacklog(vault, id, deps);
   if (t.executor === "engine" && (!t.jobId || !readJob(vault, t.jobId))) throw new Error("this task has no job to run; re-route it first");
   // Take a slot, or wait as queued: the count and the claim happen under one lock, so two starters never overfill.
   let claimed = false;
@@ -463,6 +778,7 @@ export async function startTask(vault: string, id: string, o: { deps?: WorkDeps 
     x.status = "running";
     claimed = true;
     note(x, x.executor === "herdr" ? "starting" : "started", x.executor === "herdr" ? "in Herdr" : "the engine runs it", now);
+    addUpdate(x, "task", WORKING_LINE, now);
     savePrompt(vault, cur.prompt);
     return x;
   });
@@ -472,6 +788,28 @@ export async function startTask(vault: string, id: string, o: { deps?: WorkDeps 
   if (next.executor === "engine") startJob(vault, next.jobId!, { detached: false });
   (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "run", id]);
   return next;
+}
+
+/** Move a parked task to the end of the queue, where it starts in turn (or asks first, as a new task would). */
+async function queueFromBacklog(vault: string, id: string, deps: WorkDeps): Promise<WorkTask> {
+  const now = (deps.now ?? Date.now)();
+  let ms: Machine[] = [];
+  try { ms = machines(vault, { ...deps.machine, ...(deps.herdrFor ? { herdr: deps.herdrFor("local") } : {}) }); } catch { ms = []; }
+  const t = withWorkLock(vault, () => {
+    const cur = readTask(vault, id);
+    if (!cur) throw new Error(`no task ${id}`);
+    const x = cur.task;
+    if (x.status !== "backlog") return x;
+    const ids = queueTasks(vault).map((q) => q.task.id);
+    gateTask(vault, x, ms, x.jobId ? readJob(vault, x.jobId) : null, now);
+    note(x, "moved to the queue", undefined, now);
+    savePrompt(vault, cur.prompt);
+    writeOrder(vault, [...ids.filter((q) => q !== id), id]);
+    return x;
+  });
+  syncBoard(vault, t);
+  await topUp(vault, deps);
+  return readTask(vault, id)?.task ?? t;
 }
 
 export function hereLabel(vault: string, deps: WorkDeps): string { return thisMachine(vault, deps.machine).label; }
@@ -490,30 +828,50 @@ export async function withLease<T>(vault: string, id: string, deps: WorkDeps, fn
 }
 
 /** The detached run: the job to its end, its result into the thread, the status onto the card and the board. */
-export async function runTask(vault: string, id: string, deps: WorkDeps = {}, o: { createWorkspace?: boolean; workspace?: string; reopen?: boolean } = {}): Promise<WorkTask> {
+export async function runTask(vault: string, id: string, deps: WorkDeps = {}, o: { reopen?: boolean } = {}): Promise<WorkTask> {
   const r = readTask(vault, id);
   if (!r) throw new Error(`no task ${id}`);
   if (r.task.executor === "herdr") return launchTask(vault, id, deps, o);
   const jobId = r.task.jobId;
   if (!jobId) throw new Error("this task has no job");
   const clock = deps.now ?? Date.now;
-  const job = await withLease(vault, id, deps, () => (deps.runJob ?? ((v, j) => runJob(v, j)))(vault, jobId));
+  // A long run says when a step is done (rate-limited, never its raw output).
+  let seen = 1;
+  const watch = setInterval(() => {
+    try {
+      const m = engineMilestone(readJob(vault, jobId), seen);
+      if (!m) return;
+      seen = m.step;
+      updateTask(vault, id, (x) => { addMilestone(x, m.text, clock()); });
+    } catch { /* the next tick */ }
+  }, LEASE_RENEW_MS);
+  let job: Job;
+  try { job = await withLease(vault, id, deps, () => (deps.runJob ?? ((v, j) => runJob(v, j)))(vault, jobId)); } finally { clearInterval(watch); }
   const filed = readReceipts(vault, jobId).filter((x) => !x.undone).map((x) => `- ${x.text} (${x.file})`);
   let body = "";
   try { body = (JSON.parse(readFileSync(join(jobDir(vault, jobId), "result.json"), "utf8")) as { body?: string }).body ?? ""; } catch { /* no result */ }
   const text = job.status === "done"
     ? [job.result?.summary ?? "", body, filed.length ? `Filed:\n${filed.join("\n")}` : ""].filter(Boolean).join("\n\n")
     : `The job ${job.status === "stopped" ? "stopped" : job.status === "needs-approval" ? "is waiting for you" : "failed"}${job.note ? `: ${job.note}` : "."}`;
+  // The job's own summary is the best source; the full text when it has none.
+  const outcome = job.status === "done" ? await distilOutcome(job.result?.summary || text, deps) : "";
+  let rerun = false;
   const t = updateTask(vault, id, (x) => {
     appendTurn(vault, x, "assistant", text, "prevail", clock());
     // A pause or stop the user asked for while it ran stands.
     if (x.status === "running") {
-      x.status = job.status === "done" ? "done" : job.status === "needs-approval" ? "needs-you" : job.status === "stopped" ? "paused" : "failed";
-      if (x.status === "needs-you") x.ask = { kind: "start", detail: job.note ?? "it is waiting for your yes" };
+      // Follow-ups that came in while it ran: it goes again with them.
+      if (job.status === "done" && x.pendingFollowups?.length) rerun = true;
+      else if (job.status === "done") finish(x, "done", outcome || "Done.", clock());
+      // An action the user's rules hold for approval: a plain line, never a question here.
+      else if (job.status === "needs-approval") { x.status = "paused"; x.outcome = "Stopped before an action your rules keep for your approval."; addUpdate(x, "task", x.outcome, clock()); }
+      else if (job.status === "stopped") x.status = "paused";
+      else finish(x, "failed", "It did not finish.", clock());
     }
-    note(x, `job ${job.status}`, job.note ?? job.result?.summary, clock());
+    note(x, job.status === "done" ? "done" : `job ${job.status}`, job.note ?? job.result?.summary, clock());
   });
   syncBoard(vault, t);
+  if (rerun) return rerunWithFollowups(vault, id, deps);
   return t;
 }
 
@@ -645,7 +1003,6 @@ export async function routeTask(vault: string, id: string, c: RouteChange, deps:
   const now = (deps.now ?? Date.now)();
   const r = readTask(vault, id);
   if (!r) throw new Error(`no task ${id}`);
-  if (r.task.status === "running" && r.task.executor === "engine") throw new Error("pause the task before re-routing it");
   const { cat, ms } = catalogFor(vault, deps);
   let to: Destination | null | undefined;
   if (c.undo) {
@@ -659,8 +1016,12 @@ export async function routeTask(vault: string, id: string, c: RouteChange, deps:
   }
   if (c.agentKind && !cat.agentKinds.includes(c.agentKind)) throw new Error(`unknown agent kind ${c.agentKind}`);
   if (c.machine && !ms.some((m) => m.label === c.machine)) throw new Error(`unknown machine ${c.machine}`);
+  const picked = c.machine ? ms.find((m) => m.label === c.machine) : undefined;
+  if (picked && r.task.executor === "herdr" && picked.herdr !== "local" && picked.herdr !== "saved") throw new Error(`${picked.label} is not connected`);
   const herdrOpen = r.task.executor === "herdr" && !!r.task.herdr?.tabId;
   const wasRunning = r.task.status === "running";
+  // A run in the engine stops here and starts again in its new home.
+  if (wasRunning && r.task.executor === "engine" && r.task.jobId && readJob(vault, r.task.jobId)?.status === "running") { try { stopJob(vault, r.task.jobId); } catch { /* gone */ } }
   // A new agent kind or machine for an open Herdr tab: close it there, open it in the new place.
   if (herdrOpen && (to !== undefined || (c.agentKind && c.agentKind !== r.task.agentKind) || (c.machine && c.machine !== r.task.machine))) {
     try { closeHerdr(vault, r.task, deps); } catch { /* already gone */ }
@@ -671,26 +1032,26 @@ export async function routeTask(vault: string, id: string, c: RouteChange, deps:
       else x.routes = [...(x.routes ?? []), x.dest];
       moveThread(vault, x, to, now);
       note(x, c.undo ? "route undone" : "re-routed", to ? `${to.kind} ${to.label}` : "General", now);
+      // The owner's correction teaches where work like this goes; undoing it takes the lesson back.
+      if (c.undo && x.dest) unlearnRoute(vault, x, x.dest, now);
+      else if (!c.undo && to) learnRoute(vault, x, to, now);
       x.dest = to;
+      const ctx = gatherContext(vault, x);
+      if (ctx.length) x.context = ctx; else delete x.context;
     }
     if (c.agentKind && c.agentKind !== x.agentKind) { note(x, "agent kind", `${x.agentKind} to ${c.agentKind}`, now); x.agentKind = c.agentKind; }
     if (c.machine && c.machine !== x.machine) { note(x, "machine", `${x.machine} to ${c.machine}`, now); x.machine = c.machine; }
-    if (herdrOpen) { delete x.herdr; if (wasRunning) x.status = "routed"; }
-    // Restaff for the new home (the old job stays as its record).
+    if (herdrOpen) delete x.herdr;
+    if (wasRunning && (herdrOpen || x.executor === "engine")) x.status = "routed";
+    // Restaff for the new home (the old job stays as its record), and start again on its own when it was on its way.
     if (x.status !== "running") {
       const job = staffTask(vault, x, "model", now);
       if (job) x.jobId = job.id;
-      const machine = ms.find((m) => m.label === x.machine);
-      if (x.executor === "herdr" && machine && machine.herdr !== "local" && machine.herdr !== "saved") { x.status = "needs-you"; x.ask = { kind: "machine-add", detail: `${machine.label} is not a saved Herdr machine here`, command: machineAddCommand(machine.label) }; }
-      else if (x.status === "routed" || x.status === "needs-you") {
-        const s = startsAlone(vault, job);
-        if (wasRunning && herdrOpen && s.yes) x.status = "routed";
-        else { x.status = "needs-you"; x.ask = { kind: "start", detail: s.yes ? "re-routed; start it in its new home?" : s.why }; }
-      }
+      if (x.status === "routed" || x.status === "needs-you" || x.status === "queued") gateTask(vault, x, ms, job, now);
     }
   });
   syncBoard(vault, t);
-  if (t.status === "routed" && wasRunning) return startTask(vault, id, { deps });
+  if (t.status === "queued") { await topUp(vault, deps); return readTask(vault, id)?.task ?? t; }
   return t;
 }
 
@@ -754,8 +1115,8 @@ export function declineSuggestion(vault: string, id: string, n: number, deps: Wo
   });
 }
 
-/** The user's answer to what the card asks: yes or no (start, a new workspace, a machine), or keep, close, reopen. */
-export async function answerTask(vault: string, id: string, reply: string, o: { workspace?: string; deps?: WorkDeps } = {}): Promise<WorkTask> {
+/** An answer to what an older record asks (Work mode asks nothing now): yes or no, or keep, close, reopen. */
+export async function answerTask(vault: string, id: string, reply: string, o: { deps?: WorkDeps } = {}): Promise<WorkTask> {
   const deps = o.deps ?? {};
   const now = (deps.now ?? Date.now)();
   const r = readTask(vault, id);
@@ -775,21 +1136,177 @@ export async function answerTask(vault: string, id: string, reply: string, o: { 
     syncBoard(vault, t);
     return t;
   }
-  if (ask.kind === "herdr-workspace") {
-    if (a === "no") {
-      // Without a workspace the engine runs it, if the user starts it.
-      const t = updateTask(vault, id, (x) => { x.executor = "engine"; x.status = "needs-you"; x.ask = { kind: "start", detail: "no Herdr workspace; run it with the engine?" }; note(x, "no workspace", undefined, now); });
-      return t;
-    }
-    // The user's yes to this workspace: the detached run creates it, then opens the tab.
-    const t = updateTask(vault, id, (x) => { x.status = "running"; delete x.ask; note(x, "workspace yes", o.workspace, now); });
-    (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "run", id, "--create-workspace", ...(o.workspace ? ["--workspace", o.workspace] : [])]);
-    return t;
-  }
+  // An older record's workspace question: the workspace is found or made by itself now.
+  if (ask.kind === "herdr-workspace") return a === "yes" ? startTask(vault, id, { deps }) : stopTask(vault, id, deps);
   if (ask.kind === "keep-close") return a === "yes" ? updateTask(vault, id, (x) => { delete x.ask; note(x, "kept", undefined, now); }) : closeTask(vault, id, deps);
   // machine-add: no means run it here instead.
   if (a === "no") return routeTask(vault, id, { machine: hereLabel(vault, deps) }, deps);
   throw new Error("add the machine with: prevail work machine-add --label <label> --target <ssh target> --yes");
+}
+
+// ── Check off, follow up, rename, focus ─────────────────────────────────────
+
+/** The user checked it off: done, out of the queue, its Herdr tab closed. The task and its history stay. */
+export function doneTask(vault: string, id: string, deps: WorkDeps = {}): WorkTask {
+  const now = (deps.now ?? Date.now)();
+  const r = readTask(vault, id);
+  if (!r) throw new Error(`no task ${id}`);
+  if (r.task.jobId && readJob(vault, r.task.jobId)?.status === "running") { try { stopJob(vault, r.task.jobId); } catch { /* gone */ } }
+  if (r.task.executor === "herdr" && r.task.herdr?.tabId) { try { closeHerdr(vault, r.task, deps); } catch { /* already closed */ } }
+  const t = updateTask(vault, id, (x) => {
+    x.status = "done";
+    x.cleared = true;
+    delete x.ask;
+    delete x.pendingFollowups;
+    if (x.herdr) { delete x.herdr.tabId; delete x.herdr.paneId; delete x.herdr.agent; delete x.herdr.briefPending; }
+    note(x, "checked off", undefined, now);
+  });
+  syncBoard(vault, t);
+  if (!t.learnOff) journalLesson(vault, t.dest?.owner, `Work task "${t.name}" closed${t.outcome ? `: ${t.outcome}` : "."}`, now);
+  return t;
+}
+
+/** The task's ask with every follow-up so far, for a run that starts again. */
+const withFollowups = (t: WorkTask) => [t.text, ...t.log.filter((l) => l.ev === "follow-up" && l.more).map((l) => `Follow-up: ${l.more}`)].join("\n\n");
+
+/** Start a task again (a follow-up on finished work): a fresh job, or a fresh launch in Herdr with the history. */
+export async function rerunWithFollowups(vault: string, id: string, deps: WorkDeps = {}): Promise<WorkTask> {
+  const now = (deps.now ?? Date.now)();
+  const r = readTask(vault, id);
+  if (!r) throw new Error(`no task ${id}`);
+  updateTask(vault, id, (x) => {
+    delete x.pendingFollowups; delete x.outcome; delete x.cleared; delete x.ask;
+    if (x.executor === "engine") { const job = staffTask(vault, { ...x, text: withFollowups(x) }, r.prompt.source, now); if (job) x.jobId = job.id; }
+    else if (x.herdr) { delete x.herdr.agent; delete x.herdr.briefPending; }
+    x.status = "routed";
+    note(x, "again", "with your follow-up", now);
+  });
+  return startTask(vault, id, { deps });
+}
+
+export interface FollowupJudgement { kind: "same" | "rename" | "new"; name?: string }
+
+/** Is a follow-up the same work (maybe under a truer name), or a different piece of work? The model says; code keeps it. */
+export async function judgeFollowup(t: Pick<WorkTask, "name" | "text">, text: string, deps: WorkDeps = {}): Promise<FollowupJudgement> {
+  if (deps.runner === null || process.env.PREVAIL_BUNKER === "1") return { kind: "same" };
+  try {
+    const runner = deps.runner ?? (await import("./route.ts")).claudeRouteRunner;
+    const raw = await runner({
+      system: [
+        "A task already has a short name. The user just followed up on it. Decide:",
+        '- "same": the follow-up clarifies or continues the task and the name still fits;',
+        '- "rename": same task, but the work shifted so the name no longer fits: give a new name;',
+        '- "new": the follow-up is really a different piece of work: give that work its own name.',
+        "A name is 2 to 4 words, Title Case, at most 28 characters, a noun phrase (\"Landlord Reply\", \"Dinner Spots\").",
+        'Reply with ONLY JSON: {"kind":"same|rename|new","name":"<name, for rename or new>"}',
+      ].join("\n"),
+      prompt: `Task name: ${t.name ?? ""}\nTask: ${t.text}\nFollow-up: ${text.slice(0, 2000)}`,
+      timeoutMs: 20_000, maxChars: 400,
+    });
+    const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)) as { kind?: string; name?: string };
+    const name = j.name ? cleanName(j.name) : null;
+    if (j.kind === "rename" && name && name !== t.name) return { kind: "rename", name };
+    if (j.kind === "new") return { kind: "new", ...(name ? { name } : {}) };
+  } catch { /* keep it */ }
+  return { kind: "same" };
+}
+
+/** Give a task a new short name, everywhere: the card, and its Herdr tab, pane and agent. */
+export function renameTask(vault: string, id: string, name: string, deps: WorkDeps = {}): WorkTask {
+  const clean = cleanName(name);
+  if (!clean) throw new Error("a name is 1 to 4 words, at most 28 characters");
+  const now = (deps.now ?? Date.now)();
+  const t = updateTask(vault, id, (x) => { if (x.name !== clean) { x.name = clean; note(x, "renamed", `Renamed to ${clean}`, now); } });
+  journalLesson(vault, t.dest?.owner, `The task "${t.text.slice(0, 120)}" is called ${clean}.`, now);
+  if (t.executor === "herdr" && t.herdr?.tabId) { try { renameHerdr(vault, t, deps); } catch { /* the tab is gone */ } }
+  return t;
+}
+
+export interface FollowupResult { ok: true; task: WorkTask; added?: WorkTask[]; renamed?: string; closed?: boolean }
+
+/**
+ * A follow-up or clarification on a task. It goes into the task's record and
+ * its thread, then: to the agent still at work in Herdr; noted for an engine
+ * run still going (it runs again with it when it ends); or it starts the
+ * finished task again with it. A follow-up that is really other work (or
+ * `asTask`) becomes a new task in the same work, with its own name. A shift in
+ * the work renames the task everywhere.
+ */
+export async function followUp(vault: string, id: string, text: string, o: { asTask?: boolean; deps?: WorkDeps } = {}): Promise<FollowupResult> {
+  const deps = o.deps ?? {};
+  const now = (deps.now ?? Date.now)();
+  const body = text.replace(/\r/g, "").trim();
+  if (!body) throw new Error("say what to add");
+  if (body.length > 8_000) throw new Error("that follow-up is too long (8,000 characters at most)");
+  const r = readTask(vault, id);
+  if (!r) throw new Error(`no task ${id}`);
+  // "Forget that": what this task used from what was learned goes, and it never comes back from these tasks.
+  if (!o.asTask && isForget(body)) {
+    const gone = forgetLearned(vault, r.task.learned ?? [], now).map(plainLesson);
+    const past = r.task.recurringOf ?? [];
+    for (const pid of past) { try { updateTask(vault, pid, (x) => { x.learnOff = true; }); } catch { /* gone */ } }
+    if (past.length) gone.push("that this is recurring work");
+    const t = updateTask(vault, id, (x) => {
+      addUpdate(x, "you", body, now);
+      note(x, "forgot", gone.join("; ") || "nothing", now);
+      // Shaped by what was forgotten, this task no longer teaches either.
+      if (gone.length) x.learnOff = true;
+      delete x.learned; delete x.recurringOf;
+      addUpdate(x, "task", gone.length ? `Forgotten: ${gone.join("; ")}. I will not use it again.` : "Nothing learned was used on this task, so there is nothing to forget.", now);
+    });
+    return { ok: true, task: t };
+  }
+  // The answers to a plan's questions: into what it knows (and so the brief), then it starts.
+  if (!o.asTask && r.task.planning && r.task.status === "needs-you") {
+    // What holds next time (budget, preferences) is remembered, so the next plan asks less.
+    const asked = [...(r.task.updates ?? [])].reverse().find((u) => u.questions?.length)?.questions ?? [];
+    learnAnswers(vault, r.task.planKind ?? "other", asked, body, now);
+    journalLesson(vault, r.task.dest?.owner, `The owner answered the plan for "${r.task.name}": ${body}`, now);
+    updateTask(vault, id, (x) => {
+      appendTurn(vault, x, "user", body, "prevail", now); note(x, "follow-up", undefined, now, body); addUpdate(x, "you", body, now);
+      x.context = [...(x.context ?? []), { label: "Your answers to the plan", text: `The user answered the plan's questions: ${body}` }];
+      delete x.planning; delete x.waiting;
+    });
+    return { ok: true, task: await rerunWithFollowups(vault, id, deps) };
+  }
+  // The yes to "Can I close this task?": it closes now (its Herdr tab too). Only a finished task closes on a word.
+  if (!o.asTask && (r.task.status === "done" || r.task.status === "failed") && !r.task.cleared && isCloseYes(body)) {
+    updateTask(vault, id, (x) => addUpdate(x, "you", body, now));
+    return { ok: true, task: doneTask(vault, id, deps), closed: true };
+  }
+  const j: FollowupJudgement = o.asTask ? { kind: "new" } : await judgeFollowup(r.task, body, deps);
+  if (j.kind === "new") {
+    const p = await addWork(vault, body, { into: r.prompt.id, surface: r.prompt.surface, deps });
+    if (j.name && p.tasks.length === 1) renameTask(vault, p.tasks[0]!.id, j.name, deps);
+    // The parent stays as it was (status, tab, back-and-forth); the subtask links back to it.
+    for (const c of p.tasks) updateTask(vault, c.id, (x) => { x.parentId = id; });
+    const t = updateTask(vault, id, (x) => {
+      const nm = j.name ?? p.tasks[0]?.name ?? "new task";
+      x.children = [...new Set([...(x.children ?? []), ...p.tasks.map((c) => c.id)])];
+      note(x, "split", `Became its own task: ${nm}`, now, body); addUpdate(x, "you", body, now); addUpdate(x, "task", `That is its own task now: ${nm}.`, now, undefined, p.tasks[0]?.id);
+    });
+    return { ok: true, task: t, added: p.tasks.map((x) => readTask(vault, x.id)?.task ?? x) };
+  }
+  updateTask(vault, id, (x) => { appendTurn(vault, x, "user", body, "prevail", now); note(x, "follow-up", undefined, now, body); addUpdate(x, "you", body, now); });
+  // "No, not that": a correction the owner's domain memory keeps.
+  if (/^\s*(?:no\b|nope\b|not (?:that|this|quite)|wrong\b|that'?s not|that is not)/i.test(body)) journalLesson(vault, r.task.dest?.owner, `The owner corrected the task "${r.task.name}": ${body}`, now);
+  if (j.kind === "rename" && j.name) renameTask(vault, id, j.name, deps);
+  const t = readTask(vault, id)!.task;
+  const done = (task: WorkTask): FollowupResult => ({ ok: true, task, ...(j.kind === "rename" ? { renamed: j.name } : {}) });
+  if (t.executor === "herdr" && t.herdr?.agent && !t.herdr.briefPending && promptHerdr(vault, t, body, deps)) {
+    // Every follow-up gets an answer at once; the result follows as its own update.
+    if (t.status === "running") return done(updateTask(vault, id, (x) => addUpdate(x, "task", "On it: looking into that now.", now)));
+    // Finished, its tab still open: the same agent goes on with it.
+    const back = updateTask(vault, id, (x) => { x.status = "running"; delete x.outcome; delete x.cleared; delete x.ask; note(x, "again", "with your follow-up", now); addUpdate(x, "task", WORKING_LINE, now); });
+    syncBoard(vault, back);
+    (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "mirror", id]);
+    return done(back);
+  }
+  if (t.executor === "engine" && t.status === "running") {
+    return done(updateTask(vault, id, (x) => { x.pendingFollowups = [...(x.pendingFollowups ?? []), body]; note(x, "noted", "It goes in when this run ends", now); addUpdate(x, "task", "Noted: I will work that in as soon as this step ends.", now); }));
+  }
+  if (t.status === "queued" || t.status === "routed" || t.status === "backlog") return done(updateTask(vault, id, (x) => addUpdate(x, "task", "Noted: I will use that when it starts.", now)));
+  return done(await rerunWithFollowups(vault, id, deps));
 }
 
 // ── Views ───────────────────────────────────────────────────────────────────
@@ -818,7 +1335,7 @@ export function listWork(vault: string, view: "queue" | "backlog" = "queue", now
   if (view === "backlog") return { ok: true, view, tasks: prompts.flatMap((p) => p.tasks.map((t) => withPrompt(t, p))) };
   // The queue: open tasks, flat, in the user's order. `prompts` stays for older desktops.
   const tasks = queueTasks(vault, prompts).map(({ task, prompt }) => withPrompt(task, prompt));
-  return { ok: true, view, tasks, maxRunning: readSettings(vault).maxRunning, prompts: prompts.filter((p) => p.tasks.some((t) => OPEN.includes(t.status) || !!t.ask)) };
+  return { ok: true, view, tasks, maxRunning: readSettings(vault).maxRunning, prompts: prompts.filter((p) => p.tasks.some(inQueue)) };
 }
 
 export function showWork(vault: string, id: string) {
@@ -839,7 +1356,7 @@ export function showWork(vault: string, id: string) {
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
-const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--no-model] | list [--view queue|backlog] | reorder <task> --before <id>|--after <id>|--to <index> | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] [--max-running n] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | run <task> | mirror <task>  [--json]";
+const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--hold] [--into <work id>] [--no-model] | done <task> | followup <task> [--file -|--text t] [--as-task] | rename <task> --name n | focus <task> | list [--view queue|backlog] | reorder <task> --before <id>|--after <id>|--to <index> | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] [--max-running n] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | machine-approve --label l --target t --yes | run <task> | mirror <task>  [--json]";
 
 export async function workCommand(argv: string[], vault: string, deps: WorkDeps = {}): Promise<number> {
   const sub = parseModArgs(argv).pos[0] ?? "list";
@@ -867,7 +1384,7 @@ async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<n
       const file = args.get("file");
       const text = file === "-" ? await new Response(Bun.stdin.stream()).text() : file ? readFileSync(file, "utf8") : args.get("text") ?? args.pos.slice(1).join(" ");
       const surface = (["desktop", "phone", "cli"] as const).find((s) => s === args.get("surface")) ?? "cli";
-      const p = await addWork(vault, text, { surface, machine: args.get("machine"), agentKind: args.get("agent"), deps: { ...deps, ...(args.has("no-model") ? { runner: null } : {}) } });
+      const p = await addWork(vault, text, { surface, machine: args.get("machine"), agentKind: args.get("agent"), hold: args.has("hold"), into: args.get("into"), deps: { ...deps, ...(args.has("no-model") ? { runner: null } : {}) } });
       return say({ ok: true, prompt: p }, p.tasks.map((t) => `${t.id}  ${t.status.padEnd(9)} ${t.dest ? `${t.dest.kind}:${t.dest.id}` : "unrouted"}  ${t.text}`).join("\n"));
     }
     if (sub === "list") {
@@ -885,6 +1402,15 @@ async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<n
       const t = await routeTask(vault, id, { dest: args.get("dest"), undo: args.has("undo"), agentKind: args.get("agent"), machine: args.get("machine") }, deps);
       return say({ ok: true, task: t }, `${t.id} -> ${t.dest ? `${t.dest.kind}:${t.dest.id}` : "General"} (${t.status})`);
     }
+    if (sub === "done") { const t = doneTask(vault, id, deps); return say({ ok: true, task: t }, `${t.id}: done`); }
+    if (sub === "followup") {
+      const file = args.get("file");
+      const text = file === "-" ? await new Response(Bun.stdin.stream()).text() : args.get("text") ?? args.pos.slice(2).join(" ");
+      const r = await followUp(vault, id, text, { asTask: args.has("as-task"), deps: { ...deps, ...(args.has("no-model") ? { runner: null } : {}) } });
+      return say(r, r.added ? `new task: ${r.added.map((t) => t.id).join(", ")}` : `${r.task.id}: ${r.task.status}`);
+    }
+    if (sub === "rename") { const t = renameTask(vault, id, args.get("name") ?? args.pos.slice(2).join(" "), deps); return say({ ok: true, task: t }, `${t.id}: ${t.name}`); }
+    if (sub === "focus") { const t = focusTask(vault, id, deps); return say({ ok: true, task: t }, `${t.id}: focused`); }
     if (sub === "pause") { const t = pauseTask(vault, id, deps); return say({ ok: true, task: t }, `${t.id}: paused`); }
     if (sub === "stop") { const t = stopTask(vault, id, deps); return say({ ok: true, task: t }, `${t.id}: closed`); }
     if (sub === "start") { const t = await startTask(vault, id, { deps }); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }
@@ -895,7 +1421,7 @@ async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<n
     }
     if (sub === "accept") { const r = await acceptSuggestion(vault, id, Number(args.pos[2] ?? args.get("n")), deps); return say({ ok: true, ...r }, r.command ? `run: ${r.command}` : `${r.task.id}: ${r.made ?? r.open ?? "accepted"}`); }
     if (sub === "decline") { const t = declineSuggestion(vault, id, Number(args.pos[2] ?? args.get("n")), deps); return say({ ok: true, task: t }, `${t.id}: declined`); }
-    if (sub === "answer") { const t = await answerTask(vault, id, args.pos[2] ?? args.get("reply") ?? "", { workspace: args.get("workspace"), deps }); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }
+    if (sub === "answer") { const t = await answerTask(vault, id, args.pos[2] ?? args.get("reply") ?? "", { deps }); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }
     if (sub === "settings") {
       const patch: Partial<WorkSettings> = {};
       const h = args.get("herdr");
@@ -920,9 +1446,17 @@ async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<n
       const target = args.get("target") ?? "";
       if (!args.has("yes")) return fail(`confirm with --yes: ${machineAddCommand(label || "<label>", target || "<ssh target>")}`);
       const r = addMachine(label, target, md.herdr);
-      return say({ ok: true, ...r }, r.output);
+      // Needs approval is an answer, not a failure: the desktop offers to open Terminal for it.
+      return say(r, r.ok ? r.output : `${r.error}: ${r.command.join(" ")}`);
     }
-    if (sub === "run") { const t = await runTask(vault, id, deps, { createWorkspace: args.has("create-workspace"), workspace: args.get("workspace"), reopen: args.has("reopen") }); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }
+    if (sub === "machine-approve") {
+      const label = args.get("label") ?? "";
+      const target = args.get("target") ?? "";
+      if (!args.has("yes")) return fail(`confirm with --yes: opens Terminal running ${machineAddCommand(label || "<label>", target || "<ssh target>")}`);
+      const r = approveInTerminal(label, target, deps.terminal);
+      return say(r, `opened Terminal: ${r.command.join(" ")}`);
+    }
+    if (sub === "run") { const t = await runTask(vault, id, deps, { reopen: args.has("reopen") }); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }
     if (sub === "mirror") { const t = await mirrorTask(vault, id, deps); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }
   } catch (e) { return fail((e as Error).message); }
   return fail(USAGE);

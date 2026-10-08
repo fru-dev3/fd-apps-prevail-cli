@@ -5,9 +5,10 @@ import { setChiefSetting } from "./chief-of-staff.ts";
 import { boardFile, readJob, saveJob, type Job } from "./jobs.ts";
 import type { Herdr } from "./spaces.ts";
 import {
-  acceptSuggestion, addWork, answerTask, continueTask, declineSuggestion, listWork, pauseTask, readOrder, readSettings, readTask, remainingJob, reorderTask, routeTask, runTask, showWork,
+  acceptSuggestion, addWork, answerTask, continueTask, distilOutcome, doneTask, finish, followUp, plainOutcome, startTask, declineSuggestion, listWork, pauseTask, readOrder, readSettings, readTask, remainingJob, reorderTask, routeTask, runTask, showWork,
   stopTask, topUp, updateTask, workCommand, writeSettings, type WorkDeps,
 } from "./work.ts";
+import { gatherContext, neededSpecialists, ownerLocation, planTask } from "./work-assemble.ts";
 
 const ROOT = join("/tmp", `prevail-work-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -45,7 +46,7 @@ function quietHerdr(): Herdr {
 
 function deps(spawned: string[][] = []): WorkDeps {
   const h = quietHerdr();
-  return { spawnSelf: (a) => { spawned.push(a); }, herdrFor: () => h, machine: { host: "laptop", role: "hub", env: { GLYPH_SPACES: join(ROOT, "no-glyph"), PREVAIL_MACHINE: "laptop" } } };
+  return { runner: null, spawnSelf: (a) => { spawned.push(a); }, herdrFor: () => h, machine: { host: "laptop", role: "hub", env: { GLYPH_SPACES: join(ROOT, "no-glyph"), PREVAIL_MACHINE: "laptop" } } };
 }
 
 const threeGoals = JSON.stringify({ goals: [
@@ -56,7 +57,7 @@ const threeGoals = JSON.stringify({ goals: [
 
 describe("adding work", () => {
   beforeEach(seed);
-  test("one prompt becomes three routed tasks, each with a thread, a board line and a job; what may start alone starts", async () => {
+  test("one prompt becomes three routed tasks, each with a thread, a board line and a job; all start on their own", async () => {
     setChiefSetting(V, "handoff", "offer");
     setChiefSetting(V, "handoff", "auto");
     const spawned: string[][] = [];
@@ -66,42 +67,49 @@ describe("adding work", () => {
     expect(p.machine).toBe("laptop");
     expect(p.tasks.map((t) => t.dest?.id)).toEqual(["insurance", "fitness", "money"]);
     const [a, b, c] = p.tasks;
-    // find and plan start alone; an email asks first.
-    expect(a!.status).toBe("running");
-    expect(b!.status).toBe("running");
-    expect(c!.status).toBe("needs-you");
-    expect(c!.ask).toMatchObject({ kind: "start" });
-    expect(spawned).toEqual([["work", "run", a!.id], ["work", "run", b!.id]]);
+    // Work mode never asks: an email starts too, and the rule it keeps to is a plain line.
+    expect(p.tasks.map((t) => t.status)).toEqual(["running", "running", "running"]);
+    expect(p.tasks.every((t) => !t.ask)).toBe(true);
+    expect(c!.log.find((l) => l.ev === "guard")?.detail).toBe("Your rules apply: drafts only, nothing is sent.");
+    expect(spawned).toEqual([["work", "run", a!.id], ["work", "run", b!.id], ["work", "run", c!.id]]);
+    // Assembled before dispatch: a search brings the researcher, a draft the writer.
+    expect(a!.specialists).toContain("researcher");
+    expect(c!.specialists).toContain("writer");
+    // Every domain each touches, the owner first: the panel shows them as pills.
+    expect(p.tasks.map((t) => t.domains?.[0])).toEqual(["insurance", "fitness", "money"]);
+    expect(p.tasks.map((t) => t.name)).toEqual(["Foo Carrier Rentals", "Foo Training Plan", "Foo Bank Reply"]);
     // The thread: desktop markdown with its frontmatter, and the .jsonl twin.
     const md = readFileSync(join(D("insurance"), "memory", "threads", `${a!.thread.session}.md`), "utf8");
     expect(md).toMatch(/^---\ntitle: Find the best foo carrier for the rentals\ndomain: insurance\ncreated: \S+Z\nupdated: \S+Z\nturns: 1\n---\n\n## You\n\nFind the best foo carrier/);
     expect(existsSync(join(D("insurance"), "memory", "threads", `${a!.thread.session}.jsonl`))).toBe(true);
     // The board line follows the status.
     expect(readFileSync(join(D("insurance"), "memory", "tasks.md"), "utf8")).toContain(`~src:work:${a!.id} ~owner:ai ~status:doing ~id:${a!.board!.id}`);
-    expect(readFileSync(join(D("money"), "memory", "tasks.md"), "utf8")).toContain("~status:review");
+    expect(readFileSync(join(D("money"), "memory", "tasks.md"), "utf8")).toContain("~status:doing");
     const job = readJob(V, a!.jobId!)!;
     expect(job.origin.kind).toBe("work");
     expect(job.domains.owner).toBe("insurance");
-    // A specialist the work needs is made (draft at most) when handoff is auto; a domain waits as a suggestion.
+    // A specialist the work needs is made at once (draft at most); a domain waits as a suggestion.
     expect(c!.suggestions.map((s) => [s.kind, s.state])).toEqual([["domain", "open"], ["specialist", "accepted"]]);
     expect(c!.specialists).toContain("fee-checker");
     expect(readFileSync(join(V, "build", "specialists", "fee-checker.md"), "utf8")).toContain("ceiling: draft");
   });
-  test("the code router and bunker never start alone; handoff offer neither", async () => {
+  test("the code router and handoff offer start too; bunker holds the work with a plain line, never a question", async () => {
     const spawned: string[][] = [];
     const p = await addWork(V, "Find the best foo carrier for the insurance. Plan a foo training block for fitness.", { deps: { ...deps(spawned), runner: null } });
     expect(p.source).toBe("code");
-    expect(p.tasks.every((t) => t.status === "needs-you")).toBe(true);
+    expect(p.tasks.map((t) => t.status)).toEqual(["running", "running"]);
+    expect(p.tasks.map((t) => t.name)).toEqual(["Foo Carrier Insurance", "Foo Training Plan"]);
+    setChiefSetting(V, "handoff", "offer");
+    const r = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => threeGoals } });
+    expect(r.tasks[0]!.status).toBe("running");
+    expect(r.tasks[0]!.ask).toBeUndefined();
     process.env.PREVAIL_BUNKER = "1";
     try {
       const q = await addWork(V, "Find the best foo carrier", { deps: { ...deps(spawned), runner: async () => threeGoals } });
       expect(q.source).toBe("code");
-      expect(q.tasks[0]!.status).toBe("needs-you");
+      expect(q.tasks[0]).toMatchObject({ status: "paused", outcome: "Held: bunker mode is on, so work waits." });
+      expect(q.tasks[0]!.ask).toBeUndefined();
     } finally { delete process.env.PREVAIL_BUNKER; }
-    setChiefSetting(V, "handoff", "offer");
-    const r = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => threeGoals } });
-    expect(r.tasks[0]!.ask?.detail).toMatch(/offered/);
-    expect(spawned).toEqual([]);
   });
 });
 
@@ -122,6 +130,9 @@ describe("running, pausing, continuing", () => {
     };
     const r = await runTask(V, t.id, { ...deps(), runJob: stub });
     expect(r.status).toBe("done");
+    // Checked in the queue with its outcome, distilled from the result, until cleared.
+    expect(r.outcome).toBe("Carrier A for both foo rentals");
+    expect(r.cleared).toBe(false);
     expect(r.lease).toBeUndefined();
     const md = readFileSync(join(D("insurance"), "memory", "threads", `${t.thread.session}.md`), "utf8");
     expect(md).toContain("## prevail\n\nCarrier A for both foo rentals\n\n## Answer\nCarrier A.");
@@ -202,7 +213,7 @@ describe("routes, suggestions and answers", () => {
     setChiefSetting(V, "handoff", "offer");
     const p = await addWork(V, "x", { deps: { ...deps(), runner: async () => threeGoals } });
     const t = p.tasks[2]!;
-    expect(t.suggestions[1]!.state).toBe("open");
+    expect(t.suggestions[1]!.state).toBe("accepted");
     expect(declineSuggestion(V, t.id, 2).suggestions[1]!.state).toBe("declined");
     const r = await acceptSuggestion(V, t.id, 1, deps());
     expect(r.made).toBe("domain banking");
@@ -219,10 +230,12 @@ describe("routes, suggestions and answers", () => {
     expect(r.made).toBe("thing/foo-dog");
     expect(r.task.dest?.entity).toBe("thing/foo-dog");
   });
-  test("answer yes starts, no closes", async () => {
+  test("an older record's question still answers: yes starts, no closes", async () => {
     const spawned: string[][] = [];
     const p = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => threeGoals } });
     const c = p.tasks[2]!;
+    pauseTask(V, c.id, deps());
+    updateTask(V, c.id, (x) => { x.status = "needs-you"; x.ask = { kind: "start", detail: "foo" }; });
     expect((await answerTask(V, c.id, "yes", { deps: deps(spawned) })).status).toBe("running");
     expect(spawned.at(-1)).toEqual(["work", "run", c.id]);
     pauseTask(V, c.id, deps());
@@ -265,7 +278,21 @@ describe("views and the CLI", () => {
     expect(m.json.agentKinds).toContain("claude");
     expect((await cli(["show", "nope"])).json).toMatchObject({ ok: false });
     expect((await cli(["bogus"])).code).toBe(1);
-    expect(readTask(V, p.tasks[2]!.id)?.task.status).toBe("needs-you");
+    expect(readTask(V, p.tasks[2]!.id)?.task.status).toBe("running");
+  });  test("machine-add answers needs approval (exit 0) and machine-approve opens Terminal only with --yes", async () => {
+    const q = quietHerdr();
+    const refusing: Herdr = (args) => { if (args[0] === "machine" && args[1] === "add") throw new Error("herdr machine add failed: remote herdr server needs one final update before this client can attach; run from an interactive terminal to approve updating it"); return q(args); };
+    const ran: string[][] = [];
+    const d: WorkDeps = { ...deps(), herdrFor: () => refusing, terminal: (a) => { ran.push(a); } };
+    const r = await cli(["machine-add", "--label", "mini-foo", "--target", "foo@mini-foo", "--yes"], d);
+    expect(r.code).toBe(0);
+    expect(r.json).toMatchObject({ ok: false, needsApproval: true, label: "mini-foo" });
+    expect((r.json.command as string[]).slice(1)).toEqual(["machine", "add", "--label", "mini-foo", "foo@mini-foo"]);
+    expect((await cli(["machine-approve", "--label", "mini-foo", "--target", "foo@mini-foo"], d)).code).toBe(1);
+    expect(ran).toEqual([]);
+    const ok = await cli(["machine-approve", "--label", "mini-foo", "--target", "foo@mini-foo", "--yes"], d);
+    expect(ok.json).toMatchObject({ ok: true });
+    expect(ran.length).toBe(1);
   });
 });
 
@@ -359,6 +386,43 @@ describe("the ordered queue", () => {
     expect(ids().slice(0, 2)).toEqual([a, b]);
   });
 
+  test("work add --hold parks the tasks in the backlog; start moves one to the end of the queue", async () => {
+    setChiefSetting(V, "handoff", "auto");
+    const spawned: string[][] = [];
+    const a = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => four("a") } });
+    const orig = process.stdout.write.bind(process.stdout);
+    let buf = "";
+    process.stdout.write = ((x: string) => { buf += x; return true; }) as typeof process.stdout.write;
+    try { expect(await workCommand(["add", "--hold", "--text", "foo ideas", "--json"], V, { ...deps(spawned), runner: async () => four("h") })).toBe(0); } finally { process.stdout.write = orig; }
+    const held = (JSON.parse(buf.trim().split("\n").pop()!) as { prompt: { tasks: { id: string; status: string; ask?: unknown }[] } }).prompt.tasks;
+    // Routed and filed, never started, not in the queue, no slot taken.
+    expect(held.map((t) => t.status)).toEqual(["backlog", "backlog", "backlog", "backlog"]);
+    expect(held.every((t) => !t.ask)).toBe(true);
+    expect(ids()).toEqual(a.tasks.map((t) => t.id));
+    expect(readOrder(V)).toEqual(a.tasks.map((t) => t.id));
+    expect(spawned.filter((c) => held.some((t) => c.includes(t.id)))).toEqual([]);
+    expect((listWork(V, "backlog").tasks ?? []).filter((t) => t.status === "backlog").length).toBe(4);
+    // A topUp never starts a parked task.
+    updateTask(V, a.tasks[0]!.id, (x) => { x.status = "done"; });
+    await topUp(V, deps(spawned));
+    expect(held.map((t) => status(t.id))).toEqual(["backlog", "backlog", "backlog", "backlog"]);
+    // Start moves it to the end of the queue, where it starts in turn (three slots: a2, a3, a4 run, so it waits).
+    const moved = await startTask(V, held[1]!.id, { deps: deps(spawned) });
+    expect(moved.status).toBe("queued");
+    expect(ids()).toEqual([...a.tasks.slice(1).map((t) => t.id), held[1]!.id]);
+    expect(moved.log.map((l) => l.ev)).toContain("moved to the queue");
+    // A freed slot starts it.
+    pauseTask(V, a.tasks[1]!.id, deps(spawned));
+    await topUp(V, deps(spawned));
+    expect(status(held[1]!.id)).toBe("running");
+    // Moved to a full queue, it waits its turn; it never asks.
+    setChiefSetting(V, "handoff", "offer");
+    const next = await startTask(V, held[2]!.id, { deps: deps(spawned) });
+    expect(next.status).toBe("queued");
+    expect(next.ask).toBeUndefined();
+    expect(ids().at(-1)).toBe(held[2]!.id);
+  });
+
   test("settings take --max-running from 1 to 20", async () => {
     expect(readSettings(V).maxRunning).toBe(3);
     const orig = process.stdout.write.bind(process.stdout);
@@ -371,5 +435,139 @@ describe("the ordered queue", () => {
     } finally { process.stdout.write = orig; }
     expect(readSettings(V).maxRunning).toBe(5);
     expect(buf).toContain("\"maxRunning\":5");
+  });
+});
+
+describe("assembly, outcomes, follow-ups and check-off", () => {
+  beforeEach(seed);
+  const near = JSON.stringify({ goals: [{ text: "Dinner", tasks: [{ name: "Dinner Spots", text: "Find good dinner spots near me", dest: { kind: "domain", id: "general" }, confidence: 0.9, shape: "find" }] }] });
+  test("before it starts, the chief of staff brings the searcher and the user's home city from the profile", async () => {
+    writeFileSync(join(V, "build", "user.md"), "# Foo User\n\n- Home city: Fooville\n- Likes: quiet places\n");
+    const p = await addWork(V, "x", { deps: { ...deps(), runner: async () => near } });
+    const t = p.tasks[0]!;
+    expect(t.specialists).toContain("researcher");
+    expect(t.context).toEqual([{ label: "Your home city, from your profile", text: "The user's home city: Fooville. \"Near me\" means near there." }]);
+    // It goes in with the work, so nothing has to ask where the user is.
+    expect(readJob(V, t.jobId!)!.ask).toContain("Fooville");
+    expect(ownerLocation(V)).toEqual({ text: "Fooville", from: "your profile" });
+    // No location known: nothing invented.
+    writeFileSync(join(V, "build", "user.md"), "# Foo User\n");
+    expect(gatherContext(V, { text: "Find good dinner spots near me", dest: null })).toEqual([]);
+  });
+  test("a person's page and an app's connection come along too", () => {
+    const pe = join(V, "data", "entities", "people", "foo-bar");
+    mkdirSync(pe, { recursive: true });
+    writeFileSync(join(pe, "entity.md"), "---\nname: Foo Bar\nkind: person\n---\nFoo Bar runs the foo bakery and prefers email.\n");
+    const ctx = gatherContext(V, { text: "Reply to Foo Bar", dest: { kind: "entity", id: "person/foo-bar", label: "Foo Bar", space: "general", owner: "general", entity: "person/foo-bar", confidence: 1, why: "" } });
+    expect(ctx[0]).toMatchObject({ label: "Foo Bar's page" });
+    expect(ctx[0]!.text).toContain("prefers email");
+    expect(neededSpecialists(V, { text: "Draft a reply to Foo Bar", shape: "make", flags: {}, specialists: [] })).toEqual(["writer"]);
+  });
+  test("the outcome is one or two plain sentences: the model's when it answers, else code's", async () => {
+    expect(plainOutcome("## Done\n\n⏺ Read(foo.md)\n\nSummary:\nI drafted the foo reply — it is in Drafts. Nothing was sent. Extra detail here.")).toBe("I drafted the foo reply, it is in Drafts. Nothing was sent.");
+    expect(await distilOutcome("long foo result", { runner: async () => "Found three foo carriers; Carrier A is cheapest." })).toBe("Found three foo carriers; Carrier A is cheapest.");
+    expect(await distilOutcome("Summary: Foo is done now.", { runner: async () => { throw new Error("down"); } })).toBe("Foo is done now.");
+  });
+  test("a finished task stays checked in the queue until the user clears it", async () => {
+    const p = await addWork(V, "x", { deps: { ...deps(), runner: async () => threeGoals } });
+    const [a, b] = p.tasks;
+    updateTask(V, a!.id, (x) => finish(x, "done", "Foo done."));
+    expect(listWork(V, "queue").tasks.map((t) => t.id)).toContain(a!.id);
+    const d = doneTask(V, a!.id, deps());
+    expect(d).toMatchObject({ status: "done", cleared: true, outcome: "Foo done." });
+    expect(listWork(V, "queue").tasks.map((t) => t.id)).not.toContain(a!.id);
+    // Checking off a running task stops it and clears it.
+    const e = doneTask(V, b!.id, deps());
+    expect(e).toMatchObject({ status: "done", cleared: true });
+    expect(e.log.at(-1)?.ev).toBe("checked off");
+  });
+  test("a follow-up on a running engine task waits for the run; on finished work it starts it again with the follow-up", async () => {
+    const spawned: string[][] = [];
+    const p = await addWork(V, "x", { deps: { ...deps(spawned), runner: async () => JSON.stringify({ goals: [JSON.parse(threeGoals).goals[0]] }) } });
+    const t = p.tasks[0]!;
+    const f = await followUp(V, t.id, "Only foo carriers with a local office", { deps: deps(spawned) });
+    expect(f.task.pendingFollowups).toEqual(["Only foo carriers with a local office"]);
+    expect(f.task.log.find((l) => l.ev === "follow-up")?.more).toBe("Only foo carriers with a local office");
+    const stub = async (vault: string, id: string): Promise<Job> => { const j = readJob(vault, id)!; const done = { ...j, status: "done" as const, result: { type: "page", summary: "Foo carrier A." } }; saveJob(vault, done); return done; };
+    const r = await runTask(V, t.id, { ...deps(spawned), runJob: stub });
+    // It went again with the follow-up: a new job whose ask carries it.
+    expect(r.status).toBe("running");
+    expect(r.jobId).not.toBe(t.jobId);
+    expect(readJob(V, r.jobId!)!.ask).toContain("Follow-up: Only foo carriers with a local office");
+    expect(spawned.at(-1)).toEqual(["work", "run", t.id]);
+    // Finished: a follow-up starts it again.
+    updateTask(V, t.id, (x) => finish(x, "done", "Foo done."));
+    const g = await followUp(V, t.id, "And the foo deductible", { deps: deps(spawned) });
+    expect(g.task.status).toBe("running");
+    expect(g.task.outcome).toBeUndefined();
+    await expect(followUp(V, t.id, "  ", { deps: deps() })).rejects.toThrow(/say what to add/);
+  });
+  test("work add --into adds tasks to the same work; re-routing a running task starts it again in its new home", async () => {
+    const p = await addWork(V, "x", { deps: { ...deps(), runner: async () => threeGoals } });
+    const more = await addWork(V, "y", { into: p.id, deps: { ...deps(), runner: async () => JSON.stringify({ goals: [JSON.parse(threeGoals).goals[1]] }) } });
+    expect(more.id).toBe(p.id);
+    expect(more.tasks.map((t) => t.id)).toEqual([`${p.id}-4`]);
+    expect(readTask(V, `${p.id}-4`)!.prompt.tasks.length).toBe(4);
+    await expect(addWork(V, "z", { into: "w20200101-000000-dead", deps: deps() })).rejects.toThrow(/no work/);
+    const t = p.tasks[0]!;
+    const r = await routeTask(V, t.id, { dest: "domain:money" }, deps());
+    expect(r).toMatchObject({ status: "running", dest: { id: "money" } });
+    expect(r.ask).toBeUndefined();
+  });
+});
+
+describe("plan before doing", () => {
+  beforeEach(seed);
+  const route = (text: string, id = "general") => async () => JSON.stringify({ goals: [{ text, tasks: [{ name: "Foo Task", text, dest: { kind: "domain", id }, confidence: 0.9, shape: "do" }] }] });
+  function travelVault() {
+    mkdirSync(join(D("travel"), "memory"), { recursive: true });
+    writeFileSync(join(D("travel"), ".prevail-layout-v4"), "v4\n");
+    writeFileSync(join(D("travel"), "manifest.json"), JSON.stringify({ identity: { name: "travel", summary: "Foo travel" } }));
+    writeFileSync(join(D("travel"), "memory", "state.md"), "# travel\nPrefers trains over flights on foo trips.\n");
+    writeFileSync(join(D("money"), "memory", "state.md"), "# money\nTravel budget: 3,000 foo dollars a year.\n");
+    const ev = join(V, "data", "entities", "events", "foo-lisbon-trip");
+    mkdirSync(ev, { recursive: true });
+    writeFileSync(join(ev, "entity.md"), "---\nname: Foo Lisbon Trip\nkind: event\n---\n\nA one week trip to Lisbon with Sam Foo, by train.\n");
+  }
+  test("booking a trip to Europe asks first: the plan names the domains, cites the past trip and budget, and waits as Needs you", async () => {
+    travelVault();
+    const spawned: string[][] = [];
+    const p = await addWork(V, "Book a trip to Europe", { deps: { ...deps(spawned), runner: route("Book a trip to Europe", "travel") } });
+    const t = p.tasks[0]!;
+    expect(t).toMatchObject({ status: "needs-you", planning: true });
+    expect(spawned).toEqual([]);
+    expect(t.domains).toEqual(expect.arrayContaining(["travel", "money"]));
+    const plan = t.updates!.at(-1)!;
+    expect(plan.from).toBe("task");
+    expect(plan.text).toContain("Foo Lisbon Trip");
+    expect(plan.text).toContain("Travel budget");
+    expect(plan.questions!.length).toBeGreaterThanOrEqual(2);
+    expect(plan.questions!.length).toBeLessThanOrEqual(4);
+    expect(plan.questions![0]).toBe("Where in Europe: which cities or places?");
+    expect(plan.questions).toEqual(expect.arrayContaining(["When, and for how long?", "What budget should I keep to?"]));
+    expect(t.context!.map((c) => c.label)).toEqual(expect.arrayContaining(["Your past trip: Foo Lisbon Trip", "It proposes before paying"]));
+    // The one reply starts the work, with the answers in what it knows.
+    const f = await followUp(V, t.id, "Porto and Seville, ten days in May, 2,000 at most, to rest", { deps: deps(spawned) });
+    expect(f.task.status).toBe("running");
+    expect(f.task.planning).toBeUndefined();
+    expect(f.task.context!.at(-1)).toMatchObject({ label: "Your answers to the plan" });
+    expect(f.task.updates!.slice(-2).map((u) => u.from)).toEqual(["you", "task"]);
+    expect(spawned.at(-1)).toEqual(["work", "run", t.id]);
+  });
+  test("a small, fully specified ask goes straight through", async () => {
+    const spawned: string[][] = [];
+    const p = await addWork(V, "Summarize the foo insurance note", { deps: { ...deps(spawned), runner: route("Summarize the foo insurance note", "insurance") } });
+    expect(p.tasks[0]!.status).toBe("running");
+    expect(p.tasks[0]!.planning).toBeUndefined();
+    expect(planTask(V, { text: "Summarize the foo insurance note", flags: {} })).toBeNull();
+  });
+  test("done is never set without a result", () => {
+    const t = { status: "running", log: [] } as unknown as Parameters<typeof finish>[0];
+    finish(t, "done", "");
+    expect(t.status).toBe("needs-you");
+    expect(t.updates!.at(-1)!.text).toMatch(/without a result/);
+    finish(t, "done", "Three foo carriers compared; A is cheapest.");
+    expect(t.status).toBe("done");
+    expect(t.updates!.map((u) => u.text).slice(-2)).toEqual(["Done: Three foo carriers compared; A is cheapest.", "Can I close this task?"]);
   });
 });

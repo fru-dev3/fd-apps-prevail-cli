@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createMission } from "./missions.ts";
-import { buildCatalog, buildWorkPrompt, codeRoute, destination, folderOf, folderPath, MAX_GOALS, MAX_TASKS, parseWorkReply, routeWork, splitGoals, type Catalog } from "./work-router.ts";
+import { buildCatalog, buildWorkPrompt, cleanName, codeRoute, destination, folderOf, folderPath, isSystemName, MAX_GOALS, MAX_TASKS, nameFromText, oneTaskPerIntent, parseWorkReply, routeWork, splitGoals, type Catalog } from "./work-router.ts";
 
 const ROOT = join("/tmp", `prevail-work-router-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -132,5 +132,46 @@ describe("the code path", () => {
     expect((await routeWork(V, "Find a cheaper foo policy", { catalog: cat(), runner: null })).source).toBe("code");
     process.env.PREVAIL_BUNKER = "1";
     try { expect((await routeWork(V, "Find a cheaper foo policy", { catalog: cat(), runner: async () => "{}" })).source).toBe("code"); } finally { delete process.env.PREVAIL_BUNKER; }
+  });
+});
+
+describe("names, systems and one task per intent", () => {
+  beforeEach(seed);
+  test("every task gets a short Title Case name: the model's when it is one, else made from the words", () => {
+    const reply = JSON.stringify({ goals: [{ text: "Foo", tasks: [
+      { name: "landlord reply", text: "Draft a reply to Foo Bar accepting the offer", dest: { kind: "entity", id: "person/foo-bar" } },
+      { name: "Search for good foo restaurants near the office tonight", text: "Search for good restaurants near me", dest: { kind: "domain", id: "general" } },
+      { text: "Compare the foo insurance quotes", dest: { kind: "domain", id: "insurance" } },
+    ] }] });
+    const plan = parseWorkReply(reply, cat())!;
+    expect(plan.goals[0]!.tasks.map((t) => t.name)).toEqual(["Landlord Reply", "Nearby Restaurants", "Foo Insurance Comparison"]);
+    expect(cleanName("Draft reply to Landlord accepting")).toBe("Draft Reply to Landlord");
+    expect(cleanName("a name of far too many words here")).toBeNull();
+    expect(nameFromText("Draft reply to Landlord accepting")).toBe("Landlord Reply");
+    expect(nameFromText("Find good dinner spots near me")).toBe("Dinner Spots");
+    for (const t of plan.goals[0]!.tasks) expect(t.name.length).toBeLessThanOrEqual(28);
+  });
+  test("Herdr, Prevail, Glyph, machines and agent tools are never suggested as new apps", () => {
+    const reply = JSON.stringify({ goals: [{ text: "Foo", tasks: [{ text: "Open the foo notes in Herdr on mini-foo", dest: { kind: "domain", id: "general" }, missing: [
+      { kind: "app", name: "Herdr", why: "x" }, { kind: "app", name: "Prevail", why: "x" }, { kind: "app", name: "Glyph", why: "x" }, { kind: "app", name: "mini-foo", why: "x" },
+      { kind: "app", name: "Claude Code", why: "x" }, { kind: "app", name: "codex", why: "x" }, { kind: "app", name: "Foo Bank", why: "a real app" },
+    ] }] }] });
+    const s = parseWorkReply(reply, cat())!.goals[0]!.tasks[0]!.suggestions;
+    expect(s.map((x) => x.name)).toEqual(["Foo Bank"]);
+    expect(isSystemName("Herdr", cat())).toBe(true);
+    expect(isSystemName("Foo Bank", cat())).toBe(false);
+    expect(buildWorkPrompt("x", cat()).system).toMatch(/not apps: never list them/);
+  });
+  test("a reply is one task that ends at a draft: never a draft task plus a send task", async () => {
+    const reply = JSON.stringify({ goals: [{ text: "Reply to Foo Bar", tasks: [
+      { name: "Foo Reply", text: "Draft a reply to Foo Bar", dest: { kind: "entity", id: "person/foo-bar" } },
+      { name: "Send Reply", text: "Send the reply to Foo Bar", dest: { kind: "entity", id: "person/foo-bar" } },
+    ] }] });
+    expect(parseWorkReply(reply, cat())!.goals[0]!.tasks.map((t) => t.text)).toEqual(["Draft a reply to Foo Bar"]);
+    const code = await codeRoute(V, "Draft a reply to Foo Bar and then send it to him", cat());
+    expect(code.goals.flatMap((g) => g.tasks.map((t) => t.text))).toEqual(["Draft a reply to Foo Bar"]);
+    // A send with nothing drafted beside it is left alone (it ends at a draft by the rules).
+    expect(oneTaskPerIntent([{ text: "Send the foo invoice" }])).toEqual([{ text: "Send the foo invoice" }]);
+    expect(buildWorkPrompt("x", cat()).system).toMatch(/One task per intent/);
   });
 });

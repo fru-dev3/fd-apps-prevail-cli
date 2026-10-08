@@ -45,6 +45,8 @@ export type SuggestionKind = "domain" | "project" | "entity" | "app" | "speciali
 export interface Suggestion { kind: SuggestionKind; name: string; why: string; draft?: unknown; state: "open" | "accepted" | "declined" }
 export interface TaskFlags { open_ended?: boolean; decision?: boolean; money?: boolean; numbers?: boolean }
 export interface RoutedTask {
+  /** A short name, 2 to 4 words in Title Case ("Landlord Reply"): the row, the panel title, the Herdr tab and agent. `text` is the full ask. */
+  name: string;
   text: string;
   goal: string;
   dest: Destination | null;
@@ -201,6 +203,48 @@ function defaultMachine(cat: Catalog, dest: Destination | null): string {
   return last && cat.machines.some((m) => m.label === last) ? last : cat.here;
 }
 
+// ── Names ───────────────────────────────────────────────────────────────────
+
+export const NAME_MAX = 28;
+const SMALL = new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "vs", "with"]);
+const titleWord = (w: string, first: boolean) => (/^[A-Z0-9]{2,}$/.test(w) || /[a-z][A-Z]/.test(w) ? w : !first && SMALL.has(w.toLowerCase()) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+
+/** A name as the card shows it: 1 to 4 words, Title Case, at most 28 characters, no trailing "-ing" word. Null when it cannot be one. */
+export function cleanName(raw: string): string | null {
+  let words = String(raw ?? "").replace(/[\u2014\u2013]/g, " ").replace(/["'`.,:;!?()[\]{}]/g, " ").split(/\s+/).filter(Boolean);
+  if (!words.length) return null;
+  // "Draft reply to Landlord accepting": a trailing verb in -ing is not part of a name.
+  while (words.length > 1 && /ing$/i.test(words[words.length - 1]!) && !/^(thing|ring|king|wing|spring|string|building|meeting|wedding|morning|evening|housing|clothing|parking|booking|painting|landing|listing|pricing|funding|training|banking|shipping|wiring|ceiling|flooring|plumbing|hiring|filing)$/i.test(words[words.length - 1]!)) words.pop();
+  if (words.length > 4) return null;
+  words = words.map((w, i) => titleWord(w, i === 0));
+  while (words.length > 1 && SMALL.has(words[words.length - 1]!.toLowerCase())) words.pop();
+  const name = words.join(" ");
+  return name.length <= NAME_MAX ? name : null;
+}
+
+// Words that say what to do, not what it is about: dropped from a name made by code.
+const FILLER = new Set(["please", "can", "could", "would", "you", "i", "me", "my", "we", "our", "us", "need", "needs", "want", "wants", "to", "some", "any", "good", "great", "best", "nice", "new", "a", "an", "the", "for", "about", "with", "on", "in", "at", "of", "and", "or", "around", "near", "nearby", "this", "that", "these", "those", "it", "them", "up", "out", "into", "from", "next", "get", "go", "do", "make", "find", "search", "look", "looking", "check", "figure", "help", "tell", "let", "know", "is", "are", "be", "what", "which", "who", "how", "when", "where", "why", "there", "here", "today", "tomorrow", "week", "weekend", "soon", "now", "just", "also", "really", "very", "accepting", "confirming", "saying", "asking"]);
+const VERB_NOUN: [RegExp, string][] = [
+  [/^(?:draft|write|reply|respond|answer|email)\b/i, "Reply"], [/^(?:plan|organi[sz]e)\b/i, "Plan"], [/^(?:book|reserve)\b/i, "Booking"],
+  [/^(?:call|phone|ring)\b/i, "Call"], [/^(?:remind)\b/i, "Reminder"], [/^(?:fix|repair)\b/i, "Fix"], [/^(?:compare)\b/i, "Comparison"],
+  [/^(?:review|check)\b/i, "Review"], [/^(?:pay|budget)\b/i, "Budget"], [/^(?:summari[sz]e)\b/i, "Summary"],
+];
+
+/** A short name by code: the words the task is about, plus what kind of work it is ("Draft reply to Landlord" is "Landlord Reply"). */
+export function nameFromText(text: string): string {
+  const t = text.replace(/^(?:please|can you|could you|would you|i need to|i want to|help me)\s+/i, "").trim();
+  const kind = VERB_NOUN.find(([re]) => re.test(t))?.[1];
+  const words = t.replace(/[^A-Za-z0-9' -]+/g, " ").split(/\s+/).filter((w) => w && !FILLER.has(w.toLowerCase()) && !/^(?:draft|write|reply|respond|answer|email|plan|book|reserve|call|remind|fix|compare|review|pay|summari[sz]e|send|ask)$/i.test(w));
+  let core = words.slice(0, kind ? 2 : 3);
+  // One word says too little: "Nearby Restaurants", "Restaurants Search".
+  if (core.length === 1 && !kind) core = /\b(near me|around me|nearby|close to me)\b/i.test(t) ? ["Nearby", core[0]!] : [core[0]!, /^(?:find|search|look|research|any)\b/i.test(t) ? "Search" : "Task"];
+  for (let n = core.length; n >= 1; n--) {
+    const name = cleanName([...core.slice(0, n), ...(kind ? [kind] : [])].join(" "));
+    if (name) return name;
+  }
+  return cleanName(t.split(/\s+/).slice(0, 3).join(" ")) ?? "New Task";
+}
+
 // ── The model path ──────────────────────────────────────────────────────────
 
 export function buildWorkPrompt(text: string, cat: Catalog): { system: string; prompt: string } {
@@ -210,10 +254,13 @@ export function buildWorkPrompt(text: string, cat: Catalog): { system: string; p
     "Route each task to exactly one destination from the lists you are given, by id. Never invent an id.",
     "When a task needs a home that is not listed (a life area, a project, a person or other entity, an app, a specialist), still route it to the closest listed home, and name what is missing in `missing`.",
     "Reply with ONLY one JSON object, no prose and no code fence:",
-    '{"goals":[{"text":"<the goal in the user\'s words>","tasks":[{"text":"<one task, an imperative line with every name, date and amount the user said>","dest":{"kind":"domain|project|folder|entity|app","id":"<listed id>"},"alternatives":[{"kind":"...","id":"..."}],"confidence":<0..1>,"why":"<one short line>","specialists":["<listed specialist id>"],"shape":"find|plan|do|understand|make|act|negotiate|learn|relate|reflect","flags":{"open_ended":<bool>,"decision":<bool>,"money":<bool>,"numbers":<bool>},"effort":"quick|standard|deep","agent":"<agent kind, only when the user asked for one>","machine":"<machine label, only when the user named one or the work is deep>","missing":[{"kind":"domain|project|entity|app|specialist","name":"<short name>","why":"<one line>","draft":{"kind":"<for an entity only: person|place|product|thing|event>"}}]}]}]}',
+    '{"goals":[{"text":"<the goal in the user\'s words>","tasks":[{"name":"<2 to 4 words, Title Case, at most 28 characters>","text":"<one task, an imperative line with every name, date and amount the user said>","dest":{"kind":"domain|project|folder|entity|app","id":"<listed id>"},"alternatives":[{"kind":"...","id":"..."}],"confidence":<0..1>,"why":"<one short line>","specialists":["<listed specialist id>"],"shape":"find|plan|do|understand|make|act|negotiate|learn|relate|reflect","flags":{"open_ended":<bool>,"decision":<bool>,"money":<bool>,"numbers":<bool>},"effort":"quick|standard|deep","agent":"<agent kind, only when the user asked for one>","machine":"<machine label, only when the user named one or the work is deep>","missing":[{"kind":"domain|project|entity|app|specialist","name":"<short name>","why":"<one line>","draft":{"kind":"<for an entity only: person|place|product|thing|event>"}}]}]}]}',
     "`missing` is only for a home the work should have and does not (a life area, project, person, thing, app or specialist); never for a detail the prompt leaves out, like a file path or a date.",
-    "For a missing entity, say what it is in draft.kind: a pet, a car or a gadget is a thing, a business is an org, only a human is a person.",
+    "For a missing entity, say what it is in draft.kind: a pet, a car or a gadget is a thing, a business or a brand is a product, only a human is a person.",
     "A project's code work goes to its folder (kind folder, the repo path as id). A person, place, product, thing or event the user names goes to that entity when it is listed.",
+    "Each task gets a short name: 2 to 4 words, Title Case, at most 28 characters, a noun phrase that says what the work is about, never a sentence and never ending in a verb (\"Landlord Reply\", \"Dinner Spots\", \"Kitchen Quotes\").",
+    "One task per intent. Never split one piece of work into steps: \"reply to X\" is ONE task that ends at a draft (nothing is ever sent), never a draft task plus a send task.",
+    "Herdr, Prevail, Glyph, the user's machines and their agent tools (claude, codex, gemini and the like) are the systems that run the work, not apps: never list them in `missing`.",
     "No em dashes. Plain words.",
   ].join("\n");
   const lines = [
@@ -252,6 +299,7 @@ export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text:
   };
   const goals: RouterPlan["goals"] = [];
   let count = 0;
+  const system = (name: string) => isSystemName(name, cat);
   for (const g of j.goals.slice(0, MAX_GOALS) as { text?: unknown; tasks?: unknown }[]) {
     if (!g || typeof g !== "object" || !Array.isArray(g.tasks)) continue;
     const gt = str(g.text, 300);
@@ -272,6 +320,8 @@ export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text:
         const kind = String(m?.kind ?? "") as SuggestionKind;
         const name = str(m?.name, 60);
         if (!["domain", "project", "entity", "app", "specialist"].includes(kind) || !name || exists(kind, name) || suggestions.some((s) => s.kind === kind && s.name === name)) continue;
+        // The systems that run the work are never a new home.
+        if (kind !== "specialist" && system(name)) continue;
         suggestions.push({ kind, name, why: str(m?.why, 160), ...(m?.draft && typeof m.draft === "object" ? { draft: m.draft } : {}), state: "open" });
       }
       const shape = SHAPES.includes(t.shape as Shape) ? (t.shape as Shape) : shapeOf(text) ?? "plan";
@@ -291,15 +341,34 @@ export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text:
         else if (!known && named && /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(mm)) suggestions.push({ kind: "machine", name: mm, why: "named in the prompt, not a saved Herdr machine yet", state: "open" });
       }
       tasks.push({
+        name: cleanName(str(t.name, 60)) ?? nameFromText(text),
         text, goal: gt || text, dest, alternatives,
         specialists: [...new Set((Array.isArray(t.specialists) ? t.specialists : []).filter((x): x is string => typeof x === "string" && specIds.has(x)))].slice(0, 3),
         shape, flags, effort, agentKind, machine, suggestions,
       });
       count++;
     }
-    if (tasks.length) goals.push({ text: gt || tasks[0]!.text, tasks });
+    const one = oneTaskPerIntent(tasks);
+    if (one.length) goals.push({ text: gt || one[0]!.text, tasks: one });
   }
   return goals.length ? { goals, source: "model" } : null;
+}
+
+/** Herdr, Prevail, Glyph, a machine or an agent tool: the systems that run the work, never an app to add. */
+export function isSystemName(name: string, cat: Pick<Catalog, "machines" | "agentKinds">): boolean {
+  const n = name.trim().toLowerCase();
+  if (/\b(herdr|prevail|glyph|terminal|tmux|zsh|shell|mac ?mini|macbook|imac|mac studio|my mac|laptop|desktop app|vault|claude(?: code)?|codex|gemini|cursor|antigravity|agy|copilot|opencode)\b/.test(n)) return true;
+  if (cat.machines.some((m) => m.label.toLowerCase() === n)) return true;
+  return cat.agentKinds.some((k) => k === n);
+}
+
+const SEND = /^(?:send|email|post|submit|deliver|mail)\b/i;
+const DRAFTING = /\b(?:draft|reply|respond|write|answer|compose)\b/i;
+
+/** One task per intent: a "send it" step beside a draft of the same thing folds into the draft (nothing is ever sent). */
+export function oneTaskPerIntent<T extends { text: string }>(tasks: T[]): T[] {
+  if (!tasks.some((t) => DRAFTING.test(t.text) && !SEND.test(t.text))) return tasks;
+  return tasks.filter((t) => !SEND.test(t.text));
 }
 
 // ── The code path ───────────────────────────────────────────────────────────
@@ -353,13 +422,14 @@ export async function codeDestination(vault: string, text: string, cat: Catalog)
 
 export async function codeRoute(vault: string, text: string, cat: Catalog): Promise<RouterPlan> {
   const goals: RouterPlan["goals"] = [];
-  for (const g of splitGoals(text).slice(0, MAX_TASKS)) {
+  // One task per intent: "draft a reply and then send it" stays one task.
+  for (const g of oneTaskPerIntent(splitGoals(text).map((x) => ({ text: x }))).map((x) => x.text).slice(0, MAX_TASKS)) {
     const dest = await codeDestination(vault, g, cat);
     const money = /\$\s?\d|\b(price|prices|cost|costs|budget|pay|quote|quotes)\b/i.test(g);
     goals.push({
       text: g,
       tasks: [{
-        text: g, goal: g, dest, alternatives: [], specialists: [],
+        name: nameFromText(g), text: g, goal: g, dest, alternatives: [], specialists: [],
         shape: shapeOf(g) ?? "plan",
         flags: { ...(money ? { money: true } : {}), ...(/\b(should i|choose|decide|which one)\b/i.test(g) ? { decision: true } : {}) },
         effort: "standard",
@@ -388,7 +458,7 @@ export async function routeWork(vault: string, text: string, o: RouteWorkOptions
     try {
       const raw = await runner({ system, prompt, timeoutMs: o.timeoutMs ?? 60_000, maxChars: 16_000 });
       // A destination the model got wrong falls back to the general home, never to a guess at another domain.
-      const plan = parseWorkReply(raw, cat, { userText: t, fallback: () => destination(cat, "domain", "general", { confidence: 0.2, why: "the router named nothing that exists" }), kindFor: (d, tt) => kindSaid(tt, cat.agentKinds) ?? defaultKind(vault, d, cat) });
+      const plan = parseWorkReply(raw, cat, { userText: t, fallback: () => destination(cat, "domain", "general", { confidence: 0.2, why: "kept in General" }), kindFor: (d, tt) => kindSaid(tt, cat.agentKinds) ?? defaultKind(vault, d, cat) });
       if (plan) return plan;
     } catch { /* code takes over */ }
   }

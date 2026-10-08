@@ -138,6 +138,36 @@ export function setChiefSetting(vault: string, key: "handoff" | "usd" | "minutes
   return parseChiefOfStaff(text);
 }
 
+/**
+ * Add and drop lines under "What I've learned", keeping every other line of
+ * the file (and the prior text as a version). `drop` decides which existing
+ * lessons go; an added line already there is not repeated. Returns the lines dropped.
+ */
+export function editLearned(vault: string, o: { add?: string[]; drop?: (line: string) => boolean }, now = Date.now()): string[] {
+  const p = chiefOfStaffPath(vault);
+  const text = readText(p) || render(parseChiefOfStaff(""));
+  const lines = text.split("\n");
+  let at = lines.findIndex((l) => /^##\s+What I've learned\s*$/i.test(l));
+  if (at < 0) { while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop(); lines.push("", "## What I've learned"); at = lines.length - 1; }
+  let end = lines.findIndex((l, i) => i > at && /^##\s+/.test(l));
+  if (end < 0) end = lines.length;
+  const dropped: string[] = [];
+  const body = lines.slice(at + 1, end).filter((l) => {
+    const m = l.match(/^\s*-\s+(.*\S)\s*$/);
+    if (m && o.drop?.(m[1]!)) { dropped.push(m[1]!); return false; }
+    return true;
+  });
+  const have = new Set(body.map((l) => l.match(/^\s*-\s+(.*\S)\s*$/)?.[1]?.toLowerCase()).filter(Boolean));
+  const fresh = (o.add ?? []).map((l) => l.replace(/\s+/g, " ").trim()).filter((l) => l && !have.has(l.toLowerCase()));
+  if (!fresh.length && !dropped.length) return [];
+  let last = body.length;
+  while (last > 0 && !body[last - 1]!.trim()) last--;
+  body.splice(last, 0, ...fresh.map((l) => `- ${l}`));
+  if (end === lines.length && body[body.length - 1]?.trim()) body.push("");
+  writeVersioned(p, [...lines.slice(0, at + 1), ...body, ...lines.slice(end)].join("\n"), now);
+  return dropped;
+}
+
 export const CHIEF_HEADER = "# YOUR CHIEF OF STAFF";
 
 /**

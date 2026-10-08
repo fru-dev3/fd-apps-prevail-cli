@@ -2,7 +2,7 @@
 // positionals, `--flag value` pairs and bare boolean flags. --vault/-d and its
 // value are consumed here so no command mistakes the path for a positional.
 
-const BOOLEAN = new Set(["json", "all", "apply", "force", "backfill", "local-only", "signal", "confirm-raise"]);
+const BOOLEAN = new Set(["json", "all", "apply", "force", "backfill", "local-only", "signal", "confirm-raise", "hold"]);
 
 export interface ModArgs {
   pos: string[];
