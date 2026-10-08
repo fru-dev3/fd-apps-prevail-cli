@@ -268,6 +268,16 @@ describe("mirror, follow up, check off, close and reopen", () => {
     expect(r.updates!.some((u) => /\u23fa|Read\(|Write\(/.test(u.text))).toBe(false);
     expect(r.status).toBe("done");
   });
+  test("an agent Herdr will not read while it works is alive: the mirror waits for its pause, never says the tab closed", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "done"], reads: ["Summary:\nThe foo policy renews in May."] });
+    const t = await running(h);
+    let busy = true;
+    const live = { ...deps(h), herdrFor: (m: string) => { const f = h.forMachine(m); return (args: string[]) => { if (busy && args.includes("read") && args.includes("agent")) { busy = false; throw new Error('herdr agent read failed: {"error":{"code":"agent_not_idle"}}'); } return f(args); }; } };
+    const r = await mirrorTask(V, t.id, live, { maxRounds: 3, waitMs: 1 });
+    expect(r.status).toBe("done");
+    expect(r.outcome).toBe("The foo policy renews in May.");
+    expect(r.log.some((l) => l.ev === "mirror ended")).toBe(false);
+  });
   test("an agent asking something is never done: it needs you with the question; the follow-up answers it", async () => {
     const menu = "Where are you right now?\n❯ 1. Home\n  2. Work\nEnter to select · Esc to cancel";
     const h = fakeHerdr({ statuses: ["idle", "blocked", "blocked"], reads: ["Looking for foo dinner spots", `Looking for foo dinner spots\n${menu}`], promptBlockedOnce: true });

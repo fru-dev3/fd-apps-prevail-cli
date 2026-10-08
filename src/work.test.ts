@@ -562,6 +562,13 @@ describe("plan before doing", () => {
     expect(f.task.updates!.slice(-2).map((u) => u.from)).toEqual(["you", "task"]);
     expect(spawned.at(-1)).toEqual(["work", "run", t.id]);
   });
+  test("a dashboard is not an agent: no specialist is minted for it", async () => {
+    const text = "Check the foo status";
+    const runner = async () => JSON.stringify({ goals: [{ text, tasks: [{ name: "Foo Status", text, dest: { kind: "domain", id: "general" }, shape: "find", missing: [{ kind: "specialist", name: "Foo status dashboard", why: "a view" }] }] }] });
+    const t = (await addWork(V, text, { deps: { ...deps([]), runner } })).tasks[0]!;
+    expect(t.suggestions.find((x) => x.kind === "specialist")!.state).toBe("declined");
+    expect(t.log.some((l) => l.ev === "specialist made")).toBe(false);
+  });
   test("a small, fully specified ask goes straight through", async () => {
     const spawned: string[][] = [];
     const p = await addWork(V, "Summarize the foo insurance note", { deps: { ...deps(spawned), runner: route("Summarize the foo insurance note", "insurance") } });

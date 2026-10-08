@@ -692,6 +692,8 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     // A specialist the work needs is made at once (draft ceiling at most): Work mode does not stop to ask.
     for (const s of t.suggestions) {
       if (s.kind !== "specialist" || s.state !== "open" || process.env.PREVAIL_BUNKER === "1") continue;
+      // Recurring work keeps last time's team, and a thing (a dashboard, a list) is not an agent: neither mints a specialist.
+      if (rec || NOT_A_ROLE.test(s.name)) { s.state = "declined"; note(t, "specialist not made", rec ? "set up like last time" : `${s.name} is not a role`, now); continue; }
       try {
         const made = await makeSpecialist(vault, s.name, s.why || `Help with: ${t.text}`, s.draft, clock());
         s.state = "accepted";
@@ -751,6 +753,9 @@ function applyLearned(r0: RoutedTask, cat: Catalog, taught: string[], history: W
   }
   return { r, used, said, rec };
 }
+
+/** Names of things, not roles: the router sometimes suggests a dashboard or a list as a "specialist". */
+const NOT_A_ROLE = /\b(dashboards?|views?|registr(?:y|ies)|lists?|reports?|trackers?|boards?|pages?|tools?|apps?|databases?|sheets?|calendars?|systems?|status)\b/i;
 
 async function makeSpecialist(vault: string, name: string, mandate: string, draft: unknown, now: number): Promise<string> {
   const { createSpecialist } = await import("./specialists-custom.ts");

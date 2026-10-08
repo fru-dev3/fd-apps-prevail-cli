@@ -732,6 +732,8 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       let text = "";
       let status = "";
       try { text = readText(h(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "400"])); status = statusOf(h(["agent", "get", agent])); } catch (e) {
+        // Herdr will not read the scrollback while the agent works: it is alive, so read on its next pause.
+        if (/agent_not_idle/.test((e as Error).message)) continue;
         // The agent is gone (its tab closed by hand): stop mirroring.
         updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") {
           // A closed tab is housekeeping, never an outcome: with no result yet, it asks what to do.
