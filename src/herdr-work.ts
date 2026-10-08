@@ -25,7 +25,7 @@ import { getSpecialist } from "./specialists.ts";
 import { herdrBin, herdrOn, mapDir, readSpaces, type Herdr } from "./spaces.ts";
 import { threadFiles } from "./thread-schedule.ts";
 import { addMilestone, appendTurn, defaultSpawnSelf, distilMilestone, distilOutcome, milestoneDue, finish, note, readSettings, addUpdate, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
-import { FALLBACK_AGENT_KINDS, folderOf, folderPath, type CatalogMachine } from "./work-router.ts";
+import { FALLBACK_AGENT_KINDS, folderOf, folderPath, noDash, type CatalogMachine } from "./work-router.ts";
 
 export interface Machine {
   /** "local" for this Mac, else the saved Herdr machine's label or id. */
@@ -504,7 +504,7 @@ export function askingQuestion(words: string): string | null {
   const q = [...lines].reverse().find((l) => /\?$/.test(l) && l.length > 3 && !/^\d+[.)]/.test(l));
   const last = lines[lines.length - 1]!;
   if (!menu && !/\?$/.test(last)) return null;
-  const s = (q ?? "It is waiting on a choice in its Herdr tab.").replace(/\s*[—–]\s*/g, ", ");
+  const s = noDash(q ?? "It is waiting on a choice in its Herdr tab.");
   return s.length > 200 ? `${s.slice(0, 199)}…` : s;
 }
 

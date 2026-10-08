@@ -15,7 +15,7 @@ import { appRecords } from "./ia.ts";
 import { loadSpecialists } from "./specialists.ts";
 import type { RouteRunner } from "./route.ts";
 import { topicOf, type KnownAnswer, type PlanKind } from "./work-learn.ts";
-import type { RoutedTask } from "./work-router.ts";
+import { noDash, type RoutedTask } from "./work-router.ts";
 
 /** One thing the vault knows that the work needs: `label` is the plain line on the card, `text` goes in the brief. */
 export interface ContextItem { label: string; text: string }
@@ -172,7 +172,7 @@ export function parsePlanJudgement(raw: string): PlanJudgement | null {
   try {
     const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)) as Record<string, unknown>;
     if (typeof j.under_specified !== "boolean" || typeof j.high_impact !== "boolean") return null;
-    const list = (x: unknown, n: number, len: number) => (Array.isArray(x) ? x : []).filter((q): q is string => typeof q === "string" && !!q.trim()).map((q) => q.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").trim().slice(0, len)).slice(0, n);
+    const list = (x: unknown, n: number, len: number) => (Array.isArray(x) ? x : []).filter((q): q is string => typeof q === "string" && !!q.trim()).map((q) => noDash(q.replace(/\s+/g, " ")).trim().slice(0, len)).slice(0, n);
     return { underSpecified: j.under_specified, highImpact: j.high_impact, questions: list(j.questions, 4, 200), domains: list(j.domains, 4, 40).map((d) => d.toLowerCase()) };
   } catch { return null; }
 }
@@ -242,11 +242,12 @@ export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags"> & 
 
     const touched = domains.map((d) => d[0]!.toUpperCase() + d.slice(1)).join(", ");
     const cited = found.filter((f) => f.label !== "It proposes before paying" && !f.label.startsWith("What you told me before"));
-    const say = [
+    const sayRaw = [
       `Before I start: this ${spend || travel ? "spends money and time" : judged?.highImpact ? "affects your plans" : "needs a few details"}${touched ? `, so I brought in ${touched}` : ""}.`,
       cited.length ? `From your vault: ${cited.map((f) => f.label.replace(/^From your \w+ notes: /, "")).slice(0, 3).join("; ")}.` : "",
       "A few things only you can tell me:",
-    ].filter(Boolean).join(" ").replace(/\s*[\u2014\u2013]\s*/g, ", ");
+    ].filter(Boolean).join(" ");
+    const say = noDash(sayRaw);
     return { kind, domains, found, questions: questions.slice(0, 4), say, used };
   } catch { return null; }
 }

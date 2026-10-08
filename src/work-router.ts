@@ -273,7 +273,9 @@ export function buildWorkPrompt(text: string, cat: Catalog): { system: string; p
   return { system, prompt: lines.join("\n") };
 }
 
-const str = (x: unknown, n: number) => (typeof x === "string" ? x.replace(/\s+/g, " ").replace(/\s*[—–]\s*/g, ", ").trim().slice(0, n) : "");
+/** No em or en dashes on screen: a range between numbers reads "to" (Nov 13 to 15, $417 to 527), any other a comma. */
+export const noDash = (s: string) => s.replace(/(\d)\s*[\u2013\u2014]\s*(?=[$\u00a3\u20ac]?\d)/g, "$1 to ").replace(/\s*[\u2014\u2013]\s*/g, ", ");
+const str = (x: unknown, n: number) => (typeof x === "string" ? noDash(x.replace(/\s+/g, " ")).trim().slice(0, n) : "");
 
 /** Check a router reply against the catalog. Null when it is not usable at all. */
 export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text: string) => Destination | null; kindFor?: (dest: Destination | null, text: string) => string; userText?: string } = {}): RouterPlan | null {

@@ -55,7 +55,7 @@ import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./s
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
 import { gatherContext, judgePlan, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
 import { forgetLearned, isForget, journalLesson, knownAnswers, learnAnswers, learnRoute, lessons, plainLesson, rankContext, recurringMatch, routeLessonFor, sourceRank, unlearnRoute, type PlanKind } from "./work-learn.ts";
-import { buildCatalog, cleanName, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
+import { buildCatalog, cleanName, destination, noDash, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
 import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, focusTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, promptHerdr, renameHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 
@@ -349,7 +349,7 @@ export function milestoneByCode(words: string): string | null {
     .map((l) => l.replace(/^\s*(?:#+|>|[-*\u2022]|\d+[.)])\s*/, "").replace(/[*_`]+/g, "").trim()).filter(Boolean).join(" ");
   const hits = prose.split(/(?<=[.!])\s+/).filter((x) => x.length >= 12 && x.length <= 200 && MILESTONE_RE.test(x) && !/[{}<>]|\/\w+\/|\?$/.test(x));
   const s = hits.at(-1);
-  return s ? s.replace(/\s*[\u2014\u2013]\s*/g, ", ").trim() : null;
+  return s ? noDash(s).trim() : null;
 }
 
 /** The milestone the model distils from the agent's latest progress (one sentence), or null when nothing is worth telling. Never raw output. */
@@ -364,7 +364,7 @@ export async function distilMilestone(words: string, deps: WorkDeps = {}): Promi
       system: "From an agent's latest progress on a task, write the milestone it reached as one short plain sentence in the first person (\"I found three carriers and am comparing prices.\"). Only a real milestone: something found, drafted, finished or decided. If nothing is worth telling the owner, reply NONE. No markdown, no em dashes, no file paths.",
       prompt: text.slice(-4000), timeoutMs: 20_000, maxChars: 300,
     });
-    const line = raw.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").replace(/^["']|["']$/g, "").trim();
+    const line = noDash(raw.replace(/\s+/g, " ")).replace(/^["']|["']$/g, "").trim();
     if (/^none\b/i.test(line)) return null;
     if (!line || line.startsWith("{") || line.length > 240) return byCode;
     return line.split(/(?<=[.!?])\s+/)[0]!;
@@ -439,7 +439,7 @@ export function plainOutcome(text: string): string {
   if (!paras.length) return "";
   const pick = at >= 0 ? paras[0]! : [...paras].reverse().find((p) => p.split(" ").length >= 4) ?? paras[paras.length - 1]!;
   const two = pick.split(/(?<=[.!?])\s+/).slice(0, 2).join(" ");
-  const out = two.replace(/\s*[\u2014\u2013]\s*/g, ", ").trim();
+  const out = noDash(two).trim();
   return out.length > 240 ? `${out.slice(0, 239).replace(/\s+\S*$/, "")}\u2026` : out;
 }
 
@@ -455,7 +455,7 @@ export async function distilOutcome(text: string, deps: WorkDeps = {}, ask?: str
       system: "You write the outcome line on a finished task card. One or two short plain sentences. When the task asked a question or for a summary, lead with the answer itself (the key facts), not where it was filed. Then anything left for the user. Leave out the agent's own housekeeping (task boards, tools that failed). No preamble, no markdown, no em dashes, no lists.",
       prompt: `${ask ? `The task: ${ask.slice(0, 500)}\n\nWhat the agent reported:\n` : ""}${body.slice(-6000)}`, timeoutMs: 30_000, maxChars: 1_200,
     });
-    const line = raw.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").replace(/^["']|["']$/g, "").trim();
+    const line = noDash(raw.replace(/\s+/g, " ")).replace(/^["']|["']$/g, "").trim();
     if (!line || line.startsWith("{")) return byCode;
     // Too long for a card: its first two sentences, never thrown away for code's weaker guess.
     if (line.length <= 400) return line;
@@ -479,7 +479,7 @@ export function guardLine(guards: string[] | undefined): string | null {
   }
   return out.size ? `Your rules apply: ${[...out].join("; ")}.` : null;
 }
-const oneLine = (s: string, n = 200) => s.replace(/\s+/g, " ").replace(/\s*[—–]\s*/g, ", ").trim().slice(0, n);
+const oneLine = (s: string, n = 200) => noDash(s.replace(/\s+/g, " ")).trim().slice(0, n);
 const ymd = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
 export function defaultSpawnSelf(vault: string): (args: string[]) => void {

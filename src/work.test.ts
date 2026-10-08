@@ -464,6 +464,8 @@ describe("assembly, outcomes, follow-ups and check-off", () => {
     expect(neededSpecialists(V, { text: "Draft a reply to Foo Bar", shape: "make", flags: {}, specialists: [] })).toEqual(["writer"]);
   });
   test("the outcome is one or two plain sentences: the model's when it answers, else code's", async () => {
+    // A range keeps its meaning: never "Nov 13, 15" or "$417, 527".
+    expect(await distilOutcome("x", { runner: async () => "Foo Lake, Nov 13\u201315, about $417\u2013$527 \u2014 a good pick." })).toBe("Foo Lake, Nov 13 to 15, about $417 to $527, a good pick.");
     // A long model line keeps its whole first sentences, never thrown away for code's guess.
     const long = `The foo priorities are taxes and the lease. ${"Bar detail goes on and on. ".repeat(20)}`;
     expect(await distilOutcome("⏺ I wrote the foo page.", { runner: async () => long })).toMatch(/^The foo priorities are taxes and the lease\. Bar detail goes on and on\./);
