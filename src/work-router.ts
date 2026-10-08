@@ -276,7 +276,9 @@ export function buildWorkPrompt(text: string, cat: Catalog): { system: string; p
   return { system, prompt: lines.join("\n") };
 }
 
-const str = (x: unknown, n: number) => (typeof x === "string" ? x.replace(/\s+/g, " ").replace(/\s*[—–]\s*/g, ", ").trim().slice(0, n) : "");
+/** No em or en dashes on screen: a range between numbers reads "to" (Nov 13 to 15, $417 to 527), any other a comma. */
+export const noDash = (s: string) => s.replace(/(\d)\s*[\u2013\u2014]\s*(?=[$\u00a3\u20ac]?\d)/g, "$1 to ").replace(/\s*[\u2014\u2013]\s*/g, ", ");
+const str = (x: unknown, n: number) => (typeof x === "string" ? noDash(x.replace(/\s+/g, " ")).trim().slice(0, n) : "");
 
 /** Check a router reply against the catalog. Null when it is not usable at all. */
 export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text: string) => Destination | null; kindFor?: (dest: Destination | null, text: string) => string; userText?: string } = {}): RouterPlan | null {
@@ -348,7 +350,9 @@ export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text:
       });
       count++;
     }
-    const one = oneTaskPerIntent(tasks);
+    let one = oneTaskPerIntent(tasks);
+    // One ask is one piece of work: steps the model split a goal into (scope, research, budget...) fold into the first.
+    if (one.length > 1 && o.userText && isSingleAsk(o.userText)) one = [{ ...one[0]!, specialists: [...new Set(one.flatMap((t) => t.specialists))].slice(0, 3) }];
     if (one.length) goals.push({ text: gt || one[0]!.text, tasks: one });
   }
   return goals.length ? { goals, source: "model" } : null;
@@ -360,6 +364,12 @@ export function isSystemName(name: string, cat: Pick<Catalog, "machines" | "agen
   if (/\b(herdr|prevail|glyph|terminal|tmux|zsh|shell|mac ?mini|macbook|imac|mac studio|my mac|laptop|desktop app|vault|claude(?: code)?|codex|gemini|cursor|antigravity|agy|copilot|opencode)\b/.test(n)) return true;
   if (cat.machines.some((m) => m.label.toLowerCase() === n)) return true;
   return cat.agentKinds.some((k) => k === n);
+}
+
+/** One sentence with no "and", "also", "then", list or second line: one ask, so one task. */
+export function isSingleAsk(text: string): boolean {
+  const t = text.trim();
+  return !/[\n;,]|\b(?:and|also|then|plus)\b/i.test(t) && t.split(/(?<=[.!?])\s+/).filter(Boolean).length <= 1;
 }
 
 const SEND = /^(?:send|email|post|submit|deliver|mail)\b/i;
@@ -455,12 +465,15 @@ export async function routeWork(vault: string, text: string, o: RouteWorkOptions
   if (o.runner !== null && !bunker) {
     const runner = o.runner ?? (await import("./route.ts")).claudeRouteRunner;
     const { system, prompt } = buildWorkPrompt(t, cat);
-    try {
-      const raw = await runner({ system, prompt, timeoutMs: o.timeoutMs ?? 60_000, maxChars: 16_000 });
-      // A destination the model got wrong falls back to the general home, never to a guess at another domain.
-      const plan = parseWorkReply(raw, cat, { userText: t, fallback: () => destination(cat, "domain", "general", { confidence: 0.2, why: "kept in General" }), kindFor: (d, tt) => kindSaid(tt, cat.agentKinds) ?? defaultKind(vault, d, cat) });
-      if (plan) return plan;
-    } catch { /* code takes over */ }
+    // A model that blips (busy, rate limited, a bad reply) gets a second try: code's route is a weaker guess.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const raw = await runner({ system, prompt, timeoutMs: o.timeoutMs ?? 60_000, maxChars: 16_000 });
+        // A destination the model got wrong falls back to the general home, never to a guess at another domain.
+        const plan = parseWorkReply(raw, cat, { userText: t, fallback: () => destination(cat, "domain", "general", { confidence: 0.2, why: "kept in General" }), kindFor: (d, tt) => kindSaid(tt, cat.agentKinds) ?? defaultKind(vault, d, cat) });
+        if (plan) return plan;
+      } catch { /* once more, then code takes over */ }
+    }
   }
   return codeRoute(vault, t, cat);
 }

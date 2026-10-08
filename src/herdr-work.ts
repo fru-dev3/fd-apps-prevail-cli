@@ -25,7 +25,7 @@ import { getSpecialist } from "./specialists.ts";
 import { herdrBin, herdrOn, mapDir, readSpaces, type Herdr } from "./spaces.ts";
 import { threadFiles } from "./thread-schedule.ts";
 import { addMilestone, appendTurn, defaultSpawnSelf, distilMilestone, distilOutcome, milestoneDue, finish, note, readSettings, addUpdate, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
-import { FALLBACK_AGENT_KINDS, folderOf, folderPath, type CatalogMachine } from "./work-router.ts";
+import { FALLBACK_AGENT_KINDS, folderOf, folderPath, noDash, type CatalogMachine } from "./work-router.ts";
 
 export interface Machine {
   /** "local" for this Mac, else the saved Herdr machine's label or id. */
@@ -504,7 +504,7 @@ export function askingQuestion(words: string): string | null {
   const q = [...lines].reverse().find((l) => /\?$/.test(l) && l.length > 3 && !/^\d+[.)]/.test(l));
   const last = lines[lines.length - 1]!;
   if (!menu && !/\?$/.test(last)) return null;
-  const s = (q ?? "It is waiting on a choice in its Herdr tab.").replace(/\s*[—–]\s*/g, ", ");
+  const s = noDash(q ?? "It is waiting on a choice in its Herdr tab.");
   return s.length > 200 ? `${s.slice(0, 199)}…` : s;
 }
 
@@ -677,8 +677,11 @@ export function afterBrief(text: string): string {
 
 /** The agent's words without its terminal chrome: rules and boxes, the empty input line, the mode footer, the spinner line. */
 export function stripChrome(text: string): string {
+  const rule = (l: string | undefined) => /^\s*[─━═]{3,}/.test(l ?? "");
   return text.split("\n")
-    .filter((l) => !/^\s*[─━═]{3,}/.test(l) && !/^\s*❯\s*$/.test(l) && !/^\s*⏵⏵/.test(l) && !/^\s*✻ /.test(l))
+    // The input box (a line between two rules) holds the user's draft or the agent's ghost suggestion, never its words.
+    .filter((l, i, a) => !(/^\s*❯/.test(l) && rule(a[i - 1]) && rule(a[i + 1])))
+    .filter((l) => !rule(l) && !/^\s*❯\s*$/.test(l) && !/^\s*⏵⏵/.test(l) && !/^\s*✻ /.test(l))
     .join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -729,6 +732,8 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       let text = "";
       let status = "";
       try { text = readText(h(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "400"])); status = statusOf(h(["agent", "get", agent])); } catch (e) {
+        // Herdr will not read the scrollback while the agent works: it is alive, so read on its next pause.
+        if (/agent_not_idle/.test((e as Error).message)) continue;
         // The agent is gone (its tab closed by hand): stop mirroring.
         updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") {
           // A closed tab is housekeeping, never an outcome: with no result yet, it asks what to do.
@@ -758,7 +763,7 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       const settled = (status === "idle" || status === "done") && (round > 0 || !!words);
       const question = status === "blocked" || settled ? askingQuestion(all) ?? (status === "blocked" ? WAITING : null) : null;
       if (question && status === "blocked" && answerDialog(h, pane)) continue;
-      const outcome = settled && !question ? await distilOutcome(all.slice(-4000), deps) : "";
+      const outcome = settled && !question ? await distilOutcome(all.slice(-4000), deps, cur.text) : "";
       // Still at work: a real milestone from what it just did, a sentence at most and only now and then.
       const milestone = !settled && !question && words && milestoneDue(cur, clock()) ? await distilMilestone(words, deps) : null;
       const t = updateTask(vault, id, (x) => {

@@ -55,7 +55,7 @@ import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./s
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
 import { gatherContext, judgePlan, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
 import { forgetLearned, isForget, journalLesson, knownAnswers, learnAnswers, learnRoute, lessons, plainLesson, rankContext, recurringMatch, routeLessonFor, sourceRank, unlearnRoute, type PlanKind } from "./work-learn.ts";
-import { buildCatalog, cleanName, destination, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
+import { buildCatalog, cleanName, destination, noDash, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
 import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, focusTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, promptHerdr, renameHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 
@@ -349,7 +349,7 @@ export function milestoneByCode(words: string): string | null {
     .map((l) => l.replace(/^\s*(?:#+|>|[-*\u2022]|\d+[.)])\s*/, "").replace(/[*_`]+/g, "").trim()).filter(Boolean).join(" ");
   const hits = prose.split(/(?<=[.!])\s+/).filter((x) => x.length >= 12 && x.length <= 200 && MILESTONE_RE.test(x) && !/[{}<>]|\/\w+\/|\?$/.test(x));
   const s = hits.at(-1);
-  return s ? s.replace(/\s*[\u2014\u2013]\s*/g, ", ").trim() : null;
+  return s ? noDash(s).trim() : null;
 }
 
 /** The milestone the model distils from the agent's latest progress (one sentence), or null when nothing is worth telling. Never raw output. */
@@ -364,7 +364,7 @@ export async function distilMilestone(words: string, deps: WorkDeps = {}): Promi
       system: "From an agent's latest progress on a task, write the milestone it reached as one short plain sentence in the first person (\"I found three carriers and am comparing prices.\"). Only a real milestone: something found, drafted, finished or decided. If nothing is worth telling the owner, reply NONE. No markdown, no em dashes, no file paths.",
       prompt: text.slice(-4000), timeoutMs: 20_000, maxChars: 300,
     });
-    const line = raw.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").replace(/^["']|["']$/g, "").trim();
+    const line = noDash(raw.replace(/\s+/g, " ")).replace(/^["']|["']$/g, "").trim();
     if (/^none\b/i.test(line)) return null;
     if (!line || line.startsWith("{") || line.length > 240) return byCode;
     return line.split(/(?<=[.!?])\s+/)[0]!;
@@ -421,7 +421,14 @@ export function isCloseYes(text: string): boolean {
 
 /** The result in one or two plain sentences, by code: markdown off, the summary paragraph, two sentences. */
 export function plainOutcome(text: string): string {
-  let lines = text.replace(/\r/g, "").replace(/```[\s\S]*?```/g, "").split("\n")
+  let raw = text.replace(/\r/g, "").replace(/```[\s\S]*?```/g, "").split("\n");
+  // A coding agent's last message (its marker, not a tool call) is its reply: it leads with what came of the work.
+  const reply = raw.map((l) => /^\s*[\u23fa\u25cf]\s/.test(l)).lastIndexOf(true);
+  if (reply >= 0 && !/^\s*[\u23fa\u25cf]\s*[\w-]+\(/.test(raw[reply]!)) {
+    raw = [raw[reply]!.replace(/^\s*[\u23fa\u25cf]\s*/, ""), ...raw.slice(reply + 1)];
+    if (!raw.some((l) => /^\s*(?:#+\s*)?(?:summary|in short|result|outcome)\b/i.test(l))) raw = raw.slice(0, Math.max(1, raw.findIndex((l, i) => i > 0 && !l.trim())));
+  }
+  let lines = raw
     // Tool calls and tables are the work, not what came of it.
     .filter((l) => !/^\s*[\u23fa\u25cf]/.test(l) && !/^\s*\|/.test(l) && !/^\s*[-=_*]{3,}\s*$/.test(l))
     .map((l) => l.replace(/^\s*(?:#+|>|[-*\u2022]|\d+[.)])\s*/, "").replace(/[*_`]+/g, "").trim());
@@ -432,12 +439,12 @@ export function plainOutcome(text: string): string {
   if (!paras.length) return "";
   const pick = at >= 0 ? paras[0]! : [...paras].reverse().find((p) => p.split(" ").length >= 4) ?? paras[paras.length - 1]!;
   const two = pick.split(/(?<=[.!?])\s+/).slice(0, 2).join(" ");
-  const out = two.replace(/\s*[\u2014\u2013]\s*/g, ", ").trim();
+  const out = noDash(two).trim();
   return out.length > 240 ? `${out.slice(0, 239).replace(/\s+\S*$/, "")}\u2026` : out;
 }
 
 /** The outcome the model distils from the result (one or two sentences), else code's. Never throws. */
-export async function distilOutcome(text: string, deps: WorkDeps = {}): Promise<string> {
+export async function distilOutcome(text: string, deps: WorkDeps = {}, ask?: string): Promise<string> {
   const body = text.trim();
   if (!body) return "";
   const byCode = plainOutcome(body);
@@ -445,11 +452,16 @@ export async function distilOutcome(text: string, deps: WorkDeps = {}): Promise<
   try {
     const runner = deps.runner ?? (await import("./route.ts")).claudeRouteRunner;
     const raw = await runner({
-      system: "You write the outcome line on a finished task card. One or two short plain sentences saying what was done and anything left for the user. No preamble, no markdown, no em dashes, no lists.",
-      prompt: body.slice(-6000), timeoutMs: 30_000, maxChars: 600,
+      system: "You write the outcome line on a finished task card. One or two short plain sentences. When the task asked a question or for a summary, lead with the answer itself (the key facts), not where it was filed. Then anything left for the user. Leave out the agent's own housekeeping (task boards, tools that failed). No preamble, no markdown, no em dashes, no lists.",
+      prompt: `${ask ? `The task: ${ask.slice(0, 500)}\n\nWhat the agent reported:\n` : ""}${body.slice(-6000)}`, timeoutMs: 30_000, maxChars: 1_200,
     });
-    const line = raw.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").replace(/^["']|["']$/g, "").trim();
-    return line && line.length <= 400 && !line.startsWith("{") ? line : byCode;
+    const line = noDash(raw.replace(/\s+/g, " ")).replace(/^["']|["']$/g, "").trim();
+    if (!line || line.startsWith("{")) return byCode;
+    // Too long for a card: its first two sentences, never thrown away for code's weaker guess.
+    if (line.length <= 400) return line;
+    let fit = "";
+    for (const x of line.split(/(?<=[.!?])\s+/)) { if ((fit ? `${fit} ${x}` : x).length > 400) break; fit = fit ? `${fit} ${x}` : x; }
+    return fit || plainOutcome(line);
   } catch { return byCode; }
 }
 
@@ -467,7 +479,7 @@ export function guardLine(guards: string[] | undefined): string | null {
   }
   return out.size ? `Your rules apply: ${[...out].join("; ")}.` : null;
 }
-const oneLine = (s: string, n = 200) => s.replace(/\s+/g, " ").replace(/\s*[—–]\s*/g, ", ").trim().slice(0, n);
+const oneLine = (s: string, n = 200) => noDash(s.replace(/\s+/g, " ")).trim().slice(0, n);
 const ymd = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
 export function defaultSpawnSelf(vault: string): (args: string[]) => void {
@@ -680,6 +692,8 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     // A specialist the work needs is made at once (draft ceiling at most): Work mode does not stop to ask.
     for (const s of t.suggestions) {
       if (s.kind !== "specialist" || s.state !== "open" || process.env.PREVAIL_BUNKER === "1") continue;
+      // Recurring work keeps last time's team, and a thing (a dashboard, a list) is not an agent: neither mints a specialist.
+      if (rec || NOT_A_ROLE.test(s.name)) { s.state = "declined"; note(t, "specialist not made", rec ? "set up like last time" : `${s.name} is not a role`, now); continue; }
       try {
         const made = await makeSpecialist(vault, s.name, s.why || `Help with: ${t.text}`, s.draft, clock());
         s.state = "accepted";
@@ -739,6 +753,9 @@ function applyLearned(r0: RoutedTask, cat: Catalog, taught: string[], history: W
   }
   return { r, used, said, rec };
 }
+
+/** Names of things, not roles: the router sometimes suggests a dashboard or a list as a "specialist". */
+const NOT_A_ROLE = /\b(dashboards?|views?|registr(?:y|ies)|lists?|reports?|trackers?|boards?|pages?|tools?|apps?|databases?|sheets?|calendars?|systems?|status)\b/i;
 
 async function makeSpecialist(vault: string, name: string, mandate: string, draft: unknown, now: number): Promise<string> {
   const { createSpecialist } = await import("./specialists-custom.ts");
@@ -852,7 +869,7 @@ export async function runTask(vault: string, id: string, deps: WorkDeps = {}, o:
     ? [job.result?.summary ?? "", body, filed.length ? `Filed:\n${filed.join("\n")}` : ""].filter(Boolean).join("\n\n")
     : `The job ${job.status === "stopped" ? "stopped" : job.status === "needs-approval" ? "is waiting for you" : "failed"}${job.note ? `: ${job.note}` : "."}`;
   // The job's own summary is the best source; the full text when it has none.
-  const outcome = job.status === "done" ? await distilOutcome(job.result?.summary || text, deps) : "";
+  const outcome = job.status === "done" ? await distilOutcome(job.result?.summary || text, deps, r.task.text) : "";
   let rerun = false;
   const t = updateTask(vault, id, (x) => {
     appendTurn(vault, x, "assistant", text, "prevail", clock());

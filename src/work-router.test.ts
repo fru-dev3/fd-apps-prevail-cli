@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createMission } from "./missions.ts";
-import { buildCatalog, buildWorkPrompt, cleanName, codeRoute, destination, folderOf, folderPath, isSystemName, MAX_GOALS, MAX_TASKS, nameFromText, oneTaskPerIntent, parseWorkReply, routeWork, splitGoals, type Catalog } from "./work-router.ts";
+import { buildCatalog, isSingleAsk, buildWorkPrompt, cleanName, codeRoute, destination, folderOf, folderPath, isSystemName, MAX_GOALS, MAX_TASKS, nameFromText, oneTaskPerIntent, parseWorkReply, routeWork, splitGoals, type Catalog } from "./work-router.ts";
 
 const ROOT = join("/tmp", `prevail-work-router-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -84,7 +84,7 @@ describe("the model path", () => {
         { text: "Something with a bad home", dest: { kind: "domain", id: "ghost" }, machine: "mini-foo" },
       ] },
     ] });
-    const p = parseWorkReply(reply, cat(), { userText: "foo", fallback: () => destination(cat(), "domain", "general"), kindFor: () => "claude" })!;
+    const p = parseWorkReply(reply, cat(), { userText: "Find a cheaper foo policy. Pick a gift for Foo Bar. Fix the foo site.", fallback: () => destination(cat(), "domain", "general"), kindFor: () => "claude" })!;
     expect(p.source).toBe("model");
     const [a, b, c] = p.goals;
     expect(a!.tasks[0]).toMatchObject({ dest: { id: "insurance", confidence: 0.9 }, specialists: ["researcher"], shape: "find", flags: { money: true }, agentKind: "claude", machine: "laptop" });
@@ -105,6 +105,25 @@ describe("the model path", () => {
     expect(parseWorkReply("no json", cat())).toBeNull();
     const p = await routeWork(V, "Find a cheaper foo policy. Pick a gift for Foo Bar.", { catalog: cat(), runner: async () => { throw new Error("down"); } });
     expect(p.source).toBe("code");
+  });
+  test("one ask is one task: steps the model split it into fold into the first", () => {
+    const reply = JSON.stringify({ goals: [{ text: "A foo weekend", tasks: [
+      { name: "Foo Trip Scope", text: "Scope a foo weekend trip", dest: { kind: "domain", id: "insurance" }, specialists: ["researcher"] },
+      { name: "Foo Budget", text: "Budget the foo weekend", dest: { kind: "domain", id: "money" }, specialists: ["analyst"] },
+    ] }] });
+    const p = parseWorkReply(reply, cat(), { userText: "plan a foo weekend trip" })!;
+    expect(p.goals.flatMap((g) => g.tasks).map((t) => t.name)).toEqual(["Foo Trip Scope"]);
+    // Two asks stay two.
+    expect(parseWorkReply(reply, cat(), { userText: "plan a foo weekend trip and budget it" })!.goals.flatMap((g) => g.tasks)).toHaveLength(2);
+    expect(isSingleAsk("summarize what I noted about my foo this month")).toBe(true);
+    expect(isSingleAsk("Find a cheaper foo policy. Pick a gift for Foo Bar.")).toBe(false);
+  });
+  test("a model that blips once gets a second try before code takes over", async () => {
+    let calls = 0;
+    const ok = JSON.stringify({ goals: [{ text: "Foo", tasks: [{ name: "Foo Policy", text: "Find a cheaper foo policy", dest: { kind: "domain", id: "insurance" }, shape: "find" }] }] });
+    const p = await routeWork(V, "Find a cheaper foo policy", { catalog: cat(), runner: async () => { if (calls++ === 0) throw new Error("busy"); return ok; } });
+    expect(p.source).toBe("model");
+    expect(calls).toBe(2);
   });
 });
 

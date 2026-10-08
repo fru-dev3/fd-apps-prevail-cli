@@ -15,7 +15,7 @@ import { appRecords } from "./ia.ts";
 import { loadSpecialists } from "./specialists.ts";
 import type { RouteRunner } from "./route.ts";
 import { topicOf, type KnownAnswer, type PlanKind } from "./work-learn.ts";
-import type { RoutedTask } from "./work-router.ts";
+import { noDash, type RoutedTask } from "./work-router.ts";
 
 /** One thing the vault knows that the work needs: `label` is the plain line on the card, `text` goes in the brief. */
 export interface ContextItem { label: string; text: string }
@@ -136,6 +136,8 @@ function domainLines(vault: string, slug: string, re: RegExp, n = 2): string[] {
   return out;
 }
 
+const READ_ONLY = new Set(["understand", "find", "learn", "reflect"]);
+
 export interface TaskPlan {
   /** What kind of plan: its answers are remembered per kind (travel, purchase, health). */
   kind: PlanKind;
@@ -159,6 +161,7 @@ const PLAN_SYSTEM = [
   "under_specified: the ask leaves out something only the owner can say (where, when, budget, who, what for) and it changes the result.",
   "high_impact: it spends money or much time, commits the owner, affects other people, or touches health, legal matters or identity.",
   "A small, fully specified, low-stakes ask (summarise a note, look something up, draft a reply) is neither.",
+  "A question about the owner's own life, work, priorities, notes or records is answered from the vault: it is never under-specified. Never ask where something is kept or tracked; the agent looks.",
   "When either is true, give 2 to 4 short, specific questions only the owner can answer, and the life areas it touches from the list.",
   'Reply with ONLY JSON: {"under_specified":<bool>,"high_impact":<bool>,"questions":["..."],"domains":["<listed area>"]}',
   "No em dashes. Plain words.",
@@ -169,7 +172,7 @@ export function parsePlanJudgement(raw: string): PlanJudgement | null {
   try {
     const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)) as Record<string, unknown>;
     if (typeof j.under_specified !== "boolean" || typeof j.high_impact !== "boolean") return null;
-    const list = (x: unknown, n: number, len: number) => (Array.isArray(x) ? x : []).filter((q): q is string => typeof q === "string" && !!q.trim()).map((q) => q.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").trim().slice(0, len)).slice(0, n);
+    const list = (x: unknown, n: number, len: number) => (Array.isArray(x) ? x : []).filter((q): q is string => typeof q === "string" && !!q.trim()).map((q) => noDash(q.replace(/\s+/g, " ")).trim().slice(0, len)).slice(0, n);
     return { underSpecified: j.under_specified, highImpact: j.high_impact, questions: list(j.questions, 4, 200), domains: list(j.domains, 4, 40).map((d) => d.toLowerCase()) };
   } catch { return null; }
 }
@@ -193,13 +196,16 @@ export async function judgePlan(text: string, domains: string[], runner?: RouteR
  * keywords otherwise. What the owner said before (`known`) answers its
  * questions, so they get fewer. Never throws.
  */
-export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags">, o: { judged?: PlanJudgement | null; known?: (kind: PlanKind) => KnownAnswer[] } = {}): TaskPlan | null {
+export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags"> & { shape?: RoutedTask["shape"] }, o: { judged?: PlanJudgement | null; known?: (kind: PlanKind) => KnownAnswer[] } = {}): TaskPlan | null {
   const text = t.text;
   const travel = TRAVEL.test(text);
   const spend = SPEND.test(text) || !!t.flags.money;
   const health = HEALTH.test(text);
   const judged = o.judged ?? null;
   if (judged ? !judged.underSpecified && !judged.highImpact : !travel && !spend && !health) return null;
+  // A read-only ask (what are my priorities, what did I note) commits nothing: it is answered from the vault, never planned first,
+  // whatever the model says of its impact. A decision, travel, money or health still plans.
+  if (READ_ONLY.has(t.shape ?? "") && !travel && !spend && !health && !t.flags.decision) return null;
   const kind: PlanKind = travel ? "travel" : spend ? "purchase" : health ? "health" : "other";
   try {
     const domains = pickDomains(vault, [
@@ -237,11 +243,12 @@ export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags">, o
 
     const touched = domains.map((d) => d[0]!.toUpperCase() + d.slice(1)).join(", ");
     const cited = found.filter((f) => f.label !== "It proposes before paying" && !f.label.startsWith("What you told me before"));
-    const say = [
+    const sayRaw = [
       `Before I start: this ${spend || travel ? "spends money and time" : judged?.highImpact ? "affects your plans" : "needs a few details"}${touched ? `, so I brought in ${touched}` : ""}.`,
       cited.length ? `From your vault: ${cited.map((f) => f.label.replace(/^From your \w+ notes: /, "")).slice(0, 3).join("; ")}.` : "",
       "A few things only you can tell me:",
     ].filter(Boolean).join(" ");
+    const say = noDash(sayRaw);
     return { kind, domains, found, questions: questions.slice(0, 4), say, used };
   } catch { return null; }
 }
