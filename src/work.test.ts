@@ -568,6 +568,6 @@ describe("plan before doing", () => {
     expect(t.updates!.at(-1)!.text).toMatch(/without a result/);
     finish(t, "done", "Three foo carriers compared; A is cheapest.");
     expect(t.status).toBe("done");
-    expect(t.updates!.map((u) => u.text).slice(-2)).toEqual(["Done: Three foo carriers compared; A is cheapest.", "Can I close this task?"]);
+    expect(t.updates!.at(-1)!.text).toBe("Done: Three foo carriers compared; A is cheapest.");
   });
 });
