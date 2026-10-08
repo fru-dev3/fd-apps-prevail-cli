@@ -7,7 +7,7 @@ import type { RouteRunner } from "./route.ts";
 import type { Herdr } from "./spaces.ts";
 import { addMilestone, addWork, distilMilestone, engineMilestone, followUp, milestoneByCode, routeTask, updateTask, type WorkDeps, type WorkTask } from "./work.ts";
 import { judgePlan, parsePlanJudgement, planTask } from "./work-assemble.ts";
-import { answersFrom, isForget, rankContext, sourceRank, topicOf } from "./work-learn.ts";
+import { answersFrom, isForget, rankContext, recurringMatch, sourceRank, topicOf } from "./work-learn.ts";
 
 const ROOT = join("/tmp", `prevail-work-learn-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -129,6 +129,14 @@ describe("Work mode learns and adapts", () => {
     await followUp(V, third.id, "please forget that", { deps: deps({ now: mon(21) + 1000 }) });
     const fourth = (await addWork(V, "My foo weekly priorities", { deps: deps({ now: mon(28), runner: routeTo("My foo weekly priorities", "general", "Foo Priorities") }) })).tasks[0]!;
     expect(fourth.recurringOf).toBeUndefined();
+  });
+
+  test("asking again the same day is not recurring work; another day is", () => {
+    const at = (d: number, h: number) => new Date(2026, 8, d, h).getTime();
+    const p = (ts: number) => ({ id: `p${ts}`, ts, tasks: [{ id: `t${ts}`, name: "Foo Review", text: "Review the foo list" }] }) as unknown as Parameters<typeof recurringMatch>[0][number];
+    const t = { name: "Foo Review", text: "Review the foo list" };
+    expect(recurringMatch([p(at(7, 9)), p(at(7, 10))], t, at(7, 11))).toBeNull();
+    expect(recurringMatch([p(at(7, 9)), p(at(7, 10)), p(at(14, 9))], t, at(21, 9))!.count).toBe(2);
   });
 
   test("the sources that answered well before go first", () => {

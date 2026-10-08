@@ -452,12 +452,15 @@ export async function routeWork(vault: string, text: string, o: RouteWorkOptions
   if (o.runner !== null && !bunker) {
     const runner = o.runner ?? (await import("./route.ts")).claudeRouteRunner;
     const { system, prompt } = buildWorkPrompt(t, cat);
-    try {
-      const raw = await runner({ system, prompt, timeoutMs: o.timeoutMs ?? 60_000, maxChars: 16_000 });
-      // A destination the model got wrong falls back to the general home, never to a guess at another domain.
-      const plan = parseWorkReply(raw, cat, { userText: t, fallback: () => destination(cat, "domain", "general", { confidence: 0.2, why: "kept in General" }), kindFor: (d, tt) => kindSaid(tt, cat.agentKinds) ?? defaultKind(vault, d, cat) });
-      if (plan) return plan;
-    } catch { /* code takes over */ }
+    // A model that blips (busy, rate limited, a bad reply) gets a second try: code's route is a weaker guess.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const raw = await runner({ system, prompt, timeoutMs: o.timeoutMs ?? 60_000, maxChars: 16_000 });
+        // A destination the model got wrong falls back to the general home, never to a guess at another domain.
+        const plan = parseWorkReply(raw, cat, { userText: t, fallback: () => destination(cat, "domain", "general", { confidence: 0.2, why: "kept in General" }), kindFor: (d, tt) => kindSaid(tt, cat.agentKinds) ?? defaultKind(vault, d, cat) });
+        if (plan) return plan;
+      } catch { /* once more, then code takes over */ }
+    }
   }
   return codeRoute(vault, t, cat);
 }

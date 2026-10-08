@@ -106,6 +106,13 @@ describe("the model path", () => {
     const p = await routeWork(V, "Find a cheaper foo policy. Pick a gift for Foo Bar.", { catalog: cat(), runner: async () => { throw new Error("down"); } });
     expect(p.source).toBe("code");
   });
+  test("a model that blips once gets a second try before code takes over", async () => {
+    let calls = 0;
+    const ok = JSON.stringify({ goals: [{ text: "Foo", tasks: [{ name: "Foo Policy", text: "Find a cheaper foo policy", dest: { kind: "domain", id: "insurance" }, shape: "find" }] }] });
+    const p = await routeWork(V, "Find a cheaper foo policy", { catalog: cat(), runner: async () => { if (calls++ === 0) throw new Error("busy"); return ok; } });
+    expect(p.source).toBe("model");
+    expect(calls).toBe(2);
+  });
 });
 
 describe("the code path", () => {

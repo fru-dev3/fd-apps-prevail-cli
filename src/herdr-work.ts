@@ -677,8 +677,11 @@ export function afterBrief(text: string): string {
 
 /** The agent's words without its terminal chrome: rules and boxes, the empty input line, the mode footer, the spinner line. */
 export function stripChrome(text: string): string {
+  const rule = (l: string | undefined) => /^\s*[─━═]{3,}/.test(l ?? "");
   return text.split("\n")
-    .filter((l) => !/^\s*[─━═]{3,}/.test(l) && !/^\s*❯\s*$/.test(l) && !/^\s*⏵⏵/.test(l) && !/^\s*✻ /.test(l))
+    // The input box (a line between two rules) holds the user's draft or the agent's ghost suggestion, never its words.
+    .filter((l, i, a) => !(/^\s*❯/.test(l) && rule(a[i - 1]) && rule(a[i + 1])))
+    .filter((l) => !rule(l) && !/^\s*❯\s*$/.test(l) && !/^\s*⏵⏵/.test(l) && !/^\s*✻ /.test(l))
     .join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
@@ -758,7 +761,7 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       const settled = (status === "idle" || status === "done") && (round > 0 || !!words);
       const question = status === "blocked" || settled ? askingQuestion(all) ?? (status === "blocked" ? WAITING : null) : null;
       if (question && status === "blocked" && answerDialog(h, pane)) continue;
-      const outcome = settled && !question ? await distilOutcome(all.slice(-4000), deps) : "";
+      const outcome = settled && !question ? await distilOutcome(all.slice(-4000), deps, cur.text) : "";
       // Still at work: a real milestone from what it just did, a sentence at most and only now and then.
       const milestone = !settled && !question && words && milestoneDue(cur, clock()) ? await distilMilestone(words, deps) : null;
       const t = updateTask(vault, id, (x) => {

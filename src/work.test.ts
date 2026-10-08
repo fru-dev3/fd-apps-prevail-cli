@@ -464,6 +464,12 @@ describe("assembly, outcomes, follow-ups and check-off", () => {
     expect(neededSpecialists(V, { text: "Draft a reply to Foo Bar", shape: "make", flags: {}, specialists: [] })).toEqual(["writer"]);
   });
   test("the outcome is one or two plain sentences: the model's when it answers, else code's", async () => {
+    // A long model line keeps its whole first sentences, never thrown away for code's guess.
+    const long = `The foo priorities are taxes and the lease. ${"Bar detail goes on and on. ".repeat(20)}`;
+    expect(await distilOutcome("⏺ I wrote the foo page.", { runner: async () => long })).toMatch(/^The foo priorities are taxes and the lease\. Bar detail goes on and on\./);
+    expect((await distilOutcome("⏺ I wrote the foo page.", { runner: async () => long })).length).toBeLessThanOrEqual(400);
+    // The agent's last reply leads; its trailing caveats never become the outcome.
+    expect(plainOutcome("⏺ Reading the foo notes.\n\n⏺ Write(foo.md)\n  ⎿  Wrote 9 lines\n\n⏺ I wrote the foo priorities page and filed it. Nothing was sent.\n\n  This week's top two:\n  1. Foo taxes: due Thu.\n\n  Assumptions: I read the week as Thu to Wed. Some files were locked.")).toBe("I wrote the foo priorities page and filed it. Nothing was sent.");
     expect(plainOutcome("## Done\n\n⏺ Read(foo.md)\n\nSummary:\nI drafted the foo reply — it is in Drafts. Nothing was sent. Extra detail here.")).toBe("I drafted the foo reply, it is in Drafts. Nothing was sent.");
     expect(await distilOutcome("long foo result", { runner: async () => "Found three foo carriers; Carrier A is cheapest." })).toBe("Found three foo carriers; Carrier A is cheapest.");
     expect(await distilOutcome("Summary: Foo is done now.", { runner: async () => { throw new Error("down"); } })).toBe("Foo is done now.");
@@ -560,6 +566,12 @@ describe("plan before doing", () => {
     expect(p.tasks[0]!.status).toBe("running");
     expect(p.tasks[0]!.planning).toBeUndefined();
     expect(planTask(V, { text: "Summarize the foo insurance note", flags: {} })).toBeNull();
+  });
+  test("a read-only question about the owner's own work is answered, never planned, even when the model calls it vague", () => {
+    const vague = { underSpecified: true, highImpact: false, questions: ["Where do you track your priorities?"], domains: [] };
+    expect(planTask(V, { text: "What are my top foo priorities this week", flags: {}, shape: "understand" }, { judged: vague })).toBeNull();
+    expect(planTask(V, { text: "Plan a foo weekend trip", flags: {}, shape: "understand" }, { judged: vague })).not.toBeNull();
+    expect(planTask(V, { text: "Sort out the foo project", flags: {}, shape: "do" }, { judged: vague })).not.toBeNull();
   });
   test("done is never set without a result", () => {
     const t = { status: "running", log: [] } as unknown as Parameters<typeof finish>[0];

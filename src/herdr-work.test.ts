@@ -493,6 +493,11 @@ test("the mirror keeps the agent's words and drops its terminal chrome", () => {
   expect(stripChrome(screen)).toBe("Foo summary:\n\n- the foo policy renews in May");
 });
 
+test("an unsent suggestion in the agent's input box is never read as its words", () => {
+  const screen = ["Filed the foo summary.", "", "\u2500".repeat(40) + " foo-tab \u2500", "\u276f mark the foo task as review", "\u2500".repeat(40)].join("\n");
+  expect(stripChrome(screen)).toBe("Filed the foo summary.");
+});
+
 test("the first mirror skips the agent's banner and its echo of the brief", () => {
   expect(afterBrief(`Foo CLI v1\n> You are working on one task. End with a short summary: what you did, ${BRIEF_END}\n\nFoo answer`).trim()).toBe("Foo answer");
   expect(afterBrief("no echo yet")).toBe("no echo yet");

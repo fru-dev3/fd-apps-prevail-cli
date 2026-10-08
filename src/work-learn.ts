@@ -166,12 +166,14 @@ export interface Recurring { count: number; weekday?: string; last: WorkTask; id
 export function recurringMatch(prompts: WorkPrompt[], t: TaskLike, now = Date.now()): Recurring | null {
   const hits: { task: WorkTask; ts: number }[] = [];
   for (const p of prompts) for (const x of p.tasks) if (!x.learnOff && p.ts < now && similar(t, x)) hits.push({ task: x, ts: p.ts });
-  if (hits.length < 2) return null;
   hits.sort((a, b) => b.ts - a.ts);
+  // An occasion is a day: asking again the same day (a retry, a rewording) is not recurring work.
+  const occasions = new Set(hits.map((h) => new Date(h.ts).toDateString())).size;
+  if (occasions < 2) return null;
   const days = new Set(hits.map((h) => new Date(h.ts).getDay()));
   const day = days.size === 1 ? DAYS[[...days][0]!] : undefined;
   const outcome = hits.find((h) => h.task.outcome)?.task.outcome;
-  return { count: hits.length, ...(day ? { weekday: day } : {}), last: hits[0]!.task, ids: hits.map((h) => h.task.id), ...(outcome ? { outcome } : {}) };
+  return { count: occasions, ...(day ? { weekday: day } : {}), last: hits[0]!.task, ids: hits.map((h) => h.task.id), ...(outcome ? { outcome } : {}) };
 }
 
 // ── Sources that answered well ──────────────────────────────────────────────

@@ -421,7 +421,14 @@ export function isCloseYes(text: string): boolean {
 
 /** The result in one or two plain sentences, by code: markdown off, the summary paragraph, two sentences. */
 export function plainOutcome(text: string): string {
-  let lines = text.replace(/\r/g, "").replace(/```[\s\S]*?```/g, "").split("\n")
+  let raw = text.replace(/\r/g, "").replace(/```[\s\S]*?```/g, "").split("\n");
+  // A coding agent's last message (its marker, not a tool call) is its reply: it leads with what came of the work.
+  const reply = raw.map((l) => /^\s*[\u23fa\u25cf]\s/.test(l)).lastIndexOf(true);
+  if (reply >= 0 && !/^\s*[\u23fa\u25cf]\s*[\w-]+\(/.test(raw[reply]!)) {
+    raw = [raw[reply]!.replace(/^\s*[\u23fa\u25cf]\s*/, ""), ...raw.slice(reply + 1)];
+    if (!raw.some((l) => /^\s*(?:#+\s*)?(?:summary|in short|result|outcome)\b/i.test(l))) raw = raw.slice(0, Math.max(1, raw.findIndex((l, i) => i > 0 && !l.trim())));
+  }
+  let lines = raw
     // Tool calls and tables are the work, not what came of it.
     .filter((l) => !/^\s*[\u23fa\u25cf]/.test(l) && !/^\s*\|/.test(l) && !/^\s*[-=_*]{3,}\s*$/.test(l))
     .map((l) => l.replace(/^\s*(?:#+|>|[-*\u2022]|\d+[.)])\s*/, "").replace(/[*_`]+/g, "").trim());
@@ -437,7 +444,7 @@ export function plainOutcome(text: string): string {
 }
 
 /** The outcome the model distils from the result (one or two sentences), else code's. Never throws. */
-export async function distilOutcome(text: string, deps: WorkDeps = {}): Promise<string> {
+export async function distilOutcome(text: string, deps: WorkDeps = {}, ask?: string): Promise<string> {
   const body = text.trim();
   if (!body) return "";
   const byCode = plainOutcome(body);
@@ -445,11 +452,16 @@ export async function distilOutcome(text: string, deps: WorkDeps = {}): Promise<
   try {
     const runner = deps.runner ?? (await import("./route.ts")).claudeRouteRunner;
     const raw = await runner({
-      system: "You write the outcome line on a finished task card. One or two short plain sentences saying what was done and anything left for the user. No preamble, no markdown, no em dashes, no lists.",
-      prompt: body.slice(-6000), timeoutMs: 30_000, maxChars: 600,
+      system: "You write the outcome line on a finished task card. One or two short plain sentences. When the task asked a question or for a summary, lead with the answer itself (the key facts), not where it was filed. Then anything left for the user. Leave out the agent's own housekeeping (task boards, tools that failed). No preamble, no markdown, no em dashes, no lists.",
+      prompt: `${ask ? `The task: ${ask.slice(0, 500)}\n\nWhat the agent reported:\n` : ""}${body.slice(-6000)}`, timeoutMs: 30_000, maxChars: 1_200,
     });
     const line = raw.replace(/\s+/g, " ").replace(/\s*[\u2014\u2013]\s*/g, ", ").replace(/^["']|["']$/g, "").trim();
-    return line && line.length <= 400 && !line.startsWith("{") ? line : byCode;
+    if (!line || line.startsWith("{")) return byCode;
+    // Too long for a card: its first two sentences, never thrown away for code's weaker guess.
+    if (line.length <= 400) return line;
+    let fit = "";
+    for (const x of line.split(/(?<=[.!?])\s+/)) { if ((fit ? `${fit} ${x}` : x).length > 400) break; fit = fit ? `${fit} ${x}` : x; }
+    return fit || plainOutcome(line);
   } catch { return byCode; }
 }
 
@@ -852,7 +864,7 @@ export async function runTask(vault: string, id: string, deps: WorkDeps = {}, o:
     ? [job.result?.summary ?? "", body, filed.length ? `Filed:\n${filed.join("\n")}` : ""].filter(Boolean).join("\n\n")
     : `The job ${job.status === "stopped" ? "stopped" : job.status === "needs-approval" ? "is waiting for you" : "failed"}${job.note ? `: ${job.note}` : "."}`;
   // The job's own summary is the best source; the full text when it has none.
-  const outcome = job.status === "done" ? await distilOutcome(job.result?.summary || text, deps) : "";
+  const outcome = job.status === "done" ? await distilOutcome(job.result?.summary || text, deps, r.task.text) : "";
   let rerun = false;
   const t = updateTask(vault, id, (x) => {
     appendTurn(vault, x, "assistant", text, "prevail", clock());
