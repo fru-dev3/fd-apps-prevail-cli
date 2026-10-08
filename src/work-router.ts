@@ -347,7 +347,9 @@ export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text:
       });
       count++;
     }
-    const one = oneTaskPerIntent(tasks);
+    let one = oneTaskPerIntent(tasks);
+    // One ask is one piece of work: steps the model split a goal into (scope, research, budget...) fold into the first.
+    if (one.length > 1 && o.userText && isSingleAsk(o.userText)) one = [{ ...one[0]!, specialists: [...new Set(one.flatMap((t) => t.specialists))].slice(0, 3) }];
     if (one.length) goals.push({ text: gt || one[0]!.text, tasks: one });
   }
   return goals.length ? { goals, source: "model" } : null;
@@ -359,6 +361,12 @@ export function isSystemName(name: string, cat: Pick<Catalog, "machines" | "agen
   if (/\b(herdr|prevail|glyph|terminal|tmux|zsh|shell|mac ?mini|macbook|imac|mac studio|my mac|laptop|desktop app|vault|claude(?: code)?|codex|gemini|cursor|antigravity|agy|copilot|opencode)\b/.test(n)) return true;
   if (cat.machines.some((m) => m.label.toLowerCase() === n)) return true;
   return cat.agentKinds.some((k) => k === n);
+}
+
+/** One sentence with no "and", "also", "then", list or second line: one ask, so one task. */
+export function isSingleAsk(text: string): boolean {
+  const t = text.trim();
+  return !/[\n;,]|\b(?:and|also|then|plus)\b/i.test(t) && t.split(/(?<=[.!?])\s+/).filter(Boolean).length <= 1;
 }
 
 const SEND = /^(?:send|email|post|submit|deliver|mail)\b/i;

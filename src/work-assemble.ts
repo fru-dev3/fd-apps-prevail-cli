@@ -203,8 +203,9 @@ export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags"> & 
   const health = HEALTH.test(text);
   const judged = o.judged ?? null;
   if (judged ? !judged.underSpecified && !judged.highImpact : !travel && !spend && !health) return null;
-  // A read-only ask (what are my priorities, what did I note) is answered from the vault, never planned first.
-  if (READ_ONLY.has(t.shape ?? "") && !travel && !spend && !health && !judged?.highImpact) return null;
+  // A read-only ask (what are my priorities, what did I note) commits nothing: it is answered from the vault, never planned first,
+  // whatever the model says of its impact. A decision, travel, money or health still plans.
+  if (READ_ONLY.has(t.shape ?? "") && !travel && !spend && !health && !t.flags.decision) return null;
   const kind: PlanKind = travel ? "travel" : spend ? "purchase" : health ? "health" : "other";
   try {
     const domains = pickDomains(vault, [

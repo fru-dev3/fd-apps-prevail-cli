@@ -579,6 +579,8 @@ describe("plan before doing", () => {
   test("a read-only question about the owner's own work is answered, never planned, even when the model calls it vague", () => {
     const vague = { underSpecified: true, highImpact: false, questions: ["Where do you track your priorities?"], domains: [] };
     expect(planTask(V, { text: "What are my top foo priorities this week", flags: {}, shape: "understand" }, { judged: vague })).toBeNull();
+    expect(planTask(V, { text: "What are my top foo priorities this week", flags: {}, shape: "understand" }, { judged: { ...vague, highImpact: true } })).toBeNull();
+    expect(planTask(V, { text: "Should I sell the foo house", flags: { decision: true }, shape: "understand" }, { judged: { ...vague, highImpact: true } })).not.toBeNull();
     expect(planTask(V, { text: "Plan a foo weekend trip", flags: {}, shape: "understand" }, { judged: vague })).not.toBeNull();
     expect(planTask(V, { text: "Sort out the foo project", flags: {}, shape: "do" }, { judged: vague })).not.toBeNull();
   });
