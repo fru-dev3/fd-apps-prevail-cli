@@ -511,6 +511,8 @@ export function askingQuestion(words: string): string | null {
 
 const OWNER_HEAD = /^(?:(?:still )?waiting (?:on|for) (?:you|your \w+)|what i need from you|(?:i )?need(?:s)? from you|over to you|your (?:call|decision|choice|turn)|decisions? for you|for you to (?:decide|pick|choose))\b.{0,40}:?$/i;
 const OWNER_LAST = /^(?:pick|choose|tell me|let me know|say which|confirm which|decide)\b/i;
+// A choice or an approval the work waits on; the owner's own errands (sign, pay, file) are not one.
+const CHOICE = /^(?:pick|choose|select|confirm|approve|decide|say|tell me|let me know|answer|reply|which|whether|go with|yes or no)\b/i;
 
 /**
  * What a finished reply hands back to the owner ("Waiting on you: 1. Pick a
@@ -530,9 +532,10 @@ export function ownerAsk(words: string): string | null {
     if (!m) break;
     items.push(m[1]!.replace(/[.;]+$/, ""));
   }
+  const asks = items.filter((x) => CHOICE.test(x));
   const last = lines[lines.length - 1] ?? "";
-  if (!items.length && !OWNER_LAST.test(last)) return null;
-  const said = items.length ? `It needs you to: ${items.map((x) => x[0]!.toLowerCase() + x.slice(1)).join("; ")}.` : last;
+  if (!asks.length && !OWNER_LAST.test(last)) return null;
+  const said = asks.length ? `Waiting on you: ${asks.map((x) => x[0]!.toLowerCase() + x.slice(1)).join("; ")}.` : last;
   const s = noDash(said);
   return s.length > 240 ? `${s.slice(0, 239)}…` : s;
 }
