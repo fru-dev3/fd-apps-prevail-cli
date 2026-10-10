@@ -285,10 +285,12 @@ describe("mirror, follow up, check off, close and reopen", () => {
     const t = await running(h);
     const r = await mirrorTask(V, t.id, deps(h), { maxRounds: 2, waitMs: 1 });
     expect(r.status).toBe("needs-you");
-    expect(r.waiting).toBe("It needs you to: pick a destination and a weekend; approve booking.");
+    expect(r.waiting).toBe("Waiting on you: pick a destination and a weekend; approve booking.");
     expect(r.outcome).toBeTruthy();
     expect(r.updates!.some((u) => u.text.startsWith("Done"))).toBe(false);
     expect(ownerAsk("Two foo hotels compared.\n\nPick one and I will hold it.")).toBe("Pick one and I will hold it.");
+    // The owner's own errands in a summary are not a question back: that summary is done.
+    expect(ownerAsk("The foo claim is 85% paid.\n\nWaiting on you:\n1. Notarizing and sending the foo form.\n2. Paying the foo contractor.")).toBeNull();
     expect(ownerAsk("Drafted the foo reply; it is in your drafts.\n\nNext steps:\n1. Review it.")).toBeNull();
     // Only the latest reply counts: after the owner's answer, a finished reply is done.
     expect(ownerAsk(`${end}\n❯ Foo Lake, the 13th\nBooked nothing; Foo Lake hold drafted for the 13th.`)).toBeNull();

@@ -92,7 +92,8 @@ export function maskTask<T extends { updates?: { text: string; questions?: strin
   for (const u of t.updates ?? []) { u.text = maskIdentifiers(u.text); if (u.questions) u.questions = u.questions.map(maskIdentifiers); }
   if (t.outcome) t.outcome = maskIdentifiers(t.outcome);
   if (t.waiting) t.waiting = maskIdentifiers(t.waiting);
-  for (const c of t.context ?? []) { c.label = maskIdentifiers(c.label); c.text = maskIdentifiers(c.text); }
+  // A context label is shown as is: an em dash from vault text reads as a comma there.
+  for (const c of t.context ?? []) { c.label = noDash(maskIdentifiers(c.label)); c.text = maskIdentifiers(c.text); }
   for (const l of t.log ?? []) { if (l.detail) l.detail = maskIdentifiers(l.detail); if (l.more) l.more = maskIdentifiers(l.more); }
   return t;
 }
