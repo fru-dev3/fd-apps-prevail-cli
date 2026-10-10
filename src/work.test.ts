@@ -592,7 +592,7 @@ describe("plan before doing", () => {
     const p = await addWork(V, "Book a trip to Europe", { deps: { ...deps([]), runner: route("Book a trip to Europe", "travel") } });
     const t = p.tasks[0]!;
     const shown = JSON.stringify([t.updates, t.context, t.outcome, t.waiting]);
-    for (const leak of ["9876543210123", "512.34", "4321 Foo Way", "55555-1234"]) expect(shown).not.toContain(leak);
+    for (const leak of ["9876543210123", "512.34", "Foo Way", "55555-1234"]) expect(shown).not.toContain(leak);
     expect(readFileSync(join(V, "build", "_meta", "work", "prompts", `${p.id}.json`), "utf8")).not.toContain("9876543210123");
     // The budget still reaches the brief, masked of identifiers.
     expect(t.context!.some((c) => c.text.includes("Travel budget"))).toBe(true);
@@ -602,7 +602,7 @@ describe("plan before doing", () => {
     expect(maskIdentifiers("card ending in 4242, acct #55512, x9921 and ****1234")).not.toMatch(/4242|55512|9921|1234/);
     expect(maskIdentifiers("SSN 123-45-6789, routing 021000021, call 555-123-4567")).not.toMatch(/6789|021000021|4567/);
     expect(maskIdentifiers("IBAN GB82WEST12345698765432")).not.toContain("GB82WEST");
-    expect(maskIdentifiers("Lives at 12 Foo Street, Fooville")).toBe("Lives at •••• Foo Street, Fooville");
+    expect(maskIdentifiers("Lives at 12 Foo Street, Fooville")).toBe("Lives at ••••, Fooville");
     const keep = "On 2026-10-09, about $1,234,567.89 or 3,000 dollars, Nov 13 to 15, in 2027, ZIP 55555.";
     expect(maskIdentifiers(keep)).toBe(keep);
   });
