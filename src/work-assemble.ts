@@ -59,7 +59,43 @@ export function ownerLocation(vault: string): { text: string; from: string } | n
   return null;
 }
 
-const body = (raw: string, n: number) => raw.replace(/^---\n[\s\S]*?\n---\n/, "").replace(/\s+/g, " ").trim().slice(0, n);
+const body = (raw: string, n: number) => maskIdentifiers(raw.replace(/^---\n[\s\S]*?\n---\n/, "").replace(/\s+/g, " ").trim().slice(0, n));
+
+// ── Identifiers never reach the screen or a brief ──────────────────────────
+// Vault notes hold account and card numbers, routing numbers, IBANs, SSNs
+// and street addresses. Work mode quotes notes in plans, context lines and
+// outcomes, so every such number is hidden before it is shown or stored.
+const HIDDEN = "••••";
+const ID_RULES: RegExp[] = [
+  // An account, card or routing number by its label: "Savings 1234567890123", "acct #4521", "ending in 4521", "x4521", "****4521".
+  /\b(?:acct|account|card|routing|aba|iban|member|policy|loan|checking|savings)\s*(?:no\.?|number|num|#)?\s*[:#]?\s*(?:ending(?: in)?\s*)?[x*•]*\d[\d -]{2,}\d\b/gi,
+  /\bending(?: in)?\s+\d{3,}\b/gi,
+  /(?:\b[xX]{1,4}|[*•]{2,})[ -]?\d{3,}\b/g,
+  // A long digit run (7+ digits, spaces or dashes allowed), not money and not a date: accounts, cards, SSNs, phones, ZIP+4.
+  /(?<![$€£\d.,])\b\d(?:[ -]?\d){6,}\b(?![.,]\d)/g,
+  /\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b/g,
+  // A street address: "1234 Foo Way".
+  /\b\d{1,6}\s+(?:[A-Z][a-z]+\s+){1,3}(?:Way|St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|Pl|Place|Cir|Circle|Pkwy|Parkway|Ter|Terrace|Trl|Trail|Hwy|Highway)\b\.?/g,
+];
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The text with account, card and routing numbers, SSNs, IBANs and street addresses hidden. */
+export function maskIdentifiers(text: string): string {
+  if (!text) return text;
+  let out = text;
+  for (const re of ID_RULES) out = out.replace(re, (m) => (ISO_DATE.test(m.trim()) ? m : m.replace(/[x*•]*\d[\d x*•-]*\d|[x*•]*\d+/gi, HIDDEN)));
+  return out;
+}
+
+/** The same, over everything a task shows: its updates, outcome, waiting line, context and activity. */
+export function maskTask<T extends { updates?: { text: string; questions?: string[] }[]; outcome?: string; waiting?: string; context?: ContextItem[]; log?: { detail?: string; more?: string }[] }>(t: T): T {
+  for (const u of t.updates ?? []) { u.text = maskIdentifiers(u.text); if (u.questions) u.questions = u.questions.map(maskIdentifiers); }
+  if (t.outcome) t.outcome = maskIdentifiers(t.outcome);
+  if (t.waiting) t.waiting = maskIdentifiers(t.waiting);
+  for (const c of t.context ?? []) { c.label = maskIdentifiers(c.label); c.text = maskIdentifiers(c.text); }
+  for (const l of t.log ?? []) { if (l.detail) l.detail = maskIdentifiers(l.detail); if (l.more) l.more = maskIdentifiers(l.more); }
+  return t;
+}
 
 /** What the vault knows that this task will need. Never throws; an empty list when nothing fits. */
 export function gatherContext(vault: string, t: Pick<RoutedTask, "text" | "dest">): ContextItem[] {
@@ -127,7 +163,7 @@ function domainLines(vault: string, slug: string, re: RegExp, n = 2): string[] {
   for (const f of ["memory.md", "state.md"]) {
     try {
       for (const raw of readFileSync(join(domainDir(vault, slug), "memory", f), "utf8").split("\n")) {
-        const l = raw.replace(/^[\s>*#-]+/, "").replace(/[*_`]+/g, "").trim();
+        const l = maskIdentifiers(raw.replace(/^[\s>*#-]+/, "").replace(/[*_`]+/g, "").trim());
         if (l.length > 6 && l.length < 220 && re.test(l) && !out.includes(l)) out.push(l);
         if (out.length >= n) return out;
       }
@@ -135,6 +171,9 @@ function domainLines(vault: string, slug: string, re: RegExp, n = 2): string[] {
   }
   return out;
 }
+
+/** A note about an account rather than a budget: its balance, rate, interest or number. */
+const ACCOUNT_LINE = /\b(balance|apy|apr|interest|account|acct|routing|iban|statement|net worth|card)\b/i;
 
 const READ_ONLY = new Set(["understand", "find", "learn", "reflect"]);
 
@@ -220,8 +259,9 @@ export function planTask(vault: string, t: Pick<RoutedTask, "text" | "flags"> & 
       for (const p of trips.slice(0, 2)) found.push({ label: `Your past trip: ${p.doc.name}`, text: `A past trip in the vault: ${p.doc.name}: ${body(readFileSync(join(vault, p.path), "utf8"), 300)}` });
       for (const d of domains.filter((x) => !["money", "wealth", "finance", "finances", "health", "fitness"].includes(x))) for (const l of domainLines(vault, d, /\b(trip|travel|visit|prefer|love|want|dream)\w*\b/i)) found.push({ label: `From your ${d} notes: ${l}`, text: `From the user's ${d} notes: ${l}` });
     }
-    for (const d of domains.filter((x) => ["money", "wealth", "finance", "finances"].includes(x))) for (const l of domainLines(vault, d, /\b(budget|savings?|spend|fund|allowance|limit)\w*\b/i)) found.push({ label: `From your ${d} notes: ${l}`, text: `From the user's ${d} notes: ${l}` });
-    for (const d of domains.filter((x) => ["health", "fitness"].includes(x))) for (const l of domainLines(vault, d, /\b(allerg\w*|condition|avoid|knee|back|diet|medication|can't|cannot)\b/i, 1)) found.push({ label: `From your ${d} notes: ${l}`, text: `From the user's ${d} notes: ${l}` });
+    // Money and health lines go in the brief only, never quoted on screen; a line about an account (its balance, rate, number) is left out entirely.
+    for (const d of domains.filter((x) => ["money", "wealth", "finance", "finances"].includes(x))) for (const l of domainLines(vault, d, /\b(budget|savings?|spend|fund|allowance|limit)\w*\b/i).filter((x) => !ACCOUNT_LINE.test(x))) found.push({ label: `Your ${d} notes on budget`, text: `From the user's ${d} notes: ${l}` });
+    for (const d of domains.filter((x) => ["health", "fitness"].includes(x))) for (const l of domainLines(vault, d, /\b(allerg\w*|condition|avoid|knee|back|diet|medication|can't|cannot)\b/i, 1)) found.push({ label: `Your ${d} notes`, text: `From the user's ${d} notes: ${l}` });
     if (spend || travel) found.push({ label: "It proposes before paying", text: "Never buy, book or pay. Prepare options and a proposal (holds or drafts only) and ask the user before anything spends money." });
 
     let questions: string[] = [];

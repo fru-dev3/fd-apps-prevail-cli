@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { readChiefOfStaff } from "./chief-of-staff.ts";
-import { readMachineRole } from "./config.ts";
+import { readMachineRole, readWebAccess } from "./config.ts";
 import { domainDir } from "./decisions.ts";
 import { readJob } from "./jobs.ts";
 import { runtimePath } from "./path-safety.ts";
@@ -290,6 +290,7 @@ export function buildBrief(vault: string, t: WorkTask, o: { history?: string } =
     ...(t.context?.length ? ["", "What Prevail already knows (use it; never ask the user for it):", ...t.context.map((c) => `- ${c.text}`)] : []),
     "", "Rules:",
     "- Work on your own. Never ask the user a question or wait for an answer: nobody is watching this tab. When something is truly missing, make a sensible assumption and say so in your summary.",
+    ...(readWebAccess() === "allow" ? ["- For prices, places, opening hours and anything current, search the web and use real, dated figures with their source; never estimate what a search can find. Never put the user's names, addresses or account details in a search."] : []),
     "- Draft, never send: do not email, message, post, buy, pay, book or sign anything. Write the draft and stop.",
     "- Stop before anything that cannot be undone, or that touches money, people, where the user lives or who they are, and say in your summary what is waiting for the user's approval.",
     ...(chief.neverRead.length ? [`- Never read these areas unless the task names them: ${chief.neverRead.join(", ")}.`] : []),
@@ -338,12 +339,12 @@ function glyphAgentFlags(env: Record<string, string | undefined> = process.env):
 }
 
 /** The agent's arguments for a headless run: its approval mode, then Claude's act-gate hook and no ask-the-user tool. */
-export function headlessArgs(kind: string, settingsPath: string | null, env?: Record<string, string | undefined>): string[] {
+export function headlessArgs(kind: string, settingsPath: string | null, env?: Record<string, string | undefined>, web = true): string[] {
   const cmd = KIND_CMD[kind] ?? kind;
   const flag = glyphAgentFlags(env).get(cmd);
   const base = HEADLESS[kind] ?? (flag ? [flag] : []);
   if (kind !== "claude") return [...base];
-  return [...base, ...(settingsPath ? ["--settings", settingsPath] : []), "--disallowedTools", "AskUserQuestion"];
+  return [...base, ...(settingsPath ? ["--settings", settingsPath] : []), "--disallowedTools", "AskUserQuestion", ...(web ? [] : ["WebSearch", "WebFetch"])];
 }
 
 const slugName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "task";
@@ -508,6 +509,34 @@ export function askingQuestion(words: string): string | null {
   return s.length > 200 ? `${s.slice(0, 199)}…` : s;
 }
 
+const OWNER_HEAD = /^(?:(?:still )?waiting (?:on|for) (?:you|your \w+)|what i need from you|(?:i )?need(?:s)? from you|over to you|your (?:call|decision|choice|turn)|decisions? for you|for you to (?:decide|pick|choose))\b.{0,40}:?$/i;
+const OWNER_LAST = /^(?:pick|choose|tell me|let me know|say which|confirm which|decide)\b/i;
+
+/**
+ * What a finished reply hands back to the owner ("Waiting on you: 1. Pick a
+ * destination 2. Approve booking", or a last line "Pick one and I will book
+ * it."), as one plain sentence; null when it hands nothing back. Such an
+ * ending is Needs you, never Done.
+ */
+export function ownerAsk(words: string): string | null {
+  // Only the latest reply: what follows the owner's last message in the tab.
+  const raw = words.split("\n");
+  const from = raw.map((l) => /^\s*❯\s+\S/.test(l)).lastIndexOf(true) + 1;
+  const lines = raw.slice(from).map((l) => l.replace(/^[\s●⏺>*]+/, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()).filter(Boolean).slice(-30);
+  const at = lines.map((l) => OWNER_HEAD.test(l)).lastIndexOf(true);
+  const items: string[] = [];
+  if (at >= 0) for (const l of lines.slice(at + 1)) {
+    const m = /^(?:\d+[.)]|[-•])\s+(.+)$/.exec(l);
+    if (!m) break;
+    items.push(m[1]!.replace(/[.;]+$/, ""));
+  }
+  const last = lines[lines.length - 1] ?? "";
+  if (!items.length && !OWNER_LAST.test(last)) return null;
+  const said = items.length ? `It needs you to: ${items.map((x) => x[0]!.toLowerCase() + x.slice(1)).join("; ")}.` : last;
+  const s = noDash(said);
+  return s.length > 240 ? `${s.slice(0, 239)}…` : s;
+}
+
 // What a line of the agent's work means, in plain words ("Reading your Gmail").
 const ACTIVITY: [RegExp, (arg: string) => string][] = [
   [/gmail|mail/i, (a) => (/draft/i.test(a) ? "Drafting an email" : "Reading your Gmail")],
@@ -625,7 +654,7 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
       saveLink(vault, t.machine, t.thread.space, label);
       // Claude Code carries Prevail's act-gate hook; the hook file lives on this Mac, so a remote Claude runs without it.
       const settingsPath = t.agentKind === "claude" && machine === "local" ? (deps.settingsPath ?? defaultSettingsPath)(vault, t.thread.space) : null;
-      const args = headlessArgs(t.agentKind, settingsPath, deps.machine?.env);
+      const args = headlessArgs(t.agentKind, settingsPath, deps.machine?.env, readWebAccess() === "allow");
       const glyph = (deps.glyph ?? ((m: string) => glyphOn(vault, m, m === "local")))(machine === "local" ? "local" : t.machine);
       opened = { machine: t.machine, workspaceLabel: label, workspaceId, tabId, paneId, agent: paneId, createdWorkspace: created, createdTab: true, ...(glyph ? { glyph: true } : {}) };
       if (glyph) h(["pane", "run", paneId, glyphLine(t.agentKind, name, args)]);
@@ -657,7 +686,8 @@ function defaultSettingsPath(vault: string, space: string): string {
   // Loaded lazily: it writes the hook file under the user's config.
   const { actGateSettingsPath } = require("./act-gate.ts") as typeof import("./act-gate.ts");
   const { vaultLockActive } = require("./config.ts") as typeof import("./config.ts");
-  return actGateSettingsPath(vault, space, vaultLockActive());
+  // Work mode agents may search and read the web when the user's Web access is on; the gate still stops identifiers going out.
+  return actGateSettingsPath(vault, space, vaultLockActive(), readWebAccess() === "allow");
 }
 
 /** What a read added since the last one: the text after the last mirrored tail. */
@@ -763,6 +793,8 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       const settled = (status === "idle" || status === "done") && (round > 0 || !!words);
       const question = status === "blocked" || settled ? askingQuestion(all) ?? (status === "blocked" ? WAITING : null) : null;
       if (question && status === "blocked" && answerDialog(h, pane)) continue;
+      // A reply that ends handing a choice back ("Waiting on you: pick a destination") is Needs you with its result, never Done.
+      const handBack = settled && !question ? ownerAsk(all) : null;
       const outcome = settled && !question ? await distilOutcome(all.slice(-4000), deps, cur.text) : "";
       // Still at work: a real milestone from what it just did, a sentence at most and only now and then.
       const milestone = !settled && !question && words && milestoneDue(cur, clock()) ? await distilMilestone(words, deps) : null;
@@ -775,6 +807,12 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
           if (x.status !== "needs-you" || x.waiting !== question) { note(x, "waiting", question, clock()); addUpdate(x, "task", question, clock()); }
           x.status = "needs-you"; x.waiting = question;
         } else if (status === "working" && x.status === "needs-you") { x.status = "running"; delete x.waiting; }
+        else if (handBack) {
+          if (x.status === "running") {
+            if (outcome) { x.outcome = outcome; addUpdate(x, "task", outcome, clock()); }
+            x.status = "needs-you"; x.waiting = handBack; note(x, "waiting", handBack, clock()); addUpdate(x, "task", handBack, clock());
+          }
+        }
         else if (settled && (x.status === "running" || x.status === "needs-you")) { delete x.waiting; finish(x, "done", outcome || "Done.", clock()); note(x, "done", undefined, clock()); }
       });
       syncBoard(vault, t);

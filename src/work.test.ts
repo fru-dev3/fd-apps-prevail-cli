@@ -8,7 +8,8 @@ import {
   acceptSuggestion, addWork, answerTask, continueTask, distilOutcome, doneTask, finish, followUp, plainOutcome, startTask, declineSuggestion, listWork, pauseTask, readOrder, readSettings, readTask, remainingJob, reorderTask, routeTask, runTask, showWork,
   stopTask, topUp, updateTask, workCommand, writeSettings, type WorkDeps,
 } from "./work.ts";
-import { gatherContext, neededSpecialists, ownerLocation, planTask } from "./work-assemble.ts";
+import { createMission } from "./missions.ts";
+import { gatherContext, maskIdentifiers, neededSpecialists, ownerLocation, planTask } from "./work-assemble.ts";
 
 const ROOT = join("/tmp", `prevail-work-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -548,7 +549,8 @@ describe("plan before doing", () => {
     const plan = t.updates!.at(-1)!;
     expect(plan.from).toBe("task");
     expect(plan.text).toContain("Foo Lisbon Trip");
-    expect(plan.text).toContain("Travel budget");
+    expect(plan.text).toContain("money notes on budget");
+    expect(plan.text).not.toContain("3,000");
     expect(plan.questions!.length).toBeGreaterThanOrEqual(2);
     expect(plan.questions!.length).toBeLessThanOrEqual(4);
     expect(plan.questions![0]).toBe("Where in Europe: which cities or places?");
@@ -583,6 +585,36 @@ describe("plan before doing", () => {
     expect(planTask(V, { text: "Should I sell the foo house", flags: { decision: true }, shape: "understand" }, { judged: { ...vague, highImpact: true } })).not.toBeNull();
     expect(planTask(V, { text: "Plan a foo weekend trip", flags: {}, shape: "understand" }, { judged: vague })).not.toBeNull();
     expect(planTask(V, { text: "Sort out the foo project", flags: {}, shape: "do" }, { judged: vague })).not.toBeNull();
+  });
+  test("a plan never shows an account number, a balance or a street address from the vault", async () => {
+    travelVault();
+    writeFileSync(join(D("money"), "memory", "state.md"), "# money\nFoo Bank Online Savings 9876543210123: 4.10% APY, $512.34 balance.\nTravel budget: 3,000 foo dollars a year.\nPrimary residence: 4321 Foo Way, Fooville, MN 55555-1234 (savings mail goes here).\n");
+    const p = await addWork(V, "Book a trip to Europe", { deps: { ...deps([]), runner: route("Book a trip to Europe", "travel") } });
+    const t = p.tasks[0]!;
+    const shown = JSON.stringify([t.updates, t.context, t.outcome, t.waiting]);
+    for (const leak of ["9876543210123", "512.34", "4321 Foo Way", "55555-1234"]) expect(shown).not.toContain(leak);
+    expect(readFileSync(join(V, "build", "_meta", "work", "prompts", `${p.id}.json`), "utf8")).not.toContain("9876543210123");
+    // The budget still reaches the brief, masked of identifiers.
+    expect(t.context!.some((c) => c.text.includes("Travel budget"))).toBe(true);
+  });
+  test("identifiers are hidden; money, dates, years and ranges are not", () => {
+    expect(maskIdentifiers("Foo Savings 9876543210123 at 4.1% APY")).toBe("Foo Savings •••• at 4.1% APY");
+    expect(maskIdentifiers("card ending in 4242, acct #55512, x9921 and ****1234")).not.toMatch(/4242|55512|9921|1234/);
+    expect(maskIdentifiers("SSN 123-45-6789, routing 021000021, call 555-123-4567")).not.toMatch(/6789|021000021|4567/);
+    expect(maskIdentifiers("IBAN GB82WEST12345698765432")).not.toContain("GB82WEST");
+    expect(maskIdentifiers("Lives at 12 Foo Street, Fooville")).toBe("Lives at •••• Foo Street, Fooville");
+    const keep = "On 2026-10-09, about $1,234,567.89 or 3,000 dollars, Nov 13 to 15, in 2027, ZIP 55555.";
+    expect(maskIdentifiers(keep)).toBe(keep);
+  });
+  test("a task sent to a project shows that project's domains, owner first, and a re-route updates them", async () => {
+    createMission(V, { name: "Foo Roof Claim", domains: [{ slug: "money", role: "consulted" }, { slug: "insurance", role: "owner" }] });
+    const text = "Chase the foo adjuster";
+    const runner = async () => JSON.stringify({ goals: [{ text, tasks: [{ name: "Foo Adjuster", text, dest: { kind: "project", id: "foo-roof-claim" }, confidence: 0.9, shape: "do" }] }] });
+    const t = (await addWork(V, text, { deps: { ...deps([]), runner } })).tasks[0]!;
+    expect(t.dest?.kind).toBe("project");
+    expect(t.domains?.slice(0, 2)).toEqual(["insurance", "money"]);
+    const r = await routeTask(V, t.id, { dest: "domain:fitness" }, deps());
+    expect(r.domains).toEqual(["fitness"]);
   });
   test("done is never set without a result", () => {
     const t = { status: "running", log: [] } as unknown as Parameters<typeof finish>[0];

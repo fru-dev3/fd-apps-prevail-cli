@@ -53,7 +53,7 @@ import { runtimePath } from "./path-safety.ts";
 import type { RouteRunner } from "./route.ts";
 import { makeSessionId, makeTurnId, readThreadTurns, writeThreadTurn } from "./session.ts";
 import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir } from "./thread-schedule.ts";
-import { gatherContext, judgePlan, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
+import { gatherContext, judgePlan, maskTask, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
 import { forgetLearned, isForget, journalLesson, knownAnswers, learnAnswers, learnRoute, lessons, plainLesson, rankContext, recurringMatch, routeLessonFor, sourceRank, unlearnRoute, type PlanKind } from "./work-learn.ts";
 import { buildCatalog, cleanName, destination, noDash, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
 import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, focusTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, promptHerdr, renameHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
@@ -207,9 +207,10 @@ export function withWorkLock<T>(vault: string, fn: () => T): T {
 
 export function readPrompt(vault: string, id: string): WorkPrompt | null {
   if (!ID_RE.test(id)) return null;
-  try { return JSON.parse(readFileSync(join(promptsDir(vault), `${id}.json`), "utf8")) as WorkPrompt; } catch { return null; }
+  try { const p = JSON.parse(readFileSync(join(promptsDir(vault), `${id}.json`), "utf8")) as WorkPrompt; p.tasks.forEach(maskTask); return p; } catch { return null; }
 }
-function savePrompt(vault: string, p: WorkPrompt): void { writeAtomic(join(promptsDir(vault), `${p.id}.json`), `${JSON.stringify(p, null, 2)}\n`); }
+// Account, card and routing numbers never land in a task record (read or written): see maskIdentifiers.
+function savePrompt(vault: string, p: WorkPrompt): void { p.tasks.forEach(maskTask); writeAtomic(join(promptsDir(vault), `${p.id}.json`), `${JSON.stringify(p, null, 2)}\n`); }
 
 export function listPrompts(vault: string): WorkPrompt[] {
   const dir = promptsDir(vault);
@@ -309,6 +310,13 @@ export async function topUp(vault: string, deps: WorkDeps = {}): Promise<string[
 export const note = (t: WorkTask, ev: string, detail: string | undefined, now: number, more?: string) => { t.log.push({ ts: now, ev, ...(detail ? { detail: detail.slice(0, 300) } : {}), ...(more ? { more: more.slice(0, 2000) } : {}) }); if (t.log.length > 200) t.log.splice(0, t.log.length - 200); };
 
 /** One line in the task's back-and-forth, at a meaningful moment only; the same line twice in a row is said once. */
+/** The domains a destination belongs to: a project's own (its owner first), else the destination's owner domain. */
+export function destDomains(vault: string, dest: Destination | null): string[] {
+  const project = dest?.owner.startsWith("mission/") ? readMission(vault, dest.owner) : null;
+  const all = project ? [...project.domains].sort((a, b) => Number(b.role === "owner") - Number(a.role === "owner")).map((d) => d.slug) : [dest?.owner ?? "general"];
+  return all.filter((x) => /^[a-z0-9][a-z0-9-]*$/.test(x));
+}
+
 export function addUpdate(t: WorkTask, from: TaskUpdate["from"], text: string, now = Date.now(), questions?: string[], link?: string): void {
   const line = text.replace(/\s+/g, " ").trim().slice(0, 400);
   if (!line) return;
@@ -706,7 +714,7 @@ export async function addWork(vault: string, text: string, o: AddOptions = {}): 
     const job = staffTask(vault, t, plan.source, now);
     if (job) t.jobId = job.id;
     // Every domain it touches (the owner first, then consulted and informed) and the apps it involves: the panel's pills.
-    const touched = [...new Set([t.dest?.owner ?? "general", ...(job?.domains.consulted ?? []), ...(job?.domains.informed ?? [])])].filter((x) => /^[a-z0-9][a-z0-9-]*$/.test(x));
+    const touched = [...new Set([...destDomains(vault, t.dest), ...(job?.domains.consulted ?? []), ...(job?.domains.informed ?? [])])];
     if (touched.length || prep?.domains.length) t.domains = [...new Set([...touched, ...(prep?.domains ?? [])])];
     if (t.dest?.kind === "app") t.apps = [t.dest.id];
     if (o.hold) { t.status = "backlog"; note(t, "parked", "in the backlog until it is moved to the queue", now); }
@@ -1053,6 +1061,7 @@ export async function routeTask(vault: string, id: string, c: RouteChange, deps:
       x.dest = to;
       const ctx = gatherContext(vault, x);
       if (ctx.length) x.context = ctx; else delete x.context;
+      x.domains = destDomains(vault, to);
     }
     if (c.agentKind && c.agentKind !== x.agentKind) { note(x, "agent kind", `${x.agentKind} to ${c.agentKind}`, now); x.agentKind = c.agentKind; }
     if (c.machine && c.machine !== x.machine) { note(x, "machine", `${x.machine} to ${c.machine}`, now); x.machine = c.machine; }

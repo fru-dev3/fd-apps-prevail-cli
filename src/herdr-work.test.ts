@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { addMachine, agentKinds, findTaskWorkspace, approveInTerminal, askingQuestion, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
+import { addMachine, agentKinds, findTaskWorkspace, approveInTerminal, askingQuestion, ownerAsk, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 import { addWork, continueTask, doneTask, followUp, isCloseYes, WORKING_LINE, pauseTask, queueTasks, updateTask, writeSettings, type WorkDeps, type WorkTask } from "./work.ts";
 
@@ -192,6 +192,7 @@ describe("a task in a Herdr tab: found or made, one tab per task, headless, neve
     await launchTask(V, n.tasks[0]!.id, deps(hn));
     expect(mutating(hn.calls).find((x) => x[2] === "start")).toEqual(["local", "agent", "start", expect.any(String), "--kind", "codex", "--pane", "w1:p1", "--", "--ask-for-approval", "never", "--sandbox", "workspace-write"]);
     expect(headlessArgs("claude", null)).toEqual(["--dangerously-skip-permissions", "--disallowedTools", "AskUserQuestion"]);
+    expect(headlessArgs("claude", null, undefined, false)).toEqual(["--dangerously-skip-permissions", "--disallowedTools", "AskUserQuestion", "WebSearch", "WebFetch"]);
     expect(glyphLine("gemini", "Foo Carrier", ["--yolo"])).toBe("gemini --yolo");
   });
   test("a trust question is answered by itself; an agent that is still not ready gets its brief from the mirror", async () => {
@@ -277,6 +278,20 @@ describe("mirror, follow up, check off, close and reopen", () => {
     expect(r.status).toBe("done");
     expect(r.outcome).toBe("The foo policy renews in May.");
     expect(r.log.some((l) => l.ev === "mirror ended")).toBe(false);
+  });
+  test("a reply that hands a choice back is Needs you with its result, never Done", async () => {
+    const end = "Foo Lake, Nov 13 to 15, about 430 foo dollars.\n\nWaiting on you:\n1. Pick a destination and a weekend.\n2. Approve booking.";
+    const h = fakeHerdr({ statuses: ["idle", "done"], reads: [end] });
+    const t = await running(h);
+    const r = await mirrorTask(V, t.id, deps(h), { maxRounds: 2, waitMs: 1 });
+    expect(r.status).toBe("needs-you");
+    expect(r.waiting).toBe("It needs you to: pick a destination and a weekend; approve booking.");
+    expect(r.outcome).toBeTruthy();
+    expect(r.updates!.some((u) => u.text.startsWith("Done"))).toBe(false);
+    expect(ownerAsk("Two foo hotels compared.\n\nPick one and I will hold it.")).toBe("Pick one and I will hold it.");
+    expect(ownerAsk("Drafted the foo reply; it is in your drafts.\n\nNext steps:\n1. Review it.")).toBeNull();
+    // Only the latest reply counts: after the owner's answer, a finished reply is done.
+    expect(ownerAsk(`${end}\n❯ Foo Lake, the 13th\nBooked nothing; Foo Lake hold drafted for the 13th.`)).toBeNull();
   });
   test("an agent asking something is never done: it needs you with the question; the follow-up answers it", async () => {
     const menu = "Where are you right now?\n❯ 1. Home\n  2. Work\nEnter to select · Esc to cancel";
