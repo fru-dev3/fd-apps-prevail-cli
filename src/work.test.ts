@@ -603,6 +603,7 @@ describe("plan before doing", () => {
     expect(maskIdentifiers("SSN 123-45-6789, routing 021000021, call 555-123-4567")).not.toMatch(/6789|021000021|4567/);
     expect(maskIdentifiers("IBAN GB82WEST12345698765432")).not.toContain("GB82WEST");
     expect(maskIdentifiers("Lives at 12 Foo Street, Fooville")).toBe("Lives at ••••, Fooville");
+    expect(maskIdentifiers("Lives at •••• Foo Street, Fooville")).toBe("Lives at ••••, Fooville");
     const keep = "On 2026-10-09, about $1,234,567.89 or 3,000 dollars, Nov 13 to 15, in 2027, ZIP 55555.";
     expect(maskIdentifiers(keep)).toBe(keep);
   });

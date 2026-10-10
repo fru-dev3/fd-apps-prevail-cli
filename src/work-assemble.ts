@@ -76,7 +76,7 @@ const ID_RULES: RegExp[] = [
   /\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b/g,
 ];
 // A street address ("1234 Foo Way") is hidden whole, name and all.
-const STREET = /\b\d{1,6}\s+(?:[A-Z][a-z]+\s+){1,3}(?:Way|St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|Pl|Place|Cir|Circle|Pkwy|Parkway|Ter|Terrace|Trl|Trail|Hwy|Highway)\b\.?/g;
+const STREET = /(?:\b\d{1,6}|••••)\s+(?:[A-Z][a-z]+\s+){1,3}(?:Way|St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|Pl|Place|Cir|Circle|Pkwy|Parkway|Ter|Terrace|Trl|Trail|Hwy|Highway)\b\.?/g;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The text with account, card and routing numbers, SSNs, IBANs and street addresses hidden. */
