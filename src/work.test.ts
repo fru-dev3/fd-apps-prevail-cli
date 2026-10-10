@@ -588,12 +588,14 @@ describe("plan before doing", () => {
   });
   test("a plan never shows an account number, a balance or a street address from the vault", async () => {
     travelVault();
+    writeFileSync(join(D("travel"), "memory", "memory.md"), "# travel\nFoo Lake trip \u2014 loved the trails.\n");
     writeFileSync(join(D("money"), "memory", "state.md"), "# money\nFoo Bank Online Savings 9876543210123: 4.10% APY, $512.34 balance.\nTravel budget: 3,000 foo dollars a year.\nPrimary residence: 4321 Foo Way, Fooville, MN 55555-1234 (savings mail goes here).\n");
     const p = await addWork(V, "Book a trip to Europe", { deps: { ...deps([]), runner: route("Book a trip to Europe", "travel") } });
     const t = p.tasks[0]!;
     const shown = JSON.stringify([t.updates, t.context, t.outcome, t.waiting]);
     for (const leak of ["9876543210123", "512.34", "Foo Way", "55555-1234"]) expect(shown).not.toContain(leak);
     expect(readFileSync(join(V, "build", "_meta", "work", "prompts", `${p.id}.json`), "utf8")).not.toContain("9876543210123");
+    expect(t.context!.some((c) => c.label.includes("\u2014"))).toBe(false);
     // The budget still reaches the brief, masked of identifiers.
     expect(t.context!.some((c) => c.text.includes("Travel budget"))).toBe(true);
   });
