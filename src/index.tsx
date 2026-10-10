@@ -7073,7 +7073,7 @@ async function main() {
     const { runActGateHook } = await import("./act-gate.ts");
     const vault = flag("vault") || readConfig()?.vaultPath || "";
     const vaultLockOn = args.actGateArgs.includes("--vault-lock");
-    await runActGateHook(vault, flag("domain") || "general", vaultLockOn);
+    await runActGateHook(vault, flag("domain") || "general", vaultLockOn, args.actGateArgs.includes("--web"));
     return;
   }
   if (args.actsCmd) {

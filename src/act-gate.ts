@@ -423,7 +423,7 @@ function pathFromInput(input: unknown): string | null {
 
 /** Gate one BUILTIN tool call when Vault Lock is on. Returns null to defer to
  *  the normal connector classifier (non-builtin), else an allow/deny. */
-export function gateBuiltin(vault: string, vaultLockOn: boolean, toolName: string, toolInput: unknown): GateDecision | null {
+export function gateBuiltin(vault: string, vaultLockOn: boolean, toolName: string, toolInput: unknown, web = false): GateDecision | null {
   const name = toolName;
   const isFileWrite = name === "Write" || name === "Edit" || name === "NotebookEdit" || name === "MultiEdit";
   // Grep/Glob/LS read file contents or listings just like Read does; leaving
@@ -448,6 +448,15 @@ export function gateBuiltin(vault: string, vaultLockOn: boolean, toolName: strin
     // A trusted web or links source (apps add-source) may be read: WebFetch is
     // a GET, and only to a host in the _meta registry the model cannot edit.
     if (name === "WebFetch" && isTrustedFetch(vault, toolInput)) return { action: "allow" };
+    // Web on for this run (Work mode with the user's Web access on): a search or a page read may go out,
+    // unless the query or URL would carry an identifier or a figure from the vault.
+    if (web) {
+      const o = (toolInput && typeof toolInput === "object" ? toolInput : {}) as Record<string, unknown>;
+      const out = [o.query, o.url, o.prompt].filter((x): x is string => typeof x === "string").join("\n");
+      const leaks = scanSensitive(out).filter((f) => f.start !== undefined && f.category !== "money" && f.category !== "quote");
+      if (!leaks.length) return { action: "allow" };
+      return { action: "deny", reason: `${name} was blocked: it would send ${findingCategories(leaks).join(", ")} to the web. Search without it.` };
+    }
     return { action: "deny", reason: `Vault Lock is on: ${name} (outbound web) is blocked so nothing can be fetched from or leaked to the network during a confined run. Work from the vault, or the user can turn off Vault Lock.` };
   }
   if (isBash) {
@@ -485,7 +494,7 @@ export interface GateDecision {
   reason?: string;
 }
 
-export function gateToolCall(vault: string, domain: string, toolName: string, toolInput: unknown, vaultLockOn = true, opts: { thread?: string } = {}): GateDecision {
+export function gateToolCall(vault: string, domain: string, toolName: string, toolInput: unknown, vaultLockOn = true, opts: { thread?: string; web?: boolean } = {}): GateDecision {
   // One writer per folder (agent mesh): a domain agent writes only its own
   // folder, Vault Lock or not. Anything for another domain is a handoff.
   if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit" || toolName === "NotebookEdit") {
@@ -497,7 +506,7 @@ export function gateToolCall(vault: string, domain: string, toolName: string, to
     }
   }
   // C1: builtins first - the technical Vault Lock boundary.
-  const builtin = gateBuiltin(vault, vaultLockOn, toolName, toolInput);
+  const builtin = gateBuiltin(vault, vaultLockOn, toolName, toolInput, opts.web);
   if (builtin) {
     if (builtin.action === "deny") {
       auditAction(vault, { ts: Date.now(), domain, action: `builtin ${toolName}`, outcome: "blocked_by_egress_guard", report: builtin.reason ?? "blocked by Vault Lock" });
@@ -570,13 +579,13 @@ export function missionGate(vault: string, domain: string): { readOnly: boolean;
 // gate needs no environment plumbing. Stable path -> written once, reused.
 // Dev caveat (same as gws-mcp): under `bun run` process.execPath is bun, so
 // the hook only binds in compiled builds - matching the rest of the MCP stack.
-export function actGateSettingsPath(vault: string, domain: string, vaultLockOn = true): string {
+export function actGateSettingsPath(vault: string, domain: string, vaultLockOn = true, web = false): string {
   const dir = join(homedirSafe(), ".prevail", "act-gate");
   mkdirSync(dir, { recursive: true });
-  const key = createHash("sha256").update(`${vault}\n${domain}\n${vaultLockOn}`).digest("hex").slice(0, 12);
+  const key = createHash("sha256").update(`${vault}\n${domain}\n${vaultLockOn}${web ? "\nweb" : ""}`).digest("hex").slice(0, 12);
   const path = join(dir, `${key}.json`);
   const q = (v: string) => `"${v.replace(/(["\\$`])/g, "\\$1")}"`;
-  const lock = vaultLockOn ? " --vault-lock" : "";
+  const lock = `${vaultLockOn ? " --vault-lock" : ""}${web ? " --web" : ""}`;
   const command = `${q(process.execPath)} act-gate-hook --vault ${q(vault)} --domain ${q(domain)}${lock}`;
   // Catch-all matcher (C1): the hook must see BUILTINS (Bash/Write/Edit/Read/
   // WebFetch/WebSearch), not just mcp__* connectors, or the model's own shell
@@ -625,7 +634,7 @@ export function accessOutcome(d: GateDecision): "ran" | "queued" | "denied" | "d
 /** The hook entrypoint: read the Claude Code PreToolUse JSON from stdin, gate,
  *  and print the decision in the hook protocol. Never throws (a gate crash
  *  must fail CLOSED for gated tools, so unparseable input denies). */
-export async function runActGateHook(vault: string, domain: string, vaultLockOn = true): Promise<void> {
+export async function runActGateHook(vault: string, domain: string, vaultLockOn = true, web = false): Promise<void> {
   let raw = "";
   for await (const chunk of process.stdin) raw += chunk;
   let toolName = "";
@@ -638,7 +647,7 @@ export async function runActGateHook(vault: string, domain: string, vaultLockOn 
   if (!toolName) { process.stdout.write("{}\n"); return; }
   let decision: GateDecision;
   try {
-    decision = gateToolCall(vault, domain, toolName, toolInput, vaultLockOn, { thread: threadIdFromEnv() });
+    decision = gateToolCall(vault, domain, toolName, toolInput, vaultLockOn, { thread: threadIdFromEnv(), web });
   } catch (e) {
     // Fail closed for gated shapes, open for builtins.
     decision = classifyAct(toolName) === "allow"
