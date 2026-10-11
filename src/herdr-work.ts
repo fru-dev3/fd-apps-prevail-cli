@@ -788,6 +788,17 @@ const WAITING = "It is waiting on a question in its Herdr tab.";
 export const CREW_NUDGE = "You stopped without writing your status file. Write it now as the brief says (state done, blocked or failed, and a one line summary), then stop.";
 /** How long the watcher sleeps between quiet polls when Herdr cannot block for it. */
 export const POLL_MS = 15_000;
+
+// Herdr 0.6 asks for the state as --status; 0.9 renamed it --until and refuses --status. Learn which once.
+let waitFlag = "--status";
+/** Wait for an agent to reach a state, in whichever form this Herdr takes. */
+export function herdrWait(h: Herdr, agent: string, want: string, ms: string): void {
+  try { h(["agent", "wait", agent, waitFlag, want, "--timeout", ms]); } catch (e) {
+    if (!/unknown option|unexpected argument|missing required/i.test((e as Error).message)) throw e;
+    waitFlag = waitFlag === "--status" ? "--until" : "--status";
+    h(["agent", "wait", agent, waitFlag, want, "--timeout", ms]);
+  }
+}
 /** The longest one Herdr wait blocks: well inside the lease, which is renewed between waits. */
 export const WAIT_MS = 90_000;
 
@@ -840,7 +851,7 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
       // No timer: Herdr wakes the watcher when the agent changes state. Idle while it works; working again once it has
       // stopped (waiting on the owner, or reminded). A timeout is a quiet poll; a Herdr that cannot wait gets a slow one.
       const want = cur.status === "needs-you" || last === "idle" || last === "done" || last === "blocked" ? "working" : "idle";
-      try { h(["agent", "wait", agent, "--status", want, "--timeout", wait]); } catch (e) {
+      try { herdrWait(h, agent, want, wait); } catch (e) {
         const why = (e as Error).message.split(" failed: ").pop() ?? "";
         if (!/timed out/i.test(why)) sleep(o.pollMs ?? POLL_MS);
       }

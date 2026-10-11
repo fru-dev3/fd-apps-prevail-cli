@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createMission } from "./missions.ts";
 import { crewPaths } from "./work-crew.ts";
-import { CREW_NUDGE, addMachine, agentKinds, findTaskWorkspace, approveInTerminal, askingQuestion, ownerAsk, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
+import { CREW_NUDGE, addMachine, herdrWait, agentKinds, findTaskWorkspace, approveInTerminal, askingQuestion, ownerAsk, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
 import { addWork, continueTask, doneTask, followUp, isCloseYes, WORKING_LINE, pauseTask, queueTasks, readTask, reconcileWork, routeTask, updateTask, writeSettings, type WorkDeps, type WorkTask } from "./work.ts";
 
@@ -783,5 +783,21 @@ describe("reconcile after a restart", () => {
     expect(reconcileWork(V, later).relaunched).toEqual([id]);
     expect(spawned.at(-1)).toEqual(["work", "run", id]);
     expect(reconcileWork(V, later).relaunched).toEqual([]);
+  });
+});
+
+describe("herdrWait", () => {
+  test("a Herdr that refuses one form of the state flag gets the other, and it is remembered", () => {
+    const calls: string[][] = [];
+    const takes = (flag: string): Herdr => (a) => { calls.push(a); if (a[3] !== flag) throw new Error(`herdr agent wait failed: unknown option: ${a[3]}`); return ""; };
+    herdrWait(takes("--until"), "foo-1", "idle", "1");
+    expect(calls.map((c) => c[3])).toEqual(["--status", "--until"]);
+    herdrWait(takes("--until"), "foo-1", "working", "1");
+    expect(calls.at(-1)).toEqual(["agent", "wait", "foo-1", "--until", "working", "--timeout", "1"]);
+    // An older Herdr wants --status back.
+    herdrWait(takes("--status"), "foo-1", "idle", "1");
+    expect(calls.at(-1)![3]).toBe("--status");
+    // A timeout is not a flag problem: it is passed on.
+    expect(() => herdrWait(() => { throw new Error("herdr agent wait failed: timed out"); }, "foo-1", "idle", "1")).toThrow(/timed out/);
   });
 });
