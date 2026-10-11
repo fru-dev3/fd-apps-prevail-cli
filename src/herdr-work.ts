@@ -13,7 +13,8 @@
 // cached per process, with a fallback list.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { readChiefOfStaff } from "./chief-of-staff.ts";
@@ -24,7 +25,8 @@ import { runtimePath } from "./path-safety.ts";
 import { getSpecialist } from "./specialists.ts";
 import { herdrBin, herdrOn, mapDir, readSpaces, type Herdr } from "./spaces.ts";
 import { threadFiles } from "./thread-schedule.ts";
-import { addMilestone, appendTurn, defaultSpawnSelf, distilMilestone, distilOutcome, milestoneDue, finish, note, readSettings, addUpdate, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
+import { addMilestone, appendTurn, applyCrewStatus, defaultSpawnSelf, LEASE_MS, LEASE_RENEW_MS, distilMilestone, distilOutcome, milestoneDue, finish, note, readSettings, addUpdate, readTask, syncBoard, updateTask, withLease, workDir, type HerdrRef, type WorkDeps, type WorkTask } from "./work.ts";
+import { crewBrief, crewPaths, ensureWorktree, readCrewStatus, resetCrewStatus, shipModeOf, stopHookSettings, realGit } from "./work-crew.ts";
 import { FALLBACK_AGENT_KINDS, folderOf, folderPath, noDash, type CatalogMachine } from "./work-router.ts";
 
 export interface Machine {
@@ -263,8 +265,34 @@ function herdrMachine(vault: string, label: string, deps: WorkDeps): string | nu
   return m.herdr === "saved" ? m.id : null;
 }
 
-/** The folder the agent works in, found again on the machine it runs on. */
+/** The folder the agent works in, found again on the machine it runs on: a ship task's own worktree on this Mac, else its home folder. */
 export function taskCwd(vault: string, t: WorkTask, machine: string, deps: WorkDeps = {}): string {
+  if (machine === "local" && t.crew === "ship" && t.worktree && existsSync(t.worktree.cwd)) return t.worktree.cwd;
+  return homeFolder(vault, t, machine, deps);
+}
+
+/**
+ * A ship task whose home is a git repo gets its own worktree on this Mac
+ * (made once; work-crew.ts ensureWorktree) and the repo's ship mode. Any
+ * other task comes back as it is. Throws when git cannot make the worktree:
+ * the task never falls back to the shared checkout.
+ */
+export function prepareWorktree(vault: string, id: string, deps: WorkDeps = {}): WorkTask {
+  const r = readTask(vault, id);
+  if (!r) throw new Error(`no task ${id}`);
+  const t = r.task;
+  if (t.crew !== "ship" || !t.dest?.folder) return t;
+  const git = deps.git ?? realGit;
+  const wt = ensureWorktree(vault, t, homeFolder(vault, t, "local", deps), { git, ...(deps.worktreeRoot ? { root: deps.worktreeRoot } : {}) });
+  if (!wt || (t.worktree?.path === wt.path && t.shipMode)) return t;
+  const now = (deps.now ?? Date.now)();
+  const mode = shipModeOf(wt.repo, git);
+  const here = thisMachine(vault, deps.machine).label;
+  return updateTask(vault, id, (x) => { x.worktree = { ...wt, machine: here }; x.shipMode = mode; note(x, "worktree", `${wt.path} on ${wt.branch}; ships by ${mode}`, now); });
+}
+
+/** The task's home folder (its project folder or its space), found again on the machine it runs on. */
+function homeFolder(vault: string, t: WorkTask, machine: string, deps: WorkDeps = {}): string {
   const me = thisMachine(vault, deps.machine);
   const local = me.roots;
   const roots = machine === "local" ? local : (() => {
@@ -276,7 +304,7 @@ export function taskCwd(vault: string, t: WorkTask, machine: string, deps: WorkD
 }
 
 /** The brief the agent gets first: the task, its home, the team's mandates and the user's rules. */
-export function buildBrief(vault: string, t: WorkTask, o: { history?: string } = {}): string {
+export function buildBrief(vault: string, t: WorkTask, o: { history?: string; /** The vault's folder on the machine the agent runs on, when not this one. */ vaultRoot?: string } = {}): string {
   const job = t.jobId ? readJob(vault, t.jobId) : null;
   const chief = readChiefOfStaff(vault);
   const team = (job?.team ?? []).flatMap((s) => s.specialists).map((id) => getSpecialist(vault, id)).filter((s): s is NonNullable<typeof s> => !!s);
@@ -295,6 +323,7 @@ export function buildBrief(vault: string, t: WorkTask, o: { history?: string } =
     "- Stop before anything that cannot be undone, or that touches money, people, where the user lives or who they are, and say in your summary what is waiting for the user's approval.",
     ...(chief.neverRead.length ? [`- Never read these areas unless the task names them: ${chief.neverRead.join(", ")}.`] : []),
     `- Stay within about $${job?.budget.usd ?? chief.limits.usd} and ${job?.budget.minutes ?? chief.limits.minutes} minutes of work, then report.`,
+    ...crewBrief(vault, t, o.vaultRoot),
     "", `End with a short summary: what you did, ${BRIEF_END}`,
   ];
   if (o.history) lines.unshift("Pick this task back up. The conversation so far:", "", o.history, "", "---", "");
@@ -404,6 +433,8 @@ function markCreated(vault: string, machine: string, id: string, on: boolean): v
   writeHerdrFile(vault, f);
 }
 const madeByPrevail = (vault: string, machine: string, id: string) => (readHerdrFile(vault).created[machine] ?? []).includes(id);
+/** The workspaces Prevail made on a machine (by id): their panes are Work mode's own. */
+export const prevailWorkspaces = (vault: string, machine: string): string[] => readHerdrFile(vault).created[machine] ?? [];
 
 /** Drop links and made-here marks that point at workspaces no longer open on that machine. They are found again, never made again. */
 export function pruneLinks(vault: string, machine: string, rows: WsRow[]): void {
@@ -616,12 +647,28 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
     t = updateTask(vault, id, (x) => { note(x, "moved", `${x.machine} is not connected, so it runs on ${here}`, now); x.machine = here; });
     machine = "local";
   }
+  // A ship task on a repo gets its own worktree before the brief names it (this Mac only: git runs here).
+  if (t.crew === "ship" && t.dest?.folder) {
+    if (machine === "local") {
+      try { t = prepareWorktree(vault, id, deps); } catch (e) {
+        const x = updateTask(vault, id, (y) => { finish(y, "failed", "It could not get its own git worktree, so it did not start.", now); note(y, "no worktree", (e as Error).message.slice(0, 200), now); });
+        syncBoard(vault, x);
+        return x;
+      }
+    } else if (!t.log.some((l) => l.ev === "no worktree")) {
+      t = updateTask(vault, id, (x) => { note(x, "no worktree", `worktrees are made on this Mac only; on ${x.machine} it works in the folder itself`, now); });
+    }
+  }
+  // A fresh brief: last time's status file steps aside, so the next one says how this run went.
+  if (t.crew) resetCrewStatus(vault, t, deps.crewHome);
   const h = herdrFor(deps, machine);
   const md = threadFiles(vault, t.thread.space, t.thread.session).find((f) => f.endsWith(".md"));
   const thread = md ? readFileSync(md, "utf8").replace(/^---\n[\s\S]*?\n---\n/, "").trim() : "";
   // Picked back up (reopen, a follow-up): the brief carries the conversation so far.
   const history = o.reopen || (thread.match(/^## /gm)?.length ?? 0) > 1 ? thread.slice(-4000) : "";
-  const brief = buildBrief(vault, t, { history });
+  // On another Mac the crew files are named by that Mac's vault folder.
+  const vaultRoot = machine === "local" ? undefined : readMachineRecords(vault).find((x) => x.label === t.machine || x.hostname === t.machine)?.vaultRoot;
+  const brief = buildBrief(vault, t, { history, ...(vaultRoot ? { vaultRoot } : {}) });
   let ref: HerdrRef;
   let opened: HerdrRef | null = null;
   const prior = !o.reopen && t.herdr?.tabId && t.herdr.agent ? t.herdr : null;
@@ -656,7 +703,9 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
       const created = madeByPrevail(vault, t.machine, workspaceId);
       saveLink(vault, t.machine, t.thread.space, label);
       // Claude Code carries Prevail's act-gate hook; the hook file lives on this Mac, so a remote Claude runs without it.
-      const settingsPath = t.agentKind === "claude" && machine === "local" ? (deps.settingsPath ?? defaultSettingsPath)(vault, t.thread.space) : null;
+      // A crew agent's settings add the Stop hook that holds it until its status file is written.
+      const gate = t.agentKind === "claude" && machine === "local" ? (deps.settingsPath ?? defaultSettingsPath)(vault, t.thread.space) : null;
+      const settingsPath = gate && t.crew ? stopHookSettings(vault, t, { base: gate, ...(deps.crewHome ? { home: deps.crewHome } : {}) }) : gate;
       const args = headlessArgs(t.agentKind, settingsPath, deps.machine?.env, readWebAccess() === "allow");
       const glyph = (deps.glyph ?? ((m: string) => glyphOn(vault, m, m === "local")))(machine === "local" ? "local" : t.machine);
       opened = { machine: t.machine, workspaceLabel: label, workspaceId, tabId, paneId, agent: paneId, createdWorkspace: created, createdTab: true, ...(glyph ? { glyph: true } : {}) };
@@ -676,7 +725,7 @@ export async function launchTask(vault: string, id: string, deps: WorkDeps = {},
     return x;
   }
   const next = updateTask(vault, id, (x) => {
-    x.herdr = ref; x.status = "running"; delete x.ask; delete x.waiting;
+    x.herdr = ref; x.status = "running"; delete x.ask; delete x.waiting; delete x.crewNudged;
     note(x, o.reopen || prior ? "back in Herdr" : "in Herdr", `${ref.workspaceLabel} on ${x.machine}`, now);
     if (machine !== "local" && x.agentKind === "claude") note(x, "no act gate", "the hook file lives on this Mac; the remote agent runs without it", now);
   });
@@ -735,17 +784,37 @@ const statusOf = (r: unknown): string => {
 
 const WAITING = "It is waiting on a question in its Herdr tab.";
 
+/** The one reminder a crew agent gets when it stops without its status file. */
+export const CREW_NUDGE = "You stopped without writing your status file. Write it now as the brief says (state done, blocked or failed, and a one line summary), then stop.";
+/** How long the watcher sleeps between quiet polls when Herdr cannot block for it. */
+export const POLL_MS = 15_000;
+/** The longest one Herdr wait blocks: well inside the lease, which is renewed between waits. */
+export const WAIT_MS = 90_000;
+
+const fingerprint = (...parts: string[]) => createHash("sha1").update(parts.join("\u0000")).digest("hex");
+/** A status file's state and age, for the watcher's fingerprint (empty when there is none). */
+const statusStamp = (file: string) => { try { return `${statSync(file).mtimeMs}:${statSync(file).size}`; } catch { return ""; } };
+
 /**
- * Mirror the agent's work into the thread until it finishes: wait, read,
- * append only what is new, and note what it is doing as plain activity lines.
+ * Watch the agent until it finishes, quietly: wait on Herdr (`agent wait`
+ * blocks until the agent goes idle while it works, or starts working again
+ * while it waits on the owner), then read. A round where nothing changed (the
+ * same state, the same output tail, the same status file) does nothing: no
+ * model call, no write. On a change it mirrors what is new into the thread,
+ * notes what the agent does as plain activity lines, and settles the card.
+ *
  * A brief that could not go in at launch goes in once the agent is idle. An
  * agent asking something (a menu, a question, Herdr's blocked state) is never
  * done: the task waits as needs-you with the question as one sentence, and a
- * follow-up answers it. Done only when the agent settles with its work
- * finished; the outcome is distilled then. The mirror holds the lease.
+ * follow-up answers it. A crew task (scout or ship) is settled by its status
+ * file: done, blocked (needs you) or failed; an agent that stops without one
+ * is reminded once, then failed. A task from before shapes is done when the
+ * agent settles with its work finished, its outcome distilled then. The
+ * watcher holds the lease.
  */
-export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {}, o: { maxRounds?: number; waitMs?: number } = {}): Promise<WorkTask> {
+export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {}, o: { maxRounds?: number; waitMs?: number; pollMs?: number } = {}): Promise<WorkTask> {
   const clock = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? ((ms: number) => Bun.sleepSync(ms));
   const r = readTask(vault, id);
   if (!r?.task.herdr?.agent) throw new Error(`task ${id} has no Herdr agent`);
   const machine = herdrMachine(vault, r.task.machine, deps);
@@ -753,34 +822,55 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
   const h = herdrFor(deps, machine);
   const agent = r.task.herdr.agent;
   const pane = r.task.herdr.paneId;
+  const statusFile = crewPaths(vault, r.task).status;
   const until = clock() + 6 * 3_600_000;
-  const wait = String(o.waitMs ?? 600_000);
+  // Herdr's wait blocks this process, so it is kept under the lease and the lease is renewed here, between waits:
+  // a watcher that is alive always holds a live lease, and reconcile never starts a second one.
+  const wait = String(o.waitMs ?? WAIT_MS);
+  const host = thisMachine(vault, deps.machine).label;
+  let renewed = clock();
+  // What the last round acted on, and the agent's state then.
+  let seen = "";
+  let last = "";
   await withLease(vault, id, deps, async () => {
     for (let round = 0; round < (o.maxRounds ?? 10_000) && clock() < until; round++) {
+      if (clock() - renewed >= LEASE_RENEW_MS) { renewed = clock(); try { updateTask(vault, id, (x) => { x.lease = { host, until: renewed + LEASE_MS }; }); } catch { break; } }
       const cur = readTask(vault, id)?.task;
       if (!cur || !(cur.status === "running" || cur.status === "needs-you") || cur.herdr?.agent !== agent) break;
-      // Waiting on the user: only a change from there wakes it (no spin on a state that stays blocked).
-      const waitArgs = cur.status === "needs-you" ? ["--until", "working", "--until", "idle", "--until", "done"] : [];
-      try { h(["agent", "wait", agent, ...waitArgs, "--timeout", wait]); } catch { /* a timeout: read what there is */ }
+      // No timer: Herdr wakes the watcher when the agent changes state. Idle while it works; working again once it has
+      // stopped (waiting on the owner, or reminded). A timeout is a quiet poll; a Herdr that cannot wait gets a slow one.
+      const want = cur.status === "needs-you" || last === "idle" || last === "done" || last === "blocked" ? "working" : "idle";
+      try { h(["agent", "wait", agent, "--status", want, "--timeout", wait]); } catch (e) {
+        const why = (e as Error).message.split(" failed: ").pop() ?? "";
+        if (!/timed out/i.test(why)) sleep(o.pollMs ?? POLL_MS);
+      }
       let text = "";
       let status = "";
       try { text = readText(h(["agent", "read", agent, "--source", "recent-unwrapped", "--lines", "400"])); status = statusOf(h(["agent", "get", agent])); } catch (e) {
         // Herdr will not read the scrollback while the agent works: it is alive, so read on its next pause.
-        if (/agent_not_idle/.test((e as Error).message)) continue;
-        // The agent is gone (its tab closed by hand): stop mirroring.
-        updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") {
+        if (/agent_not_idle/.test((e as Error).message)) { last = "working"; continue; }
+        // The agent is gone (its tab closed by hand): stop watching.
+        const st = cur.crew ? readCrewStatus(statusFile) : null;
+        const t = updateTask(vault, id, (x) => { note(x, "mirror ended", (e as Error).message.slice(0, 200), clock()); if (x.status === "running" || x.status === "needs-you") {
+          // A crew task says how it went in its status file; without one, a closed tab is a failure with a plain reason.
+          if (st) applyCrewStatus(vault, x, st, st.summary, clock());
+          else if (x.crew) finish(x, "failed", "Its Herdr tab closed before it said how it went. Continue starts it again.", clock());
           // A closed tab is housekeeping, never an outcome: with no result yet, it asks what to do.
-          if (x.outcome) finish(x, "done", x.outcome, clock());
+          else if (x.outcome) finish(x, "done", x.outcome, clock());
           else { x.status = "needs-you"; x.waiting = "Its Herdr tab closed before a result came back. Should it start again?"; addUpdate(x, "task", x.waiting, clock()); }
         } });
+        syncBoard(vault, t);
         break;
       }
+      last = status;
       // The brief that could not go in at launch: in now that the agent is ready.
       if (cur.herdr?.briefPending) {
         if (status === "idle" || status === "done") {
-          try { h(["agent", "prompt", agent, buildBrief(vault, cur)]); } catch { continue; }
+          const vaultRoot = machine === "local" ? undefined : readMachineRecords(vault).find((x) => x.label === cur.machine || x.hostname === cur.machine)?.vaultRoot;
+          try { h(["agent", "prompt", agent, buildBrief(vault, cur, vaultRoot ? { vaultRoot } : {})]); } catch { continue; }
           const t = updateTask(vault, id, (x) => { if (x.herdr) { delete x.herdr.briefPending; x.herdr.lastRead = text.slice(-2000); } x.status = "running"; delete x.waiting; note(x, "briefed", undefined, clock()); });
           syncBoard(vault, t);
+          last = "working";
           continue;
         }
         if (answerDialog(h, pane)) continue;
@@ -790,15 +880,26 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
         }
         continue;
       }
+      // Nothing new since the last round (same state, same output, same status file): nothing to do, and no model call.
+      const print = fingerprint(status, text.slice(-4000), cur.crew ? statusStamp(statusFile) : "");
+      if (print === seen) continue;
+      seen = print;
       const fresh = (cur.herdr?.lastRead ? newText(cur.herdr.lastRead, text) : afterBrief(text)).trim();
       const words = stripChrome(fresh);
       const all = stripChrome(afterBrief(text));
       const settled = (status === "idle" || status === "done") && (round > 0 || !!words);
-      const question = status === "blocked" || settled ? askingQuestion(all) ?? (status === "blocked" ? WAITING : null) : null;
+      // A menu Herdr sees it blocked on is a question. A crew agent that stopped says how it went in its status file
+      // (blocked, with what it needs), so its last line ending in a question mark is not one.
+      const question = status === "blocked" ? askingQuestion(all) ?? WAITING : settled && !cur.crew ? askingQuestion(all) : null;
       if (question && status === "blocked" && answerDialog(h, pane)) continue;
+      // A crew agent that stopped: its status file says how it went; none yet, it is reminded once.
+      const crewDone = settled && !question && !!cur.crew;
+      const st = crewDone ? readCrewStatus(statusFile) : null;
+      const nudged = crewDone && !st && !cur.crewNudged ? promptHerdr(vault, cur, CREW_NUDGE, deps) : false;
       // A reply that ends handing a choice back ("Waiting on you: pick a destination") is Needs you with its result, never Done.
-      const handBack = settled && !question ? ownerAsk(all) : null;
-      const outcome = settled && !question ? await distilOutcome(all.slice(-4000), deps, cur.text) : "";
+      const handBack = settled && !question && !cur.crew ? ownerAsk(all) : null;
+      // The outcome: a crew agent's own summary; a model distils it only when there is none, or for a task from before shapes.
+      const outcome = st?.state === "done" ? st.summary || await distilOutcome(all.slice(-4000), deps, cur.text) : settled && !question && !cur.crew ? await distilOutcome(all.slice(-4000), deps, cur.text) : "";
       // Still at work: a real milestone from what it just did, a sentence at most and only now and then.
       const milestone = !settled && !question && words && milestoneDue(cur, clock()) ? await distilMilestone(words, deps) : null;
       const t = updateTask(vault, id, (x) => {
@@ -810,6 +911,11 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
           if (x.status !== "needs-you" || x.waiting !== question) { note(x, "waiting", question, clock()); addUpdate(x, "task", question, clock()); }
           x.status = "needs-you"; x.waiting = question;
         } else if (status === "working" && x.status === "needs-you") { x.status = "running"; delete x.waiting; }
+        else if (crewDone && (x.status === "running" || x.status === "needs-you")) {
+          if (st) applyCrewStatus(vault, x, st, outcome, clock());
+          else if (nudged) { x.crewNudged = clock(); note(x, "reminded", "it stopped without its status file; asked once to write it", clock()); }
+          else { finish(x, "failed", "It stopped without saying how it went, even after a reminder.", clock()); note(x, "no status", undefined, clock()); }
+        }
         else if (handBack) {
           if (x.status === "running") {
             if (outcome) { x.outcome = outcome; addUpdate(x, "task", outcome, clock()); }
@@ -819,7 +925,9 @@ export async function mirrorTask(vault: string, id: string, deps: WorkDeps = {},
         else if (settled && (x.status === "running" || x.status === "needs-you")) { delete x.waiting; finish(x, "done", outcome || "Done.", clock()); note(x, "done", undefined, clock()); }
       });
       syncBoard(vault, t);
-      if (t.status === "done") break;
+      // Reminded: the next round, once it has worked again or the wait runs out, decides done or failed.
+      if (nudged) seen = "";
+      if (t.status === "done" || t.status === "failed") break;
     }
   });
   return readTask(vault, id)!.task;
@@ -880,9 +988,10 @@ export function resumeHerdr(vault: string, id: string, deps: WorkDeps = {}): boo
   if (!r || !ref?.agent) return false;
   const machine = herdrMachine(vault, ref.machine, deps);
   if (!machine) return false;
+  if (r.task.crew) resetCrewStatus(vault, r.task, deps.crewHome);
   try { herdrFor(deps, machine)(["agent", "prompt", ref.agent, "Continue where you left off."]); } catch { return false; }
   const now = (deps.now ?? Date.now)();
-  const t = updateTask(vault, id, (x) => { x.status = "running"; delete x.ask; note(x, "resumed", "in its Herdr tab", now); });
+  const t = updateTask(vault, id, (x) => { x.status = "running"; delete x.ask; delete x.crewNudged; note(x, "resumed", "in its Herdr tab", now); });
   syncBoard(vault, t);
   (deps.spawnSelf ?? defaultSpawnSelf(vault))(["work", "mirror", id]);
   return true;

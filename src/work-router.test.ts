@@ -194,3 +194,19 @@ describe("names, systems and one task per intent", () => {
     expect(buildWorkPrompt("x", cat()).system).toMatch(/One task per intent/);
   });
 });
+
+describe("scout or ship", () => {
+  beforeEach(seed);
+  test("the model's word is kept when it is scout or ship; otherwise code shapes it from the ask", async () => {
+    const reply = JSON.stringify({ goals: [{ text: "g", tasks: [
+      { text: "Find the foo policy renewal date", dest: { kind: "domain", id: "insurance" }, crew: "ship" },
+      { text: "Find the foo policy number", dest: { kind: "domain", id: "insurance" }, crew: "captain" },
+      { text: "Fix the bar site header", dest: { kind: "folder", id: "/tmp/foo-home/code/bar-site" } },
+    ] }] });
+    const plan = parseWorkReply(reply, cat())!;
+    expect(plan.goals[0]!.tasks.map((t) => t.crew)).toEqual(["ship", "scout", "ship"]);
+    expect(buildWorkPrompt("x", cat()).system).toContain('"crew":"scout|ship"');
+    const code = await codeRoute(V, "Why is the foo premium so high? Fix the bar site header.", cat());
+    expect(code.goals.map((g) => g.tasks[0]!.crew)).toEqual(["scout", "ship"]);
+  });
+});
