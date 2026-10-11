@@ -23,6 +23,15 @@
 // tasks in the backlog instead: routed and filed, never started, until
 // `work start` moves one to the end of the queue.
 //
+// Each new task is a scout or a ship (work-crew.ts): a scout finds out and
+// ends with a report, a ship makes the change, in its own git worktree when
+// its home is a repo. A crew agent writes a status file before it ends; the
+// watcher (mirrorTask) waits on Herdr, not a timer, and spends no model call
+// on a round where nothing changed. `work reconcile` (also run by `work list`,
+// at most every two minutes) squares the queue with the panes still open
+// after a restart: a lost watcher starts again, a task whose tab is gone and
+// left no status is failed, a Work pane no task knows is reported, never closed.
+//
 // A finished task stays in the queue, checked, with a one or two sentence
 // outcome the engine distils from the result. It never closes itself and
 // never asks to: it stays until the user closes it, by saying done or close in
@@ -56,8 +65,9 @@ import { appendThreadMarkdown, createThreadMarkdown, threadFiles, threadWriteDir
 import { gatherContext, judgePlan, maskTask, neededSpecialists, planTask, type ContextItem } from "./work-assemble.ts";
 import { forgetLearned, isForget, journalLesson, knownAnswers, learnAnswers, learnRoute, lessons, plainLesson, rankContext, recurringMatch, routeLessonFor, sourceRank, unlearnRoute, type PlanKind } from "./work-learn.ts";
 import { buildCatalog, cleanName, destination, noDash, routeWork, type Catalog, type Destination, type RoutedTask, type RouterPlan } from "./work-router.ts";
-import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, focusTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, promptHerdr, renameHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
-import type { Herdr } from "./spaces.ts";
+import { agentKinds, asCatalogMachines, closeHerdr, herdrWorkspaces, closeTask, focusTask, launchTask, machineAddCommand, machines, mirrorTask, pauseHerdr, prepareWorktree, prevailWorkspaces, promptHerdr, renameHerdr, reopenTask, resumeHerdr, addMachine, approveInTerminal, thisMachine, writeMachineRecord, type Machine, type MachineDeps } from "./herdr-work.ts";
+import { closeWorktree, crewPaths, isCrewShape, readCrewStatus, resetCrewStatus, type CrewShape, type CrewStatus, type Git, type ShipMode, type WorktreeRef } from "./work-crew.ts";
+import { herdrOn, type Herdr } from "./spaces.ts";
 
 // "backlog": parked as an idea (routed, never started, not in the queue); `work start` moves it to the end of the queue.
 export type WorkStatus = "backlog" | "routed" | "queued" | "needs-you" | "running" | "paused" | "done" | "failed" | "closed";
@@ -128,6 +138,14 @@ export interface WorkTask extends RoutedTask {
   recurringOf?: string[];
   /** The owner said "forget that": this task no longer teaches anything. */
   learnOff?: boolean;
+  /** A ship task's own git worktree (its home is a repo), made on this Mac at its first start. */
+  worktree?: WorktreeRef;
+  /** How a ship task on a repo finishes (the repo's setting, or found). */
+  shipMode?: ShipMode;
+  /** A scout's report, relative to the vault, once it is done. */
+  report?: string;
+  /** When the watcher reminded the agent to write its status file (once; a second silent stop fails it). */
+  crewNudged?: number;
 }
 
 export interface TaskUpdate {
@@ -171,6 +189,12 @@ export interface WorkDeps {
   glyph?: (machine: string) => boolean;
   /** Waits between polls (tests pass a no-op). */
   sleep?: (ms: number) => void;
+  /** Runs git (tests may pass their own; the default is the real one). */
+  git?: Git;
+  /** Where worktrees go (default ~/.workmux, or PREVAIL_WORKTREE_ROOT). */
+  worktreeRoot?: string;
+  /** This Mac's folder for a task's agent settings and Stop hook (default ~/.prevail/work). */
+  crewHome?: string;
 }
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -412,6 +436,32 @@ export function finish(t: WorkTask, status: "done" | "failed", outcome?: string,
   if (was === status) return;
   if (status === "done") { const what = (t.outcome ?? "").replace(/^done[:.]?\s*/i, "").trim(); addUpdate(t, "task", what ? `Done: ${what}` : "Done.", now); }
   else addUpdate(t, "task", t.outcome || "I could not finish it.", now);
+}
+
+/**
+ * What a crew agent's status file says, onto the card: done (a scout's report
+ * goes into the thread), blocked (Needs you, with what it needs), or failed.
+ * `outcome` is the line for a done card (the status summary, else distilled).
+ */
+export function applyCrewStatus(vault: string, t: WorkTask, st: CrewStatus, outcome: string, now = Date.now()): void {
+  delete t.crewNudged;
+  if (st.state === "blocked") {
+    const need = st.summary || "It needs you before it can go on.";
+    if (t.status !== "needs-you" || t.waiting !== need) { note(t, "waiting", need, now); addUpdate(t, "task", need, now); }
+    t.status = "needs-you"; t.waiting = need;
+    return;
+  }
+  delete t.waiting;
+  if (st.state === "failed") { finish(t, "failed", st.summary || "It could not finish.", now); note(t, "failed", st.summary, now); return; }
+  if (t.crew === "scout") {
+    const file = [st.report, crewPaths(vault, t).report].find((f) => f && f.startsWith("/") && existsSync(f));
+    if (file) {
+      try { appendTurn(vault, t, "assistant", `Report (${relative(vault, file)}):\n\n${readFileSync(file, "utf8").slice(0, 20_000)}`, t.agentKind, now); } catch { /* the card still says it */ }
+      t.report = relative(vault, file);
+    }
+  }
+  finish(t, "done", outcome || st.summary, now);
+  note(t, "done", t.report ? `report: ${t.report}` : undefined, now);
 }
 
 /** The user closing a finished task in a reply ("close it", "done", "that's it"); anything else is a follow-up. Nothing asks, so a bare "yes" is not one. */
@@ -858,6 +908,17 @@ export async function runTask(vault: string, id: string, deps: WorkDeps = {}, o:
   const jobId = r.task.jobId;
   if (!jobId) throw new Error("this task has no job");
   const clock = deps.now ?? Date.now;
+  // A ship task on a repo runs in its own worktree: the job works there.
+  if (r.task.crew === "ship") {
+    let wt: WorktreeRef | undefined;
+    try { wt = prepareWorktree(vault, id, deps).worktree; } catch (e) {
+      const t = updateTask(vault, id, (x) => { finish(x, "failed", "It could not get its own git worktree, so it did not start.", clock()); note(x, "no worktree", (e as Error).message, clock()); });
+      syncBoard(vault, t);
+      return t;
+    }
+    const j = wt ? readJob(vault, jobId) : null;
+    if (j && wt && j.cwd !== wt.cwd) { j.cwd = wt.cwd; saveJob(vault, j); }
+  }
   // A long run says when a step is done (rate-limited, never its raw output).
   let seen = 1;
   const watch = setInterval(() => {
@@ -1019,9 +1080,9 @@ function retag(vault: string, t: WorkTask, to: Destination | null): void {
   writeFileSync(md, `---\n${meta.join("\n")}\n---\n${raw.slice(fm[0].length)}`);
 }
 
-export interface RouteChange { dest?: string; undo?: boolean; agentKind?: string; machine?: string }
+export interface RouteChange { dest?: string; undo?: boolean; agentKind?: string; machine?: string; /** Scout or ship. */ crew?: string }
 
-/** Re-route a task: a new destination, Undo (back one), or a new agent kind or machine. Moves, never deletes. */
+/** Re-route a task: a new destination, Undo (back one), a new agent kind or machine, or scout for ship. Moves, never deletes. */
 export async function routeTask(vault: string, id: string, c: RouteChange, deps: WorkDeps = {}): Promise<WorkTask> {
   const now = (deps.now ?? Date.now)();
   const r = readTask(vault, id);
@@ -1039,6 +1100,8 @@ export async function routeTask(vault: string, id: string, c: RouteChange, deps:
   }
   if (c.agentKind && !cat.agentKinds.includes(c.agentKind)) throw new Error(`unknown agent kind ${c.agentKind}`);
   if (c.machine && !ms.some((m) => m.label === c.machine)) throw new Error(`unknown machine ${c.machine}`);
+  if (c.crew !== undefined && !isCrewShape(c.crew)) throw new Error("a task is a scout or a ship");
+  const crew = c.crew as CrewShape | undefined;
   const picked = c.machine ? ms.find((m) => m.label === c.machine) : undefined;
   if (picked && r.task.executor === "herdr" && picked.herdr !== "local" && picked.herdr !== "saved") throw new Error(`${picked.label} is not connected`);
   const herdrOpen = r.task.executor === "herdr" && !!r.task.herdr?.tabId;
@@ -1046,7 +1109,7 @@ export async function routeTask(vault: string, id: string, c: RouteChange, deps:
   // A run in the engine stops here and starts again in its new home.
   if (wasRunning && r.task.executor === "engine" && r.task.jobId && readJob(vault, r.task.jobId)?.status === "running") { try { stopJob(vault, r.task.jobId); } catch { /* gone */ } }
   // A new agent kind or machine for an open Herdr tab: close it there, open it in the new place.
-  if (herdrOpen && (to !== undefined || (c.agentKind && c.agentKind !== r.task.agentKind) || (c.machine && c.machine !== r.task.machine))) {
+  if (herdrOpen && (to !== undefined || (c.agentKind && c.agentKind !== r.task.agentKind) || (c.machine && c.machine !== r.task.machine) || (crew && crew !== r.task.crew))) {
     try { closeHerdr(vault, r.task, deps); } catch { /* already gone */ }
   }
   const t = updateTask(vault, id, (x) => {
@@ -1065,6 +1128,8 @@ export async function routeTask(vault: string, id: string, c: RouteChange, deps:
     }
     if (c.agentKind && c.agentKind !== x.agentKind) { note(x, "agent kind", `${x.agentKind} to ${c.agentKind}`, now); x.agentKind = c.agentKind; }
     if (c.machine && c.machine !== x.machine) { note(x, "machine", `${x.machine} to ${c.machine}`, now); x.machine = c.machine; }
+    // A worktree it already has stays (it may hold work); a scout just works in the folder itself.
+    if (crew && crew !== x.crew) { note(x, "shape", `${x.crew ?? "unshaped"} to ${crew}`, now); x.crew = crew; }
     if (herdrOpen) delete x.herdr;
     if (wasRunning && (herdrOpen || x.executor === "engine")) x.status = "routed";
     // Restaff for the new home (the old job stays as its record), and start again on its own when it was on its way.
@@ -1177,6 +1242,10 @@ export function doneTask(vault: string, id: string, deps: WorkDeps = {}): WorkTa
   if (!r) throw new Error(`no task ${id}`);
   if (r.task.jobId && readJob(vault, r.task.jobId)?.status === "running") { try { stopJob(vault, r.task.jobId); } catch { /* gone */ } }
   if (r.task.executor === "herdr" && r.task.herdr?.tabId) { try { closeHerdr(vault, r.task, deps); } catch { /* already closed */ } }
+  // Its worktree goes only when nothing would be lost (clean, and merged or pushed); otherwise it stays and the card says so.
+  const here = hereLabel(vault, deps);
+  const tree = r.task.worktree;
+  const wt = !tree ? null : tree.machine && tree.machine !== here ? { removed: false, why: `it is on ${tree.machine}; close it there` } : closeWorktree(tree, deps.git);
   const t = updateTask(vault, id, (x) => {
     x.status = "done";
     x.cleared = true;
@@ -1184,6 +1253,10 @@ export function doneTask(vault: string, id: string, deps: WorkDeps = {}): WorkTa
     delete x.pendingFollowups;
     if (x.herdr) { delete x.herdr.tabId; delete x.herdr.paneId; delete x.herdr.agent; delete x.herdr.briefPending; }
     note(x, "checked off", undefined, now);
+    if (wt && x.worktree) {
+      if (wt.removed) { note(x, "worktree removed", `${x.worktree.path}: ${wt.why}`, now); delete x.worktree; }
+      else { note(x, "worktree kept", `${x.worktree.path}: ${wt.why}`, now); addUpdate(x, "task", `I left its worktree at ${x.worktree.path} because ${wt.why}.`, now); }
+    }
   });
   syncBoard(vault, t);
   if (!t.learnOff) journalLesson(vault, t.dest?.owner, `Work task "${t.name}" closed${t.outcome ? `: ${t.outcome}` : "."}`, now);
@@ -1317,6 +1390,8 @@ export async function followUp(vault: string, id: string, text: string, o: { asT
   if (j.kind === "rename" && j.name) renameTask(vault, id, j.name, deps);
   const t = readTask(vault, id)!.task;
   const done = (task: WorkTask): FollowupResult => ({ ok: true, task, ...(j.kind === "rename" ? { renamed: j.name } : {}) });
+  // The agent goes again: last time's status file steps aside, so a fresh one says how this round went.
+  if (t.crew && t.executor === "herdr" && t.herdr?.agent && !t.herdr.briefPending) { resetCrewStatus(vault, t, deps.crewHome); if (t.crewNudged) updateTask(vault, id, (x) => { delete x.crewNudged; }); }
   if (t.executor === "herdr" && t.herdr?.agent && !t.herdr.briefPending && promptHerdr(vault, t, body, deps)) {
     // Every follow-up gets an answer at once; the result follows as its own update.
     if (t.status === "running") return done(updateTask(vault, id, (x) => addUpdate(x, "task", "On it: looking into that now.", now)));
@@ -1351,6 +1426,103 @@ function settle(vault: string, p: WorkPrompt, now: number): WorkPrompt {
   return p;
 }
 
+// ── Reconcile: the queue squared with what is really open ─────────────────
+
+export interface ReconcileReport {
+  /** Tasks whose agent is still open but whose watcher was gone: watched again. */
+  watched: string[];
+  /** Tasks that never got their tab (the launch died): launched again. */
+  relaunched: string[];
+  /** Tasks whose tab is gone: settled from their status file, or failed. */
+  settled: string[];
+  /** Work mode panes no task knows: reported, never closed. */
+  orphans: { pane: string; label?: string; cwd?: string }[];
+}
+
+/** A launch that has said nothing for this long is not still on its way. */
+const LAUNCH_STALE_MS = 5 * 60_000;
+
+/**
+ * After a restart (of the Mac, the app or Herdr), square this Mac's open Herdr
+ * tasks with the panes Herdr really has. A task whose agent is still there but
+ * whose watcher is gone (no live lease) is watched again; one whose launch
+ * died before its tab opened is launched again; one whose tab is gone takes
+ * what its status file says, else it fails with a plain reason. A pane in a
+ * workspace Prevail made, or in a task's worktree, that no task knows is
+ * reported and left alone. Engine runs settle as `work list` settles them.
+ * Safe to run again and again: a task it hands to a watcher holds a lease, so
+ * the next run leaves it be.
+ */
+export function reconcileWork(vault: string, deps: WorkDeps = {}): ReconcileReport {
+  const now = (deps.now ?? Date.now)();
+  const out: ReconcileReport = { watched: [], relaunched: [], settled: [], orphans: [] };
+  const prompts = listPrompts(vault).map((p) => settle(vault, p, now));
+  const here = hereLabel(vault, deps);
+  const tasks = prompts.flatMap((p) => p.tasks);
+  const made = new Set(prevailWorkspaces(vault, here));
+  // Nothing of Work mode's in Herdr on this Mac: no need to ask Herdr at all.
+  if (!made.size && !tasks.some((t) => t.executor === "herdr" && t.machine === here)) return out;
+  let panes: { pane_id: string; label?: string; cwd?: string; workspace_id?: string }[];
+  // No Herdr answering: nothing is known about the panes, so nothing changes.
+  try { panes = ((deps.herdrFor?.("local") ?? herdrOn("local"))(["pane", "list"]) as { panes?: typeof panes })?.panes ?? []; } catch { return out; }
+  const live = new Set(panes.map((p) => p.pane_id));
+  const spawnSelf = deps.spawnSelf ?? defaultSpawnSelf(vault);
+  const leased = (t: WorkTask) => !!t.lease && t.lease.until > now;
+  for (const t of tasks) {
+    if (t.executor !== "herdr" || t.machine !== here || !["running", "needs-you", "paused"].includes(t.status) || leased(t)) continue;
+    const pane = t.herdr?.paneId ?? t.herdr?.agent;
+    if (!pane) {
+      // Running with no tab: its launch died (the run is detached). Launched again once it has been quiet a while.
+      const last = t.log.at(-1)?.ts ?? 0;
+      if (t.status !== "running" || now - last < LAUNCH_STALE_MS) continue;
+      updateTask(vault, t.id, (x) => { x.lease = { host: here, until: now + LEASE_MS }; note(x, "relaunched", "its launch stopped before the tab opened", now); });
+      spawnSelf(["work", "run", t.id]);
+      out.relaunched.push(t.id);
+      continue;
+    }
+    if (live.has(pane)) {
+      if (t.status === "paused") continue;
+      // Its watcher holds the lease; give it one now so a second reconcile does not start another.
+      updateTask(vault, t.id, (x) => { x.lease = { host: here, until: now + LEASE_MS }; note(x, "watching again", "after a restart", now); });
+      spawnSelf(["work", "mirror", t.id]);
+      out.watched.push(t.id);
+      continue;
+    }
+    const st = t.crew ? readCrewStatus(crewPaths(vault, t).status) : null;
+    // A paused task with no word stays paused: Continue reopens it with its history.
+    if (t.status === "paused" && !st) continue;
+    const x = updateTask(vault, t.id, (y) => {
+      if (!["running", "needs-you", "paused"].includes(y.status)) return;
+      if (st) applyCrewStatus(vault, y, st, st.summary, now);
+      else finish(y, "failed", "Its Herdr tab is gone and it left no word on how it went. Continue starts it again.", now);
+      if (y.herdr) { delete y.herdr.tabId; delete y.herdr.paneId; delete y.herdr.agent; delete y.herdr.briefPending; }
+      note(y, "reconciled", st ? `its tab is gone; its status file says ${st.state}` : "its tab is gone and there is no status file", now);
+    });
+    syncBoard(vault, x);
+    out.settled.push(t.id);
+  }
+  // Work mode's own panes no task knows: in a workspace Prevail made, or in a task's worktree.
+  const known = new Set(tasks.flatMap((t) => [t.herdr?.paneId, t.herdr?.agent].filter((p): p is string => !!p)));
+  const trees = tasks.map((t) => t.worktree?.path).filter((p): p is string => !!p);
+  for (const p of panes) {
+    if (known.has(p.pane_id)) continue;
+    const ours = (p.workspace_id && made.has(p.workspace_id)) || (p.cwd && trees.some((w) => p.cwd === w || p.cwd!.startsWith(`${w}/`)));
+    if (ours) out.orphans.push({ pane: p.pane_id, ...(p.label ? { label: p.label } : {}), ...(p.cwd ? { cwd: p.cwd } : {}) });
+  }
+  return out;
+}
+
+/** How often `work list` reconciles on its own (it is polled; a restart is rare). */
+export const RECONCILE_EVERY_MS = 2 * 60_000;
+
+/** Reconcile when this Mac has not in the last two minutes; quiet on any failure. */
+export function maybeReconcile(vault: string, deps: WorkDeps = {}): ReconcileReport | null {
+  const now = (deps.now ?? Date.now)();
+  const mark = join(workDir(vault), `reconciled-${hereLabel(vault, deps).replace(/[^A-Za-z0-9_.-]/g, "-")}.json`);
+  try { if (now - (JSON.parse(readFileSync(mark, "utf8")) as { ts: number }).ts < RECONCILE_EVERY_MS) return null; } catch { /* first time */ }
+  try { writeAtomic(mark, `${JSON.stringify({ ts: now })}\n`); return reconcileWork(vault, deps); } catch { return null; }
+}
+
 export function listWork(vault: string, view: "queue" | "backlog" = "queue", now = Date.now()) {
   const prompts = listPrompts(vault).map((p) => settle(vault, p, now));
   // The prompt rides along with each task, clipped; the clip says so.
@@ -1380,14 +1552,15 @@ export function showWork(vault: string, id: string) {
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
-const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--hold] [--into <work id>] [--no-model] | done <task> | followup <task> [--file -|--text t] [--as-task] | rename <task> --name n | focus <task> | list [--view queue|backlog] | reorder <task> --before <id>|--after <id>|--to <index> | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] [--max-running n] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | machine-approve --label l --target t --yes | run <task> | mirror <task>  [--json]";
+const USAGE = "usage: prevail work add [--file -|<path>] [--text t] [--surface desktop|phone|cli] [--machine m] [--agent kind] [--hold] [--into <work id>] [--no-model] | done <task> | followup <task> [--file -|--text t] [--as-task] | rename <task> --name n | focus <task> | list [--view queue|backlog] | reorder <task> --before <id>|--after <id>|--to <index> | show <id> | route <task> [--dest kind:id] [--undo] [--agent kind] [--machine m] [--crew scout|ship] | pause <task> | continue <task> [--yes] | start <task> | stop <task> | accept <task> <n> | decline <task> <n> | answer <task> yes|no|keep|close|reopen [--workspace label] | settings [--herdr on|off] [--workspace label] [--max-running n] | machines | workspaces [--machine m] | machine-add --label l --target t --yes | machine-approve --label l --target t --yes | reconcile | run <task> | mirror <task>  [--json]";
 
 export async function workCommand(argv: string[], vault: string, deps: WorkDeps = {}): Promise<number> {
   const sub = parseModArgs(argv).pos[0] ?? "list";
   // The list tops the queue up first (a safety net); every command that can free a slot or queue a task tops it up after,
   // so a detached `work run` or `work mirror` that finishes starts the next queued task.
   const top = async () => { try { await topUp(vault, deps); } catch { /* the next command tries again */ } };
-  if (sub === "list") await top();
+  // A restart leaves tasks whose watcher or tab is gone: the polled list squares them, at most every two minutes.
+  if (sub === "list") { maybeReconcile(vault, deps); await top(); }
   const code = await workSub(argv, vault, deps);
   if (!["list", "show", "machines", "workspaces"].includes(sub)) await top();
   return code;
@@ -1423,7 +1596,7 @@ async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<n
     }
     if (sub === "show") { const v = showWork(vault, id); if (!v) return fail(`no task or prompt ${id}`); return say(v, JSON.stringify(v, null, 2)); }
     if (sub === "route") {
-      const t = await routeTask(vault, id, { dest: args.get("dest"), undo: args.has("undo"), agentKind: args.get("agent"), machine: args.get("machine") }, deps);
+      const t = await routeTask(vault, id, { dest: args.get("dest"), undo: args.has("undo"), agentKind: args.get("agent"), machine: args.get("machine"), crew: args.get("crew") }, deps);
       return say({ ok: true, task: t }, `${t.id} -> ${t.dest ? `${t.dest.kind}:${t.dest.id}` : "General"} (${t.status})`);
     }
     if (sub === "done") { const t = doneTask(vault, id, deps); return say({ ok: true, task: t }, `${t.id}: done`); }
@@ -1479,6 +1652,14 @@ async function workSub(argv: string[], vault: string, deps: WorkDeps): Promise<n
       if (!args.has("yes")) return fail(`confirm with --yes: opens Terminal running ${machineAddCommand(label || "<label>", target || "<ssh target>")}`);
       const r = approveInTerminal(label, target, deps.terminal);
       return say(r, `opened Terminal: ${r.command.join(" ")}`);
+    }
+    if (sub === "reconcile") {
+      const r = reconcileWork(vault, deps);
+      const lines = [
+        ...r.watched.map((x) => `${x}: watched again`), ...r.relaunched.map((x) => `${x}: launched again`), ...r.settled.map((x) => `${x}: its tab is gone, settled`),
+        ...r.orphans.map((o) => `pane ${o.pane}${o.label ? ` (${o.label})` : ""}: no task knows it; left open`),
+      ];
+      return say({ ok: true, ...r }, lines.join("\n") || "nothing to reconcile");
     }
     if (sub === "run") { const t = await runTask(vault, id, deps, { reopen: args.has("reopen") }); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }
     if (sub === "mirror") { const t = await mirrorTask(vault, id, deps); return say({ ok: true, task: t }, `${t.id}: ${t.status}`); }

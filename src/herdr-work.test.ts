@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { addMachine, agentKinds, findTaskWorkspace, approveInTerminal, askingQuestion, ownerAsk, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { createMission } from "./missions.ts";
+import { crewPaths } from "./work-crew.ts";
+import { CREW_NUDGE, addMachine, agentKinds, findTaskWorkspace, approveInTerminal, askingQuestion, ownerAsk, shellQuote, terminalArgv, buildBrief, closeTask, focusTask, glyphLine, headlessArgs, herdrWorkspaces, hostKey, launchTask, machines, mirrorTask, newText, stripChrome, afterBrief, BRIEF_END, reopenTask, writeMachineRecord } from "./herdr-work.ts";
 import type { Herdr } from "./spaces.ts";
-import { addWork, continueTask, doneTask, followUp, isCloseYes, WORKING_LINE, pauseTask, queueTasks, updateTask, writeSettings, type WorkDeps, type WorkTask } from "./work.ts";
+import { addWork, continueTask, doneTask, followUp, isCloseYes, WORKING_LINE, pauseTask, queueTasks, readTask, reconcileWork, routeTask, updateTask, writeSettings, type WorkDeps, type WorkTask } from "./work.ts";
 
 const ROOT = join("/tmp", `prevail-herdr-work-${process.pid}`);
 const V = join(ROOT, "vault");
@@ -69,12 +73,18 @@ function deps(h: ReturnType<typeof fakeHerdr>, spawned: string[][] = [], o: { gl
     herdrFor: (m) => h.forMachine(m),
     machine: { host: "laptop", role: "hub", env: { GLYPH_SPACES: GLYPH, PREVAIL_MACHINE: "laptop", GLYPH_AGENTS: join(ROOT, "no-agents.tsv") } },
     settingsPath: () => "/tmp/foo-act-gate.json",
+    worktreeRoot: join(ROOT, "trees"),
   };
 }
 
 const oneTask = (kind = "claude", machine?: string, text = "Find the best foo carrier for the rentals") => JSON.stringify({ goals: [{ text: "Cover the foo rentals", tasks: [{ name: "Foo Carrier", text, dest: { kind: "domain", id: "insurance" }, confidence: 0.9, shape: "find", ...(kind !== "claude" ? { agent: kind } : {}), ...(machine ? { machine, effort: "deep" } : {}) }] }] });
 const mutating = (calls: string[][]) => calls.filter((c) => ["create", "close", "start", "prompt", "send-keys", "add", "run", "rename", "focus"].includes(c[2] ?? "") && c[3] !== "--help");
 const HEADLESS_CLAUDE = ["--dangerously-skip-permissions", "--settings", "/tmp/foo-act-gate.json", "--disallowedTools", "AskUserQuestion"];
+// A crew task's Claude settings: the act gate plus its Stop hook, in this Mac's own folder (here, the test config dir).
+const crewSettings = (id: string) => join(ROOT, "config", "work", id, "settings.json");
+const crewClaude = (id: string) => ["--dangerously-skip-permissions", "--settings", crewSettings(id), "--disallowedTools", "AskUserQuestion"];
+/** A record from before shapes (no scout or ship): it runs as it always did. */
+const legacy = (id: string) => updateTask(V, id, (x) => { delete x.crew; });
 
 describe("machines and agent kinds", () => {
   beforeEach(seed);
@@ -144,7 +154,7 @@ describe("a task in a Herdr tab: found or made, one tab per task, headless, neve
     expect(m[0]).toContain(`PREVAIL_THREAD_ID=${t.thread.session}`);
     expect(m[1]).toEqual(["local", "tab", "rename", "wnew:t1", "Foo Carrier"]);
     // Headless: Claude skips its approval prompts and its ask tool, and keeps Prevail's act-gate hook.
-    expect(m[2]).toEqual(["local", "agent", "start", expect.stringMatching(/^foo-carrier-\d+$/), "--kind", "claude", "--pane", "wnew:p1", "--", ...HEADLESS_CLAUDE]);
+    expect(m[2]).toEqual(["local", "agent", "start", expect.stringMatching(/^foo-carrier-\d+$/), "--kind", "claude", "--pane", "wnew:p1", "--", ...crewClaude(t.id)]);
     expect(m[3]).toEqual(["local", "pane", "rename", "wnew:p1", "Foo Carrier"]);
     expect(m[4]!.slice(0, 4)).toEqual(["local", "agent", "prompt", "wnew:p1"]);
     expect(m[4]![4]).toContain("Task: Find the best foo carrier for the rentals");
@@ -179,7 +189,12 @@ describe("a task in a Herdr tab: found or made, one tab per task, headless, neve
     const r = await launchTask(V, p.tasks[0]!.id, deps(h, [], { glyph: true }));
     const m = mutating(h.calls);
     expect(m.find((c) => c[2] === "start")).toBeUndefined();
-    expect(m.find((c) => c[1] === "pane" && c[2] === "run")).toEqual(["local", "pane", "run", "w1:p1", "claude -n 'Foo Carrier' --dangerously-skip-permissions --settings /tmp/foo-act-gate.json --disallowedTools AskUserQuestion"]);
+    expect(m.find((c) => c[1] === "pane" && c[2] === "run")).toEqual(["local", "pane", "run", "w1:p1", `claude -n 'Foo Carrier' --dangerously-skip-permissions --settings ${crewSettings(p.tasks[0]!.id)} --disallowedTools AskUserQuestion`]);
+    // A task from before shapes keeps the act gate's own settings file.
+    const old = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask() } });
+    legacy(old.tasks[0]!.id);
+    await launchTask(V, old.tasks[0]!.id, deps(h, [], { glyph: true }));
+    expect(mutating(h.calls).filter((c) => c[1] === "pane" && c[2] === "run").at(-1)![4]).toContain(HEADLESS_CLAUDE.join(" "));
     expect(r.herdr).toMatchObject({ glyph: true, agent: "w1:p1" });
     // Codex: through Glyph by a bare label word, sandboxed with no approvals, no act gate (its hook is Claude's).
     const hc = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Insurance" }], statuses: ["idle"] });
@@ -205,6 +220,7 @@ describe("a task in a Herdr tab: found or made, one tab per task, headless, neve
     // Blocked on something it cannot answer: no question for the user here; the mirror sends the brief once it is idle.
     const hb = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Insurance" }], statuses: ["blocked"], screens: ["Foo needs something"] });
     const q = await addWork(V, "y", { deps: { ...deps(hb), runner: async () => oneTask() } });
+    legacy(q.tasks[0]!.id);
     const b = await launchTask(V, q.tasks[0]!.id, deps(hb));
     expect(b).toMatchObject({ status: "running", herdr: { briefPending: true } });
     expect(b.ask).toBeUndefined();
@@ -238,8 +254,10 @@ describe("a task in a Herdr tab: found or made, one tab per task, headless, neve
 
 describe("mirror, follow up, check off, close and reopen", () => {
   beforeEach(seed);
+  // These tasks are records from before shapes: the agent settles with its words, as it always did. Crew tasks are below.
   async function running(h: ReturnType<typeof fakeHerdr>, spawned: string[][] = [], runner = oneTask()) {
     const p = await addWork(V, "x", { deps: { ...deps(h, spawned), runner: async () => runner } });
+    legacy(p.tasks[0]!.id);
     return launchTask(V, p.tasks[0]!.id, deps(h, spawned));
   }
   test("the mirror appends only new text, notes what the agent does in plain words, and ends done with an outcome", async () => {
@@ -528,4 +546,242 @@ test("an unsent suggestion in the agent's input box is never read as its words",
 test("the first mirror skips the agent's banner and its echo of the brief", () => {
   expect(afterBrief(`Foo CLI v1\n> You are working on one task. End with a short summary: what you did, ${BRIEF_END}\n\nFoo answer`).trim()).toBe("Foo answer");
   expect(afterBrief("no echo yet")).toBe("no echo yet");
+});
+
+describe("crew tasks: scout or ship, a status file before the end, a quiet watcher", () => {
+  beforeEach(seed);
+  const statusOf = (t: WorkTask) => crewPaths(V, t).status;
+  const writeStatus = (t: WorkTask, j: object) => { mkdirSync(crewPaths(V, t).dir, { recursive: true }); writeFileSync(statusOf(t), JSON.stringify(j)); };
+  /** A runner that only counts: the watcher's model calls. */
+  const counting = () => { const n = { calls: 0 }; return { n, runner: async () => { n.calls++; return "NONE"; } }; };
+  async function crewTask(h: ReturnType<typeof fakeHerdr>, text = "Find the best foo carrier for the rentals", spawned: string[][] = []) {
+    const p = await addWork(V, "x", { deps: { ...deps(h, spawned), runner: async () => oneTask("claude", undefined, text) } });
+    return launchTask(V, p.tasks[0]!.id, deps(h, spawned));
+  }
+
+  test("the router shapes each task; the brief tells a scout to change nothing and every crew agent to write its status file", async () => {
+    const h = fakeHerdr({ statuses: ["idle"] });
+    const t = await crewTask(h);
+    expect(t.crew).toBe("scout");
+    const brief = mutating(h.calls).find((c) => c[2] === "prompt")![4]!;
+    expect(brief).toContain("This is a scout task");
+    expect(brief).toContain(`Write what you found to ${crewPaths(V, t).report}`);
+    expect(brief).toContain(`write ${statusOf(t)} as JSON`);
+    // The brief still ends on its last words (the mirror finds the agent's reply after them).
+    expect(brief.trimEnd().endsWith(BRIEF_END)).toBe(true);
+    // The Stop hook rides in the task's own settings, beside the act gate's.
+    const settings = JSON.parse(readFileSync(join(ROOT, "config", "work", t.id, "settings.json"), "utf8")) as { hooks: { Stop: unknown[] } };
+    expect(settings.hooks.Stop).toHaveLength(1);
+    const s = await addWork(V, "y", { deps: { ...deps(h), runner: async () => oneTask("claude", undefined, "Draft a reply to the foo landlord") } });
+    expect(s.tasks[0]!.crew).toBe("ship");
+  });
+
+  test("a scout that writes its status and report is done with its own summary: the report goes in the thread, no model call", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "done"], reads: [`${BRIEF_END}\n\nFoo carrier A is cheapest.`] });
+    const t = await crewTask(h);
+    mkdirSync(crewPaths(V, t).dir, { recursive: true });
+    writeFileSync(crewPaths(V, t).report, "# Foo carriers\n\nCarrier A is cheapest for both foo rentals.\n");
+    writeStatus(t, { state: "done", summary: "Carrier A is cheapest for both foo rentals.", report: crewPaths(V, t).report });
+    const c = counting();
+    const r = await mirrorTask(V, t.id, { ...deps(h), runner: c.runner }, { maxRounds: 3, waitMs: 1 });
+    expect(r).toMatchObject({ status: "done", outcome: "Carrier A is cheapest for both foo rentals.", report: `data/domains/insurance/memory/work/${t.id}/report.md` });
+    expect(c.n.calls).toBe(0);
+    expect(readFileSync(join(D("insurance"), "memory", "threads", `${t.thread.session}.md`), "utf8")).toContain("Carrier A is cheapest for both foo rentals.\n");
+    // It waited on Herdr, not a timer: idle while it worked.
+    expect(h.calls.find((c) => c[1] === "agent" && c[2] === "wait")).toEqual(["local", "agent", "wait", t.herdr!.agent!, "--status", "idle", "--timeout", "1"]);
+  });
+
+  test("blocked in its status file is Needs you with what it needs; a follow-up clears the old status for a fresh one", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "idle"], reads: [`${BRIEF_END}\n\nI need the foo policy number.`] });
+    const t = await crewTask(h);
+    writeStatus(t, { state: "blocked", summary: "I need the foo policy number to compare like for like." });
+    const r = await mirrorTask(V, t.id, deps(h), { maxRounds: 2, waitMs: 1 });
+    expect(r).toMatchObject({ status: "needs-you", waiting: "I need the foo policy number to compare like for like." });
+    // Waiting on the owner, the watcher waits for the agent to work again.
+    expect(h.calls.filter((c) => c[2] === "wait").at(-1)).toContain("working");
+    const f = await followUp(V, t.id, "It is in the foo folder", { deps: deps(h) });
+    expect(f.task.status).toBe("running");
+    expect(existsSync(statusOf(t))).toBe(false);
+    expect(existsSync(statusOf(t).replace(/\.json$/, ".prev.json"))).toBe(true);
+  });
+
+  test("an agent that stops without its status file is reminded once, then failed with a plain reason", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "idle", "idle"], reads: [`${BRIEF_END}\n\nAll done with foo.`] });
+    const t = await crewTask(h);
+    const r = await mirrorTask(V, t.id, deps(h), { maxRounds: 3, waitMs: 1 });
+    expect(mutating(h.calls).filter((c) => c[2] === "prompt").map((c) => c[4]).at(-1)).toBe(CREW_NUDGE);
+    expect(r.log.some((l) => l.ev === "reminded")).toBe(true);
+    expect(r).toMatchObject({ status: "failed", outcome: "It stopped without saying how it went, even after a reminder." });
+    // A reminder that lands: the status written after it settles the task.
+    const h2 = fakeHerdr({ statuses: ["idle", "idle"], reads: [`${BRIEF_END}\n\nAll done with foo.`] });
+    const t2 = await crewTask(h2);
+    let n = 0;
+    const d2 = { ...deps(h2), herdrFor: (m: string) => { const f = h2.forMachine(m); return (a: string[]) => { if (a[1] === "prompt" && a[3] === CREW_NUDGE && ++n === 1) writeStatus(t2, { state: "done", summary: "Foo carrier A it is." }); return f(a); }; } };
+    expect(await mirrorTask(V, t2.id, d2, { maxRounds: 3, waitMs: 1 })).toMatchObject({ status: "done", outcome: "Foo carrier A it is." });
+  });
+
+  test("a crew agent's last line ending in a question is not a question: its status file says how it went", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "idle"], reads: [`${BRIEF_END}\n\nCarrier A is cheapest. Want me to draft the foo quote request too?`] });
+    const t = await crewTask(h);
+    writeStatus(t, { state: "done", summary: "Carrier A is cheapest." });
+    expect(await mirrorTask(V, t.id, deps(h), { maxRounds: 2, waitMs: 1 })).toMatchObject({ status: "done", outcome: "Carrier A is cheapest." });
+  });
+
+  test("a long watch renews its lease between waits, so reconcile never starts a second watcher", async () => {
+    const h = fakeHerdr({ statuses: ["idle", "working", "working", "working", "done"], reads: [`${BRIEF_END}\n\nworking on foo`] });
+    const t = await crewTask(h);
+    let clock = Date.now();
+    const leases: number[] = [];
+    const d = { ...deps(h), now: () => (clock += 2 * 60_000), herdrFor: (m: string) => { const f = h.forMachine(m); return (a: string[]) => { if (a[1] === "wait") leases.push(readTask(V, t.id)!.task.lease?.until ?? 0); return f(a); }; } };
+    await mirrorTask(V, t.id, d, { maxRounds: 4, waitMs: 1 });
+    // Each wait starts with a lease that outlives it.
+    expect(leases.length).toBeGreaterThan(2);
+    expect(leases.slice(1).every((u, i) => u > leases[i]!)).toBe(true);
+  });
+
+  test("the crew files are named by the vault folder of the Mac the agent runs on", async () => {
+    const h = fakeHerdr({ statuses: ["idle"] });
+    const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask() } });
+    const b = buildBrief(V, p.tasks[0]!, { vaultRoot: "/tmp/foo-remote-vault" });
+    expect(b).toContain(`write /tmp/foo-remote-vault/data/domains/insurance/memory/work/${p.tasks[0]!.id}/status.json as JSON`);
+  });
+
+  test("its tab closing with no status file fails it; with one, the file says how it went", async () => {
+    const gone = (h: ReturnType<typeof fakeHerdr>) => ({ ...deps(h), herdrFor: (m: string) => { const f = h.forMachine(m); return (a: string[]) => { if (a[0] === "agent" && a[1] === "read") throw new Error('herdr agent read failed: {"error":{"code":"agent_not_found"}}'); return f(a); }; } });
+    const h = fakeHerdr({ statuses: ["idle"] });
+    const t = await crewTask(h);
+    expect(await mirrorTask(V, t.id, gone(h), { maxRounds: 2, waitMs: 1 })).toMatchObject({ status: "failed", outcome: "Its Herdr tab closed before it said how it went. Continue starts it again." });
+    const t2 = await crewTask(h);
+    writeStatus(t2, { state: "failed", summary: "The foo site was down." });
+    expect(await mirrorTask(V, t2.id, gone(h), { maxRounds: 2, waitMs: 1 })).toMatchObject({ status: "failed", outcome: "The foo site was down." });
+  });
+
+  test("quiet supervision: a round where nothing changed makes no model call and no write", async () => {
+    // A task from before shapes that hands a choice back, then sits there: the old mirror distilled it every round.
+    const end = "Foo Lake or Foo Bay, both about 430 foo dollars.\n\nPick one and I will hold it.";
+    const h = fakeHerdr({ statuses: ["idle"], reads: [end] });
+    const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask() } });
+    legacy(p.tasks[0]!.id);
+    const t = await launchTask(V, p.tasks[0]!.id, deps(h));
+    const c = counting();
+    const r = await mirrorTask(V, t.id, { ...deps(h), runner: c.runner }, { maxRounds: 8, waitMs: 1 });
+    expect(r).toMatchObject({ status: "needs-you", waiting: "Pick one and I will hold it." });
+    expect(c.n.calls).toBe(1);
+    const turns = readFileSync(join(D("insurance"), "memory", "threads", `${t.thread.session}.md`), "utf8").match(/^## /gm)!.length;
+    expect(turns).toBe(2);
+    // While it waits on the owner, Herdr is asked to wake the watcher when the agent works again.
+    expect(h.calls.filter((x) => x[2] === "wait").slice(1).every((x) => x.includes("working"))).toBe(true);
+  });
+
+  test("a ship task on a repo works in its own worktree, told how the project ships; checking it off keeps unpushed work", async () => {
+    const repo = join(ROOT, "code", "foo-app");
+    mkdirSync(repo, { recursive: true });
+    const g = (cwd: string, ...a: string[]) => spawnSync("git", ["-C", cwd, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Foo", GIT_AUTHOR_EMAIL: "foo@example.com", GIT_COMMITTER_NAME: "Foo", GIT_COMMITTER_EMAIL: "foo@example.com" } }).stdout.trim();
+    g(repo, "init", "--quiet", "-b", "main");
+    writeFileSync(join(repo, "foo.ts"), "export const foo = 1;\n");
+    g(repo, "add", ".");
+    g(repo, "commit", "--quiet", "-m", "foo");
+    createMission(V, { name: "Foo App", domains: [{ slug: "general", role: "owner" }], repos: [repo] });
+    const h = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Foo App" }], statuses: ["idle"] });
+    const reply = JSON.stringify({ goals: [{ text: "Foo", tasks: [{ name: "Foo Bug", text: "Fix the foo bug", dest: { kind: "folder", id: repo }, confidence: 0.9, shape: "do", crew: "ship" }] }] });
+    const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => reply } });
+    const t = await launchTask(V, p.tasks[0]!.id, deps(h));
+    const tree = join(ROOT, "trees", "foo-app", `foo-bug-${t.id.split("-").slice(-2).join("-")}`);
+    expect(t.worktree).toMatchObject({ path: tree, branch: `work/foo-bug-${t.id.split("-").slice(-2).join("-")}`, base: "HEAD", cwd: tree });
+    expect(t.shipMode).toBe("local-only");
+    expect(mutating(h.calls).find((c) => c[1] === "tab" && c[2] === "create")).toContain(tree);
+    const brief = mutating(h.calls).find((c) => c[2] === "prompt")![4]!;
+    expect(brief).toContain(`your own git worktree at ${tree}, on the branch ${t.worktree!.branch}`);
+    expect(brief).toContain("Do not push or merge: the owner merges it.");
+    // Unpushed work on the branch: checking it off leaves the worktree and says so.
+    writeFileSync(join(tree, "foo.ts"), "export const foo = 2;\n");
+    g(tree, "commit", "--quiet", "-am", "foo two");
+    const d = doneTask(V, t.id, deps(h));
+    expect(existsSync(tree)).toBe(true);
+    expect(d.worktree?.path).toBe(tree);
+    expect(d.updates!.at(-1)!.text).toBe(`I left its worktree at ${tree} because its branch is not merged or pushed yet.`);
+    // Merged into its base: nothing to lose, so it goes (the branch stays).
+    g(repo, "merge", "--quiet", "--ff-only", t.worktree!.branch);
+    const again = doneTask(V, t.id, deps(h));
+    expect(existsSync(tree)).toBe(false);
+    expect(again.worktree).toBeUndefined();
+    expect(again.log.at(-1)).toMatchObject({ ev: "worktree removed" });
+    expect(g(repo, "branch", "--list", t.worktree!.branch)).toContain("work/");
+    // A worktree another Mac made is left for that Mac.
+    updateTask(V, t.id, (x) => { x.worktree = { ...t.worktree!, machine: "studio-foo" }; });
+    const far = doneTask(V, t.id, deps(h));
+    expect(far.worktree?.machine).toBe("studio-foo");
+    expect(far.log.at(-1)).toMatchObject({ ev: "worktree kept", detail: expect.stringContaining("it is on studio-foo") });
+  });
+
+  test("scout or ship changes like a re-route: an open tab closes and it starts again shaped anew", async () => {
+    const h = fakeHerdr({ workspaces: [{ workspace_id: "w1", label: "Insurance" }], statuses: ["idle"] });
+    const spawned: string[][] = [];
+    const t = await crewTask(h, undefined, spawned);
+    const r = await routeTask(V, t.id, { crew: "ship" }, deps(h, spawned));
+    expect(r.crew).toBe("ship");
+    expect(r.log.find((l) => l.ev === "shape")?.detail).toBe("scout to ship");
+    expect(mutating(h.calls).some((c) => c[1] === "tab" && c[2] === "close")).toBe(true);
+    expect(spawned.at(-1)).toEqual(["work", "run", t.id]);
+    await expect(routeTask(V, t.id, { crew: "captain" }, deps(h))).rejects.toThrow(/scout or a ship/);
+  });
+});
+
+describe("reconcile after a restart", () => {
+  beforeEach(seed);
+  async function launched(h: ReturnType<typeof fakeHerdr>, text = "Find the best foo carrier for the rentals") {
+    const p = await addWork(V, "x", { deps: { ...deps(h), runner: async () => oneTask("claude", undefined, text) } });
+    return launchTask(V, p.tasks[0]!.id, deps(h));
+  }
+  test("a live agent whose watcher is gone is watched again, once; a gone tab settles from its status file or fails", async () => {
+    const h0 = fakeHerdr({ statuses: ["idle"] });
+    const alive = await launched(h0);
+    const done = await launched(h0, "Find foo carrier B");
+    const lost = await launched(h0, "Find foo carrier C");
+    mkdirSync(crewPaths(V, done).dir, { recursive: true });
+    writeFileSync(crewPaths(V, done).status, JSON.stringify({ state: "done", summary: "Foo carrier B is fine." }));
+    const h = fakeHerdr({ panes: [{ pane_id: alive.herdr!.paneId, workspace_id: "wnew" }] });
+    const spawned: string[][] = [];
+    const r = reconcileWork(V, deps(h, spawned));
+    expect(r.watched).toEqual([alive.id]);
+    expect(spawned).toEqual([["work", "mirror", alive.id]]);
+    expect(r.settled.sort()).toEqual([done.id, lost.id].sort());
+    expect(readTask(V, done.id)!.task).toMatchObject({ status: "done", outcome: "Foo carrier B is fine." });
+    expect(readTask(V, lost.id)!.task).toMatchObject({ status: "failed", outcome: "Its Herdr tab is gone and it left no word on how it went. Continue starts it again." });
+    expect(readTask(V, lost.id)!.task.herdr?.paneId).toBeUndefined();
+    // Idempotent: the watcher it started holds the lease, and the settled ones are settled.
+    const again = reconcileWork(V, deps(h, spawned));
+    expect(again).toEqual({ watched: [], relaunched: [], settled: [], orphans: [] });
+    expect(spawned.length).toBe(1);
+    // Nothing is ever closed.
+    expect(mutating(h.calls)).toEqual([]);
+  });
+  test("a paused task keeps its pause; a Work pane no task knows is reported, never closed; no Herdr means no change", async () => {
+    const h0 = fakeHerdr({ statuses: ["idle"] });
+    const t = await launched(h0);
+    pauseTask(V, t.id, deps(h0));
+    const h = fakeHerdr({ panes: [{ pane_id: "wnew:p9", workspace_id: "wnew", label: "Foo Leftover", cwd: "/tmp/foo" }, { pane_id: "other:p1", workspace_id: "wmine", label: "Mine" }] });
+    const r = reconcileWork(V, deps(h));
+    expect(r.orphans).toEqual([{ pane: "wnew:p9", label: "Foo Leftover", cwd: "/tmp/foo" }]);
+    expect(readTask(V, t.id)!.task.status).toBe("paused");
+    expect(mutating(h.calls)).toEqual([]);
+    const down = { ...deps(h), herdrFor: () => (() => { throw new Error("herdr pane list failed: no server"); }) as Herdr };
+    expect(reconcileWork(V, down)).toEqual({ watched: [], relaunched: [], settled: [], orphans: [] });
+    // No Work mode task or workspace in Herdr on this Mac: Herdr is not even asked.
+    seed();
+    const quiet = fakeHerdr();
+    expect(reconcileWork(V, deps(quiet))).toEqual({ watched: [], relaunched: [], settled: [], orphans: [] });
+    expect(quiet.calls.some((c) => c[1] === "pane")).toBe(false);
+  });
+  test("a launch that died before its tab opened is launched again once it has been quiet a while", async () => {
+    const h = fakeHerdr({ statuses: ["idle"] });
+    const spawned: string[][] = [];
+    const p = await addWork(V, "x", { deps: { ...deps(h, spawned), runner: async () => oneTask() } });
+    const id = p.tasks[0]!.id;
+    expect(reconcileWork(V, deps(h, spawned)).relaunched).toEqual([]);
+    const later = { ...deps(h, spawned), now: () => Date.now() + 10 * 60_000 };
+    expect(reconcileWork(V, later).relaunched).toEqual([id]);
+    expect(spawned.at(-1)).toEqual(["work", "run", id]);
+    expect(reconcileWork(V, later).relaunched).toEqual([]);
+  });
 });

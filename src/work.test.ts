@@ -6,8 +6,9 @@ import { boardFile, readJob, saveJob, type Job } from "./jobs.ts";
 import type { Herdr } from "./spaces.ts";
 import {
   acceptSuggestion, addWork, answerTask, continueTask, distilOutcome, doneTask, finish, followUp, plainOutcome, startTask, declineSuggestion, listWork, pauseTask, readOrder, readSettings, readTask, remainingJob, reorderTask, routeTask, runTask, showWork,
-  stopTask, topUp, updateTask, workCommand, writeSettings, type WorkDeps,
+  stopTask, topUp, updateTask, workCommand, writeSettings, maybeReconcile, type WorkDeps,
 } from "./work.ts";
+import { spawnSync } from "node:child_process";
 import { createMission } from "./missions.ts";
 import { gatherContext, maskIdentifiers, neededSpecialists, ownerLocation, planTask } from "./work-assemble.ts";
 
@@ -627,5 +628,62 @@ describe("plan before doing", () => {
     finish(t, "done", "Three foo carriers compared; A is cheapest.");
     expect(t.status).toBe("done");
     expect(t.updates!.at(-1)!.text).toBe("Done: Three foo carriers compared; A is cheapest.");
+  });
+});
+
+describe("crew tasks in the queue", () => {
+  beforeEach(seed);
+  async function cli(args: string[], d: WorkDeps = deps()): Promise<{ code: number; json: Record<string, unknown> }> {
+    const orig = process.stdout.write.bind(process.stdout);
+    let buf = "";
+    process.stdout.write = ((s: string) => { buf += s; return true; }) as typeof process.stdout.write;
+    try { const code = await workCommand([...args, "--json"], V, d); return { code, json: JSON.parse(buf.trim().split("\n").pop()!) }; } finally { process.stdout.write = orig; }
+  }
+  const stub = (seen: Job[] = []) => async (vault: string, id: string): Promise<Job> => {
+    const j = readJob(vault, id)!;
+    seen.push(j);
+    const done = { ...j, status: "done" as const, result: { type: "page", summary: "Foo result" } };
+    saveJob(vault, done);
+    return done;
+  };
+  test("a record from before shapes loads, lists and runs as it always did", async () => {
+    const t = (await addWork(V, "x", { deps: { ...deps(), runner: async () => threeGoals } })).tasks[0]!;
+    expect(t.crew).toBe("scout");
+    updateTask(V, t.id, (x) => { delete x.crew; });
+    expect(listWork(V).tasks.find((x) => x.id === t.id)?.crew).toBeUndefined();
+    const r = await runTask(V, t.id, { ...deps(), runJob: stub() });
+    expect(r).toMatchObject({ status: "done", outcome: "Foo result" });
+    expect(r.crew).toBeUndefined();
+    expect(r.worktree).toBeUndefined();
+  });
+  test("an engine ship task on a repo runs its job in the task's own worktree", async () => {
+    const repo = join(ROOT, "code", "foo-app");
+    mkdirSync(repo, { recursive: true });
+    const g = (...a: string[]) => spawnSync("git", ["-C", repo, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Foo", GIT_AUTHOR_EMAIL: "foo@example.com", GIT_COMMITTER_NAME: "Foo", GIT_COMMITTER_EMAIL: "foo@example.com" } });
+    g("init", "--quiet", "-b", "main");
+    writeFileSync(join(repo, "foo.ts"), "export const foo = 1;\n");
+    g("add", ".");
+    g("commit", "--quiet", "-m", "foo");
+    createMission(V, { name: "Foo App", domains: [{ slug: "money", role: "owner" }], repos: [repo] });
+    const runner = async () => JSON.stringify({ goals: [{ text: "Foo", tasks: [{ name: "Foo Bug", text: "Fix the foo bug", dest: { kind: "folder", id: repo }, confidence: 0.9, shape: "do" }] }] });
+    const d = { ...deps(), worktreeRoot: join(ROOT, "trees") };
+    const t = (await addWork(V, "x", { deps: { ...d, runner } })).tasks[0]!;
+    expect(t.crew).toBe("ship");
+    const seen: Job[] = [];
+    const r = await runTask(V, t.id, { ...d, runJob: stub(seen) });
+    expect(r.worktree?.path).toBe(join(ROOT, "trees", "foo-app", `foo-bug-${t.id.split("-").slice(-2).join("-")}`));
+    expect(seen[0]!.cwd).toBe(r.worktree!.cwd);
+    expect(r.shipMode).toBe("local-only");
+  });
+  test("the CLI re-shapes a task, and reconciles on demand and, at most every two minutes, from the list", async () => {
+    const t = (await addWork(V, "x", { deps: { ...deps(), runner: async () => threeGoals } })).tasks[0]!;
+    const r = await cli(["route", t.id, "--crew", "ship"]);
+    expect(r.json).toMatchObject({ ok: true, task: { crew: "ship" } });
+    expect((await cli(["route", t.id, "--crew", "skipper"])).code).toBe(1);
+    expect((await cli(["reconcile"])).json).toEqual({ ok: true, watched: [], relaunched: [], settled: [], orphans: [] });
+    const now = Date.now();
+    expect(maybeReconcile(V, { ...deps(), now: () => now })).not.toBeNull();
+    expect(maybeReconcile(V, { ...deps(), now: () => now + 60_000 })).toBeNull();
+    expect(maybeReconcile(V, { ...deps(), now: () => now + 3 * 60_000 })).not.toBeNull();
   });
 });
