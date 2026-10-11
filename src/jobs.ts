@@ -96,6 +96,8 @@ export interface Job {
   compass?: JobCompass;
   /** Specialists Phase 3: what the Operator proposed, each behind the broker. */
   actions?: OperatorAction[];
+  /** Where the team works when not the owner's folder: a Work mode ship task's own git worktree. */
+  cwd?: string;
 }
 
 export interface Receipt { n: number; ts: number; domain: string; kind: "decision" | "task" | "note" | "page" | "draft" | "build" | "memory" | "candidate"; file: string; ref: string; text: string; undone?: number }
@@ -963,7 +965,7 @@ export async function runJob(vault: string, id: string, deps: RunDeps = {}): Pro
         let raw = "";
         try {
           const web = spec.tools.includes("web");
-          raw = await turn({ prompt, cwd: resolveDomainDir(vault, job!.domains.owner), cli, model: "", isFirst: true, bare: true, act: false, webAccess: web ? "allow" : "deny", allowTools: [...(web ? ["WebSearch", "WebFetch"] : []), ...(spec.tools.includes("vault-read") ? ["Read", "Grep", "Glob"] : [])], signal, maxOutputChars: 40_000, guard: { localOnly: bunker } });
+          raw = await turn({ prompt, cwd: job!.cwd && existsSync(job!.cwd) ? job!.cwd : resolveDomainDir(vault, job!.domains.owner), cli, model: "", isFirst: true, bare: true, act: false, webAccess: web ? "allow" : "deny", allowTools: [...(web ? ["WebSearch", "WebFetch"] : []), ...(spec.tools.includes("vault-read") ? ["Read", "Grep", "Glob"] : [])], signal, maxOutputChars: 40_000, guard: { localOnly: bunker } });
         } catch (e) { raw = ""; missing = [`the run failed: ${(e as Error).message}`]; }
         if (ac.signal.aborted) return { ok: false, status: "stopped", note: "stopped by you" };
         // A run cut off by its time limit returns no result, never "(cancelled)" as one.

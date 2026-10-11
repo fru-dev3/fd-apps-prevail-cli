@@ -19,6 +19,7 @@ import { basename } from "node:path";
 import { listPages, readIndex } from "./entities.ts";
 import { appRecords } from "./ia.ts";
 import { shapeOf, type Effort, type Shape } from "./jobs.ts";
+import { crewOf, isCrewShape, type CrewShape } from "./work-crew.ts";
 import { readManifest } from "./manifest.ts";
 import { activeMissions, ownerOf } from "./missions.ts";
 import { routableDomains, type RouteRunner } from "./route.ts";
@@ -53,6 +54,8 @@ export interface RoutedTask {
   alternatives: Destination[];
   specialists: string[];
   shape: Shape;
+  /** Scout (find out and report, change nothing) or ship (make the change). Records from before shapes have none. */
+  crew?: CrewShape;
   flags: TaskFlags;
   effort: Effort;
   agentKind: string;
@@ -254,11 +257,12 @@ export function buildWorkPrompt(text: string, cat: Catalog): { system: string; p
     "Route each task to exactly one destination from the lists you are given, by id. Never invent an id.",
     "When a task needs a home that is not listed (a life area, a project, a person or other entity, an app, a specialist), still route it to the closest listed home, and name what is missing in `missing`.",
     "Reply with ONLY one JSON object, no prose and no code fence:",
-    '{"goals":[{"text":"<the goal in the user\'s words>","tasks":[{"name":"<2 to 4 words, Title Case, at most 28 characters>","text":"<one task, an imperative line with every name, date and amount the user said>","dest":{"kind":"domain|project|folder|entity|app","id":"<listed id>"},"alternatives":[{"kind":"...","id":"..."}],"confidence":<0..1>,"why":"<one short line>","specialists":["<listed specialist id>"],"shape":"find|plan|do|understand|make|act|negotiate|learn|relate|reflect","flags":{"open_ended":<bool>,"decision":<bool>,"money":<bool>,"numbers":<bool>},"effort":"quick|standard|deep","agent":"<agent kind, only when the user asked for one>","machine":"<machine label, only when the user named one or the work is deep>","missing":[{"kind":"domain|project|entity|app|specialist","name":"<short name>","why":"<one line>","draft":{"kind":"<for an entity only: person|place|product|thing|event>"}}]}]}]}',
+    '{"goals":[{"text":"<the goal in the user\'s words>","tasks":[{"name":"<2 to 4 words, Title Case, at most 28 characters>","text":"<one task, an imperative line with every name, date and amount the user said>","dest":{"kind":"domain|project|folder|entity|app","id":"<listed id>"},"alternatives":[{"kind":"...","id":"..."}],"confidence":<0..1>,"why":"<one short line>","specialists":["<listed specialist id>"],"shape":"find|plan|do|understand|make|act|negotiate|learn|relate|reflect","crew":"scout|ship","flags":{"open_ended":<bool>,"decision":<bool>,"money":<bool>,"numbers":<bool>},"effort":"quick|standard|deep","agent":"<agent kind, only when the user asked for one>","machine":"<machine label, only when the user named one or the work is deep>","missing":[{"kind":"domain|project|entity|app|specialist","name":"<short name>","why":"<one line>","draft":{"kind":"<for an entity only: person|place|product|thing|event>"}}]}]}]}',
     "`missing` is only for a home the work should have and does not (a life area, project, person, thing, app or specialist); never for a detail the prompt leaves out, like a file path or a date.",
     "For a missing entity, say what it is in draft.kind: a pet, a car or a gadget is a thing, a business or a brand is a product, only a human is a person.",
     "A project's code work goes to its folder (kind folder, the repo path as id). A person, place, product, thing or event the user names goes to that entity when it is listed.",
     "Each task gets a short name: 2 to 4 words, Title Case, at most 28 characters, a noun phrase that says what the work is about, never a sentence and never ending in a verb (\"Landlord Reply\", \"Dinner Spots\", \"Kitchen Quotes\").",
+    "Each task is a scout or a ship (`crew`): a scout only finds out and reports (research, review, a question, an audit) and changes nothing; a ship makes or changes something (code, a draft, a file, a plan). When unsure, ship.",
     "One task per intent. Never split one piece of work into steps: \"reply to X\" is ONE task that ends at a draft (nothing is ever sent), never a draft task plus a send task.",
     "Herdr, Prevail, Glyph, the user's machines and their agent tools (claude, codex, gemini and the like) are the systems that run the work, not apps: never list them in `missing`.",
     "No em dashes. Plain words.",
@@ -327,6 +331,7 @@ export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text:
         suggestions.push({ kind, name, why: str(m?.why, 160), ...(m?.draft && typeof m.draft === "object" ? { draft: m.draft } : {}), state: "open" });
       }
       const shape = SHAPES.includes(t.shape as Shape) ? (t.shape as Shape) : shapeOf(text) ?? "plan";
+      const crew = isCrewShape(t.crew) ? t.crew : crewOf(text);
       const f = (t.flags ?? {}) as Record<string, unknown>;
       const flags: TaskFlags = {};
       for (const k of ["open_ended", "decision", "money", "numbers"] as const) if (typeof f[k] === "boolean") flags[k] = f[k] as boolean;
@@ -346,7 +351,7 @@ export function parseWorkReply(raw: string, cat: Catalog, o: { fallback?: (text:
         name: cleanName(str(t.name, 60)) ?? nameFromText(text),
         text, goal: gt || text, dest, alternatives,
         specialists: [...new Set((Array.isArray(t.specialists) ? t.specialists : []).filter((x): x is string => typeof x === "string" && specIds.has(x)))].slice(0, 3),
-        shape, flags, effort, agentKind, machine, suggestions,
+        shape, crew, flags, effort, agentKind, machine, suggestions,
       });
       count++;
     }
@@ -441,6 +446,7 @@ export async function codeRoute(vault: string, text: string, cat: Catalog): Prom
       tasks: [{
         name: nameFromText(g), text: g, goal: g, dest, alternatives: [], specialists: [],
         shape: shapeOf(g) ?? "plan",
+        crew: crewOf(g),
         flags: { ...(money ? { money: true } : {}), ...(/\b(should i|choose|decide|which one)\b/i.test(g) ? { decision: true } : {}) },
         effort: "standard",
         agentKind: kindSaid(g, cat.agentKinds) ?? defaultKind(vault, dest, cat),
